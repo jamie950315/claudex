@@ -34,7 +34,7 @@ bounded diagnostic list; pending transactions and tracked-history failures still
 stop synchronization. Discovery starts at initialization, not a bulk history import.
 
 Native compatibility is pinned to Codex `0.155.0-alpha.16.3` and Claude Code
-`2.1.210`; version drift pauses writes. Codex has cross-process writer locks.
+`2.1.210` or `2.1.281`; version drift pauses writes. Codex has cross-process writer locks.
 Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
 Claude projections use canonical project paths and owned rollback storage.
@@ -43,6 +43,17 @@ The append helper is for controlled fixtures, not runtime concurrent writes.
 The native watcher, six synthetic roundtrips, real Claude rendering, and desktop
 task-reading integration are verified without inference. Automatic desktop
 sidebar refresh and new model-generated continuation are not verified. Do not
-claim production readiness for compaction, external asset dependencies, changed
+claim production readiness for opaque/dependent compaction, external asset dependencies, changed
 working directories, or unsigned reasoning replay. Visible reasoning is labeled
 text; encrypted reasoning and native permissions do not migrate.
+
+Readable native compaction summaries plus complete continuation are supported.
+Semantic baseline resets require a new boundary after an unchanged saved byte
+prefix; checkpoints advance only on successful promotion. Opaque Codex summaries,
+replacement histories, and Claude preserved-segment chains remain blocked.
+
+Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
+Desktop-owned transcripts must not be replaced, hidden, or pruned (even if archived
+in Desktop). No external no-inference lifecycle API is established, so automatic
+Desktop generation registration is not enabled. Never claim that CLI discovery
+proves Desktop Recents visibility or implement database/IPC injection as a shortcut.

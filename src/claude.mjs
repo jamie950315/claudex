@@ -4,6 +4,7 @@ import { access, mkdir, open } from 'node:fs/promises';
 import { fromCommon, toCommon } from 'txcript';
 import { hash, snapshot, publishExclusive } from './storage.mjs';
 import { portableMessages } from './history.mjs';
+import { claudeCompaction } from './compaction.mjs';
 
 export function projectDirectory(claudeHome, cwd) {
   return join(claudeHome, 'projects', resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'));
@@ -77,9 +78,8 @@ export async function appendClaudeSession({ path, common, id, expectedHash }) {
 
 export function decodeClaude(text) {
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
-  const compact = rows.some(row => row.type === 'system' && row.subtype === 'compact_boundary');
-  if (compact) throw new Error('Claude compaction requires a new explicit handoff; automatic replay is paused.');
-  const main = rows.filter(row => !row.isSidechain);
+  const compact = claudeCompaction(text, rows);
+  const main = (compact?.rows ?? rows).filter(row => !row.isSidechain);
   const ids = new Set(main.filter(row => row.uuid).map(row => row.uuid));
   const children = new Map();
   for (const row of main.filter(row => row.type === 'user' || row.type === 'assistant')) {
@@ -91,7 +91,9 @@ export function decodeClaude(text) {
       children.set(row.parentUuid, siblings);
     }
   }
-  return JSON.parse(toCommon(main.map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
+  const common = JSON.parse(toCommon(main.map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
+  if (compact) common.meta.compaction = compact.metadata;
+  return common;
 }
 
 export async function claudeExists(path) {

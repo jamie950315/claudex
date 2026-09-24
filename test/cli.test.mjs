@@ -89,7 +89,7 @@ for (const allProjects of [false, true]) test(`native watcher discovers ${allPro
     const watcher = JSON.parse(await readFile(join(stateRoot, 'watcher-status.json'), 'utf8'));
     assert.equal(watcher.running, true);
     assert.equal(watcher.blockedSourceCount, 1);
-    assert.match(watcher.blockedSources[0].reason, /Compacted/);
+    assert.match(watcher.blockedSources[0].reason, /Opaque Codex compaction/);
   }
   t.diagnostic(`Watcher evidence: ${root}`);
 });

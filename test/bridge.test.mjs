@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Bridge } from '../src/bridge.mjs';
 import { fingerprint } from '../src/history.mjs';
+import { createHash } from 'node:crypto';
+
+const hash = value => createHash('sha256').update(value).digest('hex');
 
 const pair = index => [{ role: 'user', content: [{ type: 'text', text: `Question ${index}` }] }, { role: 'assistant', content: [{ type: 'text', text: `Answer ${index}` }] }];
 async function fixture(policy = {}) {
@@ -17,7 +20,10 @@ async function fixture(policy = {}) {
     async inspect(record) {
       const file = files.get(record.path);
       if (!file) throw new Error('Missing file');
-      return { nativeId: file.nativeId, common: structuredClone(file.common), bytes: JSON.stringify(file.common).length, digest: fingerprint(file.common) };
+      const raw = Buffer.from(file.raw ?? JSON.stringify(file.common));
+      return { nativeId: file.nativeId, common: structuredClone(file.common), bytes: raw.length, digest: fingerprint(file.common),
+        rawHash: hash(raw), prefixUnchanged: !!record.rawHash && hash(raw.subarray(0, record.bytes)) === record.rawHash,
+        compactionId: file.compactionId, compactionOffset: file.compactionOffset };
     },
     async exists(record) { return files.has(record.path); },
     async assertIdle(record) { if (files.get(record.path)?.busy) throw new Error('Native writer is active'); },
@@ -75,6 +81,78 @@ test('twelve roundtrips retain two current and at most two previous, preserve or
   for (const record of (await f.bridge.status()).records.filter(record => record.status === 'current')) {
     assert.ok(f.files.get(record.path).common.messages.length >= 22);
   }
+});
+
+async function compactSource(f, { id = 'compact-1', editPrefix = false, offset } = {}) {
+  const file = f.files.get('/source');
+  const old = file.raw ?? JSON.stringify(file.common);
+  file.compactionId = id;
+  file.compactionOffset = offset ?? Buffer.byteLength(old);
+  file.common.messages = [...pair('summary'), ...pair('after compaction')];
+  file.raw = (editPrefix ? `X${old.slice(1)}` : old) + '\n' + JSON.stringify(file.common);
+}
+
+test('verified append-only compaction syncs summary and recent turns and advances baseline only on promotion', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId, 'claude');
+  const before = (await f.bridge.status()).records.find(record => record.path === '/source');
+  await compactSource(f);
+  await f.bridge.collect();
+  assert.deepEqual((await f.bridge.status()).records.find(record => record.path === '/source'), before);
+  f.fail.verify = true;
+  await assert.rejects(f.bridge.sync(f.conversationId, 'claude'), /verification/);
+  assert.equal((await f.bridge.status()).records.find(record => record.path === '/source').checkpoint, before.checkpoint);
+  await f.bridge.recover();
+  const state = await f.bridge.status();
+  const source = state.records.find(record => record.path === '/source');
+  const target = state.records.find(record => record.side === 'codex' && record.status === 'current');
+  assert.equal(source.compactionId, 'compact-1');
+  assert.notEqual(source.rawHash, before.rawHash);
+  assert.ok(source.bytes > before.bytes);
+  assert.equal(source.checkpoint, target.checkpoint);
+  assert.equal(typeof target.rawHash, 'string');
+  assert.equal((await f.bridge.sync(f.conversationId, 'claude')).changed, false);
+});
+
+test('compaction never legitimizes edits to the previously observed native prefix', async () => {
+  const f = await fixture();
+  await compactSource(f, { editPrefix: true });
+  await assert.rejects(f.bridge.sync(f.conversationId, 'claude'), /before its checkpoint/);
+  assert.equal(f.created(), 0);
+});
+
+test('old compaction boundary and missing native proof do not reset a checkpoint', async () => {
+  for (const kind of ['old-offset', 'old-id', 'missing-hash']) {
+    const f = await fixture();
+    await compactSource(f, { offset: kind === 'old-offset' ? 0 : undefined });
+    await f.bridge.locked(async state => {
+      if (kind === 'old-id') state.records[0].compactionId = 'compact-1';
+      if (kind === 'missing-hash') delete state.records[0].rawHash;
+      await f.bridge.save(state);
+    });
+    await assert.rejects(f.bridge.sync(f.conversationId, 'claude'), /before its checkpoint/);
+    assert.equal(f.created(), 0);
+  }
+});
+
+test('verified source compaction does not overwrite unsynchronized destination changes', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId, 'claude');
+  await compactSource(f);
+  await f.advance('codex', 'conflict');
+  await assert.rejects(f.bridge.sync(f.conversationId, 'claude'), /Both sides/);
+  assert.equal(f.created(), 1);
+  assert.equal((await f.bridge.status()).pending, null);
+});
+
+test('another compaction during a pending handoff still rejects source divergence', async () => {
+  const f = await fixture();
+  await compactSource(f);
+  f.fail.create = true;
+  await assert.rejects(f.bridge.sync(f.conversationId, 'claude'), /durable create/);
+  await compactSource(f, { id: 'compact-2' });
+  f.files.get('/source').common.messages.push(...pair('new turn'));
+  await assert.rejects(f.bridge.recover(), /Source changed/);
 });
 
 test('recovery resumes durable creation without making another generation', async () => {

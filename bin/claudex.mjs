@@ -67,7 +67,7 @@ async function main() {
   if (command === 'doctor') {
     const codex = execFileSync(config.binary, ['--version'], { encoding: 'utf8' }).trim();
     const claude = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim();
-    output({ codex, claude, verifiedCodex: codex.includes('0.155.0-alpha.16.3'), verifiedClaude: claude.startsWith('2.1.210 '), note: 'Other native versions require compatibility validation.' });
+    output({ codex, claude, verifiedCodex: codex === 'codex-cli 0.155.0-alpha.16.3', verifiedClaude: ['2.1.210', '2.1.281'].some(version => claude.startsWith(`${version} `)), note: 'Other native versions require compatibility validation.' });
     return;
   }
   if (command === 'recover-lock') {
@@ -148,7 +148,7 @@ async function main() {
             if (/still running|complete assistant|Unfinished|incomplete final/i.test(error.message)) continue;
             // Unsupported, not-yet-enrolled histories must not stop unrelated projects.
             // Transaction, storage, version, and ownership failures still stop the watcher.
-            if (!/Compacted Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs/.test(error.message)) throw error;
+            if (!/Codex compaction|Compacted Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs/.test(error.message)) throw error;
             blockedSourceCount++;
             if (blockedSources.length < 20) blockedSources.push({ ...source, reason: error.message });
           }

@@ -7,7 +7,7 @@ only the copies it owns. It does not call a model or upload transcripts.
 ## Start
 
 Requires macOS, Node.js 22+, Codex CLI `0.155.0-alpha.16.3`, and Claude Code
-`2.1.210`. Other native versions pause synchronization until compatibility is
+`2.1.210` or `2.1.281`. Other native versions pause synchronization until compatibility is
 validated. Both tools retain their own authentication and permission settings.
 
 ```sh
@@ -129,11 +129,51 @@ Visible reasoning is labeled as imported transcript text, not replayed as an
 unsigned provider thinking block. Opaque encrypted reasoning, approval state,
 live processes, and provider-specific runtime state are not portable.
 
-Synchronization explicitly pauses on compaction, interrupted/incomplete turns,
-dependent histories, unsupported external attachments/artifacts, a changed
+Synchronization explicitly pauses on unsupported compaction, interrupted/incomplete
+turns, dependent histories, unsupported external attachments/artifacts, a changed
 working directory, or conversion differences. Auxiliary asset/checkpoint/task
 directories also block automatic retirement until their dependencies can be
 verified. These cases are not silently flattened or deleted.
+
+## Compacted conversations
+
+Readable native compaction summaries are transferred as labeled historical
+context, followed by complete post-compaction messages. No extra model is called
+to summarize, decrypt, or reconstruct missing history. Earlier verbatim messages
+are not presented as if they survived compaction.
+
+- Codex: a nonempty native `compacted.message` without replacement history.
+- Claude: an explicit `compact_boundary` linked to one readable
+  `isCompactSummary` record and a complete independent continuation chain.
+- Encrypted/empty summaries, Codex replacement histories, and Claude preserved
+  segments are not transferable by this adapter. The latest boundary controls;
+  an older readable summary cannot substitute for a newer opaque one.
+
+After enrollment, a compaction may reset the semantic checkpoint only if its
+boundary is new, occurs after the saved native byte count, and the entire saved
+byte prefix still matches its hash. Checkpoints advance only after successful
+promotion. Conflicts on the other side still block replacement. Original files
+remain untouched; the existing retention limits apply to summarized generations.
+
+## Claude Desktop boundary
+
+The automatic watcher targets Claude Code CLI storage, **not the Claude Desktop
+Recents list**. Desktop maintains a separate registry. Its official `/desktop`
+handoff uses `claude://resume?session=<UUID>`; Desktop `/resume` is another native
+entry point and requires a trusted folder. These entry points adopt the CLI
+transcript rather than creating a disposable independent copy.
+
+Automatic per-generation Desktop registration is not enabled: the inspected
+Desktop `2.7032.0` offers no external no-inference archive/delete lifecycle API.
+Importing every generation without that lifecycle would accumulate desktop
+entries; moving their transcripts away would break those entries. The bridge
+therefore refuses replacement or retirement of a CLI session registered with
+Desktop, including archived desktop records. It does not alter Desktop's
+database, trust settings, or internal IPC.
+
+This is an explicit remaining integration limit, not a completed automatic
+desktop synchronization feature. The foreground native CLI and desktop app
+also retain their own authentication and workspace-trust requirements.
 
 ## Verification
 

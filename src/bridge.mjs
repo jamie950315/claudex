@@ -5,6 +5,22 @@ import { readJSON, writeJSON, withLock } from './storage.mjs';
 import { DEFAULT_POLICY, planRetention } from './retention.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
 
+function preservesCheckpoint(data, record) {
+  if (fingerprint(data.common, record.messageCount) === record.checkpoint) return true;
+  // A new native compaction may replace semantic history only when the adapter
+  // proves that the complete previously observed byte prefix is still intact.
+  return typeof data.compactionId === 'string' && data.compactionId.length > 0
+    && data.compactionId !== record.compactionId
+    && Number.isSafeInteger(data.compactionOffset) && data.compactionOffset >= record.bytes
+    && typeof record.rawHash === 'string' && record.rawHash.length > 0
+    && data.prefixUnchanged === true;
+}
+
+function snapshotCheckpoint(data) {
+  return { checkpoint: data.digest, messageCount: data.common.messages.length,
+    bytes: data.bytes, rawHash: data.rawHash, compactionId: data.compactionId };
+}
+
 /** One durable transaction at a time. Drivers never receive unowned deletion targets. */
 export class Bridge {
   constructor({ root, drivers, policy = {}, now = () => Date.now() }) {
@@ -58,7 +74,7 @@ export class Bridge {
       state.conversations[id] = { id, cwd: source.common.meta.cwd, title: title || source.common.meta.title || derivedTitle || 'Claudex conversation' };
       state.records.push({ id: randomUUID(), nativeId: source.nativeId, path: source.path ?? path, conversationId: id, cwd: source.common.meta.cwd,
         side, managed: false, verified: true, status: 'current', bytes: source.bytes, createdAt: this.now(),
-        checkpoint: source.digest, messageCount: source.common.messages.length });
+        ...snapshotCheckpoint(source) });
       await this.save(state, { event: 'tracked', conversationId: id, side });
       return { conversationId: id, existing: false };
     });
@@ -75,7 +91,7 @@ export class Bridge {
       await (this.drivers[side].assertReadable ?? this.drivers[side].assertIdle)(sourceRecord);
       const source = await this.drivers[side].inspect(sourceRecord);
       assertComplete(source.common);
-      if (fingerprint(source.common, sourceRecord.messageCount) !== sourceRecord.checkpoint) throw new Error('Source history changed before its checkpoint; automatic handoff paused.');
+      if (!preservesCheckpoint(source, sourceRecord)) throw new Error('Source history changed before its checkpoint; automatic handoff paused.');
       if (target) {
         const destination = await this.drivers[otherSide].inspect(target);
         if (source.digest === sourceRecord.checkpoint) return { changed: false, reason: 'No new source messages.' };
@@ -119,7 +135,7 @@ export class Bridge {
       // materialize must recover only an exact owned projection, never overwrite.
       await driver.materialize(pending.record, pending.common, pending.title);
       const verified = await driver.verify(pending.record, pending.common);
-      pending.record = { ...pending.record, ...verified, verified: true, checkpoint: verified.digest, messageCount: verified.common.messages.length };
+      pending.record = { ...pending.record, ...verified, verified: true, ...snapshotCheckpoint(verified) };
       delete pending.record.common;
       delete pending.record.digest;
       pending.phase = 'verified';
@@ -130,9 +146,7 @@ export class Bridge {
         oldTarget.status = 'previous';
         oldTarget.retiredAt = this.now();
       }
-      sourceRecord.checkpoint = source.digest;
-      sourceRecord.messageCount = source.common.messages.length;
-      sourceRecord.bytes = source.bytes;
+      Object.assign(sourceRecord, snapshotCheckpoint(source));
       state.records.push(pending.record);
       pending.phase = 'promoted';
       await this.save(state, { event: 'promoted', conversationId: pending.record.conversationId });
@@ -180,7 +194,7 @@ export class Bridge {
   async collectInLock(state) {
     for (const current of state.records.filter(record => record.status === 'current')) {
       const data = await this.drivers[current.side].inspect(current);
-      if (fingerprint(data.common, current.messageCount) !== current.checkpoint) throw new Error('Current history changed before its checkpoint; old backups were preserved.');
+      if (!preservesCheckpoint(data, current)) throw new Error('Current history changed before its checkpoint; old backups were preserved.');
     }
     const candidates = state.records.filter(record => record.managed && record.status === 'previous');
     for (const record of candidates) {

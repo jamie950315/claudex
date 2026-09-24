@@ -3,11 +3,14 @@ import { basename, dirname, join, sep } from 'node:path';
 import { toCommon } from 'txcript';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { homedir } from 'node:os';
+import { desktopOwnsSession } from './desktop.mjs';
 import { CodexClient } from './codex.mjs';
 import { createCodexProjection, codexProjectionPath, encodeCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 import { createClaudeSession, decodeClaude, encodeClaude, sessionPath } from './claude.mjs';
 import { snapshot, privateDirectory } from './storage.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
+import { codexCompaction, provenance } from './compaction.mjs';
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const sourceKinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -27,7 +30,7 @@ export function decodeCodex(text) {
   const meta = rows.find(row => row.type === 'session_meta')?.payload;
   if (!meta || meta.forked_from_id || meta.parent_thread_id) throw new Error('Missing or dependent Codex history; independent transcript required.');
   if (rows.some(row => row.type === 'turn_context' && row.payload.cwd && row.payload.cwd !== meta.cwd)) throw new Error('Codex working directory changed; automatic handoff paused.');
-  if (rows.some(row => row.type === 'compacted')) throw new Error('Compacted Codex history requires an explicit handoff; synchronization paused.');
+  const compacted = codexCompaction(text, rows);
   let running = false;
   let aborted = false;
   for (const row of rows) {
@@ -38,20 +41,21 @@ export function decodeCodex(text) {
   }
   if (running) throw new Error('Codex turn is still running.');
   if (aborted) throw new Error('Codex turn was interrupted; automatic handoff paused.');
-  const common = JSON.parse(toCommon(text, 'codex'));
+  const common = JSON.parse(toCommon(compacted ? compacted.rows.map(row => JSON.stringify(row)).join('\n') : text, 'codex'));
+  if (compacted) common.meta.compaction = compacted.metadata;
   assertComplete(common);
   return { common, nativeId: meta.id, originator: meta.originator };
 }
 
 /** No import API and no direct SQLite changes. All removals require a managed record. */
-export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'codex' }) {
+export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'codex', claudeBinary = 'claude', desktopHome = claudeHome === join(homedir(), '.claude') ? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') : null }) {
   root = await privateDirectory(root);
   const vault = join(root, 'rollback');
   if (await privateDirectory(vault) !== vault) throw new Error('Rollback directory must remain inside bridge state.');
   const [codexVersion, claudeVersion] = await Promise.all([
-    execute(binary, ['--version'], { timeout: 10000 }), execute('claude', ['--version'], { timeout: 10000 }),
+    execute(binary, ['--version'], { timeout: 10000 }), execute(claudeBinary, ['--version'], { timeout: 10000 }),
   ]);
-  if (codexVersion.stdout.trim() !== 'codex-cli 0.155.0-alpha.16.3' || !claudeVersion.stdout.trim().startsWith('2.1.210 ')) {
+  if (codexVersion.stdout.trim() !== 'codex-cli 0.155.0-alpha.16.3' || !['2.1.210 ', '2.1.281 '].some(version => claudeVersion.stdout.trim().startsWith(version))) {
     throw new Error('Native version changed; run compatibility validation before enabling synchronization.');
   }
   const clients = new Set();
@@ -85,7 +89,7 @@ export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'cod
     parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
     if (record.nativeId && parsed.nativeId !== record.nativeId) throw new Error('Native session identity changed.');
     if (!uuid.test(parsed.nativeId)) throw new Error('Invalid native session identity.');
-    return { ...parsed, path, digest: fingerprint(parsed.common), bytes: data.bytes };
+    return { ...parsed, path, digest: fingerprint(parsed.common), bytes: data.bytes, ...provenance(data.text, record, parsed.common.meta.compaction) };
   }
   async function assertOwned(record) {
     if (!record.managed || !uuid.test(record.nativeId)) throw new Error('Refusing to modify an unmanaged session.');
@@ -122,6 +126,7 @@ export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'cod
     return data;
   }
   async function claudeIdle(record) {
+    if (await desktopOwnsSession(desktopHome, record.nativeId)) throw new Error('Claude Desktop owns this session; automatic replacement and retirement are paused.');
     let files;
     try { files = await readdir(join(claudeHome, 'sessions')); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     for (const file of files) {
