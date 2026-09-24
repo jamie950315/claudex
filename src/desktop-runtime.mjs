@@ -1,0 +1,294 @@
+import { randomBytes } from 'node:crypto';
+import { join, dirname, basename, resolve, sep } from 'node:path';
+import { lstat, realpath, readFile, access, readdir } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+import { privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
+import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
+import { ClaudeOwner } from './claude-owner.mjs';
+import { decodeClaude } from './claude.mjs';
+import { decodeOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
+import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistory } from './owned-codex-history.mjs';
+import { exportNativeHistory } from './native-history.mjs';
+import { encodeContextPacket } from './context-packet.mjs';
+import { assertComplete, fingerprint } from './history.mjs';
+import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
+
+const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
+async function exists(path) { try { await access(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
+function alive(pid) { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } }
+
+async function header(path) {
+  const stream = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input: stream, crlfDelay: Infinity });
+  try { for await (const line of lines) { try { return JSON.parse(line); } catch { throw new Error('Malformed native session header.'); } } }
+  finally { lines.close(); stream.destroy(); }
+  throw new Error('Empty native session header.');
+}
+
+export async function persistentPacketKey(root) {
+  root = await privateDirectory(root);
+  return withLock(join(root, 'packet-key.lock'), async () => {
+    const path = join(root, 'packet-key');
+    if (!await exists(path)) {
+      const state = await readJSON(join(root, 'desktop-state.json'), null);
+      const owners = await readdir(join(root, 'owners')).catch(error => { if (error.code === 'ENOENT') return []; throw error; });
+      if (state?.records?.length || state?.pending || owners.some(name => name.endsWith('.json'))) {
+        throw new Error('The packet signing key is missing for existing desktop state; restore it before synchronizing.');
+      }
+      await publishExclusive(path, randomBytes(32).toString('hex') + '\n');
+    }
+    const info = await lstat(path);
+    if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o600) throw new Error('Packet key must be a private, owned regular file.');
+    const value = (await readFile(path, 'utf8')).trim();
+    if (!/^[a-f0-9]{64}$/.test(value)) throw new Error('Invalid packet signing key.');
+    return Buffer.from(value, 'hex');
+  }, { recoverDead: true });
+}
+
+/** Native adapters with one long-lived SDK owner per logical Claude session. */
+export class DesktopRuntime {
+  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, onEvent = () => {} }) {
+    this.root = resolve(root); this.codexHome = resolve(codexHome); this.claudeHome = resolve(claudeHome);
+    this.claudeBinary = claudeBinary; this.clientFactory = clientFactory; this.ownerFactory = ownerFactory;
+    this.ownerOptions = ownerOptions; this.onEvent = onEvent; this.owners = new Map();
+    this.adapters = Object.fromEntries(['codex', 'claude'].map(side => [side, {
+      inspect: record => this.inspect({ ...record, side }),
+      plan: input => this.plan(side, input), apply: (record, common, pending) => this.apply(record, common, pending),
+      operationApplied: (record, pending) => this.operationApplied(record, pending),
+      assertIdle: record => this.assertIdle(record), hide: record => this.hide(record), remove: record => this.remove(record),
+      exists: record => this.recordExists(record),
+    }]));
+  }
+  async initialize() {
+    this.root = await privateDirectory(this.root);
+    [this.codexHome, this.claudeHome] = await Promise.all([realpath(this.codexHome), realpath(this.claudeHome)]);
+    this.key = await persistentPacketKey(this.root);
+    return this;
+  }
+
+  async codex() {
+    // A new connection is not a replay: the coordinator rechecks durable
+    // operation evidence before deciding whether a native write is required.
+    if (this.client?.closed) this.client = null;
+    if (this.client) return this.client;
+    if (this.clientFactory) this.client = await this.clientFactory();
+    else {
+      const path = join(this.root, 'codex-shared', 'owner.json');
+      let info, manifest;
+      try { info = await lstat(path); manifest = await readJSON(path); }
+      catch (error) { if (error.code === 'ENOENT') throw new Error('Shared Codex Desktop backend is not ready.'); throw error; }
+      if (info.isSymbolicLink() || !info.isFile() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o600
+          || manifest.version !== 1 || manifest.cliVersion !== 'codex-cli 0.155.0-alpha.16.3'
+          || !Number.isInteger(manifest.pid) || !Number.isInteger(manifest.childPid) || !alive(manifest.pid) || !alive(manifest.childPid)
+          || !manifest.socketPath) throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
+      const socket = await inspectCodexSocket(manifest.socketPath);
+      if (socket.socketStat.dev !== manifest.socketIdentity?.dev || socket.socketStat.ino !== manifest.socketIdentity?.ino) throw new Error('Shared Codex socket identity changed.');
+      this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath });
+    }
+    try {
+      const initialized = await this.client.initialize();
+      if (initialized.codexHome && await realpath(initialized.codexHome) !== this.codexHome) throw new Error('Shared backend uses a different Codex home.');
+      this.client.on?.('notification', event => this.onEvent({ type: 'codex_notification', event }));
+      return this.client;
+    } catch (error) { await this.client.close(); this.client = null; throw error; }
+  }
+
+  async owner(conversationId, cwd, title) {
+    let entry = this.owners.get(conversationId);
+    if (entry) {
+      if (entry.error) throw entry.error;
+      return entry.owner;
+    }
+    const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title,
+      options: { ...this.ownerOptions, pathToClaudeCodeExecutable: this.claudeBinary },
+      onEvent: event => this.onEvent({ type: 'claude_notification', conversationId, event }) };
+    const owner = this.ownerFactory ? this.ownerFactory(settings) : new ClaudeOwner(settings);
+    entry = { owner, error: null }; this.owners.set(conversationId, entry);
+    try { await owner.start(); return owner; }
+    catch (error) { entry.error = error; throw error; } // Retain live handles on a busy startup failure.
+  }
+
+  async safePath(path, home) {
+    const parent = await realpath(dirname(path));
+    if (parent !== home && !parent.startsWith(home + sep)) throw new Error('Native transcript is outside its configured home.');
+    const info = await lstat(path);
+    if (info.isSymbolicLink() || !info.isFile()) throw new Error('Native transcript must be a regular file.');
+    return join(parent, basename(path));
+  }
+
+  async snapshotBytes(nativeId, currentPath) {
+    let bytes = 0; const seen = new Set(); let foundCurrent = false;
+    const walk = async directory => {
+      let entries;
+      try { entries = await readdir(directory, { withFileTypes: true }); }
+      catch (error) { if (error.code === 'ENOENT') return; throw error; }
+      for (const entry of entries) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) { await walk(path); continue; }
+        if (!entry.isFile() || !entry.name.startsWith('rollout-') || !entry.name.includes(nativeId) || !entry.name.endsWith('.jsonl')) continue;
+        const row = await header(path);
+        if (row.type !== 'session_meta' || row.payload?.id !== nativeId) continue;
+        const info = await lstat(path); const identity = `${info.dev}:${info.ino}`;
+        if (!seen.has(identity)) { bytes += info.size; seen.add(identity); }
+        if (path === currentPath) foundCurrent = true;
+      }
+    };
+    await walk(join(this.codexHome, 'sessions'));
+    await walk(join(this.codexHome, 'archived_sessions'));
+    if (!foundCurrent || !Number.isSafeInteger(bytes)) throw new Error('Owned rollout storage could not be counted safely.');
+    return bytes;
+  }
+
+  async inspect(record) {
+    if (record.side === 'codex') {
+      let nativeId = record.nativeId;
+      if (!nativeId) {
+        await this.safePath(record.path, this.codexHome);
+        const row = await header(record.path);
+        if (row.type !== 'session_meta') throw new Error('Missing Codex session metadata.');
+        nativeId = row.payload?.id;
+      }
+      if (!UUID.test(nativeId)) throw new Error('Invalid Codex session identity.');
+      const client = await this.codex();
+      const metadata = (await client.request('thread/read', { threadId: nativeId, includeTurns: false })).thread;
+      if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
+      const cwd = await realpath(metadata.cwd);
+      const path = await this.safePath(metadata.path, this.codexHome);
+      const data = record.managed
+        ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key, completedPrefix: true })
+        : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true });
+      data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
+      return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(path)).size, digest: fingerprint(data.common) };
+    }
+    let path = record.path;
+    if (record.managed) {
+      const owner = await this.owner(record.conversationId, record.cwd, record.title);
+      if (owner.status().sessionId !== record.nativeId) throw new Error('Native Claude owner identity changed.');
+      path = owner.status().transcriptPath;
+    }
+    path = await this.safePath(path, this.claudeHome);
+    const data = await snapshot(path);
+    const prefix = completedClaudePrefix({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
+      ...(record.managed ? { key: this.key } : {}) });
+    const parsed = record.managed
+      ? decodeOwnedClaudeHistory({ text: prefix.text, conversationId: record.conversationId, sessionId: record.nativeId, key: this.key })
+      : { common: decodeClaude(prefix.text) };
+    assertComplete(parsed.common);
+    parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
+    if (!UUID.test(parsed.common.meta.id) || record.nativeId && parsed.common.meta.id !== record.nativeId) throw new Error('Claude session identity changed.');
+    return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common), incompleteTail: prefix.incompleteTail };
+  }
+
+  async plan(side, { conversationId, nativeId, common, title, target }) {
+    if (side === 'claude') {
+      const owner = await this.owner(conversationId, common.meta.cwd, title);
+      const status = owner.status();
+      if (target?.managed && target.nativeId !== status.sessionId) throw new Error('Existing Claude owner does not match the tracked identity.');
+      return { nativeId: status.sessionId, path: status.transcriptPath, kind: 'owner', title };
+    }
+    await this.codex();
+    return { nativeId, path: codexProjectionPath(this.codexHome, common, nativeId), kind: 'snapshot', title };
+  }
+
+  packet(record, common, pending) {
+    return encodeContextPacket({ messages: common.messages.slice(pending.previous.count), key: this.key,
+      conversationId: record.conversationId, sourceSide: 'codex', targetSessionId: record.nativeId,
+      operationId: pending.operationId, previousDigest: pending.previous.digest });
+  }
+  async operationApplied(record, pending) {
+    if (record.side === 'claude') {
+      const owner = await this.owner(record.conversationId, record.cwd, record.title);
+      return owner.hasAppend({ operationId: pending.operationId, content: this.packet(record, pending.common, pending) });
+    }
+    if (!await exists(record.path)) return false;
+    await this.safePath(record.path, this.codexHome);
+    const data = decodeOwnedCodexHistory({ text: (await snapshot(record.path)).text, conversationId: record.conversationId,
+      targetSessionId: record.nativeId, key: this.key });
+    if (data.operationId !== pending.operationId || data.bootstrapDigest !== pending.checkpoint.digest) throw new Error('Existing projection does not match the durable handoff intent.');
+    // Registration may have been interrupted after exclusive file publication.
+    await registerCodexProjection({ client: await this.codex(), path: record.path, id: record.nativeId, cwd: record.cwd, title: record.title });
+    return true;
+  }
+  async apply(record, common, pending) {
+    if (record.side === 'claude') {
+      const owner = await this.owner(record.conversationId, record.cwd, record.title);
+      await owner.append({ operationId: pending.operationId, content: this.packet(record, common, pending) });
+      return;
+    }
+    const canonical = buildOwnedCodexCommon({ canonical: common, key: this.key, conversationId: record.conversationId,
+      targetSessionId: record.nativeId, operationId: pending.operationId });
+    await createCodexProjection({ client: await this.codex(), codexHome: this.codexHome, common: canonical,
+      id: record.nativeId, title: record.title, historyMode: 'paginated' });
+  }
+
+  async assertIdle(record) {
+    if (record.side === 'claude') {
+      if (!record.managed) {
+        if ((await this.inspect(record)).incompleteTail) throw new Error('Claude turn is still running.');
+        return;
+      }
+      const owner = await this.owner(record.conversationId, record.cwd, record.title);
+      if (owner.status().nativeState !== 'idle') throw new Error('Claude turn is still running.');
+      return;
+    }
+    const client = await this.codex();
+    const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
+    if (thread.status?.type === 'active') throw new Error('Codex destination is active.');
+    if (record.managed && !thread.path.includes(`${sep}archived_sessions${sep}`)) await client.resumeThread(record.nativeId, { excludeTurns: true });
+  }
+  async assertOwnedSnapshot(record) {
+    if (record.side !== 'codex' || record.kind !== 'snapshot' || !record.managed || !record.verified) throw new Error('Only verified owned Codex snapshots can be retired.');
+    await this.inspect(record); // Verifies the signed bootstrap, even after native rollover.
+    if (await exists(join(this.codexHome, 'sessions', record.nativeId))) throw new Error('Owned projection has auxiliary data; retirement requires dependency verification.');
+    const client = await this.codex();
+    for (const archived of [false, true]) {
+      if ((await client.request('thread/list', { ancestorThreadId: record.nativeId, archived, sourceKinds: kinds, limit: 1 })).data.length) throw new Error('Owned projection has dependent threads.');
+      let cursor;
+      do {
+        const page = await client.request('thread/list', { archived, sourceKinds: kinds, limit: 100, ...(cursor ? { cursor } : {}) });
+        for (const value of page.data) {
+          if (value.id === record.nativeId) continue;
+          if ((await client.request('thread/read', { threadId: value.id, includeTurns: false })).thread.forkedFromId === record.nativeId) throw new Error('Owned projection has a dependent fork.');
+        }
+        cursor = page.nextCursor;
+      } while (cursor);
+    }
+  }
+  async hide(record) {
+    await this.assertIdle(record); await this.assertOwnedSnapshot(record);
+    const client = await this.codex();
+    let { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
+    if (!thread.path.includes(`${sep}archived_sessions${sep}`)) await client.request('thread/archive', { threadId: record.nativeId });
+    ({ thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false }));
+    return { path: thread.path };
+  }
+  async remove(record) {
+    await this.assertIdle(record); await this.assertOwnedSnapshot(record);
+    await (await this.codex()).request('thread/delete', { threadId: record.nativeId });
+  }
+  async recordExists(record) {
+    if (record.side !== 'codex') return exists(record.path);
+    try { await (await this.codex()).request('thread/read', { threadId: record.nativeId, includeTurns: false }); return true; }
+    catch (error) { if (/not found|no rollout|does not exist/i.test(error.message)) return false; throw error; }
+  }
+
+  async ownedNativeIds() {
+    const known = new Set();
+    const directory = join(this.root, 'owners');
+    let names;
+    try { names = await readdir(directory); } catch (error) { if (error.code === 'ENOENT') return known; throw error; }
+    for (const name of names.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+      const record = await readJSON(join(directory, name));
+      if (record.version !== 1 || !UUID.test(record.sessionId)) throw new Error('Invalid persisted native owner identity.');
+      known.add(`claude:${record.sessionId}`);
+    }
+    return known;
+  }
+  async close() {
+    for (const entry of this.owners.values()) if (!entry.owner.status().closed) await entry.owner.close();
+    if (this.client) await this.client.close();
+    this.client = null;
+  }
+}

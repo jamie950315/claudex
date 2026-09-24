@@ -82,6 +82,19 @@ test('private directory and socket permissions are mandatory', async t => {
   await assert.rejects(connectCodexSocket(socketPath), /owner-only/);
 });
 
+test('backend disconnect marks the connection closed without replaying requests', async t => {
+  const { socketPath, wss, messages } = await fixture(t);
+  const client = new CodexWebSocketClient({ socketPath });
+  await client.initialize();
+  const disconnected = once(client, 'disconnected');
+  const pending = assert.rejects(client.request('thread/archive'), /completion is unknown/);
+  [...wss.clients][0].close();
+  await disconnected; await pending;
+  assert.equal(client.closed, true);
+  assert.ok(messages.filter(message => message.method === 'thread/archive').length <= 1);
+  await client.close();
+});
+
 test('an arbitrary socket alias is rejected even if its target is private', async t => {
   const { socketPath } = await fixture(t);
   const link = `${socketPath}-link`;

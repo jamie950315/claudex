@@ -66,7 +66,11 @@ export class CodexWebSocketClient extends EventEmitter {
       this.ws = await connectCodexSocket(this.options.socketPath, this.options);
       if (this.closed) { this.ws.terminate(); throw new Error('Codex client closed'); }
       this.ws.on('error', () => this.rejectPending(new Error('Shared Codex transport failed; completion is unknown, do not retry writes automatically')));
-      this.ws.on('close', () => this.rejectPending(new Error('Shared Codex transport closed; completion is unknown, do not retry writes automatically')));
+      this.ws.on('close', () => {
+        this.closed = true;
+        this.rejectPending(new Error('Shared Codex transport closed; completion is unknown, do not retry writes automatically'));
+        this.emit('disconnected');
+      });
       this.ws.on('message', (data, binary) => this.receive(data, binary));
       const result = await this.request('initialize', {
         clientInfo: { name: 'claudex', version: '0.1.0' },

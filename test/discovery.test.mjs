@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { discoverSources } from '../src/discovery.mjs';
 import { createClaudeSession } from '../src/claude.mjs';
 import { serviceDefinition } from '../src/service.mjs';
+import { encodeContextPacket } from '../src/context-packet.mjs';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 test('Claude encoded-directory collisions do not leak into the project allowlist', async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-discovery-test-')));
@@ -29,6 +31,22 @@ test('service configuration escapes XML, uses exact executable arguments and no 
   assert.match(result.plist, /a&lt;b.mjs/);
   assert.match(result.plist, /<key>KeepAlive<\/key><false\/>/);
   assert.match(result.plist, /<key>StandardOutPath<\/key><string>\/dev\/null<\/string>/);
+});
+
+test('SDK imports from another bridge root are not rediscovered as authored native sources', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-sdk-discovery-')));
+  const claudeHome = join(root, 'claude'), codexHome = join(root, 'codex');
+  await mkdir(codexHome);
+  const id = randomUUID();
+  const content = encodeContextPacket({ messages: [
+    { role: 'user', content: [{ type: 'text', text: 'Imported question' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Imported answer' }] },
+  ], key: randomBytes(32), conversationId: randomUUID(), targetSessionId: id, operationId: randomUUID(), sourceSide: 'codex' });
+  const meta = { cwd: root, timestamp: new Date().toISOString() };
+  await createClaudeSession({ claudeHome, id, common: { meta, messages: [{ role: 'user', content }] } });
+  const quoted = await createClaudeSession({ claudeHome, common: { meta, messages: [{ role: 'user', content }] } });
+  const sources = await discoverSources({ claudeHome, codexHome, allProjects: true, since: 0 });
+  assert.deepEqual(sources, [{ side: 'claude', path: quoted.path }]);
 });
 
 test('all-project discovery includes recent native activity without following links or importing owned copies', async () => {

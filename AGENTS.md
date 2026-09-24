@@ -73,17 +73,17 @@ through Remote Control. Actual native/desktop tests verify shouldQuery:false,
 zero-inference receipts, same remote ID after restart, exact UUID/content
 persistence, and duplicate suppression. SDK0.3.281/CLI2.1.281 are pinned. Preserve
 the default OAuth namespace by omitting CLAUDE_CONFIG_DIR for standard ~/.claude.
-No credential extraction/copy is allowed. The default watcher is not integrated
-with this path yet. Store the owner handle before start() so startup failures
+No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
+path. Store the owner handle before start() so startup failures
 during user work retain the live owner instead of interrupting it.
 
 Context packets preserve portable semantic messages as authenticated labeled
-native text/images; the coordinator still needs durable key and digest-chain
-integration. Native history export uses full paginated API reads with a stable
+native text/images. DesktopBridge persists a private key, canonical prefix,
+single pending transaction and bounded audit. Native history export uses full paginated API reads with a stable
 two-read snapshot, including pre-compaction readable history. Do not claim it
 recovers encrypted reasoning or native-truncated output.
 
-Shared Codex transport is staged, not deployed: `bin/claudex-codex.mjs` preserves
+Shared Codex transport installs for the next normal app start: `bin/claudex-codex.mjs` preserves
 native Desktop args/env, starts a public Unix WS listener, and forwards JSONL
 unchanged. Do not use a prestarted WS_URL override: it loses Desktop app-tools
 injection. The native CODEX_CLI_PATH launcher is the intended activation path;
@@ -95,6 +95,31 @@ private-directory, inode and target validation, not blanket symlink following.
 Opt-in paginated projections preserve signed packet blocks and images in the
 full native history API; default legacy behavior is unchanged. Owned decoders
 validate the packet before generic metadata conversion, strip only the exact
-explicit transport receipt, and retain real subsequent turns. Live scheduling,
-bounded snapshot retirement and automatic discovery still need these pieces
-integrated; the existing watcher remains the legacy path.
+explicit transport receipt, and retain real subsequent turns. DesktopRuntime,
+DesktopBridge and desktop-watch integrate all-project discovery, stable Claude
+owners, bounded Codex snapshots and recovery. Completed-prefix readers withhold
+active tails. Verified dead locks are reclaimed; live/malformed locks block.
+
+`desktop install` selects Desktop mode only for roots with no legacy records.
+The generated fixed-Node shim configures CODEX_CLI_PATH without changing or
+restarting the app. The watcher reapplies its exact override at login and waits
+for a private verified shared-backend manifest. Never silently start another
+stdio writer. CLI status selects the configured ledger. `desktop uninstall`
+preserves transcripts and ledgers; it is not a reverse migration. The installed
+launcher still needs activation and real dual-Desktop acceptance; passing native
+fixture tests does not establish automatic sidebar behavior or two real app
+alternations. Do not remove dependency guards to force snapshot retirement.
+
+The real integrated coordinator/SDK/Desktop check verifies initial import, a
+restart, delta delivery, same Remote Control identity, exact canonical history,
+and recovery without resend. CLI 2.1.281 inserts a zero-usage synthetic assistant
+`No response requested.` after a resumed no-query tail. The owned decoder
+excludes only that exact placeholder immediately after an authenticated packet;
+real replies remain history. SDK-owned packets from another state root are
+excluded during discovery to prevent import loops (classification is not HMAC
+authentication). No current user transcript is modified by these checks.
+
+Rejected transport shortcuts: queue/add auto-starts inference on an idle native
+thread. shellCommand persists userShell events without a model request, but
+native model-context output truncates around 40k characters even when API output
+is complete. It is not a lossless arbitrary-packet transport and is not enabled.

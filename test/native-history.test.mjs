@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { exportNativeHistory } from '../src/native-history.mjs';
+import { convertNativeTurns, exportNativeHistory } from '../src/native-history.mjs';
 import { encodeClaude, decodeClaude } from '../src/claude.mjs';
 import { fingerprint } from '../src/history.mjs';
 
@@ -57,6 +57,42 @@ test('source mutation between passes fails without retrying', async () => {
   assert.equal(native.calls.length, 2);
 });
 
+test('completed-prefix mode ignores a growing active tail across full reads', async () => {
+  const active = { id: 't2', status: 'inProgress', itemsView: 'full', startedAt: 200, completedAt: null,
+    items: [user('Next', 'u2')] };
+  const growing = { ...active, items: [...active.items, { type: 'agentMessage', id: 'a2', text: 'Working', phase: 'commentary', status: 'inProgress' }] };
+  const native = client([page([turn(), active]), page([turn(), growing])]);
+  const exported = await run(native, { completedPrefix: true });
+  assert.equal(native.calls.length, 2);
+  assert.equal(exported.turnCount, 1);
+  assert.equal(exported.itemCount, 2);
+  assert.equal(exported.incompleteTail, true);
+  assert.equal(exported.incompleteTailCount, 1);
+  assert.equal(exported.common.messages.length, 2);
+  const notice = exported.common.messages[0].content[0].text;
+  const settled = await run(client([page([turn()])]), { completedPrefix: true });
+  assert.equal(settled.common.messages[0].content[0].text, notice);
+  await assert.rejects(run(client([page([active])]), { completedPrefix: true }), /no completed persisted history/);
+  await assert.rejects(run(client([page([active, turn('t3', [user('Later'), answer('Done')], 300)])]), { completedPrefix: true }), /in-progress turn precedes completed history/);
+});
+
+test('closed interrupted history before a completed turn remains explicit inert data', async () => {
+  const interrupted = { id: 't1', status: 'interrupted', itemsView: 'full', startedAt: 100, completedAt: 101,
+    error: { message: 'Synthetic interruption' }, items: [user('Earlier', 'u1'), { type: 'commandExecution', id: 'tool-1', status: 'inProgress', command: 'synthetic' }] };
+  const completed = turn('t2', [user('Continue', 'u2'), answer('Done', 'a2')], 200);
+  const exported = await run(client([page([interrupted, completed])]), { completedPrefix: true });
+  assert.equal(exported.turnCount, 2);
+  assert.equal(exported.incompleteTail, false);
+  assert.equal(exported.common.messages.length, 5);
+  assert.match(exported.common.messages[1].content[0].text, /commandExecution/);
+  assert.match(exported.common.messages[2].content[0].text, /interrupted/);
+  assert.match(exported.common.messages[2].content[0].text, /Synthetic interruption/);
+  assert.equal(exported.common.messages.at(-1).content[0].text, 'Done');
+  const snapshot = { threadId: 'thread', turns: [interrupted, completed] };
+  assert.throws(() => convertNativeTurns(snapshot, { threadId: 'thread', cwd: '/tmp/project' }), /only completed/);
+  assert.doesNotThrow(() => convertNativeTurns({ ...snapshot, completedPrefix: true }, { threadId: 'thread', cwd: '/tmp/project' }));
+});
+
 test('duplicate turn IDs, cursor cycles, and incomplete pagination fail explicitly', async () => {
   await assert.rejects(run(client([page([turn()], 'next'), page([turn()])])), /duplicate turn/);
   await assert.rejects(run(client([page([turn()], 'next'), page([turn('t2')], 'next')])), /cursor cycle/);
@@ -98,4 +134,11 @@ test('byte, item and page caps never return truncated histories', async () => {
 test('API availability errors are explicit and do not echo private server messages', async () => {
   const error = Object.assign(new Error('private transcript text'), { code: -32601 });
   await assert.rejects(run(client([error])), error => error.message.includes('thread/turns/list is unavailable') && error.message.includes('-32601') && !error.message.includes('private'));
+});
+
+test('a known closed transport remains a transient read failure without exposing server text', async () => {
+  let calls = 0;
+  const source = { closed: false, async request() { calls++; this.closed = true; throw new Error('private connection detail'); } };
+  await assert.rejects(run(source), error => /native transport unavailable/.test(error.message) && !error.message.includes('private'));
+  assert.equal(calls, 1);
 });

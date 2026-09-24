@@ -12,12 +12,17 @@ import { discoverSources } from '../src/discovery.mjs';
 import { CodexClient } from '../src/codex.mjs';
 import { installService, controlService } from '../src/service.mjs';
 import { fileURLToPath } from 'node:url';
+import { DesktopBridge } from '../src/desktop-bridge.mjs';
+import { DesktopRuntime } from '../src/desktop-runtime.mjs';
+import { runDesktopWatch } from '../src/desktop-watch.mjs';
+import { installDesktopLauncher, applyDesktopEnvironment, uninstallDesktopLauncher } from '../src/desktop-install.mjs';
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, from: { type: 'string' }, source: { type: 'string' }, id: { type: 'string' }, title: { type: 'string' },
   'codex-home': { type: 'string' }, 'claude-home': { type: 'string' }, 'codex-binary': { type: 'string' },
   project: { type: 'string', multiple: true }, help: { type: 'boolean' }, watch: { type: 'boolean' },
   'all-projects': { type: 'boolean' },
+  'claude-binary': { type: 'string' },
 } });
 const command = positionals[0] || 'help';
 let root = resolve(values.root || process.env.CLAUDEX_HOME || join(homedir(), '.local', 'share', 'claudex'));
@@ -36,6 +41,8 @@ const help = `Claudex: bounded local conversation handoffs (no model calls)
   claudex recover-lock            Clear a dead bridge process lock (never a live one)
   claudex service install|start|stop|status|uninstall    macOS background operation
   claudex doctor                  Check native versions
+  claudex desktop install         Enable all-project Desktop mode at the next normal app start
+  claudex desktop uninstall       Remove the owned next-start override; preserve conversations
 
 Global: --root PATH (default ~/.local/share/claudex). Service installation is opt-in.
 Only generated copies are retired. Original imported sessions are never deleted.
@@ -71,7 +78,7 @@ async function main() {
     return;
   }
   if (command === 'recover-lock') {
-    const path = join(root, values.watch ? 'watch.lock' : 'operation.lock');
+    const path = join(root, values.watch ? 'watch.lock' : config.mode === 'desktop' ? 'desktop-operation.lock' : 'operation.lock');
     const lock = await readJSON(path, null);
     if (!lock) { output({ cleared: false }); return; }
     if (!Number.isInteger(lock.pid)) throw new Error('Malformed lock; manual inspection required.');
@@ -92,16 +99,65 @@ async function main() {
     } else output(await controlService(positionals[1], options));
     return;
   }
+  if (command === 'desktop') {
+    if (await readJSON(join(root, 'watch.lock'), null)) throw new Error('Stop the bridge watcher safely before changing Desktop installation.');
+    if (positionals[1] === 'install') {
+      const legacy = await new Bridge({ root, drivers: {} }).status();
+      if (legacy.pending || legacy.records.length) throw new Error('Legacy conversations require an explicit migration; originals and mappings were preserved.');
+      const result = await installDesktopLauncher({ root,
+        launcher: fileURLToPath(new URL('./claudex-codex.mjs', import.meta.url)),
+        binary: values['codex-binary'] || '/Applications/ChatGPT.app/Contents/Resources/codex' });
+      await writeJSON(configPath, { ...config, mode: 'desktop', allProjects: true, projects: [],
+        claudeBinary: values['claude-binary'] || config.claudeBinary || 'claude' });
+      output(result);
+    } else if (positionals[1] === 'uninstall') {
+      output(await uninstallDesktopLauncher({ root }));
+      await writeJSON(configPath, { ...config, mode: 'legacy' });
+    } else throw new Error('Use desktop install or desktop uninstall.');
+    return;
+  }
   async function usingBridge(fn) {
     const native = await nativeDrivers({ ...config, root });
     try { return await fn(new Bridge({ root, drivers: native.drivers, policy: config.policy }), native.drivers); }
     finally { await native.close(); }
   }
   if (command === 'status') {
-    const state = await new Bridge({ root, drivers: {} }).status();
-    output({ allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
+    const state = config.mode === 'desktop'
+      ? await new DesktopBridge({ root, adapters: {} }).status()
+      : await new Bridge({ root, drivers: {} }).status();
+    output({ mode: config.mode || 'legacy', allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
       pending: state.pending ? { phase: state.pending.phase, nativeId: state.pending.record.nativeId, side: state.pending.record.side } : null,
       audit: state.audit, watcher: await readJSON(join(root, 'watcher-status.json'), null) });
+    return;
+  }
+  if (config.mode === 'desktop') {
+    if (!['watch', 'track', 'sync', 'gc', 'recover'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, and recover; owner appends cannot be aborted as disposable files.');
+    const runtime = await new DesktopRuntime({ ...config, root }).initialize();
+    const bridge = new DesktopBridge({ root, adapters: runtime.adapters, policy: config.policy });
+    const controller = new AbortController();
+    const stop = () => controller.abort();
+    if (command === 'watch') { process.on('SIGINT', stop); process.on('SIGTERM', stop); }
+    try {
+      if (command === 'watch') {
+        await applyDesktopEnvironment({ root });
+        await runDesktopWatch({ root, bridge, runtime, config, signal: controller.signal });
+      } else await withLock(join(root, 'watch.lock'), async () => {
+        if (command === 'track') {
+          if (!['codex', 'claude'].includes(values.from)) throw new Error('--from must be codex or claude.');
+          if (!values.source && !(values.from === 'codex' && values.id)) throw new Error('A source path or Codex --id is required.');
+          output(await bridge.track({ side: values.from, path: values.source && await realpath(resolve(values.source)), nativeId: values.id, title: values.title }));
+        } else if (command === 'sync') {
+          if (!positionals[1]) throw new Error('Supply a conversation ID.');
+          output(await bridge.sync(positionals[1]));
+        } else output(await bridge[command === 'gc' ? 'collect' : 'recover']());
+      });
+    } finally {
+      process.off('SIGINT', stop); process.off('SIGTERM', stop);
+      // close() explicitly refuses to interrupt a real user's active Claude turn.
+      // Keep its live handles if shutdown is unsafe; never process.exit().
+      try { await runtime.close(); }
+      catch (error) { console.error(`Claudex preserved a live native owner: ${error.message}`); }
+    }
     return;
   }
   if (command === 'track') {

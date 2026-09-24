@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { encodeClaude } from '../src/claude.mjs';
 import { encodeContextPacket } from '../src/context-packet.mjs';
-import { decodeOwnedClaudeHistory } from '../src/owned-claude-history.mjs';
+import { decodeOwnedClaudeHistory, completedClaudePrefix } from '../src/owned-claude-history.mjs';
 import { fingerprint } from '../src/history.mjs';
 
 const key = randomBytes(32);
@@ -40,4 +40,37 @@ test('unsigned incomplete user turns and wrong native identities cannot be publi
   assert.throws(() => decode([...turn('A'), { role: 'user', content: [{ type: 'text', text: 'Still working' }] }]), /complete assistant/);
   const text = encodeClaude({ meta, messages: [packet(turn('A'), 'a')] }, sessionId).text;
   assert.throws(() => decodeOwnedClaudeHistory({ text, conversationId, sessionId: randomUUID(), key }), /different native session/);
+});
+
+test('completed source prefix stays publishable while a newer user turn is unfinished', () => {
+  const text = encodeClaude({ meta, messages: [packet(turn('A'), 'a'), ...turn('B'),
+    { role: 'user', content: [{ type: 'text', text: 'Work in progress' }] }] }, sessionId).text;
+  const prefix = completedClaudePrefix({ text, conversationId, sessionId, key });
+  assert.equal(prefix.incompleteTail, true);
+  const result = decodeOwnedClaudeHistory({ text: prefix.text, conversationId, sessionId, key });
+  assert.equal(result.digest, fingerprint({ messages: [...turn('A'), ...turn('B')] }));
+  const importedOnly = encodeClaude({ meta, messages: [packet(turn('A'), 'a')] }, sessionId).text;
+  assert.equal(completedClaudePrefix({ text: importedOnly, conversationId, sessionId, key }).incompleteTail, false);
+});
+
+test('the exact native resumed no-query placeholder is not an authored assistant turn', () => {
+  const a = turn('A'), b = turn('B');
+  const placeholder = { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] };
+  const rows = encodeClaude({ meta, messages: [packet(a, 'a'), placeholder, packet(b, 'b', fingerprint({ messages: a }))] }, sessionId).rows;
+  const receipt = rows.find(row => row.type === 'assistant');
+  receipt.message.model = '<synthetic>';
+  receipt.message.stop_reason = 'stop_sequence';
+  receipt.message.stop_sequence = '';
+  receipt.message.usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  const read = () => decodeOwnedClaudeHistory({ text: rows.map(row => JSON.stringify(row)).join('\n') + '\n', conversationId, sessionId, key });
+  assert.equal(read().digest, fingerprint({ messages: [...a, ...b] }));
+  receipt.message.model = 'real-model';
+  assert.throws(read, /synchronized prefix/);
+  receipt.message.model = '<synthetic>'; receipt.message.usage.output_tokens = 1;
+  assert.throws(read, /synchronized prefix/);
+  receipt.message.usage.output_tokens = 0; receipt.message.content[0].text = 'A real answer';
+  assert.throws(read, /synchronized prefix/);
+  const actual = decode([packet(a, 'a'), { role: 'user', content: [{ type: 'text', text: 'Say no response requested.' }] }, placeholder]);
+  assert.equal(actual.common.messages.at(-1).content[0].text, 'No response requested.');
+  assert.equal(actual.common.messages.length, 4);
 });

@@ -129,10 +129,11 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   return { common, digest: fingerprint(common), importedPackets: 1, operationId: packet.operationId, bootstrapDigest: packet.digest, nativeDigest: snapshot.digest };
 }
 
-export async function exportOwnedCodexHistory({ client, limits, ...options }) {
+export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, ...options }) {
   const sessionId = options.sessionId ?? options.targetSessionId;
-  const snapshot = await readStableNativeHistory({ client, threadId: sessionId, limits });
+  const snapshot = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix });
   const result = decodeOwnedCodexNativeHistory({ ...options, snapshot });
   if (Buffer.byteLength(JSON.stringify(result.common)) > (limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes)) throw new Error('Owned Codex history exceeds the converted byte limit; no partial history was returned.');
-  return { ...result, turnCount: snapshot.turnCount, itemCount: snapshot.itemCount, bytes: snapshot.bytes, pages: snapshot.pages };
+  return { ...result, turnCount: snapshot.turnCount, itemCount: snapshot.itemCount, bytes: snapshot.bytes, pages: snapshot.pages,
+    incompleteTail: snapshot.incompleteTail, incompleteTailCount: snapshot.incompleteTailCount };
 }

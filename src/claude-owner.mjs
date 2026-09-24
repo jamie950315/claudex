@@ -188,6 +188,9 @@ export class ClaudeOwner {
       this.transcriptPath = sessionPath(this.claudeHome, this.cwd, this.state.sessionId);
       if (this.state.blocked) throw new Error(this.state.blocked);
       const transcript = await this.inspectTranscript();
+      if (!transcript.exists && (this.state.remoteId || this.state.lastAppend || this.state.registration === 'registered')) {
+        throw new Error('The owned native transcript is missing; refusing an empty restart of its existing remote identity.');
+      }
       const remoteIds = new Set(transcript.rows.filter(row => row.type === 'bridge-session' && row.sessionId === this.state.sessionId)
         .map(row => row.bridgeSessionId));
       if ([...remoteIds].some(id => !REMOTE_ID.test(id)) || remoteIds.size > 1) throw new Error('Native remote identity is invalid or ambiguous.');
@@ -262,6 +265,14 @@ export class ClaudeOwner {
     if (matches.length !== 1 || matches[0].type !== 'user' || matches[0].sessionId !== this.state.sessionId
       || hash(normalizedContent(matches[0].message?.content)) !== pending.contentHash) throw new Error('Owned append identity or content does not match the durable intent.');
     return true;
+  }
+
+  async hasAppend({ operationId, content }) {
+    validateContent(content);
+    if (typeof operationId !== 'string' || !operationId || operationId.length > 256) throw new Error('A bounded logical append identity is required.');
+    return this.findAppend(await this.inspectTranscript(), {
+      uuid: appendUuid(this.state.sessionId, operationId), contentHash: hash(normalizedContent(content)),
+    });
   }
 
   async reconcilePending(transcript) {

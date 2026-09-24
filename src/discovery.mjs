@@ -35,6 +35,18 @@ async function claudeCwd(path) {
       try {
         const row = JSON.parse(line);
         if (row.type === 'claudex-owner') return null;
+        if (row.type === 'user' && Array.isArray(row.message?.content)) {
+          const first = row.message.content[0]?.text;
+          const footer = row.message.content.at(-1)?.text;
+          if (first?.startsWith('[Claudex imported history v1]\n') && footer?.startsWith('[Claudex context packet v1]\n')) {
+            const marker = JSON.parse(footer.slice('[Claudex context packet v1]\n'.length));
+            // Discovery is classification, not authentication. Another bridge
+            // root's packet must not be imported again as a new native source.
+            // Actual history reads still verify the private HMAC and chain.
+            if (marker.version === 1 && marker.targetSessionId === row.sessionId && marker.sourceSide === 'codex'
+              && /^[a-f0-9]{64}$/.test(marker.signature)) return null;
+          }
+        }
         cwd ??= row.cwd;
       } catch { return null; }
     }
@@ -49,7 +61,7 @@ async function recent(path, since) {
 }
 
 /** Discover recent activity in selected projects, or every native project when opted in. */
-export async function discoverSources({ codexHome, claudeHome, projects = [], allProjects = false, since }, known = new Set()) {
+export async function discoverSources({ codexHome, claudeHome, projects = [], allProjects = false, since, excludeSubagents = false }, known = new Set()) {
   const selected = new Set(projects.map(path => resolve(path)));
   const eligible = cwd => typeof cwd === 'string' && isAbsolute(cwd) && (allProjects || selected.has(cwd));
   const sources = [];
@@ -57,6 +69,7 @@ export async function discoverSources({ codexHome, claudeHome, projects = [], al
     if (!(await recent(path, since))) continue;
     const row = await header(path);
     if (row?.type !== 'session_meta' || !row.payload || row.payload.originator === 'claudex') continue;
+    if (excludeSubagents && (row.payload.source?.subAgent || /^subAgent/i.test(row.payload.sourceKind ?? row.payload.source?.sourceKind ?? row.payload.source ?? ''))) continue;
     if (!eligible(row.payload.cwd) || known.has(`codex:${row.payload.id}`)) continue;
     sources.push({ side: 'codex', path });
   }

@@ -36,10 +36,12 @@ function timestamp(value) {
   return value;
 }
 
-function validateTurn(turn, previousStart) {
+function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false } = {}) {
   if (!object(turn) || typeof turn.id !== 'string' || !turn.id || !Array.isArray(turn.items)) fail('malformed turn.');
-  if (turn.status === 'inProgress') fail('wait for the in-progress turn to complete.');
-  if (turn.status !== 'completed' || turn.error != null) fail('only completed, error-free turns can be exported.');
+  if (turn.status === 'inProgress' && !allowActive) fail('wait for the in-progress turn to complete.');
+  if (turn.status !== 'completed' && turn.status !== 'inProgress'
+      && !(completedPrefix && ['failed', 'interrupted'].includes(turn.status))) fail('only completed, error-free turns can be exported.');
+  if (turn.status === 'completed' && turn.error != null) fail('only completed, error-free turns can be exported.');
   // Require positive confirmation from the live API, not a schema default that
   // might disguise an older server returning a summarized history.
   if (turn.itemsView !== 'full') fail('the native API did not return full turn items.');
@@ -47,23 +49,23 @@ function validateTurn(turn, previousStart) {
   const completedAt = timestamp(turn.completedAt);
   if (startedAt !== null && completedAt !== null && completedAt < startedAt) fail('turn completion precedes its start.');
   if (startedAt !== null && previousStart !== null && startedAt < previousStart) fail('native turns are not in ascending order.');
-  if (!turn.items.length) fail('a completed turn has no persisted items.');
+  if (turn.status === 'completed' && !turn.items.length) fail('a completed turn has no persisted items.');
   let lastUser = -1; let lastAgent = -1;
   for (let index = 0; index < turn.items.length; index++) {
     const item = turn.items[index];
     if (!object(item) || typeof item.id !== 'string' || !item.id || typeof item.type !== 'string' || !item.type) fail('malformed native item.');
-    if (item.status === 'inProgress') fail('a persisted item is still in progress.');
+    if (turn.status === 'completed' && item.status === 'inProgress') fail('a persisted item is still in progress.');
     if (item.type === 'userMessage') lastUser = index;
     if (item.type === 'agentMessage') {
       if (lastUser < 0) fail('an assistant message precedes the turn user input.');
       lastAgent = index;
     }
   }
-  if (lastUser < 0 || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string' || !turn.items[lastAgent].text.trim()) fail('a completed turn lacks its final assistant response.');
+  if (turn.status === 'completed' && (lastUser < 0 || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string' || !turn.items[lastAgent].text.trim())) fail('a completed turn lacks its final assistant response.');
   return startedAt ?? previousStart;
 }
 
-async function readPass(client, threadId, limits) {
+async function readPass(client, threadId, limits, completedPrefix) {
   const turns = []; const ids = new Set(); const cursors = new Set();
   let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null;
   while (true) {
@@ -77,6 +79,7 @@ async function readPass(client, threadId, limits) {
     } catch (error) {
       // Native errors may include private text or paths. Keep the public error
       // explicit without leaking an arbitrary server error message.
+      if (client.closed) fail('native transport unavailable; no export was produced.');
       const code = Number.isInteger(error?.code) ? ` (code ${error.code})` : '';
       fail(`thread/turns/list is unavailable or failed${code}; no export was produced.`);
     }
@@ -91,7 +94,7 @@ async function readPass(client, threadId, limits) {
     if (nextCursor !== null && (typeof nextCursor !== 'string' || !nextCursor)) fail('invalid pagination cursor.');
     if (nextCursor !== null && response.data.length === 0) fail('empty page with a continuation cursor.');
     for (const turn of response.data) {
-      previousStart = validateTurn(turn, previousStart);
+      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix });
       if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
       ids.add(turn.id);
       itemCount += turn.items.length;
@@ -102,8 +105,13 @@ async function readPass(client, threadId, limits) {
     if (cursors.has(nextCursor)) fail('pagination cursor cycle detected.');
     cursors.add(nextCursor); cursor = nextCursor;
   }
-  if (!turns.length) fail('no completed persisted history is available.');
-  return { turns, digest: digest(turns), itemCount, bytes, pages };
+  const lastCompleted = turns.findLastIndex(turn => turn.status === 'completed');
+  if (lastCompleted < 0) fail('no completed persisted history is available; wait for a complete turn.');
+  if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
+  const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
+  const incompleteTailCount = turns.length - exported.length;
+  return { turns: exported, digest: digest(exported), itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
+    bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount };
 }
 
 function inert(label, value) {
@@ -150,12 +158,14 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
   if (typeof includeNotice !== 'boolean') fail('invalid provenance notice option.');
   if (!object(snapshot) || !Array.isArray(snapshot.turns) || !snapshot.turns.length) fail('no completed persisted history is available.');
   if (snapshot.threadId !== undefined && snapshot.threadId !== threadId) fail('snapshot thread identity does not match.');
+  if (snapshot.completedPrefix !== undefined && typeof snapshot.completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
   const ids = new Set(); let previousStart = null;
   for (const turn of snapshot.turns) {
-    previousStart = validateTurn(turn, previousStart);
+    previousStart = validateTurn(turn, previousStart, { completedPrefix: snapshot.completedPrefix === true });
     if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
     ids.add(turn.id);
   }
+  if (snapshot.turns.at(-1).status !== 'completed') fail('snapshot does not end at a completed turn.');
   const messages = [];
   for (const turn of snapshot.turns) {
     const messageTimestamp = turn.startedAt == null ? suppliedTimestamp : new Date(turn.startedAt * 1000).toISOString();
@@ -174,6 +184,11 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
         content = [inert('historical event', item)];
       }
       messages.push({ role, content, ...(messageTimestamp === undefined ? {} : { timestamp: messageTimestamp }) });
+    }
+    if (turn.status === 'failed' || turn.status === 'interrupted') {
+      messages.push({ role: 'assistant', content: [inert('closed turn status', {
+        turnId: turn.id, status: turn.status, ...(turn.error === undefined ? {} : { error: turn.error }),
+      })], ...(messageTimestamp === undefined ? {} : { timestamp: messageTimestamp }) });
     }
   }
   const firstTimestamp = suppliedTimestamp ?? (snapshot.turns[0].startedAt == null ? undefined : new Date(snapshot.turns[0].startedAt * 1000).toISOString());
@@ -199,12 +214,13 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
 // database access, source transcript writes, or hidden partial-history fallback.
 // Two matching complete reads detect observed changes, not a writer lease. The
 // coordinator still rechecks source identity/checkpoints before publication.
-export async function readStableNativeHistory({ client, threadId, limits: inputLimits } = {}) {
+export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false } = {}) {
   if (!client || typeof client.request !== 'function') fail('a native app-server client is required.');
   if (typeof threadId !== 'string' || !threadId) fail('thread identity is required.');
+  if (typeof completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
   const limits = checkedLimits(inputLimits);
-  const first = await readPass(client, threadId, limits);
-  const second = await readPass(client, threadId, limits);
+  const first = await readPass(client, threadId, limits, completedPrefix);
+  const second = await readPass(client, threadId, limits, completedPrefix);
   if (first.digest !== second.digest) fail('source history changed between complete reads; synchronization paused.');
   return { ...first, threadId, turnCount: first.turns.length };
 }
@@ -215,11 +231,12 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
-  const first = await readStableNativeHistory({ client, threadId, limits });
+  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix });
   const common = convertNativeTurns(first, { threadId, cwd, timestamp: suppliedTimestamp });
   if (Buffer.byteLength(serialize(common)) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
-  return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages };
+  return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
+    incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount };
 }

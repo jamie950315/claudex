@@ -51,13 +51,68 @@ export async function publishExclusive(path, value) {
 
 export const writeJSON = (path, value) => atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
 
-export async function withLock(path, fn) {
+const sameFile = (left, right) => left.dev === right.dev && left.ino === right.ino;
+
+async function reclaimDeadLock(path) {
+  const directory = await lstat(dirname(path));
+  if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid()
+      || (directory.mode & 0o077) !== 0) throw new Error('Lock directory is not private and owned; stale lock was preserved.');
+  let original;
+  try { original = await lstat(path); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (!original.isFile() || original.isSymbolicLink() || original.uid !== process.getuid()
+      || (original.mode & 0o777) !== 0o600 || original.nlink !== 1)
+    throw new Error('Lock is not a private owned regular file; stale lock was preserved.');
+  const contents = await readFile(path, 'utf8');
+  let owner;
+  try { owner = JSON.parse(contents); }
+  catch { throw new Error('Malformed lock owner; stale lock was preserved.'); }
+  if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.started !== 'string'
+      || !Number.isFinite(Date.parse(owner.started))) throw new Error('Malformed lock owner; stale lock was preserved.');
+  if (!sameFile(original, await lstat(path))) throw new Error('Lock identity changed; stale lock was preserved.');
+  if (alive(owner.pid)) throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
+  const claim = `${path}.reclaim`;
+  try { await link(path, claim); }
+  catch (error) {
+    if (error.code === 'ENOENT') return;
+    if (error.code === 'EEXIST') throw new Error('Another stale-lock recovery is in progress; lock was preserved.');
+    throw error;
+  }
+  try {
+    const claimed = await lstat(claim);
+    const current = await lstat(path);
+    if (!sameFile(original, claimed) || !sameFile(original, current) || claimed.nlink !== 2
+        || current.nlink !== 2 || (await readFile(claim, 'utf8')) !== contents || alive(owner.pid))
+      throw new Error('Lock changed during stale recovery; lock was preserved.');
+    await unlink(path);
+  } finally {
+    if (sameFile(original, await lstat(claim))) await unlink(claim);
+  }
+}
+
+function alive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) {
+    if (error.code === 'ESRCH') return false;
+    if (error.code === 'EPERM') return true;
+    throw error;
+  }
+}
+
+export async function withLock(path, fn, { recoverDead = false } = {}) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   let file;
   try { file = await open(path, 'wx', 0o600); }
   catch (error) {
-    if (error.code === 'EEXIST') throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
-    throw error;
+    if (error.code === 'EEXIST') {
+      if (!recoverDead) throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
+      await reclaimDeadLock(path);
+      try { file = await open(path, 'wx', 0o600); }
+      catch (retryError) {
+        if (retryError.code === 'EEXIST') throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
+        throw retryError;
+      }
+    } else throw error;
   }
   try { await file.writeFile(JSON.stringify({ pid: process.pid, started: new Date().toISOString() })); return await fn(); }
   finally { await file.close(); await unlink(path); }
