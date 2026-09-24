@@ -9,6 +9,9 @@ import { promisify } from 'node:util';
 import { toCommon } from 'txcript';
 import { CodexClient } from '../src/codex.mjs';
 import { encodeCodexProjection, createCodexProjection } from '../src/codex-projection.mjs';
+import { buildOwnedCodexCommon, decodeOwnedCodexHistory, exportOwnedCodexHistory } from '../src/owned-codex-history.mjs';
+import { decodeContextPacket } from '../src/context-packet.mjs';
+import { fingerprint } from '../src/history.mjs';
 
 const common = cwd => ({ meta: { cwd, id: 'synthetic', timestamp: '2026-09-24T00:00:00Z' }, messages: [1, 2].flatMap(n => [
   { role: 'user', content: [{ type: 'text', text: `Synthetic question ${n}` }] },
@@ -66,6 +69,64 @@ test('projection has independent identity and complete turn boundaries', () => {
   assert.throws(() => encodeCodexProjection(common('/tmp'), '../bad'), /identifier/);
   const partial = common('/tmp'); partial.messages.pop();
   assert.throws(() => encodeCodexProjection(partial, id), /complete/);
+});
+
+test('paginated typed projections are explicit, deterministic, and reject executable historical tools', () => {
+  const id = randomUUID();
+  const options = { historyMode: 'paginated' };
+  const encoded = encodeCodexProjection(common('/tmp'), id, options);
+  assert.equal(encoded, encodeCodexProjection(common('/tmp'), id, options));
+  const rows = encoded.trim().split('\n').map(JSON.parse);
+  assert.equal(rows[0].payload.history_mode, 'paginated');
+  assert.deepEqual(rows.map(row => row.ordinal), rows.map((_, index) => index));
+  assert.equal(rows.filter(row => row.payload.type === 'item_completed').length, 4);
+  assert.ok(!rows.some(row => ['user_message', 'agent_message'].includes(row.payload.type)));
+  assert.equal(JSON.parse(encodeCodexProjection(common('/tmp'), id).split('\n')[0]).payload.history_mode, 'legacy');
+  assert.throws(() => encodeCodexProjection(toolCommon('/tmp'), id, options), /explicit assistant text block|historical tools/);
+  assert.throws(() => encodeCodexProjection(common('/tmp'), id, { historyMode: 'unknown' }), /history mode/);
+});
+
+test('native paginated display preserves authenticated context packet blocks and images across restart', { skip: process.env.CLAUDEX_NATIVE_TEST !== '1' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'claudex-typed-projection-test-'));
+  const codexHome = join(root, 'codex'); const cwd = join(root, 'project');
+  await mkdir(cwd); await mkdir(codexHome);
+  const id = randomUUID(); const key = Buffer.alloc(32, 7);
+  const identity = { conversationId: 'synthetic-logical-conversation', targetSessionId: id, operationId: 'synthetic-checkpoint', key };
+  const canonical = common(cwd);
+  canonical.messages[0].content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } });
+  const projectionCommon = buildOwnedCodexCommon({ ...identity, canonical });
+  const options = { binary: process.env.CLAUDEX_CODEX_BINARY || 'codex', codexHome, cwd, env: { HOME: root } };
+  let client = new CodexClient(options);
+  t.after(() => client.close());
+  await client.initialize();
+  const projection = await createCodexProjection({ client, codexHome, common: projectionCommon, id, historyMode: 'paginated', title: 'Synthetic typed packet' });
+  for (let pass = 0; pass < 2; pass++) {
+    const raw = await readFile(projection.path, 'utf8');
+    assert.equal(decodeOwnedCodexHistory({ ...identity, text: raw }).digest, fingerprint(canonical));
+    const page = await client.request('thread/turns/list', { threadId: id, itemsView: 'full', sortDirection: 'asc', limit: 100 });
+    assert.equal(page.data.length, 1);
+    assert.equal(page.data[0].status, 'completed');
+    assert.equal(page.data[0].itemsView, 'full');
+    assert.deepEqual(page.data[0].items.map(item => item.type), ['userMessage', 'agentMessage']);
+    const content = page.data[0].items[0].content.map(block => {
+      if (block.type === 'text') {
+        assert.deepEqual(block.text_elements, []);
+        return { type: 'text', text: block.text };
+      }
+      assert.equal(block.type, 'image');
+      const image = /^data:(image\/[a-z]+);base64,(.+)$/.exec(block.url);
+      assert.ok(image);
+      return { type: 'image', source: { type: 'base64', media_type: image[1], data: image[2] } };
+    });
+    assert.deepEqual(content, projectionCommon.messages[0].content);
+    assert.equal(decodeContextPacket({ ...identity, content }).digest, fingerprint(canonical));
+    assert.equal(page.data[0].items[1].text, projectionCommon.messages[1].content[0].text);
+    assert.equal((await exportOwnedCodexHistory({ ...identity, client, cwd })).digest, fingerprint(canonical));
+    if (pass === 0) {
+      await client.close(); client = new CodexClient(options); await client.initialize(); await client.resumeThread(id);
+    }
+  }
+  t.diagnostic(`Native typed display evidence: ${root}`);
 });
 
 test('native projection is listed, restart-resumable and independent of deleted predecessor', { skip: process.env.CLAUDEX_NATIVE_TEST !== '1' }, async t => {

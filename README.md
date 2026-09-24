@@ -194,6 +194,68 @@ appends to adopted transcripts, even though the isolated synthetic probe works.
 Do not promote the fixture append helper into a runtime writer based on an
 archived flag, an absent PID, or a successful reload alone.
 
+### Native SDK owner path
+
+`src/claude-owner.mjs` provides an experimental alternative: a persistent native
+Claude SDK process is the only transcript writer, and Claude Desktop connects
+through native Remote Control. Synchronization submits `shouldQuery: false`
+messages; normal user requests from Desktop remain native user turns. The
+component pins SDK `0.3.281` and CLI `2.1.281` and requires normal subscription
+OAuth. It does not copy credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
+even to the default path selects a different native credential namespace, so
+the owner omits that variable for the standard home.
+
+The component verifies no-query receipts against the exact persisted UUID and
+content, keeps one durable pending operation, deduplicates operation IDs, and
+reconnects the same Remote Control identity. Native Desktop verification shows
+updates arriving without reload, plus same-ID restart and duplicate suppression,
+with zero inference turns/API time/cost for each bridge append. These components
+are not yet wired into the default watcher; full bidirectional delivery remains
+unverified.
+
+`src/context-packet.mjs` carries reversibly labeled foreign messages as native
+text and inline images, never executable tool requests. A bounded structural
+footer authenticates the packet without duplicating its body. The future
+coordinator must persist its private signing key, enforce digest chaining, and
+keep imported packets from looping back as newly authored messages.
+
+`src/native-history.mjs` reads the native paginated `thread/turns/list` API twice,
+requiring complete matching history rather than guessing raw `history_base`
+offsets. A real compacted conversation exports all 15 completed turns and round
+trips through the Claude codec. This is saved readable display history, including
+inert tool events and inline images, not decrypted reasoning or recovered
+source-truncated output. The destination transcript visibly states that limit.
+
+### Shared Codex transport
+
+`bin/claudex-codex.mjs` is a tested, not-yet-deployed native launcher. It preserves
+the Desktop-supplied arguments and environment, replaces only the app-server
+transport with the public Unix WebSocket listener, and forwards Desktop JSONL
+frames unchanged. `CodexWebSocketClient` can join that same native backend. An
+isolated native test proves that a second client can safely archive an idle owned
+projection while the first client remains connected and receives the event.
+
+Do not enable a separate prestarted backend through `CODEX_APP_SERVER_WS_URL` as
+a shortcut: that skips Desktop's app-tools configuration and inherited pipe
+environment. The planned entry point is the native `CODEX_CLI_PATH` override,
+with the original bundled binary explicitly selected by `CLAUDEX_CODEX_BINARY`.
+Changing a running Desktop process is not supported; integration must not
+interrupt user work. The launcher has not been configured on this machine yet.
+
+The native listener creates a private, UID-owned socket alias into its native
+runtime directory. Both alias and target identities are verified. The bounded
+manifest stores only process/socket identities and version, never inherited
+environment values. The current CLI's `app-server proxy` sends raw JSONL and is
+not interchangeable with this WebSocket transport.
+
+New owned Codex checkpoints can explicitly select `historyMode: 'paginated'`.
+Typed native events preserve text block boundaries and inline images through
+the persisted API, unlike the legacy display event encoder. A signed imported
+checkpoint is followed by a clearly labeled transport receipt, not a fabricated
+AI reply. `owned-codex-history` and `owned-claude-history` recover logical messages
+and detect repeated imports or conflicting prefixes. These pieces still require
+integration with the background coordinator before full delivery is claimed.
+
 ## Verification
 
 ```sh

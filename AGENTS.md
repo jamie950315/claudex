@@ -67,3 +67,34 @@ Reject unresolved Codex history_base references without a self-contained readabl
 summary; do not silently export only their local tail. Earlier readable originals
 can remain in prior rollouts, but prefix ordinals, byte boundaries, item identity,
 and complete-turn coverage must agree before publishing a reconstruction.
+
+Experimental SDK path: `ClaudeOwner` is the sole native writer; Desktop views it
+through Remote Control. Actual native/desktop tests verify shouldQuery:false,
+zero-inference receipts, same remote ID after restart, exact UUID/content
+persistence, and duplicate suppression. SDK0.3.281/CLI2.1.281 are pinned. Preserve
+the default OAuth namespace by omitting CLAUDE_CONFIG_DIR for standard ~/.claude.
+No credential extraction/copy is allowed. The default watcher is not integrated
+with this path yet. Store the owner handle before start() so startup failures
+during user work retain the live owner instead of interrupting it.
+
+Context packets preserve portable semantic messages as authenticated labeled
+native text/images; the coordinator still needs durable key and digest-chain
+integration. Native history export uses full paginated API reads with a stable
+two-read snapshot, including pre-compaction readable history. Do not claim it
+recovers encrypted reasoning or native-truncated output.
+
+Shared Codex transport is staged, not deployed: `bin/claudex-codex.mjs` preserves
+native Desktop args/env, starts a public Unix WS listener, and forwards JSONL
+unchanged. Do not use a prestarted WS_URL override: it loses Desktop app-tools
+injection. The native CODEX_CLI_PATH launcher is the intended activation path;
+never restart active user work. WS clients share the backend and can retire idle
+owned projections immediately (native isolated proof). The CLI's raw proxy is
+not compatible with the WS listener. Native socket aliases need strict UID,
+private-directory, inode and target validation, not blanket symlink following.
+
+Opt-in paginated projections preserve signed packet blocks and images in the
+full native history API; default legacy behavior is unchanged. Owned decoders
+validate the packet before generic metadata conversion, strip only the exact
+explicit transport receipt, and retain real subsequent turns. Live scheduling,
+bounded snapshot retirement and automatic discovery still need these pieces
+integrated; the existing watcher remains the legacy path.
