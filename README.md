@@ -12,12 +12,15 @@ validated. Both tools retain their own authentication and permission settings.
 
 ```sh
 npm ci --ignore-scripts
-node bin/claudex.mjs init --project /absolute/path/to/project
+node bin/claudex.mjs init --all-projects
 node bin/claudex.mjs watch
 ```
 
-Select each project with another `--project` on the initial command. Discovery
-starts with activity after initialization, not a bulk import of old history.
+`--all-projects` automatically discovers activity across both native stores,
+including new projects, without selecting repositories. To limit scope instead,
+use repeated `--project /absolute/path/to/project` options during initialization.
+Discovery starts with activity after initialization, not a bulk import of old
+history. Existing conversations become eligible when they are updated.
 Use the normal native session lists to open the latest version. Close the
 destination session before switching back: loaded Codex writers and matching
 live Claude sessions block replacement. Reading a completed source turn does not
@@ -34,6 +37,10 @@ node bin/claudex.mjs service status
 
 The service runs at login. An unsafe error stops it rather than retrying an
 ambiguous write. `status` shows the last error without transcript contents.
+Unsupported histories found during discovery are left untouched and skipped,
+so they do not stop unrelated projects. Status reports their count and at most
+20 source paths/reasons; this diagnostic list does not accumulate over time.
+Failures involving already tracked history or pending writes still stop safely.
 `service stop` unloads it for the current login; `service start` loads it again.
 `service uninstall` removes its LaunchAgent but preserves conversation data.
 Only one watcher can run for a state root.

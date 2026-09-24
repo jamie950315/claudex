@@ -17,13 +17,14 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, from: { type: 'string' }, source: { type: 'string' }, id: { type: 'string' }, title: { type: 'string' },
   'codex-home': { type: 'string' }, 'claude-home': { type: 'string' }, 'codex-binary': { type: 'string' },
   project: { type: 'string', multiple: true }, help: { type: 'boolean' }, watch: { type: 'boolean' },
+  'all-projects': { type: 'boolean' },
 } });
 const command = positionals[0] || 'help';
 let root = resolve(values.root || process.env.CLAUDEX_HOME || join(homedir(), '.local', 'share', 'claudex'));
 const output = value => console.log(JSON.stringify(value, null, 2));
 const help = `Claudex: bounded local conversation handoffs (no model calls)
 
-  claudex init [--project /absolute/project] [--codex-home PATH] [--claude-home PATH]
+  claudex init [--all-projects | --project /absolute/project] [--codex-home PATH] [--claude-home PATH]
   claudex track --from codex|claude --source PATH [--title TITLE]
   claudex track --from codex --id THREAD_ID
   claudex sync CONVERSATION_ID --from codex|claude
@@ -46,16 +47,18 @@ async function main() {
   root = await privateDirectory(root);
   const configPath = join(root, 'config.json');
   if (command === 'init') {
+    if (values['all-projects'] && values.project?.length) throw new Error('Choose --all-projects or --project, not both.');
     if (await readJSON(configPath, null)) throw new Error('Already initialized; existing configuration was not changed.');
     const config = {
       version: 1, codexHome: await realpath(resolve(values['codex-home'] || join(homedir(), '.codex'))),
       claudeHome: await realpath(resolve(values['claude-home'] || join(homedir(), '.claude'))),
       binary: values['codex-binary'] || 'codex',
       projects: await Promise.all((values.project || []).map(path => realpath(resolve(path)))),
+      allProjects: values['all-projects'] === true,
       since: Date.now(),
     };
     await writeJSON(configPath, config);
-    output({ initialized: root, projects: config.projects, watching: false });
+    output({ initialized: root, projects: config.projects, allProjects: config.allProjects, watching: false });
     return;
   }
   const config = await readJSON(configPath, null);
@@ -84,7 +87,7 @@ async function main() {
     const options = { root, cli: fileURLToPath(import.meta.url) };
     if (positionals[1] === 'install') {
       const state = await new Bridge({ root, drivers: {} }).status();
-      if (!config.projects.length && !state.records.length) throw new Error('Select projects or track a conversation before installing the service.');
+      if (!config.allProjects && !config.projects.length && !state.records.length) throw new Error('Select all projects, specific projects, or track a conversation before installing the service.');
       output(await installService(options));
     } else output(await controlService(positionals[1], options));
     return;
@@ -96,7 +99,7 @@ async function main() {
   }
   if (command === 'status') {
     const state = await new Bridge({ root, drivers: {} }).status();
-    output({ conversations: Object.values(state.conversations), records: state.records,
+    output({ allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
       pending: state.pending ? { phase: state.pending.phase, nativeId: state.pending.record.nativeId, side: state.pending.record.side } : null,
       audit: state.audit, watcher: await readJSON(join(root, 'watcher-status.json'), null) });
     return;
@@ -128,10 +131,12 @@ async function main() {
   let lastCollection = 0;
   const stop = () => { stopped = true; };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
-  console.log('Watching opted-in projects and tracked conversations. Press Ctrl+C to stop.');
+  console.log(`Watching ${config.allProjects ? 'all projects' : 'opted-in projects'} and tracked conversations. Press Ctrl+C to stop.`);
   await withLock(join(root, 'watch.lock'), async () => {
   await writeJSON(join(root, 'watcher-status.json'), { running: true, pid: process.pid, startedAt: Date.now(), error: null });
   while (!stopped) {
+    const blockedSources = [];
+    let blockedSourceCount = 0;
     try {
       await usingBridge(async (bridge, drivers) => {
         let state = await bridge.status();
@@ -139,7 +144,14 @@ async function main() {
         const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
         for (const source of await discoverSources(config, known)) {
           try { output(await bridge.track(source)); }
-          catch (error) { if (!/still running|complete assistant|Unfinished|incomplete final/i.test(error.message)) throw error; }
+          catch (error) {
+            if (/still running|complete assistant|Unfinished|incomplete final/i.test(error.message)) continue;
+            // Unsupported, not-yet-enrolled histories must not stop unrelated projects.
+            // Transaction, storage, version, and ownership failures still stop the watcher.
+            if (!/Compacted Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs/.test(error.message)) throw error;
+            blockedSourceCount++;
+            if (blockedSources.length < 20) blockedSources.push({ ...source, reason: error.message });
+          }
         }
         state = await bridge.status();
         for (const conversation of Object.values(state.conversations)) {
@@ -161,7 +173,7 @@ async function main() {
         }
         if (Date.now() - lastCollection > 60000) { await bridge.collect(); lastCollection = Date.now(); }
       });
-      if (lastNotice) await writeJSON(join(root, 'watcher-status.json'), { running: true, pid: process.pid, updatedAt: Date.now(), waiting: null });
+      await writeJSON(join(root, 'watcher-status.json'), { running: true, pid: process.pid, updatedAt: Date.now(), waiting: null, blockedSourceCount, blockedSources });
       lastNotice = '';
     } catch (error) {
       if (/active writer|destination is active|Claude Code is open|still running|Another bridge operation/i.test(error.message)) {

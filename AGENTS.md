@@ -23,12 +23,15 @@ and generated sessions outside the repository.
 
 ## Current boundary
 
-`bin/claudex.mjs` provides explicit initialization/project opt-in, discovery,
+`bin/claudex.mjs` provides explicit initialization with all-project or selected-project scope, discovery,
 watching, synchronization, recovery, collection, and optional macOS LaunchAgent
 installation. Defaults retain one current and one previous copy per side,
 seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
+All-project discovery skips unsupported unenrolled histories and reports a
+bounded diagnostic list; pending transactions and tracked-history failures still
+stop synchronization. Discovery starts at initialization, not a bulk history import.
 
 Native compatibility is pinned to Codex `0.155.0-alpha.16.3` and Claude Code
 `2.1.210`; version drift pauses writes. Codex has cross-process writer locks.

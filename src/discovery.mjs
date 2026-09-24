@@ -1,5 +1,5 @@
 import { readdir, stat } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { projectDirectory } from './claude.mjs';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -48,25 +48,28 @@ async function recent(path, since) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-/** Discover only new activity in explicitly selected canonical project paths. */
-export async function discoverSources({ codexHome, claudeHome, projects, since }, known = new Set()) {
+/** Discover recent activity in selected projects, or every native project when opted in. */
+export async function discoverSources({ codexHome, claudeHome, projects = [], allProjects = false, since }, known = new Set()) {
   const selected = new Set(projects.map(path => resolve(path)));
+  const eligible = cwd => typeof cwd === 'string' && isAbsolute(cwd) && (allProjects || selected.has(cwd));
   const sources = [];
   for await (const path of codexFiles(join(codexHome, 'sessions'))) {
     if (!(await recent(path, since))) continue;
     const row = await header(path);
-    if (row?.type !== 'session_meta' || row.payload.originator === 'claudex') continue;
-    if (!selected.has(row.payload.cwd) || known.has(`codex:${row.payload.id}`)) continue;
+    if (row?.type !== 'session_meta' || !row.payload || row.payload.originator === 'claudex') continue;
+    if (!eligible(row.payload.cwd) || known.has(`codex:${row.payload.id}`)) continue;
     sources.push({ side: 'codex', path });
   }
-  for (const cwd of selected) {
-    const directory = projectDirectory(claudeHome, cwd);
+  const directories = allProjects
+    ? (await entries(join(claudeHome, 'projects'))).filter(entry => entry.isDirectory()).map(entry => join(claudeHome, 'projects', entry.name))
+    : [...new Set([...selected].map(cwd => projectDirectory(claudeHome, cwd)))];
+  for (const directory of directories) {
     for (const entry of await entries(directory)) {
       if (!entry.isFile() || !/^[a-f0-9-]{36}\.jsonl$/i.test(entry.name)) continue;
       if (known.has(`claude:${entry.name.slice(0, -6)}`)) continue;
       const path = join(directory, entry.name);
       // Different project paths can encode to the same Claude directory key.
-      if (await recent(path, since) && await claudeCwd(path) === cwd) sources.push({ side: 'claude', path });
+      if (await recent(path, since) && eligible(await claudeCwd(path))) sources.push({ side: 'claude', path });
     }
   }
   return sources;
