@@ -2,7 +2,8 @@ import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { access, mkdir, open } from 'node:fs/promises';
 import { fromCommon, toCommon } from 'txcript';
-import { hash, snapshot } from './storage.mjs';
+import { hash, snapshot, publishExclusive } from './storage.mjs';
+import { portableMessages } from './history.mjs';
 
 export function projectDirectory(claudeHome, cwd) {
   return join(claudeHome, 'projects', resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'));
@@ -17,7 +18,7 @@ export function encodeClaude(common, id, parentUuid = null) {
   const normalized = {
     ...common,
     meta: { ...common.meta, id },
-    messages: common.messages.map(message => ({ ...message, timestamp: message.timestamp ?? common.meta.timestamp })),
+    messages: portableMessages(common.messages).map(message => ({ ...message, timestamp: message.timestamp ?? common.meta.timestamp })),
   };
   const rows = fromCommon(JSON.stringify(normalized), 'claude_code').trim().split('\n').filter(Boolean).map(JSON.parse);
   // A fresh identifier for each appended record avoids codec-generated collisions
@@ -48,14 +49,13 @@ export function encodeClaude(common, id, parentUuid = null) {
   return { rows, text: rows.map(row => JSON.stringify(row)).join('\n') + (rows.length ? '\n' : '') };
 }
 
-export async function createClaudeSession({ claudeHome, common, id = randomUUID(), title }) {
+export async function createClaudeSession({ claudeHome, common, id = randomUUID(), title, owner }) {
   const path = sessionPath(claudeHome, common.meta.cwd, id);
   await mkdir(projectDirectory(claudeHome, common.meta.cwd), { recursive: true, mode: 0o700 });
   const encoded = encodeClaude(common, id);
   const titleRow = { type: 'custom-title', customTitle: title || 'Claudex conversation', sessionId: id };
-  const text = encoded.text + JSON.stringify(titleRow) + '\n';
-  const file = await open(path, 'wx', 0o600);
-  try { await file.writeFile(text); await file.sync(); } finally { await file.close(); }
+  const text = encoded.text + JSON.stringify(titleRow) + '\n' + (owner ? JSON.stringify({ type: 'claudex-owner', sessionId: id, owner }) + '\n' : '');
+  await publishExclusive(path, text);
   return { id, path, hash: hash(text), lastUuid: encoded.rows.at(-1)?.uuid ?? null };
 }
 
@@ -80,6 +80,17 @@ export function decodeClaude(text) {
   const compact = rows.some(row => row.type === 'system' && row.subtype === 'compact_boundary');
   if (compact) throw new Error('Claude compaction requires a new explicit handoff; automatic replay is paused.');
   const main = rows.filter(row => !row.isSidechain);
+  const ids = new Set(main.filter(row => row.uuid).map(row => row.uuid));
+  const children = new Map();
+  for (const row of main.filter(row => row.type === 'user' || row.type === 'assistant')) {
+    if (row.parentUuid && !ids.has(row.parentUuid)) throw new Error('Dependent Claude history is missing its parent; automatic handoff paused.');
+    if (row.parentUuid) {
+      const siblings = children.get(row.parentUuid) ?? new Set();
+      siblings.add(row.uuid);
+      if (siblings.size > 1) throw new Error('Nonlinear Claude history requires an explicit branch selection.');
+      children.set(row.parentUuid, siblings);
+    }
+  }
   return JSON.parse(toCommon(main.map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
 }
 

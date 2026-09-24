@@ -43,3 +43,10 @@ test('compacted sessions are not silently flattened', () => {
 test('project paths match Claude project encoding', () => {
   assert.equal(projectDirectory('/tmp/claude-home', '/Users/jamie/a.b_c'), '/tmp/claude-home/projects/-Users-jamie-a-b-c');
 });
+
+test('missing parents and competing branches are not silently flattened', () => {
+  const row = (uuid, parentUuid, role) => ({ type: role, uuid, parentUuid, message: { role, content: 'text' } });
+  assert.throws(() => decodeClaude(JSON.stringify(row('a', 'missing', 'user')) + '\n'), /missing its parent/);
+  const rows = [row('a', null, 'user'), row('b', 'a', 'assistant'), row('c', 'a', 'assistant')];
+  assert.throws(() => decodeClaude(rows.map(value => JSON.stringify(value)).join('\n') + '\n'), /Nonlinear/);
+});

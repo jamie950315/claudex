@@ -1,9 +1,10 @@
 {
   "name": "claudex-local-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Native compatibility adapters and tests for local Codex / Claude Code conversation handoffs.",
+  "description": "Bounded local conversation handoffs between Codex and Claude Code.",
+  "bin": { "claudex": "bin/claudex.mjs" },
   "scripts": { "test": "node --test test/*.test.mjs" },
   "engines": { "node": ">=22" },
   "dependencies": { "txcript": "0.14.4" }
