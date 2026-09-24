@@ -57,3 +57,13 @@ Desktop-owned transcripts must not be replaced, hidden, or pruned (even if archi
 in Desktop). No external no-inference lifecycle API is established, so automatic
 Desktop generation registration is not enabled. Never claim that CLI discovery
 proves Desktop Recents visibility or implement database/IPC injection as a shortcut.
+
+A native Desktop probe verifies two then four synthetic messages under one ID,
+including archive and deep-link unarchive without another registry entry. This
+does not establish a writer lease: archive persists before child exit is awaited,
+and unarchive can race an external append. Keep the Desktop-owned write guard.
+
+Reject unresolved Codex history_base references without a self-contained readable
+summary; do not silently export only their local tail. Earlier readable originals
+can remain in prior rollouts, but prefix ordinals, byte boundaries, item identity,
+and complete-turn coverage must agree before publishing a reconstruction.

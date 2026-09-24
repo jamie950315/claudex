@@ -148,6 +148,10 @@ are not presented as if they survived compaction.
 - Encrypted/empty summaries, Codex replacement histories, and Claude preserved
   segments are not transferable by this adapter. The latest boundary controls;
   an older readable summary cannot substitute for a newer opaque one.
+- Codex `history_base` references are not flattened into tail-only conversations.
+  Without a validated self-contained native summary, their earlier prefix must
+  first be resolved and verified. An opaque summary does not establish that the
+  earlier readable transcript has been deleted: it may live in a prior rollout.
 
 After enrollment, a compaction may reset the semantic checkpoint only if its
 boundary is new, occurs after the saved native byte count, and the entire saved
@@ -174,6 +178,21 @@ database, trust settings, or internal IPC.
 This is an explicit remaining integration limit, not a completed automatic
 desktop synchronization feature. The foreground native CLI and desktop app
 also retain their own authentication and workspace-trust requirements.
+
+A controlled desktop probe verifies another possible direction: selecting the
+project through the native folder picker permits CLI resume; two synthetic
+messages render in Desktop, and after native archive, two fixture-only appended
+messages render under the same desktop session ID. The official resume deep link
+unarchives that same ID without another desktop record. This proves reload and
+identity reuse, not safe concurrent synchronization.
+
+Archive is not an external writer lease. The inspected native lifecycle requests
+query closure without awaiting the child-process exit before persisting the
+archived flag; another UI action can unarchive immediately. No shared external
+writer lock is established. Consequently the runtime still refuses external
+appends to adopted transcripts, even though the isolated synthetic probe works.
+Do not promote the fixture append helper into a runtime writer based on an
+archived flag, an absent PID, or a successful reload alone.
 
 ## Verification
 

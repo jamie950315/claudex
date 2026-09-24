@@ -18,6 +18,15 @@ const id = '00000000-0000-4000-8000-000000000001';
 const meta = { type: 'session_meta', payload: { id, cwd: '/tmp', timestamp: '2026-09-25T00:00:00Z' } };
 const message = (role, text) => ({ type: 'response_item', payload: { type: 'message', role, content: [{ type: role === 'user' ? 'input_text' : 'output_text', text }] } });
 
+test('referenced rollout tails cannot silently omit their earlier history', () => {
+  const referenced = { ...meta, payload: { ...meta.payload, history_base: { thread_id: id, end_ordinal_exclusive: 5, end_byte_offset: 999 } } };
+  const tail = [message('user', 'Tail question'), message('assistant', 'Tail answer')];
+  assert.throws(() => decodeCodex(jsonl([referenced, ...tail])), /Referenced Codex history/);
+  const compacted = decodeCodex(jsonl([referenced, { type: 'compacted', payload: { message: 'Readable native summary of the referenced prefix.' } }, ...tail]));
+  assert.equal(compacted.common.messages.length, 3);
+  assert.match(compacted.common.messages[0].content[0].text, /Readable native summary/);
+});
+
 test('Codex readable compaction replaces earlier history and retains complete continuation', () => {
   const text = jsonl([meta, message('user', 'Discard old verbatim'), message('assistant', 'Old answer'),
     { type: 'compacted', payload: { message: 'Remember BLUE.' } }, message('user', 'Continue'), message('assistant', 'BLUE continued')]);

@@ -31,6 +31,10 @@ export function decodeCodex(text) {
   if (!meta || meta.forked_from_id || meta.parent_thread_id) throw new Error('Missing or dependent Codex history; independent transcript required.');
   if (rows.some(row => row.type === 'turn_context' && row.payload.cwd && row.payload.cwd !== meta.cwd)) throw new Error('Codex working directory changed; automatic handoff paused.');
   const compacted = codexCompaction(text, rows);
+  // A paginated rollout can contain only a tail whose earlier messages live in
+  // another file. A validated native summary is self-contained; an uncompressed
+  // tail is not. Never mistake that tail for a complete independent history.
+  if (meta.history_base != null && !compacted) throw new Error('Referenced Codex history requires verified prefix resolution; automatic handoff paused.');
   let running = false;
   let aborted = false;
   for (const row of rows) {
