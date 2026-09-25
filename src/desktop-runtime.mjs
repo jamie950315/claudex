@@ -14,6 +14,7 @@ import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
+import { isSupportedCodexVersion } from './codex-versions.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -91,9 +92,12 @@ export class DesktopRuntime {
       try { info = await lstat(path); manifest = await readJSON(path); }
       catch (error) { if (error.code === 'ENOENT') throw new Error('Shared Codex Desktop backend is not ready.'); throw error; }
       if (info.isSymbolicLink() || !info.isFile() || info.uid !== process.getuid() || (info.mode & 0o777) !== 0o600
-          || manifest.version !== 1 || manifest.cliVersion !== 'codex-cli 0.155.0-alpha.16.3'
-          || !Number.isInteger(manifest.pid) || !Number.isInteger(manifest.childPid) || !alive(manifest.pid) || !alive(manifest.childPid)
-          || !manifest.socketPath) throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
+          || manifest.version !== 1 || !Number.isInteger(manifest.pid) || !Number.isInteger(manifest.childPid)
+          || !alive(manifest.pid) || !alive(manifest.childPid)) throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
+      if (manifest.transportMode === 'native')
+        throw new Error('Shared Codex Desktop backend is not ready: Desktop is in native-only mode; synchronization awaits version validation.');
+      if (manifest.transportMode !== undefined || !isSupportedCodexVersion(manifest.cliVersion) || !manifest.socketPath)
+        throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
       const socket = await inspectCodexSocket(manifest.socketPath);
       if (socket.socketStat.dev !== manifest.socketIdentity?.dev || socket.socketStat.ino !== manifest.socketIdentity?.ino) throw new Error('Shared Codex socket identity changed.');
       this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath });

@@ -20,9 +20,9 @@ async function fixture(t) {
   await writeFile(binary, `#!${process.execPath}\nimport http from 'node:http';
 import { WebSocketServer } from ${JSON.stringify(wsModule)};
 const args = process.argv.slice(2);
-if(args[0] === '--version') { console.log(${JSON.stringify(SUPPORTED_CODEX_VERSION)}); process.exit(0); }
+if(args[0] === '--version') { console.log(process.env.CLAUDEX_SYNTHETIC_CODEX_VERSION || ${JSON.stringify(SUPPORTED_CODEX_VERSION)}); process.exit(0); }
 if(!args.includes('app-server')) { console.log(JSON.stringify({args, inherited:process.env.CLAUDEX_SYNTHETIC_VALUE==='synthetic inherited'})); process.exit(7); }
-if(args.length===3 && args[1]==='--listen' && args[2]==='stdio://') {
+if(!args.some(arg=>arg.startsWith('unix://'))) {
   process.stdin.setEncoding('utf8');
   let tail='';
   process.stdin.on('data', chunk => {
@@ -101,6 +101,62 @@ test('only app-server listener flags change and nonserver commands pass through'
   assert.deepEqual(sharedServerArguments(['app-server', '--ws-auth', 'capability-token', '--ws-token-file', '/synthetic/token', '--stdio'], '/private/socket'), ['app-server', '--ws-auth', 'capability-token', '--ws-token-file', '/synthetic/token', '--listen', 'unix:///private/socket']);
 });
 
+test('a verified patch update shares the backend using its exact runtime version', { timeout: 10000 }, async t => {
+  const { state, start, env } = await fixture(t);
+  env.CLAUDEX_SYNTHETIC_CODEX_VERSION = 'codex-cli 0.155.0-alpha.16.4';
+  const child = start(['app-server', '--analytics-default-enabled']);
+  const record = await ready(state);
+  assert.equal(record.cliVersion, env.CLAUDEX_SYNTHETIC_CODEX_VERSION);
+  assert.ok(record.socketPath);
+  child.stdin.end();
+  assert.equal((await child.done).code, 0);
+});
+
+test('an unvalidated app update starts the original native transport without enabling sync', { timeout: 10000 }, async t => {
+  const { state, start, env } = await fixture(t);
+  env.CLAUDEX_SYNTHETIC_CODEX_VERSION = 'codex-cli 99.0.0';
+  const args = ['app-server', '--analytics-default-enabled', '-c', 'synthetic="exact value"'];
+  const child = start(args);
+  const response = (await request(child, { id: 'native', method: 'probe' })).result;
+  assert.deepEqual(response.args, args);
+  assert.equal(response.appPipeInherited, true);
+  assert.match(child.errors, /synchronization is paused.*original native transport/);
+  const manifest = JSON.parse(await readFile(join(state, 'codex-shared', 'owner.json')));
+  assert.equal(manifest.transportMode, 'native');
+  assert.equal(manifest.childPid, response.pid);
+  assert.equal(manifest.socketPath, null);
+  await assert.rejects(access(join(state, 'codex-shared', 'app.sock')), { code: 'ENOENT' });
+  const contender = start(args);
+  assert.equal((await contender.done).code, 1);
+  assert.equal((await request(child, { id: 'still-native', method: 'probe' })).result.pid, response.pid);
+  child.stdin.end();
+  assert.equal((await child.done).code, 0);
+  await assert.rejects(access(join(state, 'codex-shared', 'owner.json')), { code: 'ENOENT' });
+});
+
+test('an unknown version never bypasses an existing shared writer', { timeout: 10000 }, async t => {
+  const { state, start, env } = await fixture(t);
+  const first = start(['app-server']);
+  const record = await ready(state);
+  env.CLAUDEX_SYNTHETIC_CODEX_VERSION = 'codex-cli 99.0.0';
+  const contender = start(['app-server']);
+  assert.equal((await contender.done).code, 1);
+  assert.equal((await request(first, { id: 1, method: 'probe' })).result.pid, record.childPid);
+  first.stdin.end();
+  assert.equal((await first.done).code, 0);
+});
+
+test('native-only shutdown releases its lease before propagating termination', { timeout: 10000 }, async t => {
+  const { state, start, env } = await fixture(t);
+  env.CLAUDEX_SYNTHETIC_CODEX_VERSION = 'codex-cli 99.0.0';
+  const child = start(['app-server']);
+  const response = (await request(child, { id: 'native', method: 'probe' })).result;
+  child.kill('SIGTERM');
+  assert.equal((await child.done).signal, 'SIGTERM');
+  assert.throws(() => process.kill(response.pid, 0), { code: 'ESRCH' });
+  await assert.rejects(access(join(state, 'codex-shared', 'owner.json')), { code: 'ENOENT' });
+});
+
 test('launcher preserves app configuration and environment, bridges unchanged JSONL, and shares its backend', { timeout: 10000 }, async t => {
   const { state, start } = await fixture(t);
   const args = ['app-server', '--stdio', '-c', 'plugins.codex-app-tools@openai-bundled.mcp_servers.codex_app.enabled=true'];
@@ -172,6 +228,11 @@ test('stale records without a socket recover only with exact identity; unknown f
   await mkdir(directory, { mode: 0o700, recursive: true });
   const record = { version: 1, pid: 2147483647, childPid: 2147483646, socketPath: join(directory, 'app.sock'), listenerPath: join(directory, 'app.sock'), listenerIdentity: null, socketIdentity: null, binary: await realpath(binary), cliVersion: SUPPORTED_CODEX_VERSION };
   const manifest = join(directory, 'owner.json');
+  const unknownMode = JSON.stringify({ ...record, transportMode: 'unknown-mode' });
+  await writeFile(manifest, unknownMode, { mode: 0o600 });
+  const unknown = start(['app-server']);
+  assert.equal((await unknown.done).code, 1);
+  assert.equal(await readFile(manifest, 'utf8'), unknownMode);
   await writeFile(manifest, JSON.stringify(record), { mode: 0o600 });
   const child = start(['app-server']);
   await ready(state);

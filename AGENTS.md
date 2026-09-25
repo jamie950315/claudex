@@ -33,7 +33,7 @@ All-project discovery skips unsupported unenrolled histories and reports a
 bounded diagnostic list; pending transactions and tracked-history failures still
 stop synchronization. Discovery starts at initialization, not a bulk history import.
 
-Native compatibility is pinned to Codex `0.155.0-alpha.16.3` and Claude Code
+Native compatibility is pinned to Codex `0.155.0-alpha.16.3` or `.16.4` and Claude Code
 `2.1.210` or `2.1.281`; version drift pauses writes. Codex has cross-process writer locks.
 Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
@@ -188,6 +188,16 @@ activated the signed wrapper and restored the live app-tools path. Never
 disable peer checks or substitute an unsigned client. Stdio close does not
 schedule immediate reconnect; next-request recovery is not proof that killing
 an active backend is safe.
+
+Runtime compatibility is centralized in src/codex-versions.mjs. The .16.4 app
+update passed isolated native contracts and signed-Node launcher initialization.
+An unknown runtime uses original native Desktop transport under the same
+exclusive owner lease, labeled transportMode:native, with no shared socket.
+The watcher refuses that mode and reports synchronization paused pending version
+validation. Only this pre-launch version decision may select native-only mode;
+never fall back after an ownership/shared-start/transport failure or bypass a
+live owner. Release the lease after the native child exits, including signals.
+The projection codec's .16.3 schema label is not a runtime version assertion.
 
 Rejected transport shortcuts: queue/add auto-starts inference on an idle native
 thread. shellCommand persists userShell events without a model request, but

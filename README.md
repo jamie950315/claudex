@@ -9,7 +9,7 @@ a local-only transport.
 
 ## Setup and modes
 
-Requires macOS, Node.js 22+, Codex CLI `0.155.0-alpha.16.3`, and Claude Code
+Requires macOS, Node.js 22+, Codex CLI `0.155.0-alpha.16.3` or `0.155.0-alpha.16.4`, and Claude Code
 `2.1.210` or `2.1.281`. Other native versions pause synchronization until compatibility is
 validated. Both tools retain their own authentication and permission settings.
 
@@ -82,6 +82,20 @@ Re-running `desktop install` safely upgrades an unchanged Claudex-owned launcher
 runtime with a durable recovery journal; it does not stop an active backend.
 The new runtime takes effect on the next backend launch. Do not weaken native
 peer verification to keep an unsigned wrapper running.
+
+App updates do not need to match a single hard-coded CLI patch release.
+`src/codex-versions.mjs` defines the exact validated runtime allowlist shared by
+the launcher, doctor and both adapters. An unvalidated version starts Desktop's
+original native transport with unchanged arguments and environment, under an
+exclusive native-only owner lease. No shared socket is published, and the
+watcher explicitly reports synchronization awaiting version validation. This
+does not enable history writes on an unknown version or bypass an existing
+writer. Ownership, authentication and transport failures are never silently
+retried through another backend. The bundled Node must still be OpenAI-signed.
+
+The `.16.4` app update is validated with isolated native history, writer-lock,
+snapshot-retirement and shared Unix WebSocket checks, plus an actual signed-Node
+launcher initialization. No model request is needed for these checks.
 
 Desktop mode uses one stable Claude Remote Control identity per logical
 conversation and at most two managed Codex snapshots in steady state. A cold

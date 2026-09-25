@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { connectCodexSocket, inspectCodexSocket, MAX_FRAME_BYTES } from '../src/codex-websocket.mjs';
+import { isSupportedCodexVersion, SUPPORTED_CODEX_VERSIONS } from '../src/codex-versions.mjs';
 
 const execFileAsync = promisify(execFile);
-export const SUPPORTED_CODEX_VERSION = 'codex-cli 0.155.0-alpha.16.3';
+export const SUPPORTED_CODEX_VERSION = SUPPORTED_CODEX_VERSIONS[0];
 const ownPath = fileURLToPath(import.meta.url);
 const owns = stat => stat.uid === process.getuid?.() && !stat.isSymbolicLink();
 const alive = pid => {
@@ -76,7 +77,9 @@ async function verifiedRecord(path) {
   if (!stat.isFile() || !owns(stat) || (stat.mode & 0o777) !== 0o600 || stat.size > 4096) throw new Error('Invalid shared transport ownership record');
   let data;
   try { data = JSON.parse(await readFile(path, 'utf8')); } catch { throw new Error('Incomplete shared transport ownership record; refusing recovery'); }
-  if (data.version !== 1 || !Number.isInteger(data.pid) || data.pid <= 0 || !(data.childPid === null || (Number.isInteger(data.childPid) && data.childPid > 0))) throw new Error('Invalid shared transport ownership record');
+  if (data.version !== 1 || !Number.isInteger(data.pid) || data.pid <= 0
+    || !(data.childPid === null || (Number.isInteger(data.childPid) && data.childPid > 0))
+    || ![undefined, 'native'].includes(data.transportMode)) throw new Error('Invalid shared transport ownership record');
   return { data, stat };
 }
 
@@ -101,7 +104,7 @@ async function requireDeadSocket(path) {
   });
 }
 
-async function claimOwner(directory, socketPath, binary, cliVersion) {
+async function claimOwner(directory, socketPath, binary, cliVersion, transportMode = 'shared') {
   const manifestPath = join(directory, 'owner.json');
   if (await maybeStat(join(directory, 'owner.next'))) throw new Error('An interrupted owner checkpoint requires verification before restart');
   const existing = await verifiedRecord(manifestPath);
@@ -124,6 +127,7 @@ async function claimOwner(directory, socketPath, binary, cliVersion) {
   } else if (await maybeStat(socketPath)) throw new Error('A socket exists without an ownership record; refusing replacement');
   const handle = await open(manifestPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
   const record = { version: 1, pid: process.pid, childPid: null, listenerPath: socketPath, listenerIdentity: null, socketPath: null, socketIdentity: null, binary, cliVersion };
+  if (transportMode === 'native') record.transportMode = 'native';
   try { await handle.writeFile(`${JSON.stringify(record)}\n`); await handle.sync(); } finally { await handle.close(); }
   let manifestStat = await lstat(manifestPath);
   let stagedStat;
@@ -161,7 +165,7 @@ function waitChild(child) {
   });
 }
 
-async function passthrough(binary, args, env) {
+async function passthrough(binary, args, env, owner = null) {
   const child = spawn(binary, args, { env, stdio: 'inherit' });
   const result = waitChild(child);
   const term = () => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM'); };
@@ -169,8 +173,17 @@ async function passthrough(binary, args, env) {
   process.on('SIGTERM', term);
   process.on('SIGINT', interrupt);
   let outcome;
-  try { outcome = await result; }
-  finally { process.off('SIGTERM', term); process.off('SIGINT', interrupt); }
+  try {
+    if (owner) {
+      if (!child.pid) throw new Error('Could not start native Codex backend');
+      await owner.childStarted(child.pid);
+    }
+    outcome = await result;
+  } catch (error) { term(); await result; throw error; }
+  finally {
+    process.off('SIGTERM', term); process.off('SIGINT', interrupt);
+    if (owner) await owner.cleanup();
+  }
   if (outcome.signal) process.kill(process.pid, outcome.signal);
   return outcome.code ?? 1;
 }
@@ -190,9 +203,18 @@ export async function runCodexLauncher(args = process.argv.slice(2), env = proce
   if (!serverArgs) return passthrough(binary, args, env);
   if (!isAbsolute(socketPath) || Buffer.byteLength(socketPath) > 103) throw new Error('The shared Codex socket path is too long');
   const version = (await execFileAsync(binary, ['--version'], { env, timeout: 5000, maxBuffer: 4096 })).stdout.trim();
-  if (version !== SUPPORTED_CODEX_VERSION) throw new Error('Unsupported Codex version for shared transport');
+  if (!/^codex-cli [0-9A-Za-z.+-]+$/.test(version) || version.length > 160) throw new Error('Unrecognized Codex version response');
   await privateDirectory(root);
   await privateDirectory(directory);
+  if (!isSupportedCodexVersion(version)) {
+    // An app update must not make Desktop unusable just because synchronization
+    // has not been validated yet. Keep one owner, launch the original command
+    // unchanged, and publish no shared socket. Never take this route after a
+    // shared launch/ownership/transport error.
+    const nativeOwner = await claimOwner(directory, socketPath, binary, version, 'native');
+    process.stderr.write(`Claudex synchronization is paused for unvalidated ${version}; Desktop is using its original native transport.\n`);
+    return passthrough(binary, args, env, nativeOwner);
+  }
   const owner = await claimOwner(directory, socketPath, binary, version);
   let child;
   let childDone;

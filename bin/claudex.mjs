@@ -16,6 +16,7 @@ import { DesktopBridge } from '../src/desktop-bridge.mjs';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { installDesktopLauncher, applyDesktopEnvironment, uninstallDesktopLauncher } from '../src/desktop-install.mjs';
+import { isSupportedCodexVersion } from '../src/codex-versions.mjs';
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, from: { type: 'string' }, source: { type: 'string' }, id: { type: 'string' }, title: { type: 'string' },
@@ -74,7 +75,7 @@ async function main() {
   if (command === 'doctor') {
     const codex = execFileSync(config.binary, ['--version'], { encoding: 'utf8' }).trim();
     const claude = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim();
-    output({ codex, claude, verifiedCodex: codex === 'codex-cli 0.155.0-alpha.16.3', verifiedClaude: ['2.1.210', '2.1.281'].some(version => claude.startsWith(`${version} `)), note: 'Other native versions require compatibility validation.' });
+    output({ codex, claude, verifiedCodex: isSupportedCodexVersion(codex), verifiedClaude: ['2.1.210', '2.1.281'].some(version => claude.startsWith(`${version} `)), note: 'Other native versions require compatibility validation.' });
     return;
   }
   if (command === 'recover-lock') {

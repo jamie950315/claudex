@@ -11,6 +11,7 @@ import { createClaudeSession, decodeClaude, encodeClaude, sessionPath } from './
 import { snapshot, privateDirectory } from './storage.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
 import { codexCompaction, provenance } from './compaction.mjs';
+import { isSupportedCodexVersion } from './codex-versions.mjs';
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const sourceKinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -59,7 +60,7 @@ export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'cod
   const [codexVersion, claudeVersion] = await Promise.all([
     execute(binary, ['--version'], { timeout: 10000 }), execute(claudeBinary, ['--version'], { timeout: 10000 }),
   ]);
-  if (codexVersion.stdout.trim() !== 'codex-cli 0.155.0-alpha.16.3' || !['2.1.210 ', '2.1.281 '].some(version => claudeVersion.stdout.trim().startsWith(version))) {
+  if (!isSupportedCodexVersion(codexVersion.stdout.trim()) || !['2.1.210 ', '2.1.281 '].some(version => claudeVersion.stdout.trim().startsWith(version))) {
     throw new Error('Native version changed; run compatibility validation before enabling synchronization.');
   }
   const clients = new Set();

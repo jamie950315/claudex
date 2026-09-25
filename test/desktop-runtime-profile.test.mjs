@@ -74,3 +74,14 @@ test('a pending reset cannot be launched under normal settings even with a stale
     assert.equal(f.calls.length, 0);
   } finally { await f.runtime.close(); }
 });
+
+test('native-only Desktop startup never becomes an available synchronization backend', async () => {
+  const f = await fixture();
+  try {
+    await mkdir(join(f.runtime.root, 'codex-shared'), { mode: 0o700 });
+    await writeJSON(join(f.runtime.root, 'codex-shared', 'owner.json'), { version: 1,
+      pid: process.pid, childPid: process.pid, transportMode: 'native', cliVersion: 'codex-cli 99.0.0', socketPath: null });
+    await assert.rejects(f.runtime.codex(), /native-only mode.*awaits version validation/);
+    assert.equal(f.runtime.client, undefined);
+  } finally { await f.runtime.close(); }
+});
