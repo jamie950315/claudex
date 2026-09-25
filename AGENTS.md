@@ -33,6 +33,35 @@ All-project discovery skips unsupported unenrolled histories and reports a
 bounded diagnostic list; pending transactions and tracked-history failures still
 stop synchronization. Discovery starts at initialization, not a bulk history import.
 
+Historical backfill is an explicit module API in `src/cold-import.mjs`, not a public
+CLI command or a changed discovery cutoff. Its private journal reserves one target
+per source before publication. `trackImportedPair()` verifies equal canonical
+digest/count/cwd and enrolls two unmanaged originals with `discoveryMode: cold-import`.
+The Claude original uses `importPacket: true`, packetVersion 2; runtime reads must
+authenticate its archive without creating an SDK owner. Never overwrite its
+bootstrap, replace a Desktop-owned file, or collect either original as a backup.
+Native UI acceptance of the official `claude://resume` handoff adopts the published
+CLI transcript. `paired` is not Desktop visibility; `adopted` requires read-only
+registry evidence, and visible project/title/history require UI verification.
+Do not inject registry/database/IPC state. One real Local adoption is verified
+without inference, not the completeness of a bulk migration. Missing cwd/assets,
+empty or unsupported histories remain explicit exclusions; incomplete tails are
+withheld. Do not label a partial import as all-history success.
+Claude Local continuations use normal Codex snapshot/original-dependency guards;
+the return from Codex creates a separate managed Remote Control entry. Preserve
+the Local original and direct subsequent work to Remote Control. Cold imports
+avoid idle SDK workers only until that transition; active owners remain long-lived.
+Only cold-import pairs may use ephemeral watcher hints after stable, complete
+no-change verification. Include all record lifecycle/checkpoint fields and file
+identities before/after sync, including superseded originals. Pending work,
+errors or missing/changed files invalidate hints; full verification is mandatory
+every 60 seconds. Never advance semantic checkpoints from hints or skip a current
+managed Claude owner's lifecycle checks. Normal discovery scope is unchanged.
+Collection validates both current sides only for conversations owning managed
+snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep
+the superseded-original guards global, retain every managed snapshot in the
+global quota, and preserve exact previous-snapshot/native retirement checks.
+
 Validated native baselines are Codex `0.155.0-alpha.16.3`/`.16.4` and Claude Code
 `2.1.210`/`2.1.281`. versionPolicy defaults to strict; an explicit warn policy
 allows unvalidated runtime versions to be attempted without version-only pauses.
@@ -100,6 +129,29 @@ native text/images. DesktopBridge persists a private key, canonical prefix,
 single pending transaction and bounded audit. Native history export uses full paginated API reads with a stable
 two-read snapshot, including pre-compaction readable history. Do not claim it
 recovers encrypted reasoning or native-truncated output.
+
+An exact singleton completed contextCompaction item with only type/id is inert
+control metadata when prior request context exists, not a completion boundary.
+Publish it only inside a prefix ending with a real completed assistant response;
+withhold trailing control turns and unfinished tails. Initial, mixed, malformed
+or error-bearing control turns retain normal rejection; never fabricate a reply.
+
+DesktopRuntime reads optional `nativeHistoryMaxBytes` and `nativeHistoryPageSize`
+from the private root's config.json. Defaults remain 16 MiB and 100 turns/page;
+explicit bounds are 1024..67108864 bytes and 1..100 turns/page. Both original and
+owned native exports enforce the configured raw/converted byte budget. Keep the
+256-page, 25,000-item and 64 MiB transport-frame limits unchanged. Limit errors
+identify the source thread; never add automatic retries, truncation or fallback.
+
+Unmanaged native Codex localImage recovery reads only metadata.path's current
+owned regular rollout, using O_NOFOLLOW and stable identity/stat checks with a
+512 MiB stream cap and 64 MiB row cap. Require exact translated completed-item
+equality with the full API item, matching thread/turn/context/passthrough IDs,
+one earlier embedded user response, exact text, and image wrapper path/number/order
+agreement before a closed turn. Keep image descriptors as inert metadata and
+validate the recovered data URI and converted-history budget. Never read API
+image paths, fetch URLs, search history_base files or silently choose a candidate.
+This preserves native persisted model-input bytes, not proven unresized uploads.
 
 Shared Codex transport installs for the next normal app start: `bin/claudex-codex.mjs` preserves
 native Desktop args/env, starts a public Unix WS listener, and forwards JSONL

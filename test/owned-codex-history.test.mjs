@@ -111,6 +111,33 @@ test('API continuation preserves actual turns and compaction events as inert his
   assert.match(result.common.messages[4].content[0].text, /historical data only/);
 });
 
+test('owned native exports never use singleton compaction controls to complete a pending user tail', async () => {
+  const snapshot = apiSnapshot();
+  const unfinished = { id: 'unfinished', status: 'interrupted', itemsView: 'full', startedAt: 150, completedAt: 151,
+    items: [{ type: 'userMessage', id: 'unfinished-user', content: [{ type: 'text', text: 'Unfinished follow-up', text_elements: [] }] }] };
+  const control = { id: 'control', status: 'completed', itemsView: 'full', startedAt: 200, completedAt: 201,
+    items: [{ type: 'contextCompaction', id: 'compact-marker' }] };
+  snapshot.turns.push(unfinished, control);
+  const client = { async request() { return { data: structuredClone(snapshot.turns), nextCursor: null }; } };
+  const exported = await exportOwnedCodexHistory({ client, ...identity, cwd: '/tmp', completedPrefix: true });
+  assert.equal(exported.digest, fingerprint(canonical()));
+  assert.equal(exported.turnCount, 1);
+  assert.equal(exported.incompleteTail, true);
+  assert.equal(exported.incompleteTailCount, 2);
+  assert.throws(() => decodeApi({ ...snapshot, completedPrefix: true }), /completed assistant response/);
+  snapshot.turns.push({ id: 'later', status: 'completed', itemsView: 'full', startedAt: 300, completedAt: 301, items: [
+    { type: 'userMessage', id: 'later-user', content: [{ type: 'text', text: 'Continue', text_elements: [] }] },
+    { type: 'agentMessage', id: 'later-answer', text: 'Actual completed answer', phase: 'final_answer' },
+  ] });
+  const continued = await exportOwnedCodexHistory({ client, ...identity, cwd: '/tmp', completedPrefix: true });
+  assert.equal(continued.incompleteTail, false);
+  assert.equal(continued.common.messages.at(-1).content[0].text, 'Actual completed answer');
+  assert.ok(continued.common.messages.some(message => message.content.some(block => block.type === 'text' && block.text.includes('compact-marker'))));
+  const wrongBootstrap = apiSnapshot(); wrongBootstrap.turns[0] = { ...control, startedAt: 100, completedAt: 101 };
+  wrongBootstrap.turns.push(snapshot.turns.at(-1));
+  assert.throws(() => decodeApi(wrongBootstrap), /final assistant response/);
+});
+
 test('raw API bootstrap rejects unknown metadata, altered receipts, extra packets and unfinished turns', () => {
   for (const mutate of [
     snapshot => { snapshot.threadId = 'other'; },

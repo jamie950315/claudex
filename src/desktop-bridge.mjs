@@ -5,6 +5,7 @@ import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { DEFAULT_POLICY, planRetention } from './retention.mjs';
 
 const other = side => side === 'codex' ? 'claude' : 'codex';
+const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const normalize = common => ({ ...common, messages: portableMessages(common.messages).map(({ role, content }) => ({ role, content })) });
 function matches(common, checkpoint) {
   return common.messages.length >= checkpoint.count && fingerprint(common, checkpoint.count) === checkpoint.digest;
@@ -78,6 +79,48 @@ export class DesktopBridge {
     });
   }
 
+  /** Enroll an independently published, signed Local import without spawning a
+   * Remote Control owner. Both files remain originals, never rollback garbage.
+   * Desktop adoption itself is performed through the native UI, not this ledger.
+   */
+  async trackImportedPair({ conversationId, source, target, title }) {
+    return this.locked(async state => {
+      if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
+      if (!UUID.test(conversationId) || !UUID.test(source.nativeId) || !UUID.test(target.nativeId)
+          || source.side !== 'codex' || source.managed !== false || source.kind !== 'original'
+          || target.side !== 'claude' || target.managed !== false || target.kind !== 'original'
+          || target.importPacket !== true || target.packetVersion !== 2
+          || target.conversationId !== conversationId)
+        throw new Error('Invalid cold-import pair.');
+      const prior = state.records.find(record => record.side === 'codex' && record.nativeId === source.nativeId);
+      const priorTarget = state.records.find(record => record.side === 'claude' && record.nativeId === target.nativeId);
+      if (prior || priorTarget || state.conversations[conversationId]) {
+        if (prior?.conversationId === conversationId && priorTarget?.conversationId === conversationId
+            && priorTarget.importPacket && state.conversations[conversationId]?.discoveryMode === 'cold-import')
+          return { conversationId, existing: true };
+        throw new Error('Cold-import identity is already tracked by a different enrollment.');
+      }
+      const from = await this.inspect(source), to = await this.inspect(target);
+      if (from.digest !== to.digest || from.common.messages.length !== to.common.messages.length
+          || from.common.meta.cwd !== to.common.meta.cwd || to.incompleteTail)
+        throw new Error('Cold import does not exactly match its source checkpoint.');
+      const latest = await this.inspect(source);
+      if (latest.digest !== from.digest || latest.common.messages.length !== from.common.messages.length
+          || latest.common.meta.cwd !== from.common.meta.cwd)
+        throw new Error('Source changed during cold import; published evidence was preserved.');
+      const canonical = checkpoint(from.common), cwd = from.common.meta.cwd;
+      state.conversations[conversationId] = { id: conversationId, cwd,
+        title: title || from.common.meta.title || 'Claudex conversation', canonical, discoveryMode: 'cold-import' };
+      for (const [record, data] of [[source, latest], [target, to]]) state.records.push({
+        ...record, id: randomUUID(), conversationId, cwd, path: data.path,
+        managed: false, kind: 'original', verified: true, status: 'current',
+        checkpoint: canonical, bytes: data.bytes ?? 0, createdAt: this.now(),
+      });
+      await this.save(state, { event: 'cold-import-paired', conversationId });
+      return { conversationId, existing: false };
+    });
+  }
+
   async sync(id) {
     return this.locked(async state => {
       if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
@@ -98,7 +141,10 @@ export class DesktopBridge {
         if (await this.adapters[record.side].needsMaintenance?.(record)) maintenance.push(record.side);
       }
       if (maintenance.length > 1) throw new Error('Only one native context migration may be planned at a time.');
-      if (!changed.length && records.length === 2 && !maintenance.length) return { changed: false };
+      if (!changed.length && records.length === 2 && !maintenance.length) return {
+        changed: false,
+        ...(conversation.discoveryMode === 'cold-import' ? { incompleteTail: readings.some(({ data }) => data.incompleteTail) } : {}),
+      };
       const reading = changed[0] ?? (maintenance.length ? readings.find(entry => entry.record.side !== maintenance[0]) : readings[0]);
       if (!reading) throw new Error('Context migration requires its verified paired source.');
       const { record: source, data } = reading;
@@ -237,11 +283,17 @@ export class DesktopBridge {
   }
   async collectInLock(state) {
     await this.assertOriginalsUnchanged(state);
-    for (const current of state.records.filter(record => record.status === 'current')) {
+    const snapshots = state.records.filter(record => record.managed && record.kind === 'snapshot');
+    const retainedConversations = new Set(snapshots.map(record => record.conversationId));
+    // Only conversations with disposable snapshots participate in retention.
+    // Unchanged cold-import pairs have no backups to protect and must not make
+    // global collection export every historical transcript or start an owner.
+    // Both current sides of every affected conversation still gate retirement.
+    for (const current of state.records.filter(record => record.status === 'current'
+      && retainedConversations.has(record.conversationId))) {
       const data = await this.inspect(current);
       if (!matches(data.common, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
     }
-    const snapshots = state.records.filter(record => record.managed && record.kind === 'snapshot');
     for (const record of snapshots.filter(record => record.status === 'previous')) {
       if (!await this.adapters[record.side].exists(record)) {
         state.records = state.records.filter(value => value.id !== record.id);

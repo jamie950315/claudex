@@ -153,6 +153,65 @@ test('conflicting tracked histories stop the watcher without choosing a branch',
   assert.equal(f.state.pending, null);
 });
 
+const boundedNativeDiscoveryErrors = [
+  'Native Codex local image recovery: current rollout lacks complete unambiguous image provenance; referenced histories were not searched.',
+  'Native Codex local image recovery: image response provenance does not match its native turn.',
+  'Native Codex history export: unsupported user input or external asset; nothing was silently omitted.',
+  'Native Codex history export: byte limit exceeded; no partial export is returned.',
+  'Native Codex history export: converted byte limit exceeded; no partial export is returned.',
+  'Native Codex history export: a completed turn lacks its final assistant response.',
+  'Native Codex history export: a completed turn has no persisted items.',
+];
+
+test('unenrolled native image, provenance, size and incomplete stored histories produce bounded diagnostics without blocking discovery', async () => {
+  const f = await fixture();
+  const track = f.bridge.track;
+  f.bridge.track = async source => {
+    if (source.id !== 'good') throw new Error(boundedNativeDiscoveryErrors[Number(source.id.slice(3)) % boundedNativeDiscoveryErrors.length]);
+    return track(source);
+  };
+  const sources = Array.from({ length: 28 }, (_, i) => ({ side: 'codex', id: `bad${i}`, path: `/bad${i}` }));
+  sources.push({ side: 'codex', id: 'good', path: '/good' });
+  let pass;
+  await f.run({ maxPasses: 2, discover: async (_config, known) => sources.filter(source => !known.has(`${source.side}:${source.id}`)),
+    sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(f.calls.track, ['/good']);
+  assert.equal(pass.waiting, null);
+  assert.equal(pass.blockedSourceCount, 28);
+  assert.equal(pass.blockedSources.length, 20);
+  assert.deepEqual(pass.blockedSources.slice(0, 7).map(source => source.reason), boundedNativeDiscoveryErrors);
+  assert.equal((await f.status()).error, null);
+});
+
+for (const message of boundedNativeDiscoveryErrors) {
+  test(`tracked history still stops on ${message}`, async () => {
+    const f = await fixture({ bridge: { async sync() { throw new Error(message); } } });
+    await assert.rejects(f.run({ maxPasses: 1 }), error => error.message === message);
+    assert.equal((await f.status()).error, message);
+    assert.equal(f.state.pending, null);
+  });
+}
+
+for (const message of ['Native Codex history export: malformed pagination response.',
+  'Native Codex history export: malformed native item.',
+  'Native Codex history export: invalid export limit.']) {
+  test(`unrecognized native metadata failures remain fatal during discovery: ${message}`, async () => {
+    const f = await fixture({ bridge: { async track() { throw new Error(message); } } });
+    await assert.rejects(f.run({ maxPasses: 1 }), error => error.message === message);
+    assert.equal((await f.status()).error, message);
+  });
+}
+
+test('native transport failures remain waiting conditions rather than unsupported discovery diagnostics', async () => {
+  const message = 'Native Codex history export: native transport unavailable; no export was produced.';
+  const f = await fixture({ bridge: { async track() { throw new Error(message); } } });
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.waiting, message);
+  assert.equal(pass.blockedSourceCount, 0);
+  assert.deepEqual(f.calls.track, []);
+});
+
 test('subagent discovery is excluded only when requested', async () => {
   const root = await mkdtemp(join(tmpdir(), 'claudex-discover-subagent-'));
   const codexHome = join(root, 'codex');

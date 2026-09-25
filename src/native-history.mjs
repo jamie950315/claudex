@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { assertComplete } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
+import { hydrateNativeLocalImages } from './native-local-images.mjs';
 
 export const NATIVE_HISTORY_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
@@ -37,6 +38,17 @@ function timestamp(value) {
   return value;
 }
 
+// An observed native completed control turn contains only this marker. It is
+// history metadata, never a completed model reply or a new request boundary.
+function compactionControl(turn) {
+  const item = turn.items?.[0];
+  return turn.status === 'completed' && turn.items?.length === 1 && object(item)
+    && Object.keys(item).sort().join(',') === 'id,type'
+    && item.type === 'contextCompaction' && typeof item.id === 'string' && item.id.length > 0;
+}
+
+const responseBoundary = turn => turn.status === 'completed' && !compactionControl(turn);
+
 function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorRequest = false, allowInitialDelegation = false } = {}) {
   if (!object(turn) || typeof turn.id !== 'string' || !turn.id || !Array.isArray(turn.items)) fail('malformed turn.');
   if (turn.status === 'inProgress' && !allowActive) fail('wait for the in-progress turn to complete.');
@@ -68,6 +80,7 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
       lastAgent = index;
     }
   }
+  if (continuation && compactionControl(turn)) return startedAt ?? previousStart;
   if (turn.status === 'completed' && ((!continuation && lastUser < 0) || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string' || !turn.items[lastAgent].text.trim())) fail('a completed turn lacks its final assistant response.');
   return startedAt ?? previousStart;
 }
@@ -113,8 +126,9 @@ async function readPass(client, threadId, limits, completedPrefix) {
     if (cursors.has(nextCursor)) fail('pagination cursor cycle detected.');
     cursors.add(nextCursor); cursor = nextCursor;
   }
-  const lastCompleted = turns.findLastIndex(turn => turn.status === 'completed');
+  const lastCompleted = turns.findLastIndex(responseBoundary);
   if (lastCompleted < 0) fail('no completed persisted history is available; wait for a complete turn.');
+  if (!completedPrefix && lastCompleted !== turns.length - 1) fail('trailing compaction control requires a completed assistant continuation.');
   if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
   const incompleteTailCount = turns.length - exported.length;
@@ -174,7 +188,7 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
     if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
     ids.add(turn.id);
   }
-  if (snapshot.turns.at(-1).status !== 'completed') fail('snapshot does not end at a completed turn.');
+  if (!responseBoundary(snapshot.turns.at(-1))) fail('snapshot does not end at a completed assistant response.');
   const messages = [];
   for (const turn of snapshot.turns) {
     const messageTimestamp = turn.startedAt == null ? suppliedTimestamp : new Date(turn.startedAt * 1000).toISOString();
@@ -240,11 +254,12 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
   const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix });
-  const common = convertNativeTurns(first, { threadId, cwd, timestamp: suppliedTimestamp });
+  const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
+  const common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
   if (Buffer.byteLength(serialize(common)) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
   return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
     incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount };

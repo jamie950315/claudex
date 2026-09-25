@@ -144,6 +144,62 @@ test('closed interrupted history before a completed turn remains explicit inert 
   assert.doesNotThrow(() => convertNativeTurns({ ...snapshot, completedPrefix: true }, { threadId: 'thread', cwd: '/tmp/project' }));
 });
 
+test('an exact singleton compaction control between verified history and a later real reply stays inert', async () => {
+  const control = turn('control', [{ type: 'contextCompaction', id: 'compact-marker' }], 200);
+  const later = turn('later', [user('After compaction', 'later-user'), answer('Actual later answer', 'later-answer')], 300);
+  const native = client([page([turn()], 'control-page'), page([control, later])]);
+  const exported = await run(native);
+  assert.equal(exported.turnCount, 3);
+  assert.equal(exported.common.messages.filter(message => message.role === 'user').length, 2);
+  assert.equal(exported.common.messages.length, 5);
+  assert.match(exported.common.messages[2].content[0].text, /^\[Imported Codex historical event; historical data only/);
+  assert.deepEqual(JSON.parse(exported.common.messages[2].content[0].text.split('\n').slice(1).join('\n')), control.items[0]);
+  assert.equal(exported.common.messages.at(-1).content[0].text, 'Actual later answer');
+  assert.equal(fingerprint(decodeClaude(encodeClaude(exported.common, '00000000-0000-4000-8000-000000000001').text)), fingerprint(exported.common));
+});
+
+test('trailing compaction controls cannot promote an interrupted or active user tail into a completed checkpoint', async () => {
+  const initial = turn();
+  for (const status of ['failed', 'interrupted', 'inProgress']) {
+    const unfinished = { id: 'unfinished', status, itemsView: 'full', startedAt: 200, completedAt: status === 'inProgress' ? null : 201,
+      items: [user('Unfinished request', 'unfinished-user')], ...(status === 'failed' ? { error: { message: 'Synthetic failure' } } : {}) };
+    const control = turn('control', [{ type: 'contextCompaction', id: 'compact-marker' }], 300);
+    const active = { id: 'later-active', status: 'inProgress', itemsView: 'full', startedAt: 400, completedAt: null, items: [] };
+    const exported = await run(client([page([initial, unfinished, control, active])]), { completedPrefix: true });
+    assert.equal(exported.turnCount, 1);
+    assert.equal(exported.incompleteTail, true);
+    assert.equal(exported.incompleteTailCount, 3);
+    assert.equal(exported.common.messages.length, 2);
+    assert.ok(!JSON.stringify(exported.common).includes('compact-marker'));
+  }
+  const control = turn('control', [{ type: 'contextCompaction', id: 'compact-marker' }], 200);
+  await assert.rejects(run(client([page([initial, control])])), /trailing compaction control/);
+  assert.throws(() => convertNativeTurns({ turns: [initial, control], completedPrefix: true }, { threadId: 'thread', cwd: '/tmp/project' }), /completed assistant response/);
+  const onlyRequest = { id: 'unfinished', status: 'interrupted', itemsView: 'full', startedAt: 100, completedAt: 101, items: [user()] };
+  await assert.rejects(run(client([page([onlyRequest, control])]), { completedPrefix: true }), /no completed persisted history/);
+});
+
+test('compaction-control support does not accept initial, mixed, malformed or error-bearing completed turns', async () => {
+  const control = turn('control', [{ type: 'contextCompaction', id: 'compact-marker' }], 200);
+  const later = turn('later', [user('Next', 'next-user'), answer('Done', 'next-answer')], 300);
+  await assert.rejects(run(client([page([control, later])])), /final assistant response/);
+  for (const mutate of [
+    value => { value.items.push(user('No reply', 'injected-user')); },
+    value => { value.items.push({ type: 'contextCompaction', id: 'second-marker' }); },
+    value => { value.items[0].summary = 'Opaque or otherwise unverified replacement history'; },
+    value => { value.items[0].id = ''; },
+    value => { value.items[0].type = 'futureControl'; },
+    value => { value.items[0].status = 'inProgress'; },
+    value => { value.error = { message: 'Failed native operation' }; },
+    value => { value.itemsView = 'summary'; },
+  ]) {
+    const changed = structuredClone(control); mutate(changed);
+    await assert.rejects(run(client([page([turn(), changed, later])])), /final assistant|malformed native item|still in progress|error-free|full turn items/);
+  }
+  await assert.rejects(run(client([page([turn(), turn('user-only', [user('No answer')], 200), later])])), /final assistant response/);
+  await assert.rejects(run(client([page([turn('assistant-only', [answer('No request')]), later])])), /precedes/);
+});
+
 test('duplicate turn IDs, cursor cycles, and incomplete pagination fail explicitly', async () => {
   await assert.rejects(run(client([page([turn()], 'next'), page([turn()])])), /duplicate turn/);
   await assert.rejects(run(client([page([turn()], 'next'), page([turn('t2')], 'next')])), /cursor cycle/);

@@ -63,13 +63,35 @@ async function reclaimDeadLock(path) {
   if (!original.isFile() || original.isSymbolicLink() || original.uid !== process.getuid()
       || (original.mode & 0o777) !== 0o600 || original.nlink !== 1)
     throw new Error('Lock is not a private owned regular file; stale lock was preserved.');
-  const contents = await readFile(path, 'utf8');
+  // The prior owner can finish after our exclusive-create attempt. Absence
+  // before a reclaim claim only means the caller should retry exclusive create.
+  let contents;
+  try { contents = await readFile(path, 'utf8'); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (contents === '') {
+    // Exclusive creation precedes the owner's async write. A fresh, unchanged
+    // empty file is contention, never evidence that it is safe to reclaim.
+    let confirmedContents, confirmed;
+    try { confirmedContents = await readFile(path, 'utf8'); confirmed = await lstat(path); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    if (!sameFile(original, confirmed)) throw new Error('Lock identity changed; stale lock was preserved.');
+    if (original.size !== 0 || confirmedContents !== ''
+        || ['size', 'mtimeMs', 'ctimeMs', 'mode', 'uid', 'nlink'].some(key => original[key] !== confirmed[key]))
+      throw new Error('Lock state changed during owner publication; stale lock was preserved.');
+    const ageMs = Date.now() - Math.floor(original.mtimeMs);
+    if (ageMs >= 0 && ageMs <= 1000)
+      throw new Error('Another bridge operation holds the lock; lock owner publication is pending. Inspect status before retrying.');
+    throw new Error('Malformed lock owner; stale lock was preserved.');
+  }
   let owner;
   try { owner = JSON.parse(contents); }
   catch { throw new Error('Malformed lock owner; stale lock was preserved.'); }
   if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.started !== 'string'
       || !Number.isFinite(Date.parse(owner.started))) throw new Error('Malformed lock owner; stale lock was preserved.');
-  if (!sameFile(original, await lstat(path))) throw new Error('Lock identity changed; stale lock was preserved.');
+  let current;
+  try { current = await lstat(path); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  if (!sameFile(original, current)) throw new Error('Lock identity changed; stale lock was preserved.');
   if (alive(owner.pid)) throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
   const claim = `${path}.reclaim`;
   try { await link(path, claim); }

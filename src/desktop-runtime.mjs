@@ -9,7 +9,8 @@ import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude } from './claude.mjs';
 import { decodeOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
-import { exportNativeHistory } from './native-history.mjs';
+import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
+import { createCodexLocalImageResolver } from './native-local-images.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
@@ -22,6 +23,18 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
 async function exists(path) { try { await access(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } }
+
+function importedClaudeOriginal(record) {
+  if (record.importPacket !== true) return false;
+  if (record.side !== 'claude' || record.kind !== 'original' || record.managed !== false || record.packetVersion !== 2
+      || record.contextReset || record.readResetSourceForOperation)
+    throw new Error('Imported packet records must be unmanaged original Claude sessions with packet version 2.');
+  return true;
+}
+
+function assertNotImportedOriginalWrite(record) {
+  if (importedClaudeOriginal(record)) throw new Error('Imported Claude originals are read-only to Claudex; only their native Desktop owner may write them.');
+}
 
 async function header(path) {
   const stream = createReadStream(path, { encoding: 'utf8' });
@@ -53,11 +66,18 @@ export async function persistentPacketKey(root) {
 
 /** Native adapters with one long-lived SDK owner per logical Claude session. */
 export class DesktopRuntime {
-  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict', onEvent = () => {} }) {
+  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict',
+    nativeHistoryMaxBytes = NATIVE_HISTORY_LIMITS.maxBytes, nativeHistoryPageSize = NATIVE_HISTORY_LIMITS.pageSize, onEvent = () => {} }) {
     if (!['inline', 'archive'].includes(contextMode)) throw new Error('Unsupported Desktop context mode.');
+    if (!Number.isSafeInteger(nativeHistoryMaxBytes) || nativeHistoryMaxBytes < 1024 || nativeHistoryMaxBytes > 64 * 1024 * 1024)
+      throw new Error('nativeHistoryMaxBytes must be an integer from 1024 through 67108864 bytes.');
+    if (!Number.isSafeInteger(nativeHistoryPageSize) || nativeHistoryPageSize < 1 || nativeHistoryPageSize > 100)
+      throw new Error('nativeHistoryPageSize must be an integer from 1 through 100.');
     this.root = resolve(root); this.codexHome = resolve(codexHome); this.claudeHome = resolve(claudeHome);
     this.claudeBinary = claudeBinary; this.clientFactory = clientFactory; this.ownerFactory = ownerFactory;
     this.contextMode = contextMode;
+    this.nativeHistoryMaxBytes = nativeHistoryMaxBytes;
+    this.nativeHistoryPageSize = nativeHistoryPageSize;
     this.versionPolicy = normalizeVersionPolicy(versionPolicy);
     this.codexVersionWarning = null;
     this.ownerOptions = ownerOptions; this.onEvent = onEvent; this.owners = new Map();
@@ -172,6 +192,7 @@ export class DesktopRuntime {
   }
 
   async inspect(record) {
+    const importPacket = importedClaudeOriginal(record);
     if (record.side === 'codex') {
       let nativeId = record.nativeId;
       if (!nativeId) {
@@ -186,9 +207,17 @@ export class DesktopRuntime {
       if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
       const cwd = await realpath(metadata.cwd);
       const path = await this.safePath(metadata.path, this.codexHome);
-      const data = record.managed
-        ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key, completedPrefix: true, archiveRoot: this.root })
-        : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true });
+      const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
+      let data;
+      try {
+        data = record.managed
+          ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
+            completedPrefix: true, archiveRoot: this.root, limits })
+          : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits,
+            resolveLocalImages: createCodexLocalImageResolver({ path, threadId: nativeId }) });
+      } catch (error) {
+        throw new Error(`${error.message} [Codex thread ${nativeId}]`, { cause: error });
+      }
       data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
       return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(path)).size, digest: fingerprint(data.common) };
     }
@@ -205,15 +234,17 @@ export class DesktopRuntime {
     }
     path = await this.safePath(path, this.claudeHome);
     const data = retainedData ?? (owner ? await owner.inspectTranscript() : await snapshot(path));
-    const resolveArchive = record.managed ? await prepareArchiveResolver({ root: this.root,
+    const packetHistory = record.managed || importPacket;
+    const resolveArchive = packetHistory ? await prepareArchiveResolver({ root: this.root,
       contents: data.rows.filter(row => row.type === 'user').map(row => row.message?.content),
       conversationId: record.conversationId, targetSessionId: record.nativeId, key: this.key }) : undefined;
     const prefix = completedClaudePrefix({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
-      ...(record.managed ? { key: this.key, resolveArchive } : {}) });
-    const parsed = record.managed
+      ...(packetHistory ? { key: this.key, resolveArchive } : {}) });
+    const parsed = packetHistory
       ? decodeOwnedClaudeHistory({ text: prefix.text, conversationId: record.conversationId, sessionId: record.nativeId, key: this.key, resolveArchive,
-        resetBootstrap: !retainedData ? owner.status().lastReset : undefined, versionPolicy: this.versionPolicy })
+        resetBootstrap: owner && !retainedData ? owner.status().lastReset : undefined, versionPolicy: this.versionPolicy })
       : { common: decodeClaude(prefix.text) };
+    if (importPacket && !parsed.importedPackets) throw new Error('Imported Claude original is missing its authenticated bootstrap packet.');
     assertComplete(parsed.common);
     parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
     if (!UUID.test(parsed.common.meta.id) || record.nativeId && parsed.common.meta.id !== record.nativeId) throw new Error('Claude session identity changed.');
@@ -235,6 +266,7 @@ export class DesktopRuntime {
   }
 
   async needsMaintenance(record) {
+    importedClaudeOriginal(record);
     if (record.side !== 'claude' || !record.managed || this.contextMode !== 'archive') return false;
     const owner = await this.owner(record.conversationId, record.cwd, record.title);
     if (record.packetVersion !== 2) {
@@ -246,6 +278,7 @@ export class DesktopRuntime {
   }
 
   async activateNormalOwner(record) {
+    assertNotImportedOriginalWrite(record);
     const entry = this.owners.get(record.conversationId);
     if (!entry) {
       const owner = await this.owner(record.conversationId, record.cwd, record.title, { forceNormal: true });
@@ -270,10 +303,12 @@ export class DesktopRuntime {
   }
 
   async completePromotion(record) {
-    if (record.side === 'claude' && this.contextMode === 'archive') await this.activateNormalOwner(record);
+    importedClaudeOriginal(record);
+    if (record.side === 'claude' && record.managed && this.contextMode === 'archive') await this.activateNormalOwner(record);
   }
 
   async resolveAppliedRecord(record, pending) {
+    importedClaudeOriginal(record);
     if (record.side !== 'claude' || !record.contextReset) return record;
     const owner = await this.owner(record.conversationId, record.cwd, record.title);
     const status = owner.status(), reset = status.lastReset;
@@ -291,6 +326,7 @@ export class DesktopRuntime {
       operationId: pending.operationId, previousDigest: pending.previous.digest });
   }
   async operationApplied(record, pending) {
+    assertNotImportedOriginalWrite(record);
     if (record.side === 'claude') {
       const owner = await this.owner(record.conversationId, record.cwd, record.title);
       if (record.contextReset) {
@@ -317,6 +353,7 @@ export class DesktopRuntime {
     return true;
   }
   async apply(record, common, pending) {
+    assertNotImportedOriginalWrite(record);
     if (record.side === 'claude') {
       let owner = await this.owner(record.conversationId, record.cwd, record.title);
       if (record.contextReset) {
@@ -345,6 +382,7 @@ export class DesktopRuntime {
   }
 
   async assertIdle(record) {
+    importedClaudeOriginal(record);
     if (record.side === 'claude') {
       if (!record.managed) {
         if ((await this.inspect(record)).incompleteTail) throw new Error('Claude turn is still running.');

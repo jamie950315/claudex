@@ -3,9 +3,10 @@
 Turn-boundary conversation handoffs between Codex and Claude Code. The legacy
 mode uses local CLI sessions. Experimental Desktop mode keeps a native Claude
 SDK owner connected through official Remote Control and shares Codex Desktop's
-native backend. Synchronization never requests model inference. Remote Control
-does transmit the selected conversation to the user's Claude account; it is not
-a local-only transport.
+native backend. One-time historical imports can instead start as native Local
+sessions without an SDK owner. Synchronization never requests model inference.
+Remote Control does transmit the selected conversation to the user's Claude
+account; it is not a local-only transport.
 
 ## Setup and modes
 
@@ -131,7 +132,7 @@ Malformed metadata or an actual protocol/format change can still stop a handoff.
 This is permission to attempt an unvalidated version, not a guarantee that all
 future versions will work.
 
-Desktop mode uses one stable Claude Remote Control identity per logical
+Active Remote Control conversations use one stable Claude identity per logical
 conversation and at most two managed Codex snapshots in steady state. A cold
 context migration can change the Claude local native ID without changing the
 Desktop entry. It keeps
@@ -154,6 +155,29 @@ so successive full checkpoints do not duplicate an ever-growing reference list.
 Archive v1 remains readable and reproducible for existing prepared operations.
 The v1 inline packet format remains readable; already prepared v1 transactions
 keep their original encoding during recovery.
+
+Desktop native history reads default to a 16 MiB byte budget and 100 turns per
+page. The private state root's `config.json` can explicitly set
+`nativeHistoryMaxBytes` (1024 through 67108864 bytes) and `nativeHistoryPageSize`
+(1 through 100); for example, `67108864` and `5` support a larger bounded export
+with smaller native response pages. Apply changes only when the watcher can
+restart safely. Both original and managed Codex histories use these settings;
+the 256-page, 25,000-item and 64 MiB WebSocket-frame limits remain unchanged.
+Raw and converted histories must both fit the byte budget. Exceeding a limit
+reports the source thread ID and stops that operation without retry, truncation,
+fallback, or weakening authentication and canonical-history checks.
+
+For an unmanaged Codex source, a native `localImage` may be recovered from the
+current authoritative rollout's embedded input image even when its old attachment
+file is missing. Recovery requires the complete native/API user item, thread and
+turn identities, a unique earlier user response, exact text, and ordered image
+wrappers with matching paths to agree. It reads only that owned regular rollout,
+with no-follow opens, a stable file identity/stat check, a 512 MiB scan limit and
+64 MiB row limit. It never opens the historical image path, fetches a URL or searches
+`history_base` files. MIME/base64 validation and the configured converted-history
+budget still apply. These are the persisted model-input bytes, not a claim that
+the original upload was unresized. Ambiguous, missing or changed provenance remains
+blocked; the source file is never rewritten.
 
 An existing inline owner migrates only in a fresh, unexposed maintenance process
 after its previous writer has actually exited. A connected owner's idle state or
@@ -224,6 +248,60 @@ writing to the original Local session, and Codex's original-archival policy does
 not apply to that Desktop-owned entry. Ordinary Chat/Cowork and remote-only
 sessions without an accessible supported native transcript are outside this
 verified discovery path.
+
+#### Historical Local imports
+
+`src/cold-import.mjs` provides an explicit module API for backfilling supported
+old Codex conversations. It is not a public bulk-import CLI command and does not
+change discovery's initialization cutoff. A private journal reserves one target
+per source before publication, so a rerun reuses the same allocation rather than
+creating duplicates or overwriting an existing native file.
+
+The importer publishes a native Claude CLI transcript with a signed archive
+packet, then `DesktopBridge.trackImportedPair()` verifies exact portable-history
+digest, message count and project directory on both sides. The pair remains two
+unmanaged originals, not disposable snapshots; Claudex never overwrites their
+history. The runtime's `importPacket` path authenticates and reconstructs the
+archive without starting a Claude SDK owner. Readable excerpts are not a model
+summary or a claim that all archived content is rendered inline.
+
+Publishing into `~/.claude/projects` does **not** make a Desktop entry visible.
+The official `claude://resume` handoff must be accepted through native UI to adopt
+that transcript as a Local session. Journal state `paired` means only that the
+bridge verified both histories; `adopted` additionally requires read-only native
+registry evidence. Verify the visible project, title and history in Desktop too.
+No registry/database writes or private IPC injection are used. A real Local
+import has passed this visible adoption check without requesting model inference;
+this is not evidence that every historical conversation can be imported.
+
+Continue a newly adopted import in its Local entry. A completed Claude turn can
+produce the usual Codex continuation, subject to the unchanged original-archive
+and dependency guards. Returning from Codex creates a **separate Remote Control
+entry**: continue there afterward, leaving the Local original preserved. Further
+work in the superseded Local original is an explicit conflict, not an automatic
+merge. This is the same Local-to-Remote-Control transition described above.
+
+Idle historical imports do not each reserve a long-lived SDK process. For these
+`cold-import` pairs only, the watcher may skip repeated full reads after a
+successful complete, unchanged verification. It compares every record, including
+superseded originals, and file identities/timestamps before and after verification.
+The default 60-second deadline forces another full check. Errors, pending work,
+changed or missing files invalidate those hints. Hints never advance a history checkpoint.
+Once a current managed Remote Control owner exists, normal per-pass inspection
+resumes and its native process remains long-lived; this is not a general owner
+pool or an unlimited-active-session resource guarantee.
+
+Backup collection reads both current sides of every conversation with a managed
+snapshot, but does not export unrelated cold pairs that have no backups. A missing
+or diverged current history still prevents retirement of that conversation's
+snapshots. Superseded-original checks and the byte quota remain global; previous
+snapshots retain their existing native identity, activity and dependency guards.
+
+Missing project directories or required assets, histories without a complete
+turn, and unsupported histories remain blocked and must be reported separately.
+Active incomplete tails are withheld, not presented as imported work. Originals
+and authoritative archive assets remain preserved; a partial batch is never
+reported as an all-history migration.
 
 #### Same-title handoff and preserved originals
 
@@ -494,6 +572,13 @@ offsets. A real compacted conversation exports all 15 completed turns and round
 trips through the Claude codec. This is saved readable display history, including
 inert tool events and inline images, not decrypted reasoning or recovered
 source-truncated output. The destination transcript visibly states that limit.
+
+An exact completed turn containing only a `contextCompaction` item with `type`
+and `id` may be retained as inert metadata after verified prior request context
+and before a later completed assistant response. It is never an answer or a
+publication boundary. Trailing control turns and any unfinished tail remain
+withheld in completed-prefix mode; initial, mixed or malformed control-only
+histories do not gain an exception to the normal completion checks.
 
 ### Shared Codex transport
 
