@@ -171,3 +171,11 @@ Rejected transport shortcuts: queue/add auto-starts inference on an idle native
 thread. shellCommand persists userShell events without a model request, but
 native model-context output truncates around 40k characters even when API output
 is complete. It is not a lossless arbitrary-packet transport and is not enabled.
+
+Reverse Desktop delivery creates a new `[Claudex] <original title>` Codex task;
+it never appends into the original task. Superseded originals remain tracked:
+sync, recovery and collection compare their own saved checkpoints and reject
+new complete turns or changed prefixes. Never silently ignore activity in a
+preserved original or compare it to the newer canonical checkpoint. Recovery
+also rechecks a replaced destination after a durable native apply, before
+promotion, so concurrent work cannot be silently left behind.

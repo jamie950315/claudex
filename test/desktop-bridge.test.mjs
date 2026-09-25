@@ -24,8 +24,8 @@ async function fixture(policy = {}) {
       if (!file) throw new Error(`Missing native history: ${record.path}`);
       return { nativeId: file.nativeId, path: record.path, common: copy(file.common), bytes: JSON.stringify(file.common).length };
     },
-    async plan({ nativeId, target, operationId }) {
-      calls.plan.push({ side, operationId });
+    async plan({ nativeId, target, operationId, title }) {
+      calls.plan.push({ side, operationId, title });
       if (side === 'claude' && target?.managed && target.kind === 'owner') {
         return { nativeId: target.nativeId, path: target.path, kind: 'owner' };
       }
@@ -114,6 +114,53 @@ test('alternating native turns keep one Claude owner, bounded Codex snapshots, a
   assert.deepEqual(f.files.get('/original').common, original);
   assert.equal(f.files.get('/original').hidden, false);
   assert.ok(f.files.has('/original'));
+  assert.ok(f.calls.plan.filter(call => call.side === 'codex').every(call => call.title.startsWith('[Claudex] ')));
+});
+
+test('resumed originals reject no-op sync, new allocation, and collection without selecting a branch', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('codex', 1);
+  await f.bridge.sync(f.conversationId);
+  assert.equal((await f.bridge.status()).records.find(record => record.path === '/original').status, 'original');
+  f.files.get('/original').common.messages.push(...turn('resumed-original'));
+  const before = await f.bridge.status(), calls = copy(f.calls);
+  await assert.rejects(f.bridge.sync(f.conversationId), /Superseded original.*changed/);
+  await f.advance('claude', 2);
+  await assert.rejects(f.bridge.sync(f.conversationId), /Superseded original.*changed/);
+  await assert.rejects(f.bridge.collect(), /Superseded original.*changed/);
+  assert.deepEqual(await f.bridge.status(), before);
+  assert.deepEqual(f.calls, calls);
+  assert.deepEqual(f.files.get('/original').common.messages, [...turn(0), ...turn('resumed-original')]);
+  assert.equal(f.files.get('/original').hidden, false);
+});
+
+test('recovery preserves the pending handoff when an inactive original changes', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('codex', 1);
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 2);
+  f.fail.afterApply = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after durable native apply/);
+  f.files.get('/original').common.messages[0].content[0].text = 'Rewritten original';
+  const before = await f.bridge.status(), calls = copy(f.calls);
+  await assert.rejects(f.bridge.recover(), /Superseded original.*changed/);
+  assert.deepEqual(await f.bridge.status(), before);
+  assert.deepEqual(f.calls, calls);
+});
+
+test('recovery rechecks the old destination even after a new projection was durably applied', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('codex', 1);
+  f.fail.afterApply = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after durable native apply/);
+  f.files.get('/original').common.messages.push(...turn('concurrent-original'));
+  const before = await f.bridge.status(), calls = copy(f.calls);
+  await assert.rejects(f.bridge.recover(), /Destination changed during handoff/);
+  assert.deepEqual(await f.bridge.status(), before);
+  assert.deepEqual(f.calls, calls);
 });
 
 test('recovery detects a durable Claude apply and does not append the copied turn twice', async () => {

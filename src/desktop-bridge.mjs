@@ -46,6 +46,18 @@ export class DesktopBridge {
     return { ...data, common, digest: fingerprint(common) };
   }
 
+  async assertOriginalsUnchanged(state, conversationId) {
+    for (const record of state.records.filter(record => !record.managed && record.status === 'original'
+      && (!conversationId || record.conversationId === conversationId))) {
+      const data = await this.inspect(record);
+      if (data.digest !== record.checkpoint.digest || data.common.messages.length !== record.checkpoint.count) {
+        const current = this.current(state, record.conversationId, record.side);
+        throw new Error(`Superseded original ${record.nativeId} changed; current ${record.side} session is ${current?.nativeId ?? 'unavailable'}. No branch was selected.`);
+      }
+      if (data.incompleteTail) throw new Error('A superseded original has an in-progress turn; synchronization postponed.');
+    }
+  }
+
   async track(source) {
     return this.locked(async state => {
       if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
@@ -71,6 +83,7 @@ export class DesktopBridge {
       if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
       const conversation = state.conversations[id];
       if (!conversation) throw new Error('Unknown desktop bridge conversation.');
+      await this.assertOriginalsUnchanged(state, id);
       const records = ['codex', 'claude'].map(side => this.current(state, id, side)).filter(Boolean);
       const readings = [];
       for (const record of records) {
@@ -90,7 +103,10 @@ export class DesktopBridge {
       await this.collectInLock(state);
       const operationId = randomUUID();
       const common = { ...data.common, meta: { ...data.common.meta, cwd: conversation.cwd, timestamp: new Date(this.now()).toISOString() } };
-      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title: conversation.title, target, operationId });
+      // Originals remain untouched. Label replacement Codex tasks so a user can
+      // distinguish the synchronized continuation from the preserved original.
+      const title = side === 'codex' ? `[Claudex] ${conversation.title}` : conversation.title;
+      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId });
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
       if (reuse && (side !== 'claude' || target.kind !== 'owner' || planned.kind !== 'owner')) throw new Error('Only a verified native Claude owner may reuse its identity.');
       if (reuse) await this.adapters[side].assertIdle(target);
@@ -108,6 +124,7 @@ export class DesktopBridge {
 
   async finish(state) {
     const pending = state.pending;
+    await this.assertOriginalsUnchanged(state, pending.record.conversationId);
     const driver = this.adapters[pending.record.side];
     if (pending.phase !== 'promoted') {
       const source = state.records.find(record => record.id === pending.sourceId);
@@ -118,7 +135,10 @@ export class DesktopBridge {
       if (!matches(sourceData.common, pending.checkpoint)) throw new Error('Source changed during handoff; pending evidence was preserved.');
       const target = state.records.find(record => record.id === pending.targetId);
       const applied = await driver.operationApplied(pending.record, pending);
-      if (!applied && target) {
+      // A new projection does not write the old target. Recheck that target on
+      // recovery too: it may have received a competing turn after apply.
+      if (target && (!applied || !pending.reuse)) {
+        await this.adapters[target.side].assertIdle(target);
         const targetData = await this.inspect(target);
         if (targetData.digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
       }
@@ -131,6 +151,11 @@ export class DesktopBridge {
       await this.save(state, { event: 'verified', conversationId: pending.record.conversationId });
       const latestSource = await this.inspect(source);
       if (!matches(latestSource.common, pending.checkpoint)) throw new Error('Source changed before promotion; pending evidence was preserved.');
+      await this.assertOriginalsUnchanged(state, pending.record.conversationId);
+      if (target && !pending.reuse) {
+        await this.adapters[target.side].assertIdle(target);
+        if ((await this.inspect(target)).digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
+      }
       Object.assign(source, { path: latestSource.path ?? source.path, checkpoint: pending.checkpoint, bytes: latestSource.bytes ?? source.bytes });
       if (pending.reuse) {
         const index = state.records.findIndex(record => record.id === pending.record.id);
@@ -173,6 +198,7 @@ export class DesktopBridge {
     });
   }
   async collectInLock(state) {
+    await this.assertOriginalsUnchanged(state);
     for (const current of state.records.filter(record => record.status === 'current')) {
       const data = await this.inspect(current);
       if (!matches(data.common, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');

@@ -84,6 +84,14 @@ does not silently generate a replacement for existing state. Restart recovery
 checks native operation identities before a write and never blindly retries an
 uncertain append. Native user turns are never interrupted for synchronization.
 
+Claude-to-Codex delivery creates a new Codex continuation named
+`[Claudex] <original title>`; it does not append into the original Codex task.
+Continue in that marked task after switching back. The original is preserved
+and can remain as an extra sidebar row. If a superseded original is used again,
+its changed history stops synchronization explicitly instead of being silently
+ignored or choosing one branch. Resolve that conflict before further delivery
+or backup collection; neither history is overwritten.
+
 `desktop uninstall` removes only the owned next-start launcher and returns the
 configuration to legacy mode after the watcher is stopped. It does not delete
 native conversations or Desktop state. Existing Desktop history is not migrated
