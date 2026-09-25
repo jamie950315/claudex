@@ -1,4 +1,5 @@
-import { encodeContextPacket, decodeContextPacket } from './context-packet.mjs';
+import { encodeContextPacket } from './context-packet.mjs';
+import { decodeTransportPacket as decodeContextPacket, prepareArchiveResolver } from './context-packet-reader.mjs';
 import { decodeCodex } from './native-drivers.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { convertNativeTurns, readStableNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
@@ -13,11 +14,16 @@ function receipt(digest) {
  * Its explicit receipt closes the native turn without pretending to be an AI
  * answer. The logical decoder removes both transport messages together.
  */
-export function buildOwnedCodexCommon({ canonical, key, conversationId, targetSessionId, operationId }) {
+export function buildOwnedCodexCommon({ canonical, key, conversationId, targetSessionId, operationId, contextContent, resolveArchive }) {
   assertComplete(canonical);
   if (canonical.messages[0].role !== 'user') throw new Error('Owned Codex checkpoint requires an initial user message.');
-  const content = encodeContextPacket({ common: canonical, conversationId, targetSessionId, operationId, sourceSide: 'claude', previousDigest: null, key });
+  const content = contextContent ?? encodeContextPacket({ common: canonical, conversationId, targetSessionId, operationId, sourceSide: 'claude', previousDigest: null, key });
   const digest = fingerprint(canonical);
+  if (contextContent) {
+    const verified = decodeContextPacket({ content, conversationId, targetSessionId, key, resolveArchive });
+    if (!verified || verified.digest !== digest || verified.sourceSide !== 'claude' || verified.previousDigest !== null
+        || verified.operationId !== operationId) throw new Error('Prepared Codex context does not match the full canonical checkpoint.');
+  }
   return {
     ...canonical,
     meta: { ...canonical.meta, id: targetSessionId },
@@ -32,14 +38,14 @@ export function buildOwnedCodexCommon({ canonical, key, conversationId, targetSe
  * still present. Referenced or compacted history is never silently reduced to
  * its tail; the caller must use a verified full-history source for that case.
  */
-export function decodeOwnedCodexHistory({ text, conversationId, targetSessionId, sessionId = targetSessionId, key }) {
+export function decodeOwnedCodexHistory({ text, conversationId, targetSessionId, sessionId = targetSessionId, key, resolveArchive }) {
   if (targetSessionId !== undefined && sessionId !== targetSessionId) throw new Error('Owned Codex history has conflicting expected session identities.');
   const native = decodeCodex(text);
   if (native.nativeId !== sessionId || native.common.meta.id !== sessionId) throw new Error('Owned Codex history has a different native session identity.');
   if (native.originator !== 'claudex') throw new Error('Owned Codex history lacks its native ownership marker.');
   const [bootstrap, acknowledgement, ...continuation] = native.common.messages;
   if (bootstrap?.role !== 'user') throw new Error('Owned Codex history is missing its initial checkpoint packet.');
-  const packet = decodeContextPacket({ content: bootstrap.content, conversationId, targetSessionId: sessionId, key });
+  const packet = decodeContextPacket({ content: bootstrap.content, conversationId, targetSessionId: sessionId, key, resolveArchive });
   if (!packet) throw new Error('Owned Codex history is missing its authenticated checkpoint packet.');
   if (packet.sourceSide !== 'claude' || packet.previousDigest !== null) throw new Error('Owned Codex checkpoint has an invalid source side or prefix.');
   if (acknowledgement?.role !== 'assistant' || acknowledgement.content.length !== 1
@@ -47,7 +53,7 @@ export function decodeOwnedCodexHistory({ text, conversationId, targetSessionId,
     throw new Error('Owned Codex checkpoint is missing its exact transport receipt.');
   }
   for (const message of continuation) {
-    if (decodeContextPacket({ content: message.content, conversationId, targetSessionId: sessionId, key })) {
+    if (decodeContextPacket({ content: message.content, conversationId, targetSessionId: sessionId, key, resolveArchive })) {
       throw new Error('Owned Codex history contains an unexpected additional checkpoint packet.');
     }
     if (message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text.startsWith(RECEIPT_LABEL))) {
@@ -97,7 +103,7 @@ function bootstrapContent(item) {
  * Native API history can span earlier rollouts and compaction. Packet content
  * is verified before generic rendering adds readable native metadata.
  */
-export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, targetSessionId, sessionId = targetSessionId, cwd, timestamp, key }) {
+export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, targetSessionId, sessionId = targetSessionId, cwd, timestamp, key, resolveArchive }) {
   if (targetSessionId !== undefined && sessionId !== targetSessionId) throw new Error('Owned Codex history has conflicting expected session identities.');
   if (snapshot?.threadId !== sessionId) throw new Error('Owned Codex native snapshot has a different session identity.');
   // Validates every turn, including active/error status and final responses.
@@ -106,7 +112,7 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   const first = snapshot.turns[0];
   if (first.items.length !== 2) throw new Error('Owned Codex checkpoint turn must contain exactly its packet and receipt.');
   const content = bootstrapContent(first.items[0]);
-  const packet = decodeContextPacket({ content, conversationId, targetSessionId: sessionId, key });
+  const packet = decodeContextPacket({ content, conversationId, targetSessionId: sessionId, key, resolveArchive });
   if (!packet) throw new Error('Owned Codex history is missing its authenticated checkpoint packet.');
   if (packet.sourceSide !== 'claude' || packet.previousDigest !== null) throw new Error('Owned Codex checkpoint has an invalid source side or prefix.');
   const acknowledgement = first.items[1];
@@ -118,7 +124,7 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   }
   const continuation = display.messages.slice(2);
   for (const message of continuation) {
-    if (decodeContextPacket({ content: message.content, conversationId, targetSessionId: sessionId, key })) throw new Error('Owned Codex history contains an unexpected additional checkpoint packet.');
+    if (decodeContextPacket({ content: message.content, conversationId, targetSessionId: sessionId, key, resolveArchive })) throw new Error('Owned Codex history contains an unexpected additional checkpoint packet.');
     if (message.role === 'assistant' && message.content.some(block => block.type === 'text' && block.text.startsWith(RECEIPT_LABEL))) throw new Error('Owned Codex history contains an unexpected transport receipt.');
   }
   const common = { ...display, messages: [...packet.messages, ...continuation], meta: { ...display.meta, ownedHistory: {
@@ -129,11 +135,22 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   return { common, digest: fingerprint(common), importedPackets: 1, operationId: packet.operationId, bootstrapDigest: packet.digest, nativeDigest: snapshot.digest };
 }
 
-export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, ...options }) {
+export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, ...options }) {
   const sessionId = options.sessionId ?? options.targetSessionId;
   const snapshot = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix });
+  if (archiveRoot) options.resolveArchive = await prepareArchiveResolver({ root: archiveRoot,
+    contents: [bootstrapContent(snapshot.turns[0].items[0])], conversationId: options.conversationId,
+    targetSessionId: sessionId, key: options.key });
   const result = decodeOwnedCodexNativeHistory({ ...options, snapshot });
   if (Buffer.byteLength(JSON.stringify(result.common)) > (limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes)) throw new Error('Owned Codex history exceeds the converted byte limit; no partial history was returned.');
   return { ...result, turnCount: snapshot.turnCount, itemCount: snapshot.itemCount, bytes: snapshot.bytes, pages: snapshot.pages,
     incompleteTail: snapshot.incompleteTail, incompleteTailCount: snapshot.incompleteTailCount };
+}
+
+export async function decodeOwnedCodexHistoryWithArchives({ archiveRoot, ...options }) {
+  const native = decodeCodex(options.text);
+  const resolveArchive = await prepareArchiveResolver({ root: archiveRoot,
+    contents: [native.common.messages[0]?.content], conversationId: options.conversationId,
+    targetSessionId: options.sessionId ?? options.targetSessionId, key: options.key });
+  return decodeOwnedCodexHistory({ ...options, resolveArchive });
 }

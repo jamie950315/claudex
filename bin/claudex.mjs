@@ -109,7 +109,7 @@ async function main() {
       const result = await installDesktopLauncher({ root,
         launcher: fileURLToPath(new URL('./claudex-codex.mjs', import.meta.url)),
         binary: values['codex-binary'] || '/Applications/ChatGPT.app/Contents/Resources/codex' });
-      await writeJSON(configPath, { ...config, mode: 'desktop', allProjects: true, projects: [],
+      await writeJSON(configPath, { ...config, mode: 'desktop', allProjects: true, projects: [], contextMode: config.contextMode ?? 'archive',
         claudeBinary: values['claude-binary'] || config.claudeBinary || 'claude' });
       output(result);
     } else if (positionals[1] === 'uninstall') {
@@ -127,7 +127,8 @@ async function main() {
     const state = config.mode === 'desktop'
       ? await new DesktopBridge({ root, adapters: {} }).status()
       : await new Bridge({ root, drivers: {} }).status();
-    output({ mode: config.mode || 'legacy', allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
+    output({ mode: config.mode || 'legacy', contextMode: config.mode === 'desktop' ? config.contextMode ?? 'inline' : null,
+      allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
       pending: state.pending ? { phase: state.pending.phase, nativeId: state.pending.record.nativeId, side: state.pending.record.side } : null,
       audit: state.audit, watcher: await readJSON(join(root, 'watcher-status.json'), null) });
     return;

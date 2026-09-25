@@ -247,3 +247,42 @@ test('edited old snapshots and known busy targets preserve data without new allo
   busy.files.get(target.path).busy = false;
   assert.equal((await busy.bridge.sync(busy.conversationId)).changed, true);
 });
+
+test('unchanged canonical history can migrate context and adopt its native identity before normal input opens', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('codex', 1);
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('claude'), before = await f.bridge.status();
+  const oldHistory = copy(f.files.get(old.path));
+  const adapter = f.bridge.adapters.claude, plan = adapter.plan;
+  let resetRecord, applications = 0, activationAttempts = 0;
+  adapter.needsMaintenance = async record => record.nativeId === old.nativeId;
+  adapter.plan = async options => ({ ...await plan(options), contextReset: options.contextReset });
+  adapter.operationApplied = async (_record, pending) => resetRecord?.operationId === pending.operationId;
+  adapter.apply = async (record, common, pending) => {
+    applications++;
+    assert.deepEqual(pending.previous, { count: 0, digest: null });
+    resetRecord = { ...record, nativeId: `${record.nativeId}-reset`, path: `${record.path}-reset`, operationId: pending.operationId };
+    f.files.set(resetRecord.path, { nativeId: resetRecord.nativeId, common: copy(common), operations: new Set([pending.operationId]), busy: false });
+  };
+  adapter.resolveAppliedRecord = async () => resetRecord;
+  adapter.completePromotion = async record => {
+    activationAttempts++;
+    assert.equal((await f.current('claude')).nativeId, record.nativeId);
+    if (activationAttempts === 1) throw new Error('Normal profile activation interrupted after promotion');
+  };
+  await assert.rejects(f.bridge.sync(f.conversationId), /activation interrupted/);
+  assert.equal((await f.bridge.status()).pending.phase, 'promoted');
+  await f.bridge.recover();
+  const after = await f.bridge.status();
+  assert.equal(applications, 1);
+  assert.equal(activationAttempts, 2);
+  assert.equal(after.records.length, before.records.length);
+  assert.equal((await f.current('claude')).id, old.id);
+  assert.equal((await f.current('claude')).nativeId, resetRecord.nativeId);
+  assert.deepEqual(after.conversations[f.conversationId].canonical, before.conversations[f.conversationId].canonical);
+  assert.deepEqual(f.files.get(old.path), oldHistory);
+  assert.equal(after.pending, null);
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, false);
+});

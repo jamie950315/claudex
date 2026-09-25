@@ -93,9 +93,17 @@ export class DesktopBridge {
       }
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
-      if (!changed.length && records.length === 2) return { changed: false };
-      const { record: source, data } = changed[0] ?? readings[0];
+      const maintenance = [];
+      for (const { record } of readings) {
+        if (await this.adapters[record.side].needsMaintenance?.(record)) maintenance.push(record.side);
+      }
+      if (maintenance.length > 1) throw new Error('Only one native context migration may be planned at a time.');
+      if (!changed.length && records.length === 2 && !maintenance.length) return { changed: false };
+      const reading = changed[0] ?? (maintenance.length ? readings.find(entry => entry.record.side !== maintenance[0]) : readings[0]);
+      if (!reading) throw new Error('Context migration requires its verified paired source.');
+      const { record: source, data } = reading;
       const side = other(source.side);
+      const contextReset = maintenance.includes(side);
       const target = this.current(state, id, side);
       if (target) await this.adapters[side].assertIdle(target);
       // Cleanup precedes allocation; a protected backup cannot create an
@@ -106,15 +114,17 @@ export class DesktopBridge {
       // Originals remain untouched. Label replacement Codex tasks so a user can
       // distinguish the synchronized continuation from the preserved original.
       const title = side === 'codex' ? `[Claudex] ${conversation.title}` : conversation.title;
-      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId });
+      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset });
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
+      if (contextReset && (side !== 'claude' || !reuse || planned.kind !== 'owner' || planned.contextReset !== true))
+        throw new Error('Context migration requires a reusable owned Claude reset plan.');
       if (reuse && (side !== 'claude' || target.kind !== 'owner' || planned.kind !== 'owner')) throw new Error('Only a verified native Claude owner may reuse its identity.');
       if (reuse) await this.adapters[side].assertIdle(target);
       const record = { ...planned, id: reuse ? target.id : randomUUID(), side, conversationId: id, cwd: conversation.cwd,
         managed: true, status: 'current', verified: false, bytes: 0, createdAt: reuse ? target.createdAt : this.now() };
       if (!record.nativeId || !['owner', 'snapshot'].includes(record.kind)) throw new Error('Invalid native handoff plan.');
       state.pending = { phase: 'prepared', operationId, sourceId: source.id, targetId: target?.id ?? null,
-        reuse, record, common, checkpoint: checkpoint(common), previous: reuse ? conversation.canonical : { count: 0, digest: null } };
+        reuse, record, common, checkpoint: checkpoint(common), previous: reuse && !contextReset ? conversation.canonical : { count: 0, digest: null } };
       await this.save(state, { event: 'prepared', conversationId: id, side });
       return this.finish(state);
     });
@@ -139,10 +149,16 @@ export class DesktopBridge {
       // recovery too: it may have received a competing turn after apply.
       if (target && (!applied || !pending.reuse)) {
         await this.adapters[target.side].assertIdle(target);
-        const targetData = await this.inspect(target);
+        const targetData = await this.inspect(pending.record.contextReset ? { ...target, readResetSourceForOperation: pending.operationId } : target);
         if (targetData.digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
       }
       if (!applied) await driver.apply(pending.record, pending.common, pending);
+      if (driver.resolveAppliedRecord) {
+        const resolved = await driver.resolveAppliedRecord(pending.record, pending);
+        if (resolved.nativeId !== pending.record.nativeId && (!pending.reuse || pending.record.side !== 'claude' || !pending.record.contextReset))
+          throw new Error('Only a verified native context reset may adopt a different reusable identity.');
+        pending.record = resolved;
+      }
       const targetData = await this.inspect(pending.record);
       if (!matches(targetData.common, pending.checkpoint)) throw new Error('Native destination did not preserve the complete copied checkpoint.');
       pending.record = { ...pending.record, path: targetData.path ?? pending.record.path, verified: true,
@@ -178,6 +194,7 @@ export class DesktopBridge {
       await this.assertUnchanged(old);
       Object.assign(old, await driver.hide(old));
     }
+    if (driver.completePromotion) await driver.completePromotion(pending.record);
     const result = { changed: true, conversationId: pending.record.conversationId, side: pending.record.side, nativeId: pending.record.nativeId };
     state.pending = null;
     await this.save(state, { event: 'completed', conversationId: result.conversationId, side: result.side });

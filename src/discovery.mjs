@@ -49,12 +49,14 @@ async function claudeCwd(path) {
         if (row.type === 'user' && Array.isArray(row.message?.content)) {
           const first = row.message.content[0]?.text;
           const footer = row.message.content.at(-1)?.text;
-          if (first?.startsWith('[Claudex imported history v1]\n') && footer?.startsWith('[Claudex context packet v1]\n')) {
-            const marker = JSON.parse(footer.slice('[Claudex context packet v1]\n'.length));
+          const version = /^\[Claudex imported history v([12])\]\n/.exec(first ?? '')?.[1];
+          const prefix = version && `[Claudex context packet v${version}]\n`;
+          if (prefix && footer?.startsWith(prefix)) {
+            const marker = JSON.parse(footer.slice(prefix.length));
             // Discovery is classification, not authentication. Another bridge
             // root's packet must not be imported again as a new native source.
             // Actual history reads still verify the private HMAC and chain.
-            if (marker.version === 1 && marker.targetSessionId === row.sessionId && marker.sourceSide === 'codex'
+            if (marker.version === Number(version) && marker.targetSessionId === row.sessionId && marker.sourceSide === 'codex'
               && /^[a-f0-9]{64}$/.test(marker.signature)) return null;
           }
         }

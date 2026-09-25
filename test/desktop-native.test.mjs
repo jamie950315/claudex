@@ -35,7 +35,7 @@ test('runtime reconnects after backend closure but never replays a request', asy
   await runtime.close();
 });
 
-test('native adapters alternate snapshots and a stable owner without losing canonical history', { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 60000 }, async t => {
+for (const contextMode of ['inline', 'archive']) test(`native ${contextMode} adapters alternate snapshots and a stable owner without losing canonical history`, { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 60000 }, async t => {
   const root = await mkdtemp(join(tmpdir(), 'cldx-desktop-native-'));
   const stateRoot = join(root, 'state'), cwd = join(root, 'project'), codexHome = join(root, 'codex'), claudeHome = join(root, 'claude');
   await Promise.all([cwd, codexHome, claudeHome].map(path => mkdir(path)));
@@ -68,7 +68,7 @@ test('native adapters alternate snapshots and a stable owner without losing cano
       async close() { closed = true; },
     };
   };
-  const options = { root: stateRoot, codexHome, claudeHome, ownerFactory,
+  const options = { root: stateRoot, codexHome, claudeHome, ownerFactory, contextMode,
     clientFactory: async () => new CodexClient({ codexHome }) };
   let runtime = await new DesktopRuntime(options).initialize();
   let bridge = new DesktopBridge({ root: stateRoot, adapters: runtime.adapters });

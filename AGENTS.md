@@ -179,3 +179,35 @@ new complete turns or changed prefixes. Never silently ignore activity in a
 preserved original or compare it to the newer canonical checkpoint. Recovery
 also rechecks a replaced destination after a durable native apply, before
 promotion, so concurrent work cannot be silently left behind.
+
+Desktop `contextMode: "archive"` stores complete portable messages in private
+content-addressed history-assets and sends signed v2 packets with bounded,
+explicitly labeled readable excerpts. They are not AI summaries. Mixed v1/v2
+decoders reconstruct the exact canonical digest; authenticate before loading
+archives and require their signed archiveRoot to match the configured root.
+Archive assets are authoritative history, not rollback garbage.
+Archive format v2 shares reference pages of at most 64 messages; full-checkpoint
+metadata growth per new message is bounded instead of quadratic. Preserve v1
+archive encoding when recovering old packetVersion2 intents without archiveVersion.
+
+Inline-owner migration requires a fresh deferred, input-isolated maintenance
+process after the previous writer exited. Ordinary hooks/plugins/tools/MCP are
+disabled only in that process; fixed macOS managed/MDM/remote policy inputs must
+be absent or bounded-readable, with no managed hooks or dynamic policy helpers.
+Never use bare mode, hot detach, or a stale idle level as a reset lease. Dispatch
+only advertised /clear with shouldQuery:false and without client_composed. Match
+the result's native session_id to the new init; conversation_reset's display ID
+is different. Preserve the old byte prefix plus exact verified native metadata.
+After authenticated archive restoration, promote the new native ID before a
+normal-profile worker reattaches the same RC ID. One sealed prior generation is
+retained; repeated resets are refused until safe retirement exists. Unknown clear
+outcomes are never resent. Unexpected session identity makes shutdown unsafe.
+CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS must be enabled explicitly. Pinned native
+no-query appends and /clear also emit running/idle; correlate their own receipts
+and wait for reset idle without classifying the owned lifecycle as user work.
+
+The integrated real SDK/coordinator proof preserves four canonical messages
+through a cold migration, restart and then a six-message next-delta checkpoint;
+the v2 delta and archive path render in the same Claude Desktop entry. Native
+receipts report zero inference. Production activation and real model-generated
+two-way alternation remain distinct acceptance gates.

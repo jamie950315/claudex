@@ -27,6 +27,7 @@ test('default Claude home preserves the default Keychain namespace without copyi
     { CLAUDE_CONFIG_DIR: '/different/home', PATH: '/example/path' });
   assert.equal(Object.hasOwn(env, 'CLAUDE_CONFIG_DIR'), false);
   assert.equal(env.EXAMPLE_SETTING, 'retained');
+  assert.equal(env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS, '1');
   assert.equal(env.PATH, '/example/path');
   const isolated = await claudeOwnerEnvironment('/example/isolated-claude', {}, {});
   assert.equal(isolated.CLAUDE_CONFIG_DIR, '/example/isolated-claude');
@@ -114,6 +115,27 @@ test('owner preserves identities, uses no-query appends, and deduplicates across
   assert.equal(f.calls.appends.length, 2);
   await assert.rejects(owner.append({ operationId: 'a', content: 'Different history' }), /different content/);
   await owner.close();
+});
+
+test('an unexpected native session identity never turns an old idle level into shutdown authority', async () => {
+  const f = await fixture(), owner = await ClaudeOwner.open(f.config);
+  try {
+    f.emit({ type: 'system', subtype: 'init', session_id: randomUUID() });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(owner.status().blocked, /another session/);
+    await assert.rejects(owner.close(), /busy/);
+    assert.equal(f.closeCount(), 0);
+    // Even a late frame from the old identity cannot restore authority over
+    // the now-unidentified native process.
+    f.emit({ type: 'system', subtype: 'session_state_changed', state: 'idle', session_id: owner.status().sessionId });
+    await new Promise(resolve => setImmediate(resolve));
+    await assert.rejects(owner.close(), /busy/);
+    assert.equal(f.closeCount(), 0);
+  } finally {
+    // This is a process-free fixture: terminate its synthetic stream explicitly
+    // after proving the production close path refused to interrupt it.
+    owner.input.end(); owner.query.close(); await owner.consumer; await owner.lock.release();
+  }
 });
 
 test('owner rejects another writer and mismatched runtime versions', async () => {

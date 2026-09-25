@@ -76,13 +76,45 @@ runtime with a durable recovery journal; it does not stop an active backend.
 The new runtime takes effect on the next backend launch. Do not weaken native
 peer verification to keep an unsigned wrapper running.
 
-Desktop mode uses one stable Claude local/Remote Control identity per logical
-conversation and at most two managed Codex snapshots in steady state. It keeps
+Desktop mode uses one stable Claude Remote Control identity per logical
+conversation and at most two managed Codex snapshots in steady state. A cold
+context migration can change the Claude local native ID without changing the
+Desktop entry. It keeps
 one durable signed checkpoint chain, one pending transaction, a persistent
 private signing key, and bounded diagnostics. Losing the key blocks writes; it
 does not silently generate a replacement for existing state. Restart recovery
 checks native operation identities before a write and never blindly retries an
 uncertain append. Native user turns are never interrupted for synchronization.
+
+New Desktop installations select `contextMode: "archive"`. The complete portable
+history is stored in authenticated, content-addressed `history-assets` under the
+private state root. Native messages show deterministic readable excerpts, not an
+AI summary: at most 128 KiB per view and 8 KiB per text excerpt, with exact source
+indices and an explicit manifest path for details. Native-event/tool bodies,
+images, and unshown text remain in the archive and must reconstruct the identical
+canonical digest. Missing, changed, or wrong-root archives stop synchronization.
+These assets are authoritative conversation content, not disposable rollback data.
+Archive v2 uses shared pages of at most 64 message references and a small manifest,
+so successive full checkpoints do not duplicate an ever-growing reference list.
+Archive v1 remains readable and reproducible for existing prepared operations.
+The v1 inline packet format remains readable; already prepared v1 transactions
+keep their original encoding during recovery.
+
+An existing inline owner migrates only in a fresh, unexposed maintenance process
+after its previous writer has actually exited. A connected owner's idle state or
+Remote Control detach is not treated as an exclusive input lease. Maintenance
+disables ordinary extensions only for that process, checks readable managed-policy
+sources without overriding them, and refuses managed hooks, dynamic policy helpers,
+MCP channels, active/background work, or an unfinished native input. The native
+`/clear` command uses a verified no-query receipt, preserves the old native file,
+and changes context without asking a model to summarize. The coordinator adopts
+the new native ID before restoring the normal user/project settings and reconnecting
+the same Remote Control entry. One sealed old native generation is retained;
+another reset is refused until its safe retirement is implemented and verified.
+No hot-reset or unbounded generation fallback is enabled.
+The owner explicitly enables native session-state events; even no-query work
+emits running/idle transitions. Reset waits for its verified idle boundary,
+while unexpected native identities never grant shutdown authority.
 
 Claude-to-Codex delivery creates a new Codex continuation named
 `[Claudex] <original title>`; it does not append into the original Codex task.
@@ -340,6 +372,12 @@ checks pass. Both real mirrored conversations are visible in Claude Desktop's
 sidebar, and a large compacted source history renders through Remote Control.
 Two real Desktop alternations with newly authored replies remain unverified;
 no model inference is started merely to manufacture an acceptance test.
+
+The real coordinator/SDK migration proof verifies a no-inference reset, exact
+canonical history, stable Remote Control identity, restored normal execution
+profile, and a subsequent archived delta visible in the same Claude Desktop
+conversation after restart. This is a synthetic transport proof, not a claim
+that newly model-generated bidirectional continuation has been accepted.
 
 New owned Codex checkpoints can explicitly select `historyMode: 'paginated'`.
 Typed native events preserve text block boundaries and inline images through
