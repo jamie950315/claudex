@@ -150,6 +150,18 @@ with the app-tools pipe present. Preserve this independent auxiliary process
 instead of claiming the shared owner lock. The real helper route is verified;
 subsequent Claude-targeted UI capture timeouts remain an acceptance limitation.
 
+Desktop launchers must use the original OpenAI-signed bundled Node, not the
+installing shell's process.execPath. The app's native peer authorizer checks
+the peer, parent and grandparent signing identities. A Homebrew/ad-hoc wrapper
+breaks codex_app startup and browser policy verification despite a signed leaf
+runtime. The installer verifies the bundled Node signature and journals exact
+owned-runtime upgrades. An isolated signed-wrapper native startup exposes the
+47 app tools without changing the verifier. The currently running old wrapper
+must be replaced before claiming the live app-tools path is repaired. Never
+disable peer checks or substitute an unsigned client. Stdio close does not
+schedule immediate reconnect; next-request recovery is not proof that killing
+an active backend is safe.
+
 Rejected transport shortcuts: queue/add auto-starts inference on an idle native
 thread. shellCommand persists userShell events without a model request, but
 native model-context output truncates around 40k characters even when API output

@@ -100,7 +100,9 @@ async function main() {
     return;
   }
   if (command === 'desktop') {
-    if (await readJSON(join(root, 'watch.lock'), null)) throw new Error('Stop the bridge watcher safely before changing Desktop installation.');
+    if (await readJSON(join(root, 'watch.lock'), null) && !(positionals[1] === 'install' && config.mode === 'desktop')) {
+      throw new Error('Stop the bridge watcher safely before changing Desktop installation.');
+    }
     if (positionals[1] === 'install') {
       const legacy = await new Bridge({ root, drivers: {} }).status();
       if (legacy.pending || legacy.records.length) throw new Error('Legacy conversations require an explicit migration; originals and mappings were preserved.');

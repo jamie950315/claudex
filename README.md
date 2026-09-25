@@ -68,6 +68,14 @@ restores only its own launcher override; a different existing override is never
 overwritten. If the LaunchAgent is already installed, use `service start` after
 stopping its previous instance. No repository selection is needed.
 
+The launcher uses Codex's original signed `cua_node/bin/node` runtime and verifies
+its signature. An ad-hoc or Homebrew Node in the process ancestry prevents
+native app-tools authentication and can make browser policy checks unavailable.
+Re-running `desktop install` safely upgrades an unchanged Claudex-owned launcher
+runtime with a durable recovery journal; it does not stop an active backend.
+The new runtime takes effect on the next backend launch. Do not weaken native
+peer verification to keep an unsigned wrapper running.
+
 Desktop mode uses one stable Claude local/Remote Control identity per logical
 conversation and at most two managed Codex snapshots in steady state. It keeps
 one durable signed checkpoint chain, one pending transaction, a persistent
