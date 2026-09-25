@@ -188,7 +188,8 @@ export class ClaudeOwner {
   async emit(event) {
     try { await this.onEvent(event); }
     catch { this.blocked = 'Owner event consumer failed; synchronization is paused.';
-      this.waiting?.reject(new Error(this.blocked)); this.resetWaiting?.reject(new Error(this.blocked)); }
+      this.waiting?.reject(new Error(this.blocked)); this.resetWaiting?.reject(new Error(this.blocked));
+      this.resetIdleWaiting?.reject(new Error(this.blocked)); }
   }
 
   async save() { await writeJSON(this.statePath, this.state); }
@@ -230,6 +231,7 @@ export class ClaudeOwner {
       }
       this.transcriptPath = sessionPath(this.claudeHome, this.cwd, this.state.sessionId);
       if (this.state.blocked) throw new Error(this.state.blocked);
+      if (this.state.reset && !this.deferRemoteConnection) throw new Error('A pending context reset requires a deferred cold maintenance owner.');
       if (this.state.reset) await this.validateResetRecovery();
       const transcript = await this.inspectTranscript();
       if (!transcript.exists && (this.state.remoteId || this.state.lastAppend || this.state.registration === 'registered')) {

@@ -206,8 +206,16 @@ CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS must be enabled explicitly. Pinned native
 no-query appends and /clear also emit running/idle; correlate their own receipts
 and wait for reset idle without classifying the owned lifecycle as user work.
 
+Verified archived current owners resume directly with their normal execution
+profile after restart; pending resets still require deferred cold maintenance.
+Promoted recovery reconnects the normal owner even without a cached handle.
+
 The integrated real SDK/coordinator proof preserves four canonical messages
 through a cold migration, restart and then a six-message next-delta checkpoint;
 the v2 delta and archive path render in the same Claude Desktop entry. Native
-receipts report zero inference. Production activation and real model-generated
-two-way alternation remain distinct acceptance gates.
+receipts report zero inference. The live watcher has also migrated both real
+conversations without changing their Remote Control identities or canonical
+digests. The large history's real Desktop context fell from over-capacity to
+41.1k/1M while complete portable content remained in the archive. This native
+context migration does not erase the older cloud display history. Real
+model-generated two-way alternation remains a separate acceptance gate.

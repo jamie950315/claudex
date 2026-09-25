@@ -108,9 +108,10 @@ export class DesktopRuntime {
       if (entry.error) throw entry.error;
       return entry.owner;
     }
-    const saved = this.contextMode === 'archive' && !forceNormal
+    const saved = this.contextMode === 'archive'
       ? await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null) : null;
-    const maintenanceOnly = Boolean(saved?.remoteId);
+    if (forceNormal && saved?.reset) throw new Error('A pending native context reset must be restored before a normal owner starts.');
+    const maintenanceOnly = !forceNormal && Boolean(saved?.remoteId);
     const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title,
       deferRemoteConnection: maintenanceOnly, connectAfterReset: !maintenanceOnly,
       options: { ...this.ownerOptions, pathToClaudeCodeExecutable: this.claudeBinary },
@@ -175,7 +176,8 @@ export class DesktopRuntime {
     }
     let path = record.path; let owner; let retainedData;
     if (record.managed) {
-      owner = await this.owner(record.conversationId, record.cwd, record.title);
+      owner = await this.owner(record.conversationId, record.cwd, record.title,
+        { forceNormal: record.verified === true && record.packetVersion === 2 && !record.readResetSourceForOperation });
       if (owner.status().blocked) throw new Error(owner.status().blocked);
       if (owner.status().sessionId !== record.nativeId) {
         if (!record.readResetSourceForOperation) throw new Error('Native Claude owner identity changed.');
@@ -227,8 +229,14 @@ export class DesktopRuntime {
 
   async activateNormalOwner(record) {
     const entry = this.owners.get(record.conversationId);
-    if (!entry?.maintenanceOnly) {
-      if (entry) await entry.owner.connect();
+    if (!entry) {
+      const owner = await this.owner(record.conversationId, record.cwd, record.title, { forceNormal: true });
+      if (owner.status().sessionId !== record.nativeId) throw new Error('Normal owner startup changed the promoted native identity.');
+      await owner.connect();
+      return;
+    }
+    if (!entry.maintenanceOnly) {
+      await entry.owner.connect();
       return;
     }
     const status = entry.owner.status();

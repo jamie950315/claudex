@@ -112,6 +112,9 @@ the new native ID before restoring the normal user/project settings and reconnec
 the same Remote Control entry. One sealed old native generation is retained;
 another reset is refused until its safe retirement is implemented and verified.
 No hot-reset or unbounded generation fallback is enabled.
+After successful promotion, restarts open the verified archived generation with
+normal user settings immediately; an incomplete reset still requires the isolated
+maintenance profile and cannot be exposed as a normal session.
 The owner explicitly enables native session-state events; even no-query work
 emits running/idle transitions. Reset waits for its verified idle boundary,
 while unexpected native identities never grant shutdown authority.
@@ -378,6 +381,11 @@ canonical history, stable Remote Control identity, restored normal execution
 profile, and a subsequent archived delta visible in the same Claude Desktop
 conversation after restart. This is a synthetic transport proof, not a claim
 that newly model-generated bidirectional continuation has been accepted.
+The live watcher has also migrated both real mirrored conversations, retaining
+their canonical digests and Remote Control identities. The large conversation's
+Desktop context changed from over-capacity to 41.1k/1M; full portable history
+remains in the private archive. The older cloud-rendered messages remain visible
+even though the active native context is smaller.
 
 New owned Codex checkpoints can explicitly select `historyMode: 'paginated'`.
 Typed native events preserve text block boundaries and inline images through
