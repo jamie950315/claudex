@@ -7,11 +7,13 @@ native backend. Synchronization never requests model inference. Remote Control
 does transmit the selected conversation to the user's Claude account; it is not
 a local-only transport.
 
-## Start
+## Setup and modes
 
 Requires macOS, Node.js 22+, Codex CLI `0.155.0-alpha.16.3`, and Claude Code
 `2.1.210` or `2.1.281`. Other native versions pause synchronization until compatibility is
 validated. Both tools retain their own authentication and permission settings.
+
+### Legacy CLI quick start
 
 ```sh
 npm ci --ignore-scripts
@@ -51,9 +53,14 @@ Only one watcher can run for a state root.
 ### Experimental Desktop mode
 
 Desktop mode requires Claude Code `2.1.281` with normal subscription OAuth and
-SDK `0.3.281`. It is integrated with the coordinator and background watcher, but
-full two-application acceptance remains unverified. Install it only in a state
-root without legacy tracked conversations; automatic legacy migration is refused.
+SDK `0.3.281`. It is integrated with the coordinator and background watcher.
+Explicitly user-authorized acceptance has verified two real model-authored
+Desktop roundtrips, continuation from a compacted source, stable Claude identity,
+exact logical history equality, restart recovery and bounded Codex snapshot
+retirement. The experimental designation reflects pinned native versions and
+the unsupported formats and lifecycle states documented below, not an untested
+two-application path. Install it only in a state root without legacy tracked
+conversations; automatic legacy migration is refused.
 
 ```sh
 node bin/claudex.mjs desktop install
@@ -126,6 +133,49 @@ and can remain as an extra sidebar row. If a superseded original is used again,
 its changed history stops synchronization explicitly instead of being silently
 ignored or choosing one branch. Resolve that conflict before further delivery
 or backup collection; neither history is overwritten.
+
+#### Daily desktop use
+
+1. Work in Codex normally and wait for the current reply to finish.
+2. In Claude Desktop's Code page, open the corresponding conversation marked
+   **Connected via Remote Control**. Wait for the new history to arrive, then
+   continue there. Ordinary Chat/Cowork conversations are not this bridge's
+   synchronized entry point.
+3. After Claude finishes, return to the current `[Claudex] <original title>`
+   task in Codex. Do not resume the superseded original for the same work branch.
+4. Repeat as needed. Both applications may remain open in Desktop mode, but
+   send new work on only one side of a logical conversation at a time.
+
+No per-repository bridge setup, manual import or routine command is required
+after installation. Synchronization occurs at complete-turn boundaries, not
+token by token; wait for delivery rather than assuming a fixed delay. The Mac,
+background service and shared Codex backend must be available. Remote Control
+also requires connectivity to the user's Claude account. Unsupported tracked
+history or an ambiguous write stops safely instead of retrying blindly.
+
+#### Why the `[Claudex]` title prefix exists
+
+The prefix distinguishes the synchronized continuation from the preserved
+original, which can otherwise have the same title in the sidebar. It helps
+prevent continuing in an old branch that no longer receives the other side's
+updates. It is a display label, not an ownership or synchronization credential:
+the coordinator uses native IDs, managed records, authenticated packets and
+history checkpoints, not a title-prefix match.
+
+The title prefix can technically be removed or replaced without changing the
+history format or ownership rules. Renaming a task through the native UI does
+not change its tracked native ID. However, the current generation naming rule
+is fixed in `src/desktop-bridge.mjs`, with no prefix configuration option.
+Renaming only the current task is not a permanent preference: the next Codex
+generation will again use `[Claudex]` and the stored logical conversation title.
+A permanent change requires updating the generation naming rule and its naming
+test; existing task titles are a separate native rename operation.
+
+Removing the label does not merge the two native sessions or make the original
+receive updates. Keep another clear distinction if the label is removed, or
+the original and current continuation may be indistinguishable by title alone.
+This applies only to the task title: authenticated packet markers, native IDs
+and bridge state must not be edited to change the visible name.
 
 `desktop uninstall` removes only the owned next-start launcher and returns the
 configuration to legacy mode after the watcher is stopped. It does not delete

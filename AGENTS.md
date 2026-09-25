@@ -176,7 +176,12 @@ native model-context output truncates around 40k characters even when API output
 is complete. It is not a lossless arbitrary-packet transport and is not enabled.
 
 Reverse Desktop delivery creates a new `[Claudex] <original title>` Codex task;
-it never appends into the original task. Superseded originals remain tracked:
+it never appends into the original task. This title prefix is a human-facing
+distinction, not an ownership or authentication check. Native IDs, managed
+records, packet signatures and checkpoints remain authoritative. The current
+naming rule is fixed; UI-only renames do not persist to subsequent generations.
+Naming changes must not alter transport markers or weaken original/retirement
+guards. Superseded originals remain tracked:
 sync, recovery and collection compare their own saved checkpoints and reject
 new complete turns or changed prefixes. Never silently ignore activity in a
 preserved original or compare it to the newer canonical checkpoint. Recovery
