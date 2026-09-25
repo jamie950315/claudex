@@ -3,11 +3,12 @@ import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve, delimiter, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { open, readFile, unlink, lstat, link, realpath, access } from 'node:fs/promises';
 import { ftruncateSync, writeSync, fsyncSync, constants } from 'node:fs';
 import { hash, privateDirectory, readJSON, snapshot, writeJSON } from './storage.mjs';
 import { sessionPath } from './claude.mjs';
+import { captureImageAssets, restoreImageAssets } from './claude-image-assets.mjs';
 
 export const CLAUDE_OWNER_SDK_VERSION = '0.3.281';
 export const CLAUDE_OWNER_CLI_VERSION = '2.1.281';
@@ -252,18 +253,33 @@ export class ClaudeOwner {
   }
 
   async inspectTranscript() {
+    let data;
     try {
       const info = await lstat(this.transcriptPath);
       if (!info.isFile() || info.isSymbolicLink()) throw new Error('Owned transcript must be a regular file.');
-      return { ...await snapshot(this.transcriptPath), exists: true };
+      data = await snapshot(this.transcriptPath);
     } catch (error) { if (error.code === 'ENOENT') return { rows: [], exists: false }; throw error; }
+    // Only the bridge's logical read view substitutes lossless originals for
+    // native resized previews. The SDK-owned transcript is never edited.
+    const rows = await restoreImageAssets({ root: this.root, rows: data.rows,
+      bindings: this.state.imageBindings === undefined ? {} : this.state.imageBindings });
+    return { ...data, rows, text: rows === data.rows ? data.text : rows.map(row => JSON.stringify(row)).join('\n') + '\n', exists: true };
   }
 
-  findAppend(transcript, pending) {
+  async findAppend(transcript, pending) {
     const matches = transcript.rows.filter(row => row.uuid === pending.uuid);
     if (!matches.length) return false;
-    if (matches.length !== 1 || matches[0].type !== 'user' || matches[0].sessionId !== this.state.sessionId
-      || hash(normalizedContent(matches[0].message?.content)) !== pending.contentHash) throw new Error('Owned append identity or content does not match the durable intent.');
+    if (matches.length !== 1 || matches[0].type !== 'user' || matches[0].sessionId !== this.state.sessionId) throw new Error('Owned append identity or content does not match the durable intent.');
+    if (hash(normalizedContent(matches[0].message?.content)) !== pending.contentHash) {
+      if (!pending.content || !normalizedContent(pending.content).some(block => block.type === 'image')
+        || this.state.imageBindings?.[pending.uuid]) throw new Error('Owned append identity or content does not match the durable intent.');
+      const temporaryBase = this.options.env?.CLAUDE_CODE_TMPDIR ?? process.env.CLAUDE_CODE_TMPDIR ?? (process.platform === 'darwin' ? '/tmp' : tmpdir());
+      const captured = await captureImageAssets({ root: this.root, claudeTempRoot: join(temporaryBase, `claude-${process.getuid()}`),
+        cwd: this.cwd, sessionId: this.state.sessionId, row: matches[0], expectedContent: pending.content,
+        expectedHash: pending.contentHash, normalizeContent: normalizedContent });
+      this.state.imageBindings = { ...this.state.imageBindings, [pending.uuid]: captured.bindings };
+      await this.save();
+    }
     return true;
   }
 
@@ -271,7 +287,7 @@ export class ClaudeOwner {
     validateContent(content);
     if (typeof operationId !== 'string' || !operationId || operationId.length > 256) throw new Error('A bounded logical append identity is required.');
     return this.findAppend(await this.inspectTranscript(), {
-      uuid: appendUuid(this.state.sessionId, operationId), contentHash: hash(normalizedContent(content)),
+      uuid: appendUuid(this.state.sessionId, operationId), contentHash: hash(normalizedContent(content)), content,
     });
   }
 
@@ -280,7 +296,7 @@ export class ClaudeOwner {
     if (!pending) return false;
     transcript ??= await this.inspectTranscript();
     if (!UUID.test(pending.uuid)) throw new Error('Invalid durable append identity.');
-    if (this.findAppend(transcript, pending)) {
+    if (await this.findAppend(transcript, pending)) {
       // A native record proves persistence even if a crash lost its result. It
       // does not invent a zero-cost receipt; recovered is explicit to callers.
       this.state.lastAppend = { operationId: pending.operationId, uuid: pending.uuid, contentHash: pending.contentHash, recovered: true };
@@ -318,7 +334,7 @@ export class ClaudeOwner {
       const contentHash = hash(normalizedContent(content));
       if (this.state.lastAppend?.operationId === operationId) {
         if (this.state.lastAppend.contentHash !== contentHash) throw new Error('Logical append identity was reused with different content.');
-        if (!this.findAppend(await this.inspectTranscript(), this.state.lastAppend)) throw new Error('Previously committed owner append is missing.');
+        if (!await this.findAppend(await this.inspectTranscript(), this.state.lastAppend)) throw new Error('Previously committed owner append is missing.');
         await this.connect();
         return { ...this.state.lastAppend, ...this.status(), duplicate: true };
       }
@@ -339,7 +355,7 @@ export class ClaudeOwner {
       try {
         await Promise.race([receipt, new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Owner append receipt timed out; delivery remains pending.')), this.receiptTimeoutMs); })]);
       } finally { clearTimeout(timeout); this.waiting = null; }
-      if (!this.findAppend(await this.inspectTranscript(), pending)) throw new Error('No-query receipt arrived without the exact persisted native append.');
+      if (!await this.findAppend(await this.inspectTranscript(), pending)) throw new Error('No-query receipt arrived without the exact persisted native append.');
       this.state.lastAppend = { operationId, uuid: pending.uuid, contentHash, recovered: false };
       this.state.pending = null; await this.save();
       await this.connect();

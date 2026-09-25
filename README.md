@@ -259,6 +259,21 @@ authenticated packet is excluded from logical history; genuine replies are not.
 Discovery excludes SDK imports owned by other bridge roots as well, preventing
 an already imported conversation from creating a new synchronization loop.
 
+The real shared-backend watcher now enrolls ordinary Codex conversations and
+forks, excluding subagents using native metadata. Goal continuation turns may
+start with assistant work and accept steering later; the exporter preserves
+that native order against earlier verified user context without inventing a
+user message. Completed turns still need their final response.
+
+For native resized PNG/JPEG previews, the owner verifies the exact original
+against its pending intent and Claude's private input-image cache. It retains
+original bytes once in a private content-addressed asset store and binds the
+persisted preview hash. Logical history therefore remains lossless even when
+the Desktop displays a smaller native preview. Source and native transcript
+files are not rewritten. Missing or changed assets fail explicitly. These
+originals are conversation content, not expiring rollback copies; identical
+images deduplicate and image-free sync rounds do not add asset records.
+
 `src/context-packet.mjs` carries reversibly labeled foreign messages as native
 text and inline images, never executable tool requests. A bounded structural
 footer authenticates the packet without duplicating its body. The Desktop
@@ -294,6 +309,13 @@ runtime directory. Both alias and target identities are verified. The bounded
 manifest stores only process/socket identities and version, never inherited
 environment values. The current CLI's `app-server proxy` sends raw JSONL and is
 not interchangeable with this WebSocket transport.
+
+Codex Desktop's separately launched CUA helper keeps its original standalone
+stdio backend; it does not claim the shared Desktop owner's lock. The exact
+pinned helper invocation is verified. Real shared transport activation, source
+enrollment, registration with Claude and canonical history checks pass. Large
+conversation renderer visibility and two real Desktop alternations remain
+unverified while Claude-targeted computer-use observations time out.
 
 New owned Codex checkpoints can explicitly select `historyMode: 'paginated'`.
 Typed native events preserve text block boundaries and inline images through

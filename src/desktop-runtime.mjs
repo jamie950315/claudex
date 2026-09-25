@@ -162,14 +162,14 @@ export class DesktopRuntime {
       data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
       return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(path)).size, digest: fingerprint(data.common) };
     }
-    let path = record.path;
+    let path = record.path; let owner;
     if (record.managed) {
-      const owner = await this.owner(record.conversationId, record.cwd, record.title);
+      owner = await this.owner(record.conversationId, record.cwd, record.title);
       if (owner.status().sessionId !== record.nativeId) throw new Error('Native Claude owner identity changed.');
       path = owner.status().transcriptPath;
     }
     path = await this.safePath(path, this.claudeHome);
-    const data = await snapshot(path);
+    const data = owner ? await owner.inspectTranscript() : await snapshot(path);
     const prefix = completedClaudePrefix({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
       ...(record.managed ? { key: this.key } : {}) });
     const parsed = record.managed
@@ -200,7 +200,11 @@ export class DesktopRuntime {
   async operationApplied(record, pending) {
     if (record.side === 'claude') {
       const owner = await this.owner(record.conversationId, record.cwd, record.title);
-      return owner.hasAppend({ operationId: pending.operationId, content: this.packet(record, pending.common, pending) });
+      const applied = await owner.hasAppend({ operationId: pending.operationId, content: this.packet(record, pending.common, pending) });
+      // A crash can happen after persistence but before Remote Control was
+      // registered. Recover registration without submitting the packet again.
+      if (applied) await owner.connect();
+      return applied;
     }
     if (!await exists(record.path)) return false;
     await this.safePath(record.path, this.codexHome);

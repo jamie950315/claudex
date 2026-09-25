@@ -178,6 +178,11 @@ async function passthrough(binary, args, env) {
 /** Framing adapter only: it neither initializes nor modifies Desktop requests. */
 export async function runCodexLauncher(args = process.argv.slice(2), env = process.env) {
   const binary = await resolveBinary(env.CLAUDEX_CODEX_BINARY || 'codex', env);
+  // Codex Desktop launches its CUA helper as exactly this standalone stdio
+  // server. It is not the shared Desktop owner and must keep its own pipe.
+  if (args.length === 3 && args[0] === 'app-server' && args[1] === '--listen' && args[2] === 'stdio://' && env.CODEX_APP_TOOLS_PIPE_PATH) {
+    return passthrough(binary, args, env);
+  }
   const root = resolve(env.CLAUDEX_HOME || join(homedir(), '.local', 'share', 'claudex'));
   const directory = join(root, 'codex-shared');
   const socketPath = join(directory, 'app.sock');

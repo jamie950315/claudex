@@ -22,6 +22,21 @@ import { WebSocketServer } from ${JSON.stringify(wsModule)};
 const args = process.argv.slice(2);
 if(args[0] === '--version') { console.log(${JSON.stringify(SUPPORTED_CODEX_VERSION)}); process.exit(0); }
 if(!args.includes('app-server')) { console.log(JSON.stringify({args, inherited:process.env.CLAUDEX_SYNTHETIC_VALUE==='synthetic inherited'})); process.exit(7); }
+if(args.length===3 && args[1]==='--listen' && args[2]==='stdio://') {
+  process.stdin.setEncoding('utf8');
+  let tail='';
+  process.stdin.on('data', chunk => {
+    tail+=chunk;
+    let end;
+    while((end=tail.indexOf('\\n'))>=0) {
+      const line=tail.slice(0,end); tail=tail.slice(end+1);
+      const request=JSON.parse(line);
+      console.log(JSON.stringify({id:request.id,result:{args,pid:process.pid,appPipeInherited:process.env.CODEX_APP_TOOLS_PIPE_PATH==='synthetic-pipe'}}));
+    }
+  });
+  await new Promise(resolveEnd => process.stdin.on('end', resolveEnd));
+  process.exit(0);
+}
 const address = args[args.indexOf('--listen')+1];
 const server = http.createServer();
 const wss = new WebSocketServer({server,path:'/rpc'});
@@ -121,6 +136,22 @@ test('live ownership is never stolen and SIGTERM stops only the owned child', { 
   original.kill('SIGTERM');
   assert.equal((await original.done).code, 0);
   assert.throws(() => process.kill(record.childPid, 0), { code: 'ESRCH' });
+});
+
+test('observed auxiliary stdio app-server keeps its independent native pipe while Desktop owner remains live', { timeout: 10000 }, async t => {
+  const { state, start } = await fixture(t);
+  const original = start(['app-server']);
+  const record = await ready(state);
+  const helper = start(['app-server', '--listen', 'stdio://']);
+  const reply = (await request(helper, { id: 1, method: 'probe' })).result;
+  assert.deepEqual(reply.args, ['app-server', '--listen', 'stdio://']);
+  assert.equal(reply.appPipeInherited, true);
+  assert.notEqual(reply.pid, record.childPid);
+  assert.equal((await request(original, { id: 2, method: 'probe' })).result.pid, record.childPid);
+  helper.stdin.end();
+  assert.equal((await helper.done).code, 0);
+  original.stdin.end();
+  assert.equal((await original.done).code, 0);
 });
 
 test('non-app-server commands preserve args, exit code, and environment; symlink entry executes', { timeout: 10000 }, async t => {

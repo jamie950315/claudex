@@ -12,7 +12,7 @@ async function fixture(overrides = {}) {
   const calls = { codex: 0, recover: 0, track: [], sync: [], collect: 0 };
   const state = { records: [], conversations: {}, pending: null };
   const runtime = {
-    async codex() { calls.codex++; },
+    async codex() { calls.codex++; return { async request(_method, { threadId }) { return { thread: { id: threadId, source: 'vscode' } }; } }; },
     async ownedNativeIds() { return new Set(['claude:owned']); },
     ...overrides.runtime,
   };
@@ -45,7 +45,7 @@ test('restart recovers a pending native operation before discovery or allocation
     assert.equal(f.calls.recover, 1);
     assert.equal(f.state.pending, null);
     assert.equal(config.allProjects, true);
-    assert.equal(config.excludeSubagents, true);
+    assert.equal(config.excludeSubagents, false);
     assert.ok(known.has('claude:owned'));
     return [{ side: 'codex', id: 'new', path: '/new' }];
   } });
@@ -58,6 +58,7 @@ test('absent shared transport waits without enrolling sources and later resumes'
   let available = false;
   const f = await fixture({ runtime: { async codex() {
     if (!available) { available = true; throw new Error('Shared Codex Desktop backend is not ready.'); }
+    return { async request(_method, { threadId }) { return { thread: { id: threadId, source: 'vscode' } }; } };
   } } });
   let first;
   await f.run({ maxPasses: 2, sleep: async () => {
@@ -81,6 +82,7 @@ test('an observed shared transport disconnect waits for a fresh connected pass',
   let connected = false;
   const f = await fixture({ runtime: { async codex() {
     if (!connected) { connected = true; throw new Error('Could not connect to the shared Codex transport'); }
+    return { async request(_method, { threadId }) { return { thread: { id: threadId, source: 'vscode' } }; } };
   } } });
   let first;
   await f.run({ maxPasses: 2, sleep: async () => { first = await f.status(); } });
@@ -163,4 +165,44 @@ test('subagent discovery is excluded only when requested', async () => {
   const options = { codexHome, claudeHome, allProjects: true, since: 0 };
   assert.equal((await discoverSources(options)).length, 1);
   assert.deepEqual(await discoverSources({ ...options, excludeSubagents: true }), []);
+});
+
+test('native source metadata excludes subagents and retains ordinary forks when headers disagree', async () => {
+  const read = [];
+  const f = await fixture({ runtime: { async codex() { return { async request(method, params) {
+    assert.equal(method, 'thread/read');
+    assert.equal(params.includeTurns, false);
+    read.push(params.threadId);
+    return { thread: { id: params.threadId, source: params.threadId === 'child'
+      ? { subAgent: { thread_spawn: { parent_thread_id: 'parent' } } } : 'vscode',
+      forkedFromId: params.threadId === 'fork' ? 'parent' : null } };
+  } }; } } });
+  const codexHome = join(f.root, 'codex');
+  const sessions = join(codexHome, 'sessions');
+  const { mkdir } = await import('node:fs/promises');
+  await mkdir(sessions, { recursive: true });
+  for (const [id, source] of [['child', 'vscode'], ['fork', { subAgent: { thread_spawn: {} } }]]) {
+    await writeFile(join(sessions, `rollout-${id}.jsonl`), JSON.stringify({ type: 'session_meta', payload: { id, cwd: f.root, source } }) + '\n');
+  }
+  await f.run({ maxPasses: 1, discover: discoverSources,
+    config: { codexHome, claudeHome: join(f.root, 'claude'), since: 0 },
+  });
+  assert.deepEqual(read, ['child', 'fork']);
+  assert.deepEqual(f.calls.track, [join(sessions, 'rollout-fork.jsonl')]);
+  assert.equal((await f.status()).error, null);
+});
+
+test('an unavailable new native thread is reported while another source enrolls', async () => {
+  const f = await fixture({ runtime: { async codex() { return { async request(_method, { threadId }) {
+    if (threadId === 'missing') throw new Error('Thread not found');
+    return { thread: { id: threadId, source: 'vscode' } };
+  } }; } } });
+  let pass;
+  await f.run({ maxPasses: 2, discover: async (_config, known) => [
+    { side: 'codex', id: 'missing', path: '/missing' }, { side: 'codex', id: 'good', path: '/good' },
+  ].filter(source => !known.has(`${source.side}:${source.id}`)), sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(f.calls.track, ['/good']);
+  assert.equal(pass.blockedSourceCount, 1);
+  assert.match(pass.blockedSources[0].reason, /Referenced Codex history/);
+  assert.equal((await f.status()).error, null);
 });

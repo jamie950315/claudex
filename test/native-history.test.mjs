@@ -57,6 +57,24 @@ test('source mutation between passes fails without retrying', async () => {
   assert.equal(native.calls.length, 2);
 });
 
+test('native assistant-only continuation turns retain their prior user context without fabricated prompts', async () => {
+  const continued = turn('t2', [{ ...answer('Continuing', 'a2-commentary'), phase: 'commentary' },
+    { type: 'commandExecution', id: 'tool-2', command: 'historical command', status: 'completed' }, answer('Finished continuation', 'a2')], 200);
+  const exported = await run(client([page([turn()], 'next'), page([continued])]));
+  assert.equal(exported.turnCount, 2);
+  assert.equal(exported.common.messages.filter(message => message.role === 'user').length, 1);
+  assert.equal(exported.common.messages.at(-1).content[0].text, 'Finished continuation');
+  await assert.rejects(run(client([page([continued])])), /precedes/);
+  const steered = await run(client([page([turn(), turn('steered', [answer('Before steering'), user('Late steering'), answer('Done')], 200)])]));
+  assert.equal(steered.common.messages[2].content[0].text, 'Before steering');
+  assert.equal(steered.common.messages[3].content[0].text, 'Late steering');
+  await assert.rejects(run(client([page([turn(), { ...continued, items: continued.items.slice(0, 2) }])])), /final assistant/);
+  const active = { ...continued, status: 'inProgress', completedAt: null };
+  const prefix = await run(client([page([turn(), active])]), { completedPrefix: true });
+  assert.equal(prefix.turnCount, 1);
+  assert.equal(prefix.incompleteTail, true);
+});
+
 test('completed-prefix mode ignores a growing active tail across full reads', async () => {
   const active = { id: 't2', status: 'inProgress', itemsView: 'full', startedAt: 200, completedAt: null,
     items: [user('Next', 'u2')] };

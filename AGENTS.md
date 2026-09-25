@@ -105,10 +105,11 @@ The generated fixed-Node shim configures CODEX_CLI_PATH without changing or
 restarting the app. The watcher reapplies its exact override at login and waits
 for a private verified shared-backend manifest. Never silently start another
 stdio writer. CLI status selects the configured ledger. `desktop uninstall`
-preserves transcripts and ledgers; it is not a reverse migration. The installed
-launcher still needs activation and real dual-Desktop acceptance; passing native
-fixture tests does not establish automatic sidebar behavior or two real app
-alternations. Do not remove dependency guards to force snapshot retirement.
+preserves transcripts and ledgers; it is not a reverse migration. The launcher
+is activated on the real Codex Desktop backend. Automatic native enrollment and
+Claude Remote Control registration of real conversations are verified. Real
+dual-Desktop alternation acceptance is still outstanding; fixture tests do not
+establish sidebar rendering. Do not remove dependency guards for retirement.
 
 The real integrated coordinator/SDK/Desktop check verifies initial import, a
 restart, delta delivery, same Remote Control identity, exact canonical history,
@@ -118,6 +119,28 @@ excludes only that exact placeholder immediately after an authenticated packet;
 real replies remain history. SDK-owned packets from another state root are
 excluded during discovery to prevent import loops (classification is not HMAC
 authentication). No current user transcript is modified by these checks.
+
+Native metadata, not the rollout header, determines subagent exclusion; ordinary
+forks remain eligible. Goal continuations may begin with assistant items and
+receive user steering later. Full native reads preserve this order when earlier
+verified user context exists, still requiring a final answer and withholding
+active tails. Never fabricate a user message to force role alternation.
+
+Claude 2.1.281 stores original input images under its private per-UID temporary
+project/session image cache, but may persist resized previews in JSONL. When an
+exact pending intent proves an original PNG/JPEG, retain its bytes once in the
+content-addressed private image-assets store and bind the native preview hash.
+Logical reads restore the original and validate the packet; native files are
+never rewritten. Missing originals, altered previews or changed text fail closed.
+Image bindings grow with actual image occurrences, not image-free sync rounds;
+identical originals deduplicate across owners. Archive assets are authoritative
+conversation content, not disposable rollback snapshots. Unsupported format
+conversion and ambiguous cache identities still pause synchronization.
+
+The pinned Desktop CUA helper invokes exactly `app-server --listen stdio://`
+with the app-tools pipe present. Preserve this independent auxiliary process
+instead of claiming the shared owner lock. The real helper route is verified;
+subsequent Claude-targeted UI capture timeouts remain an acceptance limitation.
 
 Rejected transport shortcuts: queue/add auto-starts inference on an idle native
 thread. shellCommand persists userShell events without a model request, but

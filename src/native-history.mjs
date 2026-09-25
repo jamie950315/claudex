@@ -36,7 +36,7 @@ function timestamp(value) {
   return value;
 }
 
-function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false } = {}) {
+function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorUser = false } = {}) {
   if (!object(turn) || typeof turn.id !== 'string' || !turn.id || !Array.isArray(turn.items)) fail('malformed turn.');
   if (turn.status === 'inProgress' && !allowActive) fail('wait for the in-progress turn to complete.');
   if (turn.status !== 'completed' && turn.status !== 'inProgress'
@@ -51,23 +51,27 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   if (startedAt !== null && previousStart !== null && startedAt < previousStart) fail('native turns are not in ascending order.');
   if (turn.status === 'completed' && !turn.items.length) fail('a completed turn has no persisted items.');
   let lastUser = -1; let lastAgent = -1;
+  // Native goal continuations can begin without a new persisted user item and
+  // receive steering later. Preserve that native order against the earlier
+  // verified user context; never invent a prompt to force alternating roles.
+  const continuation = hasPriorUser;
   for (let index = 0; index < turn.items.length; index++) {
     const item = turn.items[index];
     if (!object(item) || typeof item.id !== 'string' || !item.id || typeof item.type !== 'string' || !item.type) fail('malformed native item.');
     if (turn.status === 'completed' && item.status === 'inProgress') fail('a persisted item is still in progress.');
     if (item.type === 'userMessage') lastUser = index;
     if (item.type === 'agentMessage') {
-      if (lastUser < 0) fail('an assistant message precedes the turn user input.');
+      if (lastUser < 0 && !continuation) fail('an assistant message precedes the turn user input.');
       lastAgent = index;
     }
   }
-  if (turn.status === 'completed' && (lastUser < 0 || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string' || !turn.items[lastAgent].text.trim())) fail('a completed turn lacks its final assistant response.');
+  if (turn.status === 'completed' && ((!continuation && lastUser < 0) || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string' || !turn.items[lastAgent].text.trim())) fail('a completed turn lacks its final assistant response.');
   return startedAt ?? previousStart;
 }
 
 async function readPass(client, threadId, limits, completedPrefix) {
   const turns = []; const ids = new Set(); const cursors = new Set();
-  let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null;
+  let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null; let hasPriorUser = false;
   while (true) {
     if (pages >= limits.maxPages) fail('page limit exceeded; no partial export is returned.');
     let response;
@@ -94,7 +98,8 @@ async function readPass(client, threadId, limits, completedPrefix) {
     if (nextCursor !== null && (typeof nextCursor !== 'string' || !nextCursor)) fail('invalid pagination cursor.');
     if (nextCursor !== null && response.data.length === 0) fail('empty page with a continuation cursor.');
     for (const turn of response.data) {
-      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix });
+      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix, hasPriorUser });
+      hasPriorUser ||= turn.items.some(item => item.type === 'userMessage');
       if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
       ids.add(turn.id);
       itemCount += turn.items.length;
@@ -159,9 +164,10 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
   if (!object(snapshot) || !Array.isArray(snapshot.turns) || !snapshot.turns.length) fail('no completed persisted history is available.');
   if (snapshot.threadId !== undefined && snapshot.threadId !== threadId) fail('snapshot thread identity does not match.');
   if (snapshot.completedPrefix !== undefined && typeof snapshot.completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
-  const ids = new Set(); let previousStart = null;
+  const ids = new Set(); let previousStart = null; let hasPriorUser = false;
   for (const turn of snapshot.turns) {
-    previousStart = validateTurn(turn, previousStart, { completedPrefix: snapshot.completedPrefix === true });
+    previousStart = validateTurn(turn, previousStart, { completedPrefix: snapshot.completedPrefix === true, hasPriorUser });
+    hasPriorUser ||= turn.items.some(item => item.type === 'userMessage');
     if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
     ids.add(turn.id);
   }

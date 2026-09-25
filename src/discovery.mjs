@@ -26,6 +26,17 @@ async function header(path) {
   finally { lines.close(); stream.destroy(); }
 }
 
+export async function codexSessionId(path) {
+  const row = await header(path);
+  if (row?.type !== 'session_meta' || typeof row.payload?.id !== 'string') throw new Error('Missing Codex session metadata.');
+  return row.payload.id;
+}
+
+export function isCodexSubagentSource(source) {
+  return Boolean(source && typeof source === 'object' && source.subAgent)
+    || typeof source === 'string' && /^subAgent/i.test(source);
+}
+
 async function claudeCwd(path) {
   const stream = createReadStream(path, { encoding: 'utf8' });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
@@ -69,7 +80,7 @@ export async function discoverSources({ codexHome, claudeHome, projects = [], al
     if (!(await recent(path, since))) continue;
     const row = await header(path);
     if (row?.type !== 'session_meta' || !row.payload || row.payload.originator === 'claudex') continue;
-    if (excludeSubagents && (row.payload.source?.subAgent || /^subAgent/i.test(row.payload.sourceKind ?? row.payload.source?.sourceKind ?? row.payload.source ?? ''))) continue;
+    if (excludeSubagents && isCodexSubagentSource(row.payload.source ?? row.payload.sourceKind)) continue;
     if (!eligible(row.payload.cwd) || known.has(`codex:${row.payload.id}`)) continue;
     sources.push({ side: 'codex', path });
   }

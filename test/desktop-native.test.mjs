@@ -51,6 +51,8 @@ test('native adapters alternate snapshots and a stable owner without losing cano
     return {
       async start() { data.path = sessionPath(claudeHome, config.cwd, data.id); await mkdir(join(data.path, '..'), { recursive: true }); },
       status() { return { sessionId: data.id, transcriptPath: data.path, nativeState: 'idle', closed }; },
+      async inspectTranscript() { return snapshot(data.path); },
+      async connect() {},
       async hasAppend({ operationId, content }) {
         const known = data.operations.get(operationId);
         if (known && known !== hash(content)) throw new Error('Changed mock operation');

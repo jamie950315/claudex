@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { discoverSources } from './discovery.mjs';
+import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
 import { withLock, writeJSON } from './storage.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
@@ -30,16 +30,25 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         const blockedSources = [];
         try {
           // The transport is a prerequisite. Never enroll a source while it is absent.
-          await runtime.codex();
+          const codex = await runtime.codex();
           let state = await bridge.status();
           if (state.pending) await bridge.recover();
           state = await bridge.status();
           const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
           for (const id of await runtime.ownedNativeIds()) known.add(id);
-          const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: true }, known);
+          const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false }, known);
           for (const source of candidates) {
             if (signal?.aborted) break;
             try {
+              if (source.side === 'codex') {
+                const nativeId = source.nativeId ?? source.id ?? await codexSessionId(source.path);
+                const metadata = (await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(error => {
+                  if (/not found|no rollout/i.test(reason(error))) throw new Error('Referenced Codex history is unavailable.');
+                  throw error;
+                }))?.thread;
+                if (!metadata || metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
+                if (isCodexSubagentSource(metadata.source)) continue;
+              }
               await bridge.track(source);
               // Discovery can return duplicate paths for one native identity.
               const latest = await bridge.status();
