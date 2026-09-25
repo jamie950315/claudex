@@ -61,6 +61,18 @@ in Desktop). No external no-inference lifecycle API is established, so automatic
 Desktop generation registration is not enabled. Never claim that CLI discovery
 proves Desktop Recents visibility or implement database/IPC injection as a shortcut.
 
+Claude Desktop Code > New > Local outbound discovery is now actually verified:
+the pinned Desktop writes its native transcript under ~/.claude/projects,
+which the existing watcher discovers automatically. No second discovery store
+is needed. A real Codex continuation recalled the original Claude response.
+The UI local_<UUID> may differ from registry.cliSessionId; ownership checks must
+use the bounded stable registry mapping, including archived entries, and retain
+conservative filename protection. Never assume the UI suffix is the native ID.
+Returning from Codex creates a separate managed Remote Control entry; it does
+not write into or automatically archive the Desktop-owned Local original.
+Clearly instruct users to continue via Connected via Remote Control thereafter.
+Do not claim same-Local-ID bidirectional writing or generic Chat/Cowork support.
+
 A native Desktop probe verifies two then four synthetic messages under one ID,
 including archive and deep-link unarchive without another registry entry. This
 does not establish a writer lease: archive persists before child exit is awaited,

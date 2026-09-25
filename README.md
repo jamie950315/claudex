@@ -145,7 +145,7 @@ or backup collection; neither history is overwritten.
    continue there. Ordinary Chat/Cowork conversations are not this bridge's
    synchronized entry point.
 3. After Claude finishes, return to the current task with the original title
-   task in Codex. Do not resume the superseded original for the same work branch.
+   in Codex. Do not resume the superseded original for the same work branch.
 4. Repeat as needed. Both applications may remain open in Desktop mode, but
    send new work on only one side of a logical conversation at a time.
 
@@ -155,6 +155,27 @@ token by token; wait for delivery rather than assuming a fixed delay. The Mac,
 background service and shared Codex backend must be available. Remote Control
 also requires connectivity to the user's Claude account. Unsupported tracked
 history or an ambiguous write stops safely instead of retrying blindly.
+
+#### Starting in Claude Desktop
+
+Claude Desktop's **Code > New > Local** is also a verified starting point.
+On the pinned version it persists a Claude Code transcript in the configured
+native `~/.claude/projects` store. The existing all-project watcher discovers
+its completed turn, retains its title and creates the corresponding Codex
+continuation automatically. No separate import or repository enrollment is
+needed. A fresh native Desktop session, automatic Codex visibility and an
+actual Codex reply recalling the Claude response have been verified.
+
+The first return from Codex uses a **separate managed Remote Control session**
+with the same logical title. It does not append into the original Desktop-owned
+Local session. Continue in the entry marked **Connected via Remote Control**
+after that handoff. The original Local entry remains preserved and is not
+automatically archived or deleted; writing new work there after the handoff
+causes an explicit original-history conflict. This is not in-place two-way
+writing to the original Local session, and Codex's original-archival policy does
+not apply to that Desktop-owned entry. Ordinary Chat/Cowork and remote-only
+sessions without an accessible supported native transcript are outside this
+verified discovery path.
 
 #### Same-title handoff and preserved originals
 
@@ -323,6 +344,14 @@ Recents list**. Desktop maintains a separate registry. Its official `/desktop`
 handoff uses `claude://resume?session=<UUID>`; Desktop `/resume` is another native
 entry point and requires a trusted folder. These entry points adopt the CLI
 transcript rather than creating a disposable independent copy.
+
+New Local Desktop sessions can use a UI UUID different from their native CLI
+UUID. Ownership checks read the registry's `cliSessionId`, not just the
+`local_<UI UUID>.json` filename. Archived records remain protected. Registry
+reads are bounded and stable; malformed identities, linked or non-regular files
+and symlinked stores refuse retirement instead of treating ownership as absent.
+The verified Desktop-origin export above is read-only and does not establish
+permission for an external writer to take over the Local transcript.
 
 Automatic per-generation Desktop registration is not enabled: the inspected
 Desktop `2.7032.0` offers no external no-inference archive/delete lifecycle API.
