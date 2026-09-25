@@ -3,6 +3,7 @@ import { decodeTransportPacket as decodeContextPacket, prepareArchiveResolver } 
 import { decodeCodex } from './native-drivers.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { convertNativeTurns, readStableNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
+import { hasPortableInitialDelegation } from './codex-delegation.mjs';
 
 const RECEIPT_LABEL = '[Claudex import receipt — not an AI response]';
 
@@ -16,7 +17,8 @@ function receipt(digest) {
  */
 export function buildOwnedCodexCommon({ canonical, key, conversationId, targetSessionId, operationId, contextContent, resolveArchive }) {
   assertComplete(canonical);
-  if (canonical.messages[0].role !== 'user') throw new Error('Owned Codex checkpoint requires an initial user message.');
+  if (canonical.messages[0].role !== 'user' && !hasPortableInitialDelegation(canonical.messages[0]))
+    throw new Error('Owned Codex checkpoint requires an initial user message or an exact native Desktop delegation.');
   const content = contextContent ?? encodeContextPacket({ common: canonical, conversationId, targetSessionId, operationId, sourceSide: 'claude', previousDigest: null, key });
   const digest = fingerprint(canonical);
   if (contextContent) {

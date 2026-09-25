@@ -106,14 +106,23 @@ export class DesktopBridge {
       const contextReset = maintenance.includes(side);
       const target = this.current(state, id, side);
       if (target) await this.adapters[side].assertIdle(target);
+      const originalToArchive = side !== 'codex' ? null : target?.managed === false ? target
+        : state.records.find(record => record.conversationId === id && record.side === 'codex'
+          && record.status === 'original' && !record.managed && !record.archivedAt);
+      if (originalToArchive) {
+        if (!this.adapters.codex.assertCanArchiveOriginal || !this.adapters.codex.archiveOriginal)
+          throw new Error('The Codex adapter cannot safely archive a superseded original.');
+        // Refuse unsafe originals before allocating a same-title replacement.
+        await this.adapters.codex.assertCanArchiveOriginal(originalToArchive);
+      }
       // Cleanup precedes allocation; a protected backup cannot create an
       // unlimited stream of replacement generations.
       await this.collectInLock(state);
       const operationId = randomUUID();
       const common = { ...data.common, meta: { ...data.common.meta, cwd: conversation.cwd, timestamp: new Date(this.now()).toISOString() } };
-      // Originals remain untouched. Label replacement Codex tasks so a user can
-      // distinguish the synchronized continuation from the preserved original.
-      const title = side === 'codex' ? `[Claudex] ${conversation.title}` : conversation.title;
+      // Preserve the logical title. After verification, archive the superseded
+      // Codex original rather than keeping two same-title active entries.
+      const title = conversation.title;
       const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset });
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
       if (contextReset && (side !== 'claude' || !reuse || planned.kind !== 'owner' || planned.contextReset !== true))
@@ -124,6 +133,7 @@ export class DesktopBridge {
         managed: true, status: 'current', verified: false, bytes: 0, createdAt: reuse ? target.createdAt : this.now() };
       if (!record.nativeId || !['owner', 'snapshot'].includes(record.kind)) throw new Error('Invalid native handoff plan.');
       state.pending = { phase: 'prepared', operationId, sourceId: source.id, targetId: target?.id ?? null,
+        archiveOriginalId: originalToArchive?.id ?? null,
         reuse, record, common, checkpoint: checkpoint(common), previous: reuse && !contextReset ? conversation.canonical : { count: 0, digest: null } };
       await this.save(state, { event: 'prepared', conversationId: id, side });
       return this.finish(state);
@@ -193,6 +203,17 @@ export class DesktopBridge {
       if (old.kind !== 'snapshot') throw new Error('A stable native owner cannot be retired as a snapshot.');
       await this.assertUnchanged(old);
       Object.assign(old, await driver.hide(old));
+    }
+    if (pending.archiveOriginalId) {
+      const original = state.records.find(record => record.id === pending.archiveOriginalId);
+      if (pending.reuse || pending.record.side !== 'codex' || !original || original.side !== 'codex'
+        || original.conversationId !== pending.record.conversationId
+        || original.managed || original.kind !== 'original' || original.status !== 'original')
+        throw new Error('Original archive intent does not match the promoted Codex handoff.');
+      await this.assertOriginalsUnchanged(state, original.conversationId);
+      Object.assign(original, await driver.archiveOriginal(original));
+      // The original stays unmanaged and outside disposable backup retention.
+      original.archivedAt ??= this.now();
     }
     if (driver.completePromotion) await driver.completePromotion(pending.record);
     const result = { changed: true, conversationId: pending.record.conversationId, side: pending.record.side, nativeId: pending.record.nativeId };

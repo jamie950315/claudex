@@ -11,11 +11,11 @@ const turn = n => [
 ];
 const copy = value => structuredClone(value);
 
-async function fixture(policy = {}) {
+async function fixture(policy = {}, sourceSide = 'claude') {
   const root = await mkdtemp(join(tmpdir(), 'claudex-desktop-bridge-'));
   const files = new Map();
-  const calls = { plan: [], apply: [], hide: [], remove: [] };
-  const fail = { afterApply: false, afterHide: false };
+  const calls = { plan: [], apply: [], hide: [], remove: [], archiveOriginal: [] };
+  const fail = { afterApply: false, afterHide: false, afterArchiveOriginal: false };
   let serial = 0;
   const adapters = {};
   for (const side of ['codex', 'claude']) adapters[side] = {
@@ -62,6 +62,25 @@ async function fixture(policy = {}) {
       files.get(record.path).hidden = true;
       return { hidden: true };
     },
+    async assertCanArchiveOriginal(record) {
+      assert.equal(side, 'codex');
+      assert.equal(record.managed, false);
+      assert.equal(record.kind, 'original');
+      assert.equal(record.verified, true);
+      const file = files.get(record.path);
+      if (file.busy) throw new Error('Native target is busy');
+      if (file.dependent) throw new Error('Original has dependent threads; archive refused');
+    },
+    async archiveOriginal(record) {
+      await this.assertCanArchiveOriginal(record);
+      calls.archiveOriginal.push(record.nativeId);
+      files.get(record.path).hidden = true;
+      if (fail.afterArchiveOriginal) {
+        fail.afterArchiveOriginal = false;
+        throw new Error('Crash after durable original archive');
+      }
+      return { hidden: true };
+    },
     async exists(record) { return files.has(record.path); },
     async remove(record) {
       assert.equal(record.managed, true);
@@ -73,7 +92,7 @@ async function fixture(policy = {}) {
     meta: { id: 'original', cwd: '/tmp/desktop-project', timestamp: new Date(0).toISOString() }, messages: turn(0),
   }, operations: new Set(), busy: false, hidden: false });
   const bridge = new DesktopBridge({ root, adapters, policy });
-  const { conversationId } = await bridge.track({ side: 'claude', path: '/original' });
+  const { conversationId } = await bridge.track({ side: sourceSide, path: '/original' });
   const current = async side => (await bridge.status()).records.find(record => record.conversationId === conversationId && record.side === side && record.status === 'current');
   return { bridge, conversationId, files, calls, fail, current,
     async advance(side, n) {
@@ -114,7 +133,88 @@ test('alternating native turns keep one Claude owner, bounded Codex snapshots, a
   assert.deepEqual(f.files.get('/original').common, original);
   assert.equal(f.files.get('/original').hidden, false);
   assert.ok(f.files.has('/original'));
-  assert.ok(f.calls.plan.filter(call => call.side === 'codex').every(call => call.title.startsWith('[Claudex] ')));
+  assert.ok(f.calls.plan.every(call => call.title === 'Question 0'));
+});
+
+test('same-title Codex continuation archives its original only after verified promotion', async () => {
+  const f = await fixture({}, 'codex');
+  const original = copy(f.files.get('/original').common);
+  await f.bridge.sync(f.conversationId);
+  assert.equal(f.files.get('/original').hidden, false);
+  await f.advance('claude', 1);
+  const archive = f.bridge.adapters.codex.archiveOriginal;
+  f.bridge.adapters.codex.archiveOriginal = async record => {
+    const state = await f.bridge.status();
+    assert.equal(state.pending.phase, 'promoted');
+    const current = await f.current('codex');
+    assert.equal(current.verified, true);
+    assert.notEqual(current.nativeId, record.nativeId);
+    return archive.call(f.bridge.adapters.codex, record);
+  };
+  await f.bridge.sync(f.conversationId);
+  const state = await f.bridge.status(), preserved = state.records.find(r => r.nativeId === 'original');
+  assert.equal(f.calls.plan.at(-1).title, 'Question 0');
+  assert.equal(preserved.status, 'original');
+  assert.equal(preserved.managed, false);
+  assert.ok(preserved.archivedAt);
+  assert.equal(f.files.get('/original').hidden, true);
+  assert.deepEqual(f.files.get('/original').common, original);
+  assert.deepEqual(f.calls.archiveOriginal, ['original']);
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, false);
+  assert.deepEqual(f.calls.archiveOriginal, ['original']);
+  assert.ok(!f.calls.remove.includes('original'));
+});
+
+test('dependent originals refuse replacement before a duplicate title or archive is allocated', async () => {
+  const f = await fixture({}, 'codex');
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1);
+  f.files.get('/original').dependent = true;
+  const calls = copy(f.calls), before = await f.bridge.status();
+  await assert.rejects(f.bridge.sync(f.conversationId), /dependent threads/);
+  assert.deepEqual(f.calls, calls);
+  assert.deepEqual(await f.bridge.status(), before);
+  assert.equal(f.files.get('/original').hidden, false);
+});
+
+test('recovery retries original archive idempotently without allocating or resending history', async () => {
+  const f = await fixture({}, 'codex');
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1);
+  f.fail.afterArchiveOriginal = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after durable original archive/);
+  const before = await f.bridge.status(), plans = f.calls.plan.length, appends = f.calls.apply.length;
+  assert.equal(before.pending.phase, 'promoted');
+  assert.equal(before.pending.archiveOriginalId, before.records.find(r => r.nativeId === 'original').id);
+  assert.equal(f.files.get('/original').hidden, true);
+  await f.bridge.recover();
+  assert.equal((await f.bridge.status()).pending, null);
+  assert.equal(f.calls.plan.length, plans);
+  assert.equal(f.calls.apply.length, appends);
+  assert.equal((await f.current('codex')).nativeId, before.pending.record.nativeId);
+  assert.ok(f.files.has('/original'));
+});
+
+test('a legacy unarchived original is guarded before later same-title generations', async () => {
+  const f = await fixture({}, 'codex');
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1);
+  await f.bridge.sync(f.conversationId);
+  const legacy = await f.bridge.status();
+  delete legacy.records.find(r => r.nativeId === 'original').archivedAt;
+  await f.bridge.save(legacy);
+  f.files.get('/original').hidden = false;
+  f.files.get('/original').dependent = true;
+  await f.advance('claude', 2);
+  const plans = f.calls.plan.length;
+  await assert.rejects(f.bridge.sync(f.conversationId), /dependent threads/);
+  assert.equal(f.calls.plan.length, plans);
+  assert.equal(f.files.get('/original').hidden, false);
+  f.files.get('/original').dependent = false;
+  await f.bridge.sync(f.conversationId);
+  assert.equal(f.files.get('/original').hidden, true);
+  assert.ok((await f.bridge.status()).records.find(r => r.nativeId === 'original').archivedAt);
+  assert.equal(f.calls.plan.at(-1).title, 'Question 0');
 });
 
 test('resumed originals reject no-op sync, new allocation, and collection without selecting a branch', async () => {

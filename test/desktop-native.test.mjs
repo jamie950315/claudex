@@ -113,7 +113,11 @@ for (const contextMode of ['inline', 'archive']) test(`native ${contextMode} ada
       const a = await runtime.inspect(bridge.current(state, id, 'codex'));
       const b = await runtime.inspect(bridge.current(state, id, 'claude'));
       assert.equal(fingerprint(a.common), fingerprint(b.common));
-      assert.equal(hash(await readFile(original.path, 'utf8')), originalHash);
+      const preserved = state.records.find(record => record.nativeId === originalId);
+      assert.equal(preserved.managed, false);
+      assert.equal(preserved.status, 'original');
+      assert.match(preserved.path, /\/archived_sessions\//);
+      assert.equal(hash(await readFile(preserved.path, 'utf8')), originalHash);
     }
     t.diagnostic(`Native desktop adapter evidence: ${root}`);
   } finally { await runtime.close(); }

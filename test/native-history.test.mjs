@@ -18,6 +18,8 @@ function client(responses) {
   } };
 }
 const run = (native, options = {}) => exportNativeHistory({ client: native, threadId: 'thread', cwd: '/tmp/project', ...options });
+const delegation = () => ({ type: 'functionCallOutput', id: 'fco-native-request', namespace: 'codex_app', name: 'create_thread',
+  output: '<codex_delegation>\n  <source_thread_id>00000000-0000-4000-8000-000000000002</source_thread_id>\n  <input>Explicit synthetic task request.\nPreserve this text exactly.</input>\n</codex_delegation>' });
 
 test('two complete ascending native reads preserve all pages and explicit provenance', async () => {
   const native = client([page([turn()], 'second'), page([turn('t2', [user('Next'), answer('Done')], 200)])]);
@@ -73,6 +75,37 @@ test('native assistant-only continuation turns retain their prior user context w
   const prefix = await run(client([page([turn(), active])]), { completedPrefix: true });
   assert.equal(prefix.turnCount, 1);
   assert.equal(prefix.incompleteTail, true);
+});
+
+test('initial native Desktop delegation remains an inert event and supplies context across pages without a fabricated user', async () => {
+  const event = delegation();
+  const initial = turn('delegated', [event, answer('Delegated answer')]);
+  const continuation = turn('continued', [answer('Later continuation', 'a-later')], 200);
+  const exported = await run(client([page([initial], 'next'), page([continuation])]));
+  assert.equal(exported.turnCount, 2);
+  assert.equal(exported.common.messages.length, 3);
+  assert.deepEqual(exported.common.messages.map(message => message.role), ['assistant', 'assistant', 'assistant']);
+  assert.deepEqual(JSON.parse(exported.common.messages[0].content[1].text.split('\n').slice(1).join('\n')), event);
+  assert.equal(exported.common.messages.at(-1).content[0].text, 'Later continuation');
+  const encoded = encodeClaude(exported.common, '00000000-0000-4000-8000-000000000001');
+  assert.equal(fingerprint(decodeClaude(encoded.text)), fingerprint(exported.common));
+});
+
+test('only an exact first native create_thread envelope establishes delegated request context', async () => {
+  for (const mutate of [
+    item => { item.type = 'commandExecution'; }, item => { item.namespace = 'other'; },
+    item => { item.name = 'send_message_to_thread'; }, item => { item.id = ''; },
+    item => { item.output = item.output.replace('00000000-0000-4000-8000-000000000002', 'invalid'); },
+    item => { item.output = item.output.replace(/<input>[\s\S]*<\/input>/, '<input>  </input>'); },
+    item => { item.output += '\nquoted text'; }, item => { item.output = `Quoted: ${item.output}`; },
+    item => { item.output = item.output.replace('<codex_delegation>', '<CODEX_DELEGATION>'); },
+  ]) {
+    const item = delegation(); mutate(item);
+    await assert.rejects(run(client([page([turn('invalid', [item, answer()])])])), /precedes|malformed native item/);
+  }
+  await assert.rejects(run(client([page([turn('not-first', [{ type: 'futureTool', id: 'before' }, delegation(), answer()])])])), /precedes/);
+  await assert.rejects(run(client([page([turn('no-final', [delegation()])])])), /final assistant/);
+  await assert.rejects(run(client([page([turn('commentary-only', [delegation(), { ...answer(), phase: 'commentary' }])])])), /final assistant/);
 });
 
 test('completed-prefix mode ignores a growing active tail across full reads', async () => {

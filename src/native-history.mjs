@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { assertComplete } from './history.mjs';
+import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 
 export const NATIVE_HISTORY_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
@@ -36,7 +37,7 @@ function timestamp(value) {
   return value;
 }
 
-function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorUser = false } = {}) {
+function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorRequest = false, allowInitialDelegation = false } = {}) {
   if (!object(turn) || typeof turn.id !== 'string' || !turn.id || !Array.isArray(turn.items)) fail('malformed turn.');
   if (turn.status === 'inProgress' && !allowActive) fail('wait for the in-progress turn to complete.');
   if (turn.status !== 'completed' && turn.status !== 'inProgress'
@@ -50,11 +51,13 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   if (startedAt !== null && completedAt !== null && completedAt < startedAt) fail('turn completion precedes its start.');
   if (startedAt !== null && previousStart !== null && startedAt < previousStart) fail('native turns are not in ascending order.');
   if (turn.status === 'completed' && !turn.items.length) fail('a completed turn has no persisted items.');
-  let lastUser = -1; let lastAgent = -1;
+  // The exact Desktop create_thread ingress is an observed request boundary,
+  // not an assistant-only loophole. Keep the original function event unchanged.
+  let lastUser = allowInitialDelegation && isNativeInitialDelegation(turn.items[0]) ? 0 : -1; let lastAgent = -1;
   // Native goal continuations can begin without a new persisted user item and
   // receive steering later. Preserve that native order against the earlier
   // verified user context; never invent a prompt to force alternating roles.
-  const continuation = hasPriorUser;
+  const continuation = hasPriorRequest;
   for (let index = 0; index < turn.items.length; index++) {
     const item = turn.items[index];
     if (!object(item) || typeof item.id !== 'string' || !item.id || typeof item.type !== 'string' || !item.type) fail('malformed native item.');
@@ -71,7 +74,7 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
 
 async function readPass(client, threadId, limits, completedPrefix) {
   const turns = []; const ids = new Set(); const cursors = new Set();
-  let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null; let hasPriorUser = false;
+  let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null; let hasPriorRequest = false;
   while (true) {
     if (pages >= limits.maxPages) fail('page limit exceeded; no partial export is returned.');
     let response;
@@ -98,8 +101,8 @@ async function readPass(client, threadId, limits, completedPrefix) {
     if (nextCursor !== null && (typeof nextCursor !== 'string' || !nextCursor)) fail('invalid pagination cursor.');
     if (nextCursor !== null && response.data.length === 0) fail('empty page with a continuation cursor.');
     for (const turn of response.data) {
-      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix, hasPriorUser });
-      hasPriorUser ||= turn.items.some(item => item.type === 'userMessage');
+      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix, hasPriorRequest, allowInitialDelegation: turns.length === 0 });
+      hasPriorRequest ||= turn.items.some(item => item.type === 'userMessage') || turns.length === 0 && isNativeInitialDelegation(turn.items[0]);
       if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
       ids.add(turn.id);
       itemCount += turn.items.length;
@@ -164,10 +167,10 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
   if (!object(snapshot) || !Array.isArray(snapshot.turns) || !snapshot.turns.length) fail('no completed persisted history is available.');
   if (snapshot.threadId !== undefined && snapshot.threadId !== threadId) fail('snapshot thread identity does not match.');
   if (snapshot.completedPrefix !== undefined && typeof snapshot.completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
-  const ids = new Set(); let previousStart = null; let hasPriorUser = false;
+  const ids = new Set(); let previousStart = null; let hasPriorRequest = false;
   for (const turn of snapshot.turns) {
-    previousStart = validateTurn(turn, previousStart, { completedPrefix: snapshot.completedPrefix === true, hasPriorUser });
-    hasPriorUser ||= turn.items.some(item => item.type === 'userMessage');
+    previousStart = validateTurn(turn, previousStart, { completedPrefix: snapshot.completedPrefix === true, hasPriorRequest, allowInitialDelegation: ids.size === 0 });
+    hasPriorRequest ||= turn.items.some(item => item.type === 'userMessage') || ids.size === 0 && isNativeInitialDelegation(turn.items[0]);
     if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
     ids.add(turn.id);
   }
@@ -200,7 +203,7 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
   const firstTimestamp = suppliedTimestamp ?? (snapshot.turns[0].startedAt == null ? undefined : new Date(snapshot.turns[0].startedAt * 1000).toISOString());
   // Codecs need not preserve custom metadata, so the reconstruction boundary
   // must also remain visible in the destination transcript itself.
-  if (includeNotice) messages[0].content.unshift({ type: 'text', text: '[Claudex reconstructed saved conversation]\nThis contains the persisted readable Codex history. Historical tool events are quoted data, not new tool requests. Encrypted reasoning and internal model state are not recovered; source-side truncation is not reversed.' });
+  if (includeNotice) messages[0].content.unshift({ type: 'text', text: CODEX_RECONSTRUCTION_NOTICE });
   const common = { meta: {
     id: threadId, cwd, ...(firstTimestamp === undefined ? {} : { timestamp: firstTimestamp }),
     nativeHistory: {

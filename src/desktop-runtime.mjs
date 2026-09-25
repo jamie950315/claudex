@@ -67,6 +67,10 @@ export class DesktopRuntime {
       resolveAppliedRecord: (record, pending) => this.resolveAppliedRecord(record, pending),
       completePromotion: record => this.completePromotion(record),
     }]));
+    Object.assign(this.adapters.codex, {
+      assertCanArchiveOriginal: record => this.assertCanArchiveOriginal(record),
+      archiveOriginal: record => this.archiveOriginal(record),
+    });
   }
   async initialize() {
     this.root = await privateDirectory(this.root);
@@ -344,20 +348,88 @@ export class DesktopRuntime {
   async assertOwnedSnapshot(record) {
     if (record.side !== 'codex' || record.kind !== 'snapshot' || !record.managed || !record.verified) throw new Error('Only verified owned Codex snapshots can be retired.');
     await this.inspect(record); // Verifies the signed bootstrap, even after native rollover.
-    if (await exists(join(this.codexHome, 'sessions', record.nativeId))) throw new Error('Owned projection has auxiliary data; retirement requires dependency verification.');
+    await this.assertCodexIndependent(record, 'Owned projection');
+  }
+  async assertCodexIndependent(record, label) {
+    if (await exists(join(this.codexHome, 'sessions', record.nativeId))) throw new Error(`${label} has auxiliary data; retirement requires dependency verification.`);
     const client = await this.codex();
+    // A freshly forked thread can be loaded before thread/list exposes its
+    // persisted row. Check the live owner as well as both stored inventories.
+    let loadedCursor; const loadedCursors = new Set();
+    do {
+      const page = await client.request('thread/loaded/list', { limit: 100, ...(loadedCursor ? { cursor: loadedCursor } : {}) });
+      for (const id of page.data) {
+        if (id === record.nativeId) continue;
+        const { thread } = await client.request('thread/read', { threadId: id, includeTurns: false });
+        if (thread.id !== id) throw new Error('Loaded Codex dependency identity changed.');
+        if (thread.forkedFromId === record.nativeId) throw new Error(`${label} has a dependent fork.`);
+        if (thread.source?.subAgent?.thread_spawn?.parent_thread_id === record.nativeId)
+          throw new Error(`${label} has dependent threads.`);
+      }
+      loadedCursor = page.nextCursor;
+      if (loadedCursor && loadedCursors.has(loadedCursor)) throw new Error('Loaded Codex dependency pagination repeated.');
+      if (loadedCursor) loadedCursors.add(loadedCursor);
+    } while (loadedCursor);
     for (const archived of [false, true]) {
-      if ((await client.request('thread/list', { ancestorThreadId: record.nativeId, archived, sourceKinds: kinds, limit: 1 })).data.length) throw new Error('Owned projection has dependent threads.');
+      if ((await client.request('thread/list', { ancestorThreadId: record.nativeId, archived, sourceKinds: kinds, limit: 1 })).data.length) throw new Error(`${label} has dependent threads.`);
       let cursor;
       do {
         const page = await client.request('thread/list', { archived, sourceKinds: kinds, limit: 100, ...(cursor ? { cursor } : {}) });
         for (const value of page.data) {
           if (value.id === record.nativeId) continue;
-          if ((await client.request('thread/read', { threadId: value.id, includeTurns: false })).thread.forkedFromId === record.nativeId) throw new Error('Owned projection has a dependent fork.');
+          if ((await client.request('thread/read', { threadId: value.id, includeTurns: false })).thread.forkedFromId === record.nativeId) throw new Error(`${label} has a dependent fork.`);
         }
         cursor = page.nextCursor;
       } while (cursor);
     }
+  }
+  async originalArchiveSnapshot(record) {
+    if (record.side !== 'codex' || record.kind !== 'original' || record.managed !== false || record.verified !== true
+        || !['current', 'original'].includes(record.status) || !UUID.test(record.nativeId)
+        || !Number.isSafeInteger(record.checkpoint?.count) || record.checkpoint.count < 1
+        || !/^[a-f0-9]{64}$/.test(record.checkpoint?.digest ?? ''))
+      throw new Error('Only verified unmanaged Codex originals with a saved checkpoint can be archived.');
+    const client = await this.codex();
+    const readMetadata = async () => {
+      const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
+      if (thread.id !== record.nativeId || !record.cwd || await realpath(thread.cwd) !== record.cwd)
+        throw new Error('Codex original identity or working directory changed; it was not archived.');
+      if (!['idle', 'notLoaded'].includes(thread.status?.type))
+        throw new Error('Codex original is active or its idle state is unverified; it was not archived.');
+      return { thread, path: await this.safePath(thread.path, this.codexHome) };
+    };
+    const initial = await readMetadata();
+    const before = await snapshot(initial.path);
+    if (before.rows[0]?.type !== 'session_meta' || before.rows[0].payload?.id !== record.nativeId)
+      throw new Error('Codex original transcript identity changed; it was not archived.');
+    const data = await this.inspect(record);
+    if (data.common.meta.cwd !== record.cwd || data.nativeId !== record.nativeId || data.path !== initial.path
+        || data.incompleteTail || data.common.messages.length !== record.checkpoint.count || data.digest !== record.checkpoint.digest)
+      throw new Error('Codex original history changed or has an unfinished turn; it was not archived.');
+    const latest = await readMetadata();
+    if (latest.path !== initial.path || (await snapshot(latest.path)).hash !== before.hash)
+      throw new Error('Codex original changed during archive preflight; it was not archived.');
+    return { path: latest.path, hash: before.hash };
+  }
+  async assertCanArchiveOriginal(record) {
+    const before = await this.originalArchiveSnapshot(record);
+    await this.assertCodexIndependent(record, 'Codex original');
+    const after = await this.originalArchiveSnapshot(record);
+    if (before.path !== after.path || before.hash !== after.hash)
+      throw new Error('Codex original changed during dependency verification; it was not archived.');
+    return after;
+  }
+  async archiveOriginal(record) {
+    const before = await this.assertCanArchiveOriginal(record);
+    const client = await this.codex();
+    if (!before.path.includes(`${sep}archived_sessions${sep}`))
+      await client.request('thread/archive', { threadId: record.nativeId });
+    // The native API owns the move. Verify its result without replacing bytes,
+    // adopting ownership, or enabling the original for snapshot deletion.
+    const after = await this.originalArchiveSnapshot(record);
+    if (!after.path.includes(`${sep}archived_sessions${sep}`) || after.hash !== before.hash)
+      throw new Error('Codex original archive outcome changed; native history was preserved for inspection.');
+    return { path: after.path };
   }
   async hide(record) {
     await this.assertIdle(record); await this.assertOwnedSnapshot(record);

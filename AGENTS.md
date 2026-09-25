@@ -12,7 +12,7 @@ and generated sessions outside the repository.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
-- Preserve original sessions; do not infer permission to prune or archive them.
+- Preserve original contents and never prune originals as generated backups. The authorized Desktop same-title handoff may archive an unchanged, independent Codex original only after verifying its replacement.
 
 ## Adapters
 
@@ -37,6 +37,8 @@ Native compatibility is pinned to Codex `0.155.0-alpha.16.3` and Claude Code
 `2.1.210` or `2.1.281`; version drift pauses writes. Codex has cross-process writer locks.
 Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
+Include `thread/loaded/list`: a fresh fork can be loaded before the stored list
+exposes it. Original archival and owned-snapshot retirement share these guards.
 Claude projections use canonical project paths and owned rollback storage.
 The append helper is for controlled fixtures, not runtime concurrent writes.
 
@@ -129,6 +131,11 @@ forks remain eligible. Goal continuations may begin with assistant items and
 receive user steering later. Full native reads preserve this order when earlier
 verified user context exists, still requiring a final answer and withholding
 active tails. Never fabricate a user message to force role alternation.
+Desktop create_thread can deliver the first request as a codex_app function
+output instead of a userMessage. Only its exact initial delegation envelope
+establishes request context; preserve the event's assistant role and full inert
+payload. The same narrow predicate permits its owned Codex checkpoint. Generic
+assistant-only history, arbitrary tool outputs and malformed envelopes still fail.
 
 Claude 2.1.281 stores original input images under its private per-UID temporary
 project/session image cache, but may persist resized previews in JSONL. When an
@@ -175,18 +182,30 @@ thread. shellCommand persists userShell events without a model request, but
 native model-context output truncates around 40k characters even when API output
 is complete. It is not a lossless arbitrary-packet transport and is not enabled.
 
-Reverse Desktop delivery creates a new `[Claudex] <original title>` Codex task;
-it never appends into the original task. This title prefix is a human-facing
-distinction, not an ownership or authentication check. Native IDs, managed
-records, packet signatures and checkpoints remain authoritative. The current
-naming rule is fixed; UI-only renames do not persist to subsequent generations.
-Naming changes must not alter transport markers or weaken original/retirement
-guards. Superseded originals remain tracked:
+Reverse Desktop delivery creates a new Codex task using the stored logical title
+without a prefix; it never appends into the original task. A verified independent
+Codex original is archived only after promotion of the complete replacement.
+Original-archive preflight runs before allocation, and pending.archiveOriginalId
+journals the exact target for idempotent recovery. Originals remain unmanaged
+and excluded from deletion quotas. Active, changed or dependent originals block
+this transition; existing sessions are not bulk-renamed or archived on startup.
+Older pending transactions preserve their saved naming and archive behavior.
+Native IDs, managed records, packet signatures and checkpoints remain
+authoritative. UI-only renames do not change the stored title for later
+generations. Naming changes must not alter transport markers or weaken
+original/retirement guards. Superseded originals remain tracked:
 sync, recovery and collection compare their own saved checkpoints and reject
 new complete turns or changed prefixes. Never silently ignore activity in a
 preserved original or compare it to the newer canonical checkpoint. Recovery
 also rechecks a replaced destination after a durable native apply, before
 promotion, so concurrent work cannot be silently left behind.
+
+Fresh user-authorized Desktop acceptance verifies same-title deliveries across
+two Codex generations, automatic original archival with exact bytes preserved,
+one visible current entry, one archived generated predecessor, a stable Claude
+owner and equal canonical history. Existing dependent originals are not migrated
+by force. The preserved original remains a separate fixed copy, not a backup
+that grows on every synchronization round.
 
 Desktop `contextMode: "archive"` stores complete portable messages in private
 content-addressed history-assets and sends signed v2 packets with bounded,

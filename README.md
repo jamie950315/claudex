@@ -127,9 +127,12 @@ emits running/idle transitions. Reset waits for its verified idle boundary,
 while unexpected native identities never grant shutdown authority.
 
 Claude-to-Codex delivery creates a new Codex continuation named
-`[Claudex] <original title>`; it does not append into the original Codex task.
-Continue in that marked task after switching back. The original is preserved
-and can remain as an extra sidebar row. If a superseded original is used again,
+with the original conversation title, without a `[Claudex]` prefix; it does not
+append into the original Codex task. After verifying and promoting the new
+version, the bridge archives the superseded original through the native API.
+The original's contents remain preserved, but it leaves the main task list.
+Continue in the current same-title task after switching back. If a superseded
+original is used again,
 its changed history stops synchronization explicitly instead of being silently
 ignored or choosing one branch. Resolve that conflict before further delivery
 or backup collection; neither history is overwritten.
@@ -141,7 +144,7 @@ or backup collection; neither history is overwritten.
    **Connected via Remote Control**. Wait for the new history to arrive, then
    continue there. Ordinary Chat/Cowork conversations are not this bridge's
    synchronized entry point.
-3. After Claude finishes, return to the current `[Claudex] <original title>`
+3. After Claude finishes, return to the current task with the original title
    task in Codex. Do not resume the superseded original for the same work branch.
 4. Repeat as needed. Both applications may remain open in Desktop mode, but
    send new work on only one side of a logical conversation at a time.
@@ -153,29 +156,43 @@ background service and shared Codex backend must be available. Remote Control
 also requires connectivity to the user's Claude account. Unsupported tracked
 history or an ambiguous write stops safely instead of retrying blindly.
 
-#### Why the `[Claudex]` title prefix exists
+#### Same-title handoff and preserved originals
 
-The prefix distinguishes the synchronized continuation from the preserved
-original, which can otherwise have the same title in the sidebar. It helps
-prevent continuing in an old branch that no longer receives the other side's
-updates. It is a display label, not an ownership or synchronization credential:
-the coordinator uses native IDs, managed records, authenticated packets and
-history checkpoints, not a title-prefix match.
+New Codex generations use the stored logical conversation title. The bridge
+checks that an original can safely leave the main list before allocating its
+same-title replacement, verifies the complete replacement, then archives the
+old entry. A durable archive intent makes recovery idempotent: an interrupted
+archive does not allocate another generation or resend history. Publication
+and archive are separate native operations, so a candidate can be temporarily
+visible during a handoff; a failed handoff is not silently presented as complete.
 
-The title prefix can technically be removed or replaced without changing the
-history format or ownership rules. Renaming a task through the native UI does
-not change its tracked native ID. However, the current generation naming rule
-is fixed in `src/desktop-bridge.mjs`, with no prefix configuration option.
-Renaming only the current task is not a permanent preference: the next Codex
-generation will again use `[Claudex]` and the stored logical conversation title.
-A permanent change requires updating the generation naming rule and its naming
-test; existing task titles are a separate native rename operation.
+Originals remain unmanaged and are never deleted by the backup collector.
+There is one preserved original per enrolled source, not another original for
+each round. Later generated snapshots still follow the bounded current/previous
+retention policy. Active work, changed content, dependent forks or descendants,
+and unverified auxiliary data prevent automatic original archival. Existing
+conversations with such dependencies remain untouched; no dependency guard is
+removed merely to produce a cleaner sidebar.
 
-Removing the label does not merge the two native sessions or make the original
-receive updates. Keep another clear distinction if the label is removed, or
-the original and current continuation may be indistinguishable by title alone.
-This applies only to the task title: authenticated packet markers, native IDs
-and bridge state must not be edited to change the visible name.
+Earlier `[Claudex]` task names remain until their next safe Codex handoff; this
+does not bulk-rename or archive existing sessions on installation. An older
+pending transaction retains its saved name and archive behavior during recovery.
+If an older preserved original has not been archived, it must pass the same
+preflight before a new same-title generation is allocated.
+
+Titles are display labels, not synchronization credentials. Native IDs, managed
+records, authenticated packets and checkpoints identify each version. Removing
+the prefix does not merge native sessions or update the superseded original.
+Do not edit authenticated packet markers, native IDs or bridge state to rename
+a conversation. Native UI renames are separate from the stored logical title
+used for future generations.
+
+A separately opened, user-authorized Desktop test verifies this same-title
+workflow across two Claude-to-Codex deliveries and a Codex-to-Claude return.
+The current and prior generated tasks retain the original name, the source
+original and prior generation are archived, and only the current generation
+appears in the main list. Original bytes, Claude's identity and the complete
+logical history remain unchanged by the archival operations.
 
 `desktop uninstall` removes only the owned next-start launcher and returns the
 configuration to legacy mode after the watcher is stopped. It does not delete
@@ -191,9 +208,10 @@ node bin/claudex.mjs sync CONVERSATION_ID --from claude
 ```
 
 `track` returns the logical conversation ID. The watcher handles subsequent
-completed turns automatically. The first imported original remains untouched;
-it can therefore remain as an extra row outside the managed copies. This tool
-does not silently archive or delete the original.
+completed turns automatically. Original contents are preserved. The legacy
+adapter leaves original entries visible; Desktop mode archives a verified
+superseded Codex original as described above. Neither mode treats original
+content as a disposable generated backup.
 
 ## Bounded retention
 
@@ -367,6 +385,11 @@ forks, excluding subagents using native metadata. Goal continuation turns may
 start with assistant work and accept steering later; the exporter preserves
 that native order against earlier verified user context without inventing a
 user message. Completed turns still need their final response.
+Tasks opened by the native Codex app's `create_thread` tool can begin with a
+delegated request stored as a function output. Only the exact initial
+`codex_app.create_thread` envelope is accepted as that request boundary. Its
+original role and full payload remain quoted historical data; the bridge does
+not fabricate a user message or accept arbitrary assistant-only histories.
 
 For native resized PNG/JPEG previews, the owner verifies the exact original
 against its pending intent and Claude's private input-image cache. It retains
@@ -428,8 +451,8 @@ sidebar, and a large compacted source history renders through Remote Control.
 Two real Desktop alternations with newly authored replies pass under explicit
 user authorization. Each side recalled a value generated by the other from
 imported history, without the value being repeated in its new prompt. Claude
-kept the same Remote Control/native identity, while Codex used marked current
-checkpoints. A third Claude continuation exercised actual snapshot collection:
+kept the same Remote Control/native identity, while Codex used the then-marked
+current checkpoints. A third Claude continuation exercised actual snapshot collection:
 one current and one archived previous Codex snapshot remain, with the original
 source preserved. Normal automated tests still never request model inference.
 

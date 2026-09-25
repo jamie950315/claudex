@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +10,10 @@ import { encodeCodexProjection, createCodexProjection } from '../src/codex-proje
 import { CodexClient } from '../src/codex.mjs';
 import { fingerprint } from '../src/history.mjs';
 import { convertNativeTurns } from '../src/native-history.mjs';
+import { encodeClaude, decodeClaude } from '../src/claude.mjs';
+import { encodeArchivedContextPacket } from '../src/context-archive.mjs';
+import { prepareArchiveResolver } from '../src/context-packet-reader.mjs';
+import { decodeOwnedClaudeHistory } from '../src/owned-claude-history.mjs';
 
 const identity = { conversationId: 'conversation-1', targetSessionId: '00000000-0000-4000-8000-000000000001', operationId: 'operation-1', key: Buffer.alloc(32, 7) };
 const canonical = (cwd = '/tmp') => ({ meta: { id: 'original', cwd, timestamp: '2026-09-25T00:00:00Z' }, messages: [
@@ -20,8 +24,7 @@ const encode = common => encodeCodexProjection(common, identity.targetSessionId)
 const decode = text => decodeOwnedCodexHistory({ ...identity, text });
 const built = () => buildOwnedCodexCommon({ ...identity, canonical: canonical() });
 
-function apiSnapshot() {
-  const common = built();
+function apiSnapshot(common = built()) {
   return { threadId: identity.targetSessionId, digest: 'synthetic-native-digest', itemCount: 2, turns: [{
     id: 'bootstrap-turn', status: 'completed', itemsView: 'full', startedAt: 100, completedAt: 101,
     items: [
@@ -33,6 +36,53 @@ function apiSnapshot() {
   }] };
 }
 const decodeApi = snapshot => decodeOwnedCodexNativeHistory({ ...identity, snapshot, cwd: '/tmp' });
+
+function delegatedCanonical(includeNotice = true) {
+  const item = { type: 'functionCallOutput', id: 'delegated-request', namespace: 'codex_app', name: 'create_thread',
+    output: '<codex_delegation>\n  <source_thread_id>00000000-0000-4000-8000-000000000002</source_thread_id>\n  <input>Synthetic delegated request.</input>\n</codex_delegation>' };
+  return convertNativeTurns({ turns: [{ id: 'initial', status: 'completed', itemsView: 'full', startedAt: 100, completedAt: 101,
+    items: [item, { type: 'agentMessage', id: 'delegated-answer', text: 'Synthetic delegated response.', phase: 'final_answer' }] }] },
+  { threadId: 'original', cwd: '/tmp', includeNotice });
+}
+
+test('exact native delegated history roundtrips through Claude and inline or archived Codex packets without inventing a user', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-delegated-checkpoint-')));
+  for (const includeNotice of [false, true]) {
+    const common = delegatedCanonical(includeNotice);
+    assert.equal(fingerprint(decodeClaude(encodeClaude(common, identity.targetSessionId).text)), fingerprint(common));
+    const claudePacket = encodeContextPacket({ ...identity, common, sourceSide: 'codex' });
+    const claudeText = encodeClaude({ ...common, messages: [{ role: 'user', content: claudePacket }] }, identity.targetSessionId).text;
+    const logical = decodeOwnedClaudeHistory({ ...identity, text: claudeText, sessionId: identity.targetSessionId }).common;
+    assert.equal(fingerprint(logical), fingerprint(common));
+    for (const archived of [false, true]) {
+      const contextContent = archived ? await encodeArchivedContextPacket({ ...identity, root, common: logical, sourceSide: 'claude' }) : undefined;
+      const resolveArchive = archived ? await prepareArchiveResolver({ ...identity, root, contents: [contextContent] }) : undefined;
+      const projection = buildOwnedCodexCommon({ ...identity, canonical: logical, contextContent, resolveArchive });
+      assert.equal(projection.messages[0].role, 'user'); // The explicit outer transport packet only.
+      const raw = decodeOwnedCodexHistory({ ...identity, text: encode(projection), resolveArchive });
+      const api = decodeOwnedCodexNativeHistory({ ...identity, snapshot: apiSnapshot(projection), cwd: '/tmp', resolveArchive });
+      for (const restored of [raw, api]) {
+        assert.equal(restored.digest, fingerprint(common));
+        assert.deepEqual(restored.common.messages.map(message => message.role), ['assistant', 'assistant']);
+        assert.equal(restored.common.messages[0].content.at(-1).text, common.messages[0].content.at(-1).text);
+      }
+    }
+  }
+});
+
+test('owned checkpoints do not accept generic assistant-first history or altered delegation provenance', () => {
+  for (const mutate of [
+    common => { common.messages[0].content = [{ type: 'text', text: 'An ordinary assistant response.' }]; },
+    common => { common.messages[0].content.at(-1).text = common.messages[0].content.at(-1).text.replace('codex_app', 'other'); },
+    common => { common.messages[0].content.at(-1).text = common.messages[0].content.at(-1).text.replace('create_thread', 'send_message_to_thread'); },
+    common => { common.messages[0].content[0].text += ' changed notice'; },
+    common => { common.messages[0].content.push({ type: 'text', text: 'Extra unverified opening material.' }); },
+    common => { common.messages[0].content.at(-1).text = common.messages[0].content.at(-1).text.replace('historical data only', 'active request'); },
+  ]) {
+    const common = delegatedCanonical(); mutate(common);
+    assert.throws(() => buildOwnedCodexCommon({ ...identity, canonical: common }), /initial user message or an exact native Desktop delegation/);
+  }
+});
 
 test('raw full API bootstrap expands without metadata or provenance additions changing its digest', () => {
   const result = decodeApi(apiSnapshot());
