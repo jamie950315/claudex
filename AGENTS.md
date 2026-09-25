@@ -107,9 +107,10 @@ for a private verified shared-backend manifest. Never silently start another
 stdio writer. CLI status selects the configured ledger. `desktop uninstall`
 preserves transcripts and ledgers; it is not a reverse migration. The launcher
 is activated on the real Codex Desktop backend. Automatic native enrollment and
-Claude Remote Control registration of real conversations are verified. Real
-dual-Desktop alternation acceptance is still outstanding; fixture tests do not
-establish sidebar rendering. Do not remove dependency guards for retirement.
+Claude Remote Control registration of real conversations are verified. Both real
+mirrored conversations render in the Claude Desktop sidebar and their history
+opens through Remote Control. Real dual-Desktop alternation acceptance is still
+outstanding. Do not remove dependency guards for retirement.
 
 The real integrated coordinator/SDK/Desktop check verifies initial import, a
 restart, delta delivery, same Remote Control identity, exact canonical history,
@@ -145,10 +146,14 @@ validated before this exclusion, and ambiguous codec identity mappings fail.
 This keeps the following no-query placeholder and next delta on the same digest
 chain without editing native files or resending an already persisted packet.
 
-The pinned Desktop CUA helper invokes exactly `app-server --listen stdio://`
-with the app-tools pipe present. Preserve this independent auxiliary process
-instead of claiming the shared owner lock. The real helper route is verified;
-subsequent Claude-targeted UI capture timeouts remain an acceptance limitation.
+The pinned Desktop CUA and Browser Use helpers invoke exactly
+`app-server --listen stdio://`. CUA inherits the app-tools pipe; Browser Use
+does not. Preserve both independent auxiliary processes instead of claiming the
+shared owner lock. Both routes are verified, including live browser startup.
+If Claude has no capturable primary window, its official web session's
+Open in > Desktop app action can restore the window. Chrome's external-app
+confirmation is a native browser window, not part of the webpage snapshot.
+This route restored real Claude Desktop observations without restarting it.
 
 Desktop launchers must use the original OpenAI-signed bundled Node, not the
 installing shell's process.execPath. The app's native peer authorizer checks
@@ -156,8 +161,8 @@ the peer, parent and grandparent signing identities. A Homebrew/ad-hoc wrapper
 breaks codex_app startup and browser policy verification despite a signed leaf
 runtime. The installer verifies the bundled Node signature and journals exact
 owned-runtime upgrades. An isolated signed-wrapper native startup exposes the
-47 app tools without changing the verifier. The currently running old wrapper
-must be replaced before claiming the live app-tools path is repaired. Never
+47 app tools without changing the verifier. A normal user-initiated app restart
+activated the signed wrapper and restored the live app-tools path. Never
 disable peer checks or substitute an unsigned client. Stdio close does not
 schedule immediate reconnect; next-request recovery is not proof that killing
 an active backend is safe.

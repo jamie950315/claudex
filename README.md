@@ -323,12 +323,15 @@ manifest stores only process/socket identities and version, never inherited
 environment values. The current CLI's `app-server proxy` sends raw JSONL and is
 not interchangeable with this WebSocket transport.
 
-Codex Desktop's separately launched CUA helper keeps its original standalone
-stdio backend; it does not claim the shared Desktop owner's lock. The exact
-pinned helper invocation is verified. Real shared transport activation, source
-enrollment, registration with Claude and canonical history checks pass. Large
-conversation renderer visibility and two real Desktop alternations remain
-unverified while Claude-targeted computer-use observations time out.
+Codex Desktop's separately launched CUA and Browser Use helpers keep their
+original standalone stdio backends; they do not claim the shared Desktop owner's
+lock. The exact pinned invocation is verified with and without the app-tools
+pipe environment, including real browser startup. Real shared transport
+activation, source enrollment, registration with Claude and canonical history
+checks pass. Both real mirrored conversations are visible in Claude Desktop's
+sidebar, and a large compacted source history renders through Remote Control.
+Two real Desktop alternations with newly authored replies remain unverified;
+no model inference is started merely to manufacture an acceptance test.
 
 New owned Codex checkpoints can explicitly select `historyMode: 'paginated'`.
 Typed native events preserve text block boundaries and inline images through

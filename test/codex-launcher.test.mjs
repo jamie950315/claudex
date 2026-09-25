@@ -138,14 +138,15 @@ test('live ownership is never stolen and SIGTERM stops only the owned child', { 
   assert.throws(() => process.kill(record.childPid, 0), { code: 'ESRCH' });
 });
 
-test('observed auxiliary stdio app-server keeps its independent native pipe while Desktop owner remains live', { timeout: 10000 }, async t => {
-  const { state, start } = await fixture(t);
+for (const withAppPipe of [true, false]) test(`observed auxiliary stdio app-server preserves its pipe with app-tools environment ${withAppPipe}`, { timeout: 10000 }, async t => {
+  const { state, start, env } = await fixture(t);
   const original = start(['app-server']);
   const record = await ready(state);
+  if (!withAppPipe) delete env.CODEX_APP_TOOLS_PIPE_PATH;
   const helper = start(['app-server', '--listen', 'stdio://']);
   const reply = (await request(helper, { id: 1, method: 'probe' })).result;
   assert.deepEqual(reply.args, ['app-server', '--listen', 'stdio://']);
-  assert.equal(reply.appPipeInherited, true);
+  assert.equal(reply.appPipeInherited, withAppPipe);
   assert.notEqual(reply.pid, record.childPid);
   assert.equal((await request(original, { id: 2, method: 'probe' })).result.pid, record.childPid);
   helper.stdin.end();
