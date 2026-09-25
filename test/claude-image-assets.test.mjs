@@ -56,6 +56,20 @@ test('changed text, wrong cache bytes, or unverified provenance cannot be captur
   await assert.rejects(captureImageAssets({ ...f, expectedHash: '0'.repeat(64) }), /expected owner append/);
 });
 
+test('warn policy accepts future native version tags but still requires exact image provenance and bytes', async () => {
+  const f = await fixture();
+  f.row.version = '2.2.1';
+  await assert.rejects(captureImageAssets(f), /provenance/);
+  const warn = { ...f, versionPolicy: 'warn' };
+  const captured = await captureImageAssets(warn);
+  assert.deepEqual(captured.row.message.content, f.expectedContent);
+  await assert.rejects(captureImageAssets({ ...warn, row: { ...f.row, promptSource: 'user' } }), /provenance/);
+  await assert.rejects(captureImageAssets({ ...warn, row: { ...f.row, queueTranscriptOnly: false } }), /provenance/);
+  await assert.rejects(captureImageAssets({ ...warn, row: { ...f.row, version: '' } }), /provenance/);
+  await assert.rejects(captureImageAssets({ ...warn, row: { ...f.row,
+    message: { ...f.row.message, content: [{ type: 'text', text: 'Changed' }, image(f.preview)] } } }), /nonimage content/);
+});
+
 test('paste identities and private cache paths are mandatory', async () => {
   const f = await fixture();
   await assert.rejects(captureImageAssets({ ...f, row: { ...f.row, imagePasteIds: [] } }), /paste identities/);

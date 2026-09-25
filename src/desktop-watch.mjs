@@ -20,7 +20,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let lastCollection = startedAt;
   let passes = 0;
   const status = fields => writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
-    startedAt, updatedAt: now(), ...fields });
+    startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
+    versionWarnings: runtime.versionWarnings?.() ?? [], ...fields });
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
     try {

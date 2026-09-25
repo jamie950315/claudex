@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CodexWebSocketClient } from '../src/codex-websocket.mjs';
+import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { sharedServerArguments, SUPPORTED_CODEX_VERSION } from '../bin/claudex-codex.mjs';
 
 const launcher = fileURLToPath(new URL('../bin/claudex-codex.mjs', import.meta.url));
@@ -132,6 +133,27 @@ test('an unvalidated app update starts the original native transport without ena
   child.stdin.end();
   assert.equal((await child.done).code, 0);
   await assert.rejects(access(join(state, 'codex-shared', 'owner.json')), { code: 'ENOENT' });
+});
+
+test('explicit warn policy shares an unvalidated runtime while strict clients still refuse it', { timeout: 10000 }, async t => {
+  const { root, state, start, env } = await fixture(t);
+  await mkdir(state, { mode: 0o700 });
+  await writeFile(join(state, 'config.json'), JSON.stringify({ version: 1, versionPolicy: 'warn' }), { mode: 0o600 });
+  env.CLAUDEX_SYNTHETIC_CODEX_VERSION = 'codex-cli 99.0.0';
+  const child = start(['app-server', '--analytics-default-enabled']);
+  const record = await ready(state);
+  assert.equal(record.transportMode, undefined);
+  assert.match(child.errors, /versionPolicy=warn.*attempting shared transport/);
+  const permissive = await new DesktopRuntime({ root: state, codexHome: root, claudeHome: root, versionPolicy: 'warn' }).initialize();
+  const strict = await new DesktopRuntime({ root: state, codexHome: root, claudeHome: root }).initialize();
+  try {
+    const client = await permissive.codex();
+    assert.equal((await client.request('probe')).pid, record.childPid);
+    assert.deepEqual(permissive.versionWarnings(), [{ component: 'codex', cliVersion: 'codex-cli 99.0.0' }]);
+    await assert.rejects(strict.codex(), /invalid identity/);
+  } finally { await permissive.close(); await strict.close(); }
+  child.stdin.end();
+  assert.equal((await child.done).code, 0);
 });
 
 test('an unknown version never bypasses an existing shared writer', { timeout: 10000 }, async t => {

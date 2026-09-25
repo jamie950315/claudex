@@ -10,6 +10,7 @@ import { hash, privateDirectory, readJSON, snapshot, writeJSON } from './storage
 import { sessionPath } from './claude.mjs';
 import { captureImageAssets, restoreImageAssets } from './claude-image-assets.mjs';
 import { inspectMaintenancePolicy } from './maintenance-policy.mjs';
+import { normalizeVersionPolicy, runtimeVersionPermitted } from './runtime-version-policy.mjs';
 
 export const CLAUDE_OWNER_SDK_VERSION = '0.3.281';
 export const CLAUDE_OWNER_CLI_VERSION = '2.1.281';
@@ -37,7 +38,7 @@ export async function claudeOwnerEnvironment(claudeHome, overrides = {}, inherit
     try { return await realpath(path); }
     catch (error) { if (error.code === 'ENOENT') return resolve(path); throw error; }
   };
-  const env = { ...inherited, ...overrides, DISABLE_AUTOUPDATER: '1', CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' };
+  const env = { ...inherited, ...overrides, CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: '1' };
   // Setting CLAUDE_CONFIG_DIR changes the native Keychain namespace even when
   // its value names the default directory. Preserve default OAuth credentials
   // by omitting it, not by copying credentials into another namespace.
@@ -146,7 +147,8 @@ export class ClaudeOwner {
 
   constructor({ root, conversationId, cwd, claudeHome = join(homedir(), '.claude'), title = 'Claudex conversation',
     queryFactory, sdkVersion, claudeVersion, options = {}, onEvent = () => {}, receiptTimeoutMs = 30_000,
-    deferRemoteConnection = false, connectAfterReset = true, settingsResolver, policyPreflight = inspectMaintenancePolicy }) {
+    deferRemoteConnection = false, connectAfterReset = true, settingsResolver, policyPreflight = inspectMaintenancePolicy,
+    versionPolicy = 'strict' }) {
     if (!root || !conversationId || !cwd) throw new Error('Owner root, conversation identity, and working directory are required.');
     if (!Number.isFinite(receiptTimeoutMs) || receiptTimeoutMs <= 0) throw new Error('Invalid append receipt timeout.');
     for (const key of ['sessionId', 'resume', 'continue', 'forkSession', 'resumeSessionAt', 'resumeDropsTurn', 'persistSession', 'spawnClaudeCodeProcess']) {
@@ -157,6 +159,7 @@ export class ClaudeOwner {
     this.root = resolve(root); this.conversationId = conversationId; this.cwd = resolve(cwd);
     this.claudeHome = resolve(claudeHome); this.title = title; this.options = options;
     this.queryFactory = queryFactory; this.sdkVersion = sdkVersion; this.claudeVersion = claudeVersion;
+    this.versionPolicy = normalizeVersionPolicy(versionPolicy); this.versionWarning = null; this.versionWarningEmitted = false;
     this.settingsResolver = settingsResolver; this.injectedSettingsResolver = typeof settingsResolver === 'function';
     this.policyPreflight = policyPreflight;
     this.onEvent = onEvent; this.receiptTimeoutMs = receiptTimeoutMs;
@@ -179,6 +182,7 @@ export class ClaudeOwner {
       retainedGeneration: this.state?.retainedGeneration ? { sessionId: this.state.retainedGeneration.sessionId,
         transcriptPath: this.state.retainedGeneration.transcriptPath } : null,
       maintenanceOnly: this.deferRemoteConnection, deferRemoteConnection: this.deferRemoteConnection,
+      versionPolicy: this.versionPolicy, versionWarning: this.versionWarning ? { ...this.versionWarning } : null,
       coldResetEligible: this.coldStartVerified && !this.everConnected && this.activityRevision === 0
         && this.nativeState === 'idle' && !this.backgroundTasks.length && !this.blocked
         && !this.closed && !this.closing && !this.appendBusy && !this.resetBusy && !this.waiting,
@@ -312,7 +316,15 @@ export class ClaudeOwner {
       // a different command found through a later PATH lookup.
       this.options = { ...this.options, pathToClaudeCodeExecutable: executable };
     }
-    if (this.sdkVersion !== CLAUDE_OWNER_SDK_VERSION || this.claudeVersion !== CLAUDE_OWNER_CLI_VERSION) throw new Error('Unsupported Claude owner runtime; SDK and native CLI must match the pinned versions.');
+    if (!runtimeVersionPermitted(this.sdkVersion, CLAUDE_OWNER_SDK_VERSION, this.versionPolicy)
+        || !runtimeVersionPermitted(this.claudeVersion, CLAUDE_OWNER_CLI_VERSION, this.versionPolicy))
+      throw new Error('Unsupported Claude owner runtime; SDK and native CLI must match the pinned versions or an explicit warn policy.');
+    this.versionWarning = this.sdkVersion !== CLAUDE_OWNER_SDK_VERSION || this.claudeVersion !== CLAUDE_OWNER_CLI_VERSION
+      ? { component: 'claude', cliVersion: this.claudeVersion, sdkVersion: this.sdkVersion } : null;
+    if (this.versionWarning && !this.versionWarningEmitted) {
+      this.versionWarningEmitted = true;
+      await this.emit({ type: 'owner_version_warning', ...this.versionWarning });
+    }
   }
 
   async verifyMaintenancePolicy(runtimeEnv) {
@@ -378,7 +390,7 @@ export class ClaudeOwner {
       const temporaryBase = this.options.env?.CLAUDE_CODE_TMPDIR ?? process.env.CLAUDE_CODE_TMPDIR ?? (process.platform === 'darwin' ? '/tmp' : tmpdir());
       const captured = await captureImageAssets({ root: this.root, claudeTempRoot: join(temporaryBase, `claude-${process.getuid()}`),
         cwd: this.cwd, sessionId: this.state.sessionId, row: matches[0], expectedContent: pending.content,
-        expectedHash: pending.contentHash, normalizeContent: normalizedContent });
+        expectedHash: pending.contentHash, normalizeContent: normalizedContent, versionPolicy: this.versionPolicy });
       this.state.imageBindings = { ...this.state.imageBindings, [pending.uuid]: captured.bindings };
       await this.save();
     }

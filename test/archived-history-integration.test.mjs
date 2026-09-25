@@ -102,4 +102,13 @@ test('only a verified native clear prologue may precede an archived reset bootst
     message: { role: 'user', content: [{ type: 'text', text: 'Concurrent user input must remain visible' }] } });
   concurrent[4].parentUuid = concurrent[3].uuid;
   assert.throws(() => decodeOwnedClaudeHistory({ ...options, text: encode(concurrent), resetBootstrap }), /unsupported or concurrent history/);
+  const future = rows.map(row => ({ ...row, version: '2.2.1' }));
+  const futureOptions = { ...options, text: encode(future), resetBootstrap };
+  assert.throws(() => decodeOwnedClaudeHistory(futureOptions), /unsupported or concurrent history/);
+  assert.equal(decodeOwnedClaudeHistory({ ...futureOptions, versionPolicy: 'warn' }).digest, fingerprint({ messages: f.turn(1) }));
+  assert.throws(() => decodeOwnedClaudeHistory({ ...futureOptions, versionPolicy: 'warn', resetBootstrap: undefined }), /synchronized prefix/);
+  assert.throws(() => decodeOwnedClaudeHistory({ ...futureOptions, versionPolicy: 'warn',
+    resetBootstrap: { ...resetBootstrap, receipt: { ...resetBootstrap.receipt, apiMs: 1 } } }), /verified native no-query receipt/);
+  future[1] = { ...future[1], queueTranscriptOnly: false };
+  assert.throws(() => decodeOwnedClaudeHistory({ ...futureOptions, text: encode(future), versionPolicy: 'warn' }), /unsupported or concurrent history/);
 });

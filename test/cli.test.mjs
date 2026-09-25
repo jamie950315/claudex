@@ -37,6 +37,24 @@ test('CLI all-project scope needs no repository selection', async () => {
   assert.equal(config.allProjects, true);
 });
 
+test('version-policy changes only version enforcement and can be restored without touching the ledger', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-version-policy-cli-')));
+  const state = join(root, 'state'), codexHome = join(root, 'codex'), claudeHome = join(root, 'claude');
+  await mkdir(codexHome); await mkdir(claudeHome);
+  execFileSync(process.execPath, [cli, 'init', '--root', state, '--codex-home', codexHome, '--claude-home', claudeHome, '--all-projects']);
+  const path = join(state, 'config.json'), before = JSON.parse(await readFile(path));
+  const run = (...args) => JSON.parse(execFileSync(process.execPath, [cli, ...args, '--root', state], { encoding: 'utf8' }));
+  assert.equal(run('version-policy').versionGuardEnabled, true);
+  assert.equal(run('version-policy', 'warn').versionGuardEnabled, false);
+  assert.deepEqual(JSON.parse(await readFile(path)), { ...before, versionPolicy: 'warn' });
+  assert.equal(run('status').versionPolicy, 'warn');
+  const contents = await readFile(path, 'utf8');
+  assert.throws(() => execFileSync(process.execPath, [cli, 'version-policy', 'silent', '--root', state], { stdio: 'pipe' }));
+  assert.equal(await readFile(path, 'utf8'), contents);
+  assert.equal(run('version-policy', 'strict').versionGuardEnabled, true);
+  assert.deepEqual(run('status').records, []);
+});
+
 for (const allProjects of [false, true]) test(`native watcher discovers ${allProjects ? 'all projects' : 'only the selected project'} and mirrors the next completed turn`, { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 20000 }, async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-watch-test-')));
   const stateRoot = join(root, 'state'); const cwd = join(root, 'project'); const other = join(root, 'other');

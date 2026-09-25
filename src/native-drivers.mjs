@@ -12,6 +12,7 @@ import { snapshot, privateDirectory } from './storage.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
 import { codexCompaction, provenance } from './compaction.mjs';
 import { isSupportedCodexVersion } from './codex-versions.mjs';
+import { normalizeVersionPolicy, runtimeVersionPermitted } from './runtime-version-policy.mjs';
 
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const sourceKinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -53,16 +54,21 @@ export function decodeCodex(text) {
 }
 
 /** No import API and no direct SQLite changes. All removals require a managed record. */
-export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'codex', claudeBinary = 'claude', desktopHome = claudeHome === join(homedir(), '.claude') ? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') : null }) {
+export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'codex', claudeBinary = 'claude', versionPolicy = 'strict', desktopHome = claudeHome === join(homedir(), '.claude') ? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') : null }) {
+  versionPolicy = normalizeVersionPolicy(versionPolicy);
   root = await privateDirectory(root);
   const vault = join(root, 'rollback');
   if (await privateDirectory(vault) !== vault) throw new Error('Rollback directory must remain inside bridge state.');
   const [codexVersion, claudeVersion] = await Promise.all([
     execute(binary, ['--version'], { timeout: 10000 }), execute(claudeBinary, ['--version'], { timeout: 10000 }),
   ]);
-  if (!isSupportedCodexVersion(codexVersion.stdout.trim()) || !['2.1.210 ', '2.1.281 '].some(version => claudeVersion.stdout.trim().startsWith(version))) {
+  const codex = codexVersion.stdout.trim(), claude = claudeVersion.stdout.trim().split(/\s+/)[0];
+  const knownCodex = isSupportedCodexVersion(codex), knownClaude = ['2.1.210', '2.1.281'].includes(claude);
+  if (!runtimeVersionPermitted(codex, knownCodex ? codex : null, versionPolicy)
+      || !runtimeVersionPermitted(claude, knownClaude ? claude : null, versionPolicy)) {
     throw new Error('Native version changed; run compatibility validation before enabling synchronization.');
   }
+  if (!knownCodex || !knownClaude) process.emitWarning('Claudex versionPolicy=warn: attempting unvalidated native runtimes; protocol and history checks remain enabled.');
   const clients = new Set();
   let cachedClient;
   async function codexClient() {

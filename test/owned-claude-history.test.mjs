@@ -85,7 +85,7 @@ test('native image-source sidecars do not become authored turns or break the nex
   Object.assign(authored[0], { version: '2.1.281', promptSource: 'sdk', queueTranscriptOnly: true, promptId: 'native-prompt', imagePasteIds: [1] });
   Object.assign(authored[1], { version: '2.1.281', isMeta: true, promptId: 'native-prompt' });
   Object.assign(authored[2].message, { model: '<synthetic>', stop_reason: 'stop_sequence', stop_sequence: '', usage: { input_tokens: 0, output_tokens: 0 } });
-  const read = () => decodeOwnedClaudeHistory({ text: rows.map(row => JSON.stringify(row)).join('\n') + '\n', conversationId, sessionId, key });
+  const read = (versionPolicy = 'strict') => decodeOwnedClaudeHistory({ text: rows.map(row => JSON.stringify(row)).join('\n') + '\n', conversationId, sessionId, key, versionPolicy });
   assert.equal(read().digest, fingerprint({ messages: [...a, ...b] }));
   authored[1].isMeta = false;
   assert.throws(read, /synchronized prefix/);
@@ -93,4 +93,14 @@ test('native image-source sidecars do not become authored turns or break the nex
   assert.throws(read, /synchronized prefix/);
   authored[1].promptId = 'native-prompt'; authored[1].message.content[0].text += ' Additional instructions';
   assert.throws(read, /synchronized prefix/);
+  authored[1].message.content[0].text = annotation.content[0].text;
+  authored[0].version = '2.2.1'; authored[1].version = '2.2.1';
+  assert.throws(read, /synchronized prefix/);
+  assert.equal(read('warn').digest, fingerprint({ messages: [...a, ...b] }));
+  authored[0].promptSource = 'user';
+  assert.throws(() => read('warn'), /synchronized prefix/);
+  authored[0].promptSource = 'sdk'; authored[1].promptId = 'unrelated';
+  assert.throws(() => read('warn'), /synchronized prefix/);
+  authored[1].promptId = 'native-prompt'; authored[0].message.content[0].text += ' tampered';
+  assert.throws(() => read('warn'), /signature|digest|packet/);
 });

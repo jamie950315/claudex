@@ -1,6 +1,7 @@
 import { decodeClaude } from './claude.mjs';
 import { decodeTransportPacket as decodeContextPacket } from './context-packet-reader.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
+import { normalizeVersionPolicy, runtimeVersionPermitted } from './runtime-version-policy.mjs';
 
 // CLI 2.1.281 repairs a resumed no-query user tail with this zero-usage
 // placeholder before persisting the next input. It is not an authored reply.
@@ -39,7 +40,8 @@ function resetTransportKeys(text, native, options) {
     throw new Error('Owned reset bootstrap does not authenticate the complete archived checkpoint.');
   const prefix = rows.slice(0, index).filter(row => row.uuid && !row.isSidechain && ['user', 'assistant', 'system'].includes(row.type));
   const [caveat, command, output] = prefix;
-  if (prefix.length !== 3 || prefix.some(row => row.sessionId !== options.sessionId || row.version !== '2.1.281' || row.cwd !== bootstrap.cwd)
+  if (prefix.length !== 3 || prefix.some(row => row.sessionId !== options.sessionId
+      || !runtimeVersionPermitted(row.version, '2.1.281', options.versionPolicy) || row.cwd !== bootstrap.cwd)
       || caveat.type !== 'user' || caveat.isMeta !== true || caveat.parentUuid !== null || caveat.queueTranscriptOnly !== true || caveat.message?.content !== CLEAR_CAVEAT
       || command.type !== 'user' || command.isMeta === true || command.parentUuid !== caveat.uuid || command.queueTranscriptOnly !== true || command.message?.content !== CLEAR_COMMAND
       || output.type !== 'system' || output.subtype !== 'local_command' || output.parentUuid !== command.uuid
@@ -53,12 +55,13 @@ function resetTransportKeys(text, native, options) {
   return new Set(transported.map(messageKey));
 }
 
-function nativeImageAnnotationKeys(text, native, { conversationId, sessionId, key, resolveArchive }) {
+function nativeImageAnnotationKeys(text, native, { conversationId, sessionId, key, resolveArchive, versionPolicy }) {
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
   const byId = new Map(rows.filter(row => row.uuid).map(row => [row.uuid, row]));
   const excluded = new Set();
   for (const row of rows) {
-    if (row.type !== 'user' || row.isMeta !== true || row.isSidechain || row.sessionId !== sessionId || row.version !== '2.1.281') continue;
+    if (row.type !== 'user' || row.isMeta !== true || row.isSidechain || row.sessionId !== sessionId
+        || !runtimeVersionPermitted(row.version, '2.1.281', versionPolicy)) continue;
     const parent = byId.get(row.parentUuid);
     if (parent?.type !== 'user' || parent.sessionId !== sessionId || parent.promptSource !== 'sdk' || parent.queueTranscriptOnly !== true
         || !row.promptId || row.promptId !== parent.promptId || row.timestamp !== parent.timestamp || row.cwd !== parent.cwd
@@ -117,14 +120,16 @@ export function completedClaudePrefix({ text, conversationId, sessionId, key, re
  * The native SDK remains the only writer. Callers must snapshot the source and
  * require an idle owner before using this view as a completed source checkpoint.
  */
-export function decodeOwnedClaudeHistory({ text, conversationId, sessionId, key, resolveArchive, resetBootstrap }) {
+export function decodeOwnedClaudeHistory({ text, conversationId, sessionId, key, resolveArchive, resetBootstrap, versionPolicy = 'strict' }) {
+  versionPolicy = normalizeVersionPolicy(versionPolicy);
   const native = decodeClaude(text);
   if (native.meta.id !== sessionId) throw new Error('Owned Claude history has a different native session identity.');
-  // Validate the full native parent graph first. Then exclude only the pinned
-  // CLI's exact image-source sidecar tied to an authenticated no-query packet.
+  // Validate the full native parent graph first. Then exclude only the known
+  // CLI image-source format tied to an authenticated no-query packet. Warn
+  // policy relaxes version tags, not the sidecar's provenance or format.
   // The sidecar stays in the native transcript and is not an authored turn.
-  const imageAnnotations = nativeImageAnnotationKeys(text, native, { conversationId, sessionId, key, resolveArchive });
-  const resetAnnotations = resetTransportKeys(text, native, { conversationId, sessionId, key, resolveArchive, resetBootstrap });
+  const imageAnnotations = nativeImageAnnotationKeys(text, native, { conversationId, sessionId, key, resolveArchive, versionPolicy });
+  const resetAnnotations = resetTransportKeys(text, native, { conversationId, sessionId, key, resolveArchive, resetBootstrap, versionPolicy });
   const messages = [];
   const operations = new Set();
   let importedPackets = 0;

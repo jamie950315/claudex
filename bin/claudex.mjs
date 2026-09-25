@@ -16,7 +16,8 @@ import { DesktopBridge } from '../src/desktop-bridge.mjs';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { installDesktopLauncher, applyDesktopEnvironment, uninstallDesktopLauncher } from '../src/desktop-install.mjs';
-import { isSupportedCodexVersion } from '../src/codex-versions.mjs';
+import { isAllowedCodexVersion, isSupportedCodexVersion } from '../src/codex-versions.mjs';
+import { normalizeVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, from: { type: 'string' }, source: { type: 'string' }, id: { type: 'string' }, title: { type: 'string' },
@@ -42,6 +43,7 @@ const help = `Claudex: bounded local conversation handoffs (no model calls)
   claudex recover-lock            Clear a dead bridge process lock (never a live one)
   claudex service install|start|stop|status|uninstall    macOS background operation
   claudex doctor                  Check native versions
+  claudex version-policy [strict|warn]    Show or change version-only enforcement
   claudex desktop install         Enable all-project Desktop mode at the next normal app start
   claudex desktop uninstall       Remove the owned next-start override; preserve conversations
 
@@ -72,10 +74,24 @@ async function main() {
   const config = await readJSON(configPath, null);
   if (!config) throw new Error('Run claudex init first.');
   if (config.version !== 1) throw new Error('Unsupported configuration version.');
+  const versionPolicy = normalizeVersionPolicy(config.versionPolicy);
+  if (command === 'version-policy') {
+    if (positionals.length > 2) throw new Error('Use version-policy strict or version-policy warn.');
+    const selected = normalizeVersionPolicy(positionals[1] ?? versionPolicy);
+    if (positionals[1]) await writeJSON(configPath, { ...config, versionPolicy: selected });
+    output({ versionPolicy: selected, versionGuardEnabled: selected === 'strict',
+      note: 'Applies when the watcher/native owner next starts. A running native-only Desktop requires a normal restart to enable shared transport. Runtime data and safety checks are unchanged.' });
+    return;
+  }
   if (command === 'doctor') {
     const codex = execFileSync(config.binary, ['--version'], { encoding: 'utf8' }).trim();
-    const claude = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim();
-    output({ codex, claude, verifiedCodex: isSupportedCodexVersion(codex), verifiedClaude: ['2.1.210', '2.1.281'].some(version => claude.startsWith(`${version} `)), note: 'Other native versions require compatibility validation.' });
+    const claude = execFileSync(config.claudeBinary || 'claude', ['--version'], { encoding: 'utf8' }).trim();
+    const claudeVersion = claude.split(/\s+/)[0];
+    const verifiedClaude = (config.mode === 'desktop' ? ['2.1.281'] : ['2.1.210', '2.1.281']).includes(claudeVersion);
+    output({ codex, claude, verifiedCodex: isSupportedCodexVersion(codex), verifiedClaude, versionPolicy,
+      synchronizationAllowedByVersionPolicy: isAllowedCodexVersion(codex, versionPolicy)
+        && runtimeVersionPermitted(claudeVersion, verifiedClaude ? claudeVersion : null, versionPolicy),
+      note: versionPolicy === 'warn' ? 'Unverified runtime versions are attempted with warnings. Protocol, ownership and history checks remain enabled.' : 'Other native versions require compatibility validation.' });
     return;
   }
   if (command === 'recover-lock') {
@@ -128,7 +144,7 @@ async function main() {
     const state = config.mode === 'desktop'
       ? await new DesktopBridge({ root, adapters: {} }).status()
       : await new Bridge({ root, drivers: {} }).status();
-    output({ mode: config.mode || 'legacy', contextMode: config.mode === 'desktop' ? config.contextMode ?? 'inline' : null,
+    output({ mode: config.mode || 'legacy', versionPolicy, contextMode: config.mode === 'desktop' ? config.contextMode ?? 'inline' : null,
       allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
       pending: state.pending ? { phase: state.pending.phase, nativeId: state.pending.record.nativeId, side: state.pending.record.side } : null,
       audit: state.audit, watcher: await readJSON(join(root, 'watcher-status.json'), null) });

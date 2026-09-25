@@ -9,9 +9,12 @@ a local-only transport.
 
 ## Setup and modes
 
-Requires macOS, Node.js 22+, Codex CLI `0.155.0-alpha.16.3` or `0.155.0-alpha.16.4`, and Claude Code
-`2.1.210` or `2.1.281`. Other native versions pause synchronization until compatibility is
-validated. Both tools retain their own authentication and permission settings.
+Requires macOS and Node.js 22+. Validated native baselines are Codex CLI
+`0.155.0-alpha.16.3`/`0.155.0-alpha.16.4` and Claude Code `2.1.210`/`2.1.281`.
+The default `versionPolicy: "strict"` enforces these baselines. An explicit
+`versionPolicy: "warn"` attempts newer or otherwise unvalidated runtimes without
+blocking synchronization solely on their version numbers. Both tools retain
+their own authentication and permission settings.
 
 ### Legacy CLI quick start
 
@@ -52,8 +55,9 @@ Only one watcher can run for a state root.
 
 ### Experimental Desktop mode
 
-Desktop mode requires Claude Code `2.1.281` with normal subscription OAuth and
-SDK `0.3.281`. It is integrated with the coordinator and background watcher.
+Desktop mode's validated Claude baseline is CLI `2.1.281` with normal subscription
+OAuth and SDK `0.3.281`; warn policy permits other runtime versions to be attempted.
+It is integrated with the coordinator and background watcher.
 Explicitly user-authorized acceptance has verified two real model-authored
 Desktop roundtrips, continuation from a compacted source, stable Claude identity,
 exact logical history equality, restart recovery and bounded Codex snapshot
@@ -85,7 +89,7 @@ peer verification to keep an unsigned wrapper running.
 
 App updates do not need to match a single hard-coded CLI patch release.
 `src/codex-versions.mjs` defines the exact validated runtime allowlist shared by
-the launcher, doctor and both adapters. An unvalidated version starts Desktop's
+the launcher, doctor and both adapters. Under strict policy, an unvalidated version starts Desktop's
 original native transport with unchanged arguments and environment, under an
 exclusive native-only owner lease. No shared socket is published, and the
 watcher explicitly reports synchronization awaiting version validation. This
@@ -96,6 +100,36 @@ retried through another backend. The bundled Node must still be OpenAI-signed.
 The `.16.4` app update is validated with isolated native history, writer-lock,
 snapshot-retirement and shared Unix WebSocket checks, plus an actual signed-Node
 launcher initialization. No model request is needed for these checks.
+
+#### Version-only enforcement
+
+```sh
+node bin/claudex.mjs version-policy warn
+node bin/claudex.mjs version-policy strict
+```
+
+The first command opts out of version-only blocking for Codex, Claude Code and
+the Claude owner SDK. Unvalidated Codex versions keep shared transport instead
+of entering native-only mode, and Claude owners attempt the existing protocol.
+`status` shows the selected policy and bounded runtime warnings; `doctor` still
+reports unvalidated versions as unverified rather than claiming compatibility.
+The second command restores the strict policy. Existing configuration fields,
+conversation IDs, checkpoints and transcripts are not changed by either command.
+
+Reload an idle watcher to apply a policy change to its native owners. The
+launcher reads the saved policy at its next invocation; if Desktop is already
+using native-only transport, a normal app restart is required before sharing
+can start. Do not restart active user work. Claudex no longer forces
+`DISABLE_AUTOUPDATER=1` on its Claude workers; explicitly inherited user settings
+are preserved. Installed applications keep their normal update mechanisms;
+Claudex does not automatically upgrade its npm SDK dependency.
+
+Warn policy also allows changed native version tags through the existing exact
+image-sidecar and reset-prologue formats. It does not relax signatures, native
+identity, schema, content, no-query receipts, writer locks or conflict checks.
+Malformed metadata or an actual protocol/format change can still stop a handoff.
+This is permission to attempt an unvalidated version, not a guarantee that all
+future versions will work.
 
 Desktop mode uses one stable Claude Remote Control identity per logical
 conversation and at most two managed Codex snapshots in steady state. A cold

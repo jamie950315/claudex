@@ -31,6 +31,11 @@ test('default Claude home preserves the default Keychain namespace without copyi
   assert.equal(env.PATH, '/example/path');
   const isolated = await claudeOwnerEnvironment('/example/isolated-claude', {}, {});
   assert.equal(isolated.CLAUDE_CONFIG_DIR, '/example/isolated-claude');
+  assert.equal(Object.hasOwn(isolated, 'DISABLE_AUTOUPDATER'), false);
+  const inheritedUpdate = await claudeOwnerEnvironment('/example/isolated-claude', {}, { DISABLE_AUTOUPDATER: '1' });
+  assert.equal(inheritedUpdate.DISABLE_AUTOUPDATER, '1');
+  const explicitUpdate = await claudeOwnerEnvironment('/example/isolated-claude', { DISABLE_AUTOUPDATER: '0' }, { DISABLE_AUTOUPDATER: '1' });
+  assert.equal(explicitUpdate.DISABLE_AUTOUPDATER, '0');
 });
 
 test('owner resolves a PATH command to the same absolute executable it will validate and launch', async () => {
@@ -140,9 +145,30 @@ test('an unexpected native session identity never turns an old idle level into s
 
 test('owner rejects another writer and mismatched runtime versions', async () => {
   const f = await fixture(), owner = await ClaudeOwner.open(f.config);
+  assert.equal(owner.status().versionPolicy, 'strict');
+  assert.equal(owner.status().versionWarning, null);
   await assert.rejects(ClaudeOwner.open(f.config), /already running/);
   await owner.close();
   await assert.rejects(ClaudeOwner.open({ ...f.config, sdkVersion: '0.0.0' }), /pinned versions/);
+});
+
+test('warn policy permits future Claude CLI and SDK versions without bypassing ownership or no-query receipts', async () => {
+  const f = await fixture();
+  const config = { ...f.config, versionPolicy: 'warn', sdkVersion: '0.4.1', claudeVersion: '2.2.1' };
+  const owner = await ClaudeOwner.open(config);
+  try {
+    assert.equal(owner.status().versionPolicy, 'warn');
+    assert.deepEqual(owner.status().versionWarning, { component: 'claude', cliVersion: '2.2.1', sdkVersion: '0.4.1' });
+    await owner.loadRuntime();
+    assert.equal(f.events.filter(event => event.type === 'owner_version_warning').length, 1);
+    await assert.rejects(ClaudeOwner.open(config), /already running/);
+    await owner.append({ operationId: 'future-version', content: 'Verified no-query handoff using a future runtime fixture.' });
+    assert.equal(f.calls.appends[0].shouldQuery, false);
+    assert.equal(f.events.filter(event => event.type === 'owner_append_receipt').length, 1);
+  } finally { await owner.close(); }
+  await assert.rejects(ClaudeOwner.open({ ...config, claudeVersion: '' }), /pinned versions/);
+  await assert.rejects(ClaudeOwner.open({ ...config, sdkVersion: 'invalid\nversion' }), /pinned versions/);
+  assert.throws(() => new ClaudeOwner({ ...f.config, versionPolicy: 'invalid' }), /versionPolicy/);
 });
 
 test('startup failure during a remote turn retains the owner and lock without closing the native process', async () => {
@@ -223,12 +249,13 @@ test('unknown querying results pause appends but preserve the remote process', a
 
 test('querying bridge receipts pause synchronization without killing user work', async () => {
   const f = await fixture({ receiptMutator: result => ({ ...result, num_turns: 1, duration_api_ms: 1500, total_cost_usd: 0.3 }) });
-  const owner = await ClaudeOwner.open(f.config);
+  const config = { ...f.config, versionPolicy: 'warn', sdkVersion: '0.4.1', claudeVersion: '2.2.1' };
+  const owner = await ClaudeOwner.open(config);
   await assert.rejects(owner.append({ operationId: 'a', content: 'Synthetic handoff' }), /querying or ambiguous/);
   assert.equal(f.closeCount(), 0);
   await assert.rejects(owner.append({ operationId: 'b', content: 'Next handoff' }), /synchronization is paused/);
   await owner.close();
-  await assert.rejects(ClaudeOwner.open(f.config), /synchronization is paused/);
+  await assert.rejects(ClaudeOwner.open(config), /synchronization is paused/);
 });
 
 test('a no-query receipt retains prior session cost without treating it as new inference', async () => {

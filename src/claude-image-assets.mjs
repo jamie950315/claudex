@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { hash, publishExclusive, withLock } from './storage.mjs';
+import { normalizeVersionPolicy, runtimeVersionPermitted } from './runtime-version-policy.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const DIGEST = /^[a-f0-9]{64}$/;
@@ -97,7 +98,8 @@ function imageBytes(block) {
 }
 
 /** Bind native resized previews to the exact original bytes of a pending owner append. */
-export async function captureImageAssets({ root, claudeTempRoot, cwd, sessionId, row, expectedContent, expectedHash, normalizeContent }) {
+export async function captureImageAssets({ root, claudeTempRoot, cwd, sessionId, row, expectedContent, expectedHash, normalizeContent, versionPolicy = 'strict' }) {
+  versionPolicy = normalizeVersionPolicy(versionPolicy);
   if (typeof normalizeContent !== 'function' || !DIGEST.test(expectedHash)
       || hash(normalizeContent(expectedContent)) !== expectedHash) throw new Error('Invalid expected owner append content.');
   const expected = normalizeContent(expectedContent);
@@ -105,7 +107,7 @@ export async function captureImageAssets({ root, claudeTempRoot, cwd, sessionId,
   if (!Array.isArray(expected) || !Array.isArray(rendered) || expected.length !== rendered.length)
     throw new Error('Native image append content length differs from the durable intent.');
   if (hash(rendered) === expectedHash) return { row, bindings: {} };
-  if (row.queueTranscriptOnly !== true || row.promptSource !== 'sdk' || row.version !== '2.1.281')
+  if (row.queueTranscriptOnly !== true || row.promptSource !== 'sdk' || !runtimeVersionPermitted(row.version, '2.1.281', versionPolicy))
     throw new Error('Native image append provenance is unsupported.');
   const imageIndices = expected.flatMap((block, index) => block?.type === 'image' ? [index] : []);
   if (!imageIndices.length || !Array.isArray(row.imagePasteIds) || row.imagePasteIds.length !== imageIndices.length

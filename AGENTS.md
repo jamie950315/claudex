@@ -33,8 +33,10 @@ All-project discovery skips unsupported unenrolled histories and reports a
 bounded diagnostic list; pending transactions and tracked-history failures still
 stop synchronization. Discovery starts at initialization, not a bulk history import.
 
-Native compatibility is pinned to Codex `0.155.0-alpha.16.3` or `.16.4` and Claude Code
-`2.1.210` or `2.1.281`; version drift pauses writes. Codex has cross-process writer locks.
+Validated native baselines are Codex `0.155.0-alpha.16.3`/`.16.4` and Claude Code
+`2.1.210`/`2.1.281`. versionPolicy defaults to strict; an explicit warn policy
+allows unvalidated runtime versions to be attempted without version-only pauses.
+Never label an unvalidated version as verified. Codex has cross-process writer locks.
 Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
 Include `thread/loaded/list`: a fresh fork can be loaded before the stored list
@@ -86,7 +88,8 @@ and complete-turn coverage must agree before publishing a reconstruction.
 Experimental SDK path: `ClaudeOwner` is the sole native writer; Desktop views it
 through Remote Control. Actual native/desktop tests verify shouldQuery:false,
 zero-inference receipts, same remote ID after restart, exact UUID/content
-persistence, and duplicate suppression. SDK0.3.281/CLI2.1.281 are pinned. Preserve
+persistence, and duplicate suppression. SDK0.3.281/CLI2.1.281 are validated baselines
+enforced only in strict policy. Preserve
 the default OAuth namespace by omitting CLAUDE_CONFIG_DIR for standard ~/.claude.
 No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
 path. Store the owner handle before start() so startup failures
@@ -191,13 +194,26 @@ an active backend is safe.
 
 Runtime compatibility is centralized in src/codex-versions.mjs. The .16.4 app
 update passed isolated native contracts and signed-Node launcher initialization.
-An unknown runtime uses original native Desktop transport under the same
+Under strict policy an unknown runtime uses original native Desktop transport under the same
 exclusive owner lease, labeled transportMode:native, with no shared socket.
 The watcher refuses that mode and reports synchronization paused pending version
 validation. Only this pre-launch version decision may select native-only mode;
 never fall back after an ownership/shared-start/transport failure or bypass a
 live owner. Release the lease after the native child exits, including signals.
 The projection codec's .16.3 schema label is not a runtime version assertion.
+
+The user can suspend version-only enforcement with `version-policy warn` and
+restore it with `version-policy strict`; the setting is saved per state root.
+Launcher, DesktopRuntime, legacy adapters and ClaudeOwner honor the same policy.
+Warn mode keeps shared transport for unknown Codex versions and attempts unknown
+Claude CLI/SDK versions. Native version tags in the existing exact image/reset
+formats honor this choice too; no structural/provenance/receipt checks are removed.
+Watcher status exposes bounded deduplicated warnings. Settings take effect for
+newly loaded workers; never replace active work to apply them. Claudex no longer
+injects DISABLE_AUTOUPDATER=1; preserve explicit inherited/override preferences.
+Runtime updater behavior and npm dependency upgrades remain the native tools'
+responsibility. Keep schema versions, signatures, locks, identity and conflict
+checks strict even when runtime version enforcement is suspended.
 
 Rejected transport shortcuts: queue/add auto-starts inference on an idle native
 thread. shellCommand persists userShell events without a model request, but

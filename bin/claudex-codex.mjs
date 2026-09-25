@@ -9,7 +9,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 import { connectCodexSocket, inspectCodexSocket, MAX_FRAME_BYTES } from '../src/codex-websocket.mjs';
-import { isSupportedCodexVersion, SUPPORTED_CODEX_VERSIONS } from '../src/codex-versions.mjs';
+import { isAllowedCodexVersion, isSupportedCodexVersion, SUPPORTED_CODEX_VERSIONS } from '../src/codex-versions.mjs';
+import { readVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
 
 const execFileAsync = promisify(execFile);
 export const SUPPORTED_CODEX_VERSION = SUPPORTED_CODEX_VERSIONS[0];
@@ -203,10 +204,11 @@ export async function runCodexLauncher(args = process.argv.slice(2), env = proce
   if (!serverArgs) return passthrough(binary, args, env);
   if (!isAbsolute(socketPath) || Buffer.byteLength(socketPath) > 103) throw new Error('The shared Codex socket path is too long');
   const version = (await execFileAsync(binary, ['--version'], { env, timeout: 5000, maxBuffer: 4096 })).stdout.trim();
-  if (!/^codex-cli [0-9A-Za-z.+-]+$/.test(version) || version.length > 160) throw new Error('Unrecognized Codex version response');
+  if (!runtimeVersionPermitted(version, version, 'warn')) throw new Error('Unrecognized Codex version response');
   await privateDirectory(root);
   await privateDirectory(directory);
-  if (!isSupportedCodexVersion(version)) {
+  const versionPolicy = await readVersionPolicy(root);
+  if (!isAllowedCodexVersion(version, versionPolicy)) {
     // An app update must not make Desktop unusable just because synchronization
     // has not been validated yet. Keep one owner, launch the original command
     // unchanged, and publish no shared socket. Never take this route after a
@@ -215,6 +217,8 @@ export async function runCodexLauncher(args = process.argv.slice(2), env = proce
     process.stderr.write(`Claudex synchronization is paused for unvalidated ${version}; Desktop is using its original native transport.\n`);
     return passthrough(binary, args, env, nativeOwner);
   }
+  if (!isSupportedCodexVersion(version))
+    process.stderr.write(`Claudex versionPolicy=warn: attempting shared transport with unvalidated ${version}; runtime safety checks remain enabled.\n`);
   const owner = await claimOwner(directory, socketPath, binary, version);
   let child;
   let childDone;

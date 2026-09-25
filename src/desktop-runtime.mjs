@@ -14,7 +14,8 @@ import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
-import { isSupportedCodexVersion } from './codex-versions.mjs';
+import { isAllowedCodexVersion, isSupportedCodexVersion } from './codex-versions.mjs';
+import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -52,11 +53,13 @@ export async function persistentPacketKey(root) {
 
 /** Native adapters with one long-lived SDK owner per logical Claude session. */
 export class DesktopRuntime {
-  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', onEvent = () => {} }) {
+  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict', onEvent = () => {} }) {
     if (!['inline', 'archive'].includes(contextMode)) throw new Error('Unsupported Desktop context mode.');
     this.root = resolve(root); this.codexHome = resolve(codexHome); this.claudeHome = resolve(claudeHome);
     this.claudeBinary = claudeBinary; this.clientFactory = clientFactory; this.ownerFactory = ownerFactory;
     this.contextMode = contextMode;
+    this.versionPolicy = normalizeVersionPolicy(versionPolicy);
+    this.codexVersionWarning = null;
     this.ownerOptions = ownerOptions; this.onEvent = onEvent; this.owners = new Map();
     this.adapters = Object.fromEntries(['codex', 'claude'].map(side => [side, {
       inspect: record => this.inspect({ ...record, side }),
@@ -80,6 +83,11 @@ export class DesktopRuntime {
     return this;
   }
 
+  versionWarnings() {
+    const warnings = [this.codexVersionWarning, ...[...this.owners.values()].map(entry => entry.owner.status().versionWarning)].filter(Boolean);
+    return [...new Map(warnings.map(value => [JSON.stringify(value), value])).values()].slice(-20);
+  }
+
   async codex() {
     // A new connection is not a replay: the coordinator rechecks durable
     // operation evidence before deciding whether a native write is required.
@@ -96,8 +104,10 @@ export class DesktopRuntime {
           || !alive(manifest.pid) || !alive(manifest.childPid)) throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
       if (manifest.transportMode === 'native')
         throw new Error('Shared Codex Desktop backend is not ready: Desktop is in native-only mode; synchronization awaits version validation.');
-      if (manifest.transportMode !== undefined || !isSupportedCodexVersion(manifest.cliVersion) || !manifest.socketPath)
+      if (manifest.transportMode !== undefined || !isAllowedCodexVersion(manifest.cliVersion, this.versionPolicy) || !manifest.socketPath)
         throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
+      this.codexVersionWarning = isSupportedCodexVersion(manifest.cliVersion) ? null
+        : { component: 'codex', cliVersion: manifest.cliVersion };
       const socket = await inspectCodexSocket(manifest.socketPath);
       if (socket.socketStat.dev !== manifest.socketIdentity?.dev || socket.socketStat.ino !== manifest.socketIdentity?.ino) throw new Error('Shared Codex socket identity changed.');
       this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath });
@@ -120,7 +130,7 @@ export class DesktopRuntime {
       ? await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null) : null;
     if (forceNormal && saved?.reset) throw new Error('A pending native context reset must be restored before a normal owner starts.');
     const maintenanceOnly = !forceNormal && Boolean(saved?.remoteId);
-    const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title,
+    const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title, versionPolicy: this.versionPolicy,
       deferRemoteConnection: maintenanceOnly, connectAfterReset: !maintenanceOnly,
       options: { ...this.ownerOptions, pathToClaudeCodeExecutable: this.claudeBinary },
       onEvent: event => this.onEvent({ type: 'claude_notification', conversationId, event }) };
@@ -202,7 +212,7 @@ export class DesktopRuntime {
       ...(record.managed ? { key: this.key, resolveArchive } : {}) });
     const parsed = record.managed
       ? decodeOwnedClaudeHistory({ text: prefix.text, conversationId: record.conversationId, sessionId: record.nativeId, key: this.key, resolveArchive,
-        resetBootstrap: !retainedData ? owner.status().lastReset : undefined })
+        resetBootstrap: !retainedData ? owner.status().lastReset : undefined, versionPolicy: this.versionPolicy })
       : { common: decodeClaude(prefix.text) };
     assertComplete(parsed.common);
     parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
