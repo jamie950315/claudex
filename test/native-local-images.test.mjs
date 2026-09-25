@@ -181,6 +181,80 @@ test('older metadata support never ignores incorrect present kinds, unknown meta
   }
 });
 
+test('observed turn-only metadata and absent raw response IDs preserve the exact completed-item image proof', async t => {
+  for (const includeResponseId of [true, false]) {
+    const f = await fixture(t);
+    f.response.internal_chat_message_metadata_passthrough = { turn_id: f.turnId };
+    if (!includeResponseId) delete f.response.id;
+    await f.write();
+    const before = await readFile(f.path), exported = await f.run();
+    const images = exported.common.messages[0].content.filter(block => block.type === 'image');
+    assert.deepEqual(images.map(block => `data:${block.source.media_type};base64,${block.source.data}`), f.urls);
+    assert.deepEqual(f.response.internal_chat_message_metadata_passthrough, { turn_id: f.turnId });
+    assert.equal(Object.hasOwn(f.response, 'id'), includeResponseId);
+    assert.deepEqual(await readFile(f.path), before);
+    assert.equal(f.calls.length, 2);
+  }
+});
+
+test('optional response metadata cannot replace required turn, completion-item, count or closure evidence', async t => {
+  for (const mutate of [
+    f => { delete f.response.internal_chat_message_metadata_passthrough; },
+    f => { f.response.internal_chat_message_metadata_passthrough = null; },
+    f => { f.response.internal_chat_message_metadata_passthrough = {}; },
+    f => { f.response.internal_chat_message_metadata_passthrough.turn_id = randomUUID(); },
+    f => { f.response.internal_chat_message_metadata_passthrough.extra = true; },
+    f => { f.response.internal_chat_message_metadata_passthrough.create_time = null; },
+    f => { f.response.internal_chat_message_metadata_passthrough.create_time = '1790300000'; },
+    f => { f.response.internal_chat_message_metadata_passthrough.content_item_kinds = ['user.text']; },
+    f => { f.response.internal_chat_message_metadata_passthrough = { turn_id: f.turnId, create_time: 1790300000, content_item_kinds: ['wrong'] }; },
+    ...[null, '', 17].map(id => f => { f.response.id = id; }),
+    f => { f.response.unrecognized = 'not an observed payload shape'; },
+    f => { f.rawItem.id = randomUUID(); },
+    f => { f.rows[5].payload.turn_id = randomUUID(); },
+    f => { f.rows[2].payload.turn_id = randomUUID(); },
+    f => { f.rows[6].payload.turn_id = randomUUID(); },
+    f => { f.response.content.splice(4); },
+    f => { f.rows.splice(5, 0, structuredClone(f.rows[4])); },
+  ]) {
+    const f = await fixture(t);
+    f.response.internal_chat_message_metadata_passthrough = { turn_id: f.turnId };
+    delete f.response.id;
+    mutate(f); await f.write();
+    await assert.rejects(f.run(), /local image recovery/);
+  }
+});
+
+test('native optional client IDs normalize only absence to API null while explicit values remain exact', async t => {
+  for (const clientId of [undefined, null, 'observed-client-id']) {
+    const f = await fixture(t);
+    if (clientId === undefined) delete f.rawItem.client_id;
+    else f.rawItem.client_id = clientId;
+    f.item.clientId = clientId ?? null;
+    await f.write();
+    const before = await readFile(f.path), exported = await f.run();
+    assert.equal(exported.common.messages[0].content.filter(block => block.type === 'image').length, 2);
+    assert.deepEqual(await readFile(f.path), before);
+    assert.equal(Object.hasOwn(f.rawItem, 'client_id'), clientId !== undefined);
+  }
+});
+
+test('client identity mismatches and raw alias collisions cannot be hidden by optional-field normalization', async t => {
+  for (const mutate of [
+    f => { delete f.rawItem.client_id; f.item.clientId = 'unexpected-client'; },
+    f => { f.rawItem.client_id = null; f.item.clientId = 'unexpected-client'; },
+    f => { f.rawItem.client_id = 'explicit-native-client'; f.item.clientId = null; },
+    f => { f.rawItem.client_id = 'explicit-native-client'; f.item.clientId = 'different-client'; },
+    f => { f.rawItem.client_id = 0; f.item.clientId = null; },
+    f => { f.rawItem.clientId = f.rawItem.client_id; },
+    f => { f.rawItem.clientId = 'conflicting-client'; },
+    f => { delete f.rawItem.client_id; f.rawItem.clientId = null; f.item.clientId = null; },
+  ]) {
+    const f = await fixture(t); mutate(f); await f.write();
+    await assert.rejects(f.run(), /does not exactly match|conflicting client identity aliases/);
+  }
+});
+
 test('current-rollout resolution never searches history_base or another file for missing image provenance', async t => {
   const f = await fixture(t);
   f.rows[0].payload.history_base = { path: '/do-not-read/a-prefix.jsonl' };

@@ -152,6 +152,12 @@ agreement before a closed turn. Keep image descriptors as inert metadata and
 validate the recovered data URI and converted-history budget. Never read API
 image paths, fetch URLs, search history_base files or silently choose a candidate.
 This preserves native persisted model-input bytes, not proven unresized uploads.
+Accept only the observed passthrough key sets: turn_id alone, plus create_time,
+or plus create_time and content_item_kinds. Validate every present value; never
+invent absent timestamps. A raw response may omit its own id, but a present id
+must remain nonempty and the completed-event/API item identity is always exact.
+Only absent raw client_id normalizes to API clientId:null; explicit values must
+match exactly, and raw clientId aliases are rejected rather than overwritten.
 
 Shared Codex transport installs for the next normal app start: `bin/claudex-codex.mjs` preserves
 native Desktop args/env, starts a public Unix WS listener, and forwards JSONL

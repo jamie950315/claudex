@@ -14,7 +14,8 @@ const requestKey = ({ turnId, item }) => JSON.stringify([turnId, item.id]);
 
 function translateCompletedItem(item) {
   if (item?.type !== 'UserMessage' || !Array.isArray(item.content)) return null;
-  const result = { ...item, type: 'userMessage', clientId: item.client_id,
+  if (Object.hasOwn(item, 'clientId')) fail('native completed user item contains conflicting client identity aliases.');
+  const result = { ...item, type: 'userMessage', clientId: Object.hasOwn(item, 'client_id') ? item.client_id : null,
     content: item.content.map(input => input?.type === 'local_image'
       ? { ...input, type: 'localImage', ...(!Object.hasOwn(input, 'detail') ? { detail: null } : {}) } : input) };
   delete result.client_id;
@@ -26,11 +27,13 @@ function candidateImages(payload, request, activeTurn, contextTurn) {
   if (!Array.isArray(content) || !content.some(block => block?.type === 'input_image')) return null;
   if (content[0]?.type !== 'input_text' || content[0].text !== item.content[0].text) return null;
   const metadata = payload.internal_chat_message_metadata_passthrough;
-  if (!keys(payload, ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough'])
-      || payload.type !== 'message' || payload.role !== 'user' || typeof payload.id !== 'string' || !payload.id
-      || !(keys(metadata, ['turn_id', 'create_time', 'content_item_kinds']) || keys(metadata, ['turn_id', 'create_time']))
+  const hasResponseId = Object.hasOwn(payload, 'id');
+  if (!(keys(payload, ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough'])
+        || keys(payload, ['type', 'role', 'content', 'internal_chat_message_metadata_passthrough']))
+      || payload.type !== 'message' || payload.role !== 'user' || hasResponseId && (typeof payload.id !== 'string' || !payload.id)
+      || !(keys(metadata, ['turn_id', 'create_time', 'content_item_kinds']) || keys(metadata, ['turn_id', 'create_time']) || keys(metadata, ['turn_id']))
       || metadata.turn_id !== turnId || activeTurn !== turnId || contextTurn !== turnId
-      || typeof metadata.create_time !== 'number' || !Number.isFinite(metadata.create_time)
+      || Object.hasOwn(metadata, 'create_time') && (typeof metadata.create_time !== 'number' || !Number.isFinite(metadata.create_time))
       || !keys(content[0], ['type', 'text'])) fail('image response provenance does not match its native turn.');
   const inputs = item.content.slice(1), kinds = ['user.text'], images = [];
   if (content.length !== 1 + inputs.length * 3) fail('image response count does not match the native user item.');
@@ -48,8 +51,9 @@ function candidateImages(payload, request, activeTurn, contextTurn) {
     images.push({ url: image.image_url, detail: image.detail });
     kinds.push('user.text', 'user.image', 'user.text');
   }
-  // Older observed rollouts omit only this parallel kind list. Their exact
-  // message/triplet shapes are still mandatory; a present list is never ignored.
+  // Observed older rows can omit response ID, create_time and the kind list;
+  // never synthesize them. Native completion-item identity and the exact
+  // message/triplet shapes stay mandatory; a present list is never ignored.
   if (Object.hasOwn(metadata, 'content_item_kinds') && !isDeepStrictEqual(metadata.content_item_kinds, kinds))
     fail('image response content-kind provenance does not match.');
   return images;
