@@ -746,20 +746,25 @@ export class ClaudeOwner {
         const own = this.state.pending && keys.has(this.state.pending.uuid);
         if (!own && ['user', 'assistant', 'result'].includes(event.type)) this.activityRevision++;
         if (event.type === 'result' && own) {
-          if (event.subtype !== 'success' || event.is_error || event.num_turns !== 0 || event.duration_api_ms !== 0 || event.total_cost_usd !== 0 || keys.size !== 1) {
+          // CLI 2.1.281's shouldQuery:false branch fixes turns/API time at
+          // zero, but total_cost_usd is the cumulative session cost ledger.
+          // A prior real Desktop reply must not make a no-query import fail.
+          if (event.subtype !== 'success' || event.is_error || event.num_turns !== 0 || event.duration_api_ms !== 0
+            || !Number.isFinite(event.total_cost_usd) || event.total_cost_usd < 0 || keys.size !== 1) {
             this.blocked = 'Bridge append received a querying or ambiguous result; synchronization is paused without stopping user work.';
             this.state.blocked = this.blocked; await this.save();
             this.waiting?.reject(new Error(this.blocked));
             await this.emit({ type: 'owner_error', message: this.blocked });
           } else {
             this.waiting?.resolve();
-            await this.emit({ type: 'owner_append_receipt', uuid: this.state.pending.uuid, numTurns: 0, apiMs: 0, cost: 0 });
+            await this.emit({ type: 'owner_append_receipt', uuid: this.state.pending.uuid, numTurns: 0, apiMs: 0,
+              cumulativeCost: event.total_cost_usd });
           }
         } else {
           // Real Desktop turns are deliberately not rejected for nonzero usage.
           // The SDK owns their queue, tools and permission prompts; this adapter
           // never submits a querying message or interrupts a user's turn.
-          if (event.type === 'result' && (event.num_turns > 0 || event.duration_api_ms > 0 || event.total_cost_usd > 0)) {
+          if (event.type === 'result' && (event.num_turns > 0 || event.duration_api_ms > 0)) {
             let actualUserTurn = false;
             try {
               const transcript = await this.inspectTranscript();

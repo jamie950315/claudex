@@ -9,7 +9,7 @@ and generated sessions outside the repository.
 - Node.js 22+, ES modules; install with `npm ci`.
 - Run `npm test` for the coordinator and adapter contracts.
 - Native integration checks use isolated temporary homes and synthetic transcripts.
-- Never start model inference, overwrite live sessions, or modify user databases as a test.
+- Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
 - Preserve original sessions; do not infer permission to prune or archive them.
@@ -41,8 +41,9 @@ Claude projections use canonical project paths and owned rollback storage.
 The append helper is for controlled fixtures, not runtime concurrent writes.
 
 The native watcher, six synthetic roundtrips, real Claude rendering, and desktop
-task-reading integration are verified without inference. Automatic desktop
-sidebar refresh and new model-generated continuation are not verified. Do not
+task-reading integration are verified without inference. Separately authorized
+real Desktop acceptance verifies two model-authored roundtrips, history-based
+nonce recall on both sides, and automatic delivery. Do not
 claim production readiness for opaque/dependent compaction, external asset dependencies, changed
 working directories, or unsigned reasoning replay. Visible reasoning is labeled
 text; encrypted reasoning and native permissions do not migrate.
@@ -109,8 +110,10 @@ preserves transcripts and ledgers; it is not a reverse migration. The launcher
 is activated on the real Codex Desktop backend. Automatic native enrollment and
 Claude Remote Control registration of real conversations are verified. Both real
 mirrored conversations render in the Claude Desktop sidebar and their history
-opens through Remote Control. Real dual-Desktop alternation acceptance is still
-outstanding. Do not remove dependency guards for retirement.
+opens through Remote Control. Real dual-Desktop alternation acceptance now
+passes, including native retirement of the oldest of three generated Codex
+snapshots: one current and one archived previous remain. The original source
+is preserved. Do not remove dependency guards for retirement.
 
 The real integrated coordinator/SDK/Desktop check verifies initial import, a
 restart, delta delivery, same Remote Control identity, exact canonical history,
@@ -217,5 +220,17 @@ receipts report zero inference. The live watcher has also migrated both real
 conversations without changing their Remote Control identities or canonical
 digests. The large history's real Desktop context fell from over-capacity to
 41.1k/1M while complete portable content remained in the archive. This native
-context migration does not erase the older cloud display history. Real
-model-generated two-way alternation remains a separate acceptance gate.
+context migration does not erase the older cloud display history. User-authorized
+model-generated acceptance verifies two full alternating continuations from a
+real source containing compaction and history_base, followed by a final Claude
+recall and automatic bounded snapshot collection. Both logical histories match.
+
+Pinned no-query receipts have zero num_turns and duration_api_ms, but
+total_cost_usd/modelUsage are cumulative across real replies and resume. Require
+finite nonnegative cumulative cost, not absolute zero; preserve success, exact
+single input UUID, session identity and native persistence checks. Report this
+field as cumulativeCost, never as measured append cost. The native /clear
+receipt still requires zero cost after its ledger reset. Recovery of the
+observed old false-positive block verified exact persisted SDK/no-query input,
+authenticated canonical history, no later authored rows and an exited writer;
+it preserved the pending intent and did not resend or invent a lost receipt.

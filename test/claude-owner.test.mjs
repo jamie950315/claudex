@@ -231,6 +231,31 @@ test('querying bridge receipts pause synchronization without killing user work',
   await assert.rejects(ClaudeOwner.open(f.config), /synchronization is paused/);
 });
 
+test('a no-query receipt retains prior session cost without treating it as new inference', async () => {
+  const f = await fixture({ receiptMutator: result => ({ ...result, total_cost_usd: 0.205278,
+    modelUsage: { 'claude-sonnet-5': { costUSD: 0.205278 } } }) });
+  const owner = await ClaudeOwner.open(f.config);
+  try {
+    await owner.append({ operationId: 'after-real-reply', content: 'Synthetic handoff after an earlier model reply' });
+    const receipt = f.events.find(event => event.type === 'owner_append_receipt');
+    assert.equal(receipt.numTurns, 0);
+    assert.equal(receipt.apiMs, 0);
+    assert.equal(Object.hasOwn(receipt, 'cost'), false);
+    assert.equal(receipt.cumulativeCost, 0.205278);
+    assert.equal(owner.status().blocked, null);
+  } finally { await owner.close(); }
+});
+
+test('a positive session cost cannot disguise querying or ambiguous bridge receipts', async () => {
+  for (const fields of [{ num_turns: 1 }, { duration_api_ms: 1 }, { total_cost_usd: -1 },
+    { user_message_uuids: [randomUUID()] }]) {
+    const f = await fixture({ receiptMutator: result => ({ ...result, total_cost_usd: 0.205278, ...fields }) });
+    const owner = await ClaudeOwner.open(f.config);
+    try { await assert.rejects(owner.append({ operationId: 'bad-receipt', content: 'Synthetic handoff' }), /querying or ambiguous/); }
+    finally { await owner.close(); }
+  }
+});
+
 test('remote registration crash recovers native bridge identity rather than allocating a duplicate', async () => {
   const f = await fixture({ remoteFailure: true }), owner = await ClaudeOwner.open(f.config);
   await assert.rejects(owner.append({ operationId: 'a', content: 'Synthetic handoff' }), /Synthetic connection loss/);
