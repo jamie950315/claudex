@@ -274,6 +274,11 @@ files are not rewritten. Missing or changed assets fail explicitly. These
 originals are conversation content, not expiring rollback copies; identical
 images deduplicate and image-free sync rounds do not add asset records.
 
+Native image-source sidecars are transport metadata, not new authored messages.
+The decoder excludes only the exact pinned annotation associated with the same
+authenticated packet and native prompt identity, preserving the next delta's
+digest chain. Arbitrary metadata and ordinary user text are not discarded.
+
 `src/context-packet.mjs` carries reversibly labeled foreign messages as native
 text and inline images, never executable tool requests. A bounded structural
 footer authenticates the packet without duplicating its body. The Desktop

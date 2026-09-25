@@ -137,6 +137,14 @@ identical originals deduplicate across owners. Archive assets are authoritative
 conversation content, not disposable rollback snapshots. Unsupported format
 conversion and ambiguous cache identities still pause synchronization.
 
+The CLI also appends an `isMeta` image-source sidecar after an imported image
+packet. It is excluded from logical history only with the exact pinned text
+format, matching parent packet, prompt ID/time/cwd, paste IDs and authenticated
+packet. Other metadata or user text is retained. The native parent graph is
+validated before this exclusion, and ambiguous codec identity mappings fail.
+This keeps the following no-query placeholder and next delta on the same digest
+chain without editing native files or resending an already persisted packet.
+
 The pinned Desktop CUA helper invokes exactly `app-server --listen stdio://`
 with the app-tools pipe present. Preserve this independent auxiliary process
 instead of claiming the shared owner lock. The real helper route is verified;

@@ -74,3 +74,23 @@ test('the exact native resumed no-query placeholder is not an authored assistant
   assert.equal(actual.common.messages.at(-1).content[0].text, 'No response requested.');
   assert.equal(actual.common.messages.length, 4);
 });
+
+test('native image-source sidecars do not become authored turns or break the next packet prefix', () => {
+  const a = turn('image A'), b = turn('B');
+  a[0].content.push({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'aGVsbG8=' } });
+  const annotation = { role: 'user', content: [{ type: 'text', text: `[Image: source: /private/tmp/claude-501/-tmp/${sessionId}/images/1.png, original 2400x1600, displayed at 2000x1333. Multiply coordinates by 1.20 to map to original image.]` }] };
+  const placeholder = { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] };
+  const rows = encodeClaude({ meta, messages: [packet(a, 'image-a'), annotation, placeholder, packet(b, 'image-b', fingerprint({ messages: a }))] }, sessionId).rows;
+  const authored = rows.filter(row => row.type === 'user' || row.type === 'assistant');
+  Object.assign(authored[0], { version: '2.1.281', promptSource: 'sdk', queueTranscriptOnly: true, promptId: 'native-prompt', imagePasteIds: [1] });
+  Object.assign(authored[1], { version: '2.1.281', isMeta: true, promptId: 'native-prompt' });
+  Object.assign(authored[2].message, { model: '<synthetic>', stop_reason: 'stop_sequence', stop_sequence: '', usage: { input_tokens: 0, output_tokens: 0 } });
+  const read = () => decodeOwnedClaudeHistory({ text: rows.map(row => JSON.stringify(row)).join('\n') + '\n', conversationId, sessionId, key });
+  assert.equal(read().digest, fingerprint({ messages: [...a, ...b] }));
+  authored[1].isMeta = false;
+  assert.throws(read, /synchronized prefix/);
+  authored[1].isMeta = true; authored[1].promptId = 'another-prompt';
+  assert.throws(read, /synchronized prefix/);
+  authored[1].promptId = 'native-prompt'; authored[1].message.content[0].text += ' Additional instructions';
+  assert.throws(read, /synchronized prefix/);
+});
