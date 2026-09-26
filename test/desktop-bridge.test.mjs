@@ -103,6 +103,52 @@ async function fixture(policy = {}, sourceSide = 'claude') {
   };
 }
 
+test('initial enrollment saves verified image origins with the canonical checkpoint', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'claudex-image-origin-track-'));
+  const localImageRollouts = [{ path: '/native/initial', requests: [{ turnId: 'turn-a', itemId: 'item-a', messageIndex: 0 }] }];
+  const common = { meta: { id: 'native-a', cwd: '/tmp/project' }, messages: turn(0) };
+  const bridge = new DesktopBridge({ root, adapters: { codex: { async inspect() {
+    return { nativeId: 'native-a', path: '/native/initial', common, localImageRollouts };
+  } } } });
+  await bridge.track({ side: 'codex', path: '/native/initial' });
+  const record = (await bridge.status()).records[0];
+  assert.equal(record.checkpoint.count, 2);
+  assert.deepEqual(record.localImageRollouts, localImageRollouts);
+});
+
+test('image origins survive source rollover and recovery commits only the copied prefix origins', async () => {
+  const f = await fixture({}, 'codex');
+  const inspect = f.bridge.adapters.codex.inspect;
+  const oldOrigin = { path: '/original', requests: [{ turnId: 'image-turn', itemId: 'image-item', messageIndex: 0 }] };
+  let origins = [oldOrigin];
+  let currentPath = '/original';
+  f.bridge.adapters.codex.inspect = async record => ({ ...await inspect(record), path: currentPath,
+    localImageRollouts: copy(origins) });
+  await f.bridge.sync(f.conversationId);
+  assert.deepEqual((await f.current('codex')).localImageRollouts, [oldOrigin]);
+  await f.advance('codex', 1);
+  f.files.set('/rollover', f.files.get('/original'));
+  currentPath = '/rollover';
+  const nextOrigin = { path: '/rollover', requests: [{ turnId: 'next-turn', itemId: 'next-item', messageIndex: 2 }] };
+  origins = [oldOrigin, nextOrigin];
+  f.fail.afterApply = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after durable native apply/);
+  const applies = f.calls.apply.length;
+  // The source finishes another image-bearing turn before recovery. That image
+  // is verified by the adapter but has not yet been copied by this transaction.
+  await f.advance('codex', 2);
+  const laterRequest = { turnId: 'later-turn', itemId: 'later-item', messageIndex: 4 };
+  origins = [oldOrigin, { ...nextOrigin, requests: [...nextOrigin.requests, laterRequest] }];
+  await f.bridge.recover();
+  assert.equal(f.calls.apply.length, applies);
+  assert.equal((await f.current('codex')).path, '/rollover');
+  assert.equal((await f.current('codex')).checkpoint.count, 4);
+  assert.deepEqual((await f.current('codex')).localImageRollouts, [oldOrigin, nextOrigin]);
+  await f.bridge.sync(f.conversationId);
+  assert.equal((await f.current('codex')).checkpoint.count, 6);
+  assert.deepEqual((await f.current('codex')).localImageRollouts, origins);
+});
+
 test('alternating native turns keep one Claude owner, bounded Codex snapshots, and canonical prefixes', async () => {
   const f = await fixture({ maxAuditEntries: 8 });
   const original = copy(f.files.get('/original').common);

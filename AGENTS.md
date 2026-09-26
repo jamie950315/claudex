@@ -237,9 +237,24 @@ owned native exports enforce the configured raw/converted byte budget. Keep the
 256-page, 25,000-item and 64 MiB transport-frame limits unchanged. Limit errors
 identify the source thread; never add automatic retries, truncation or fallback.
 
-Native Codex localImage recovery for originals and owned continuations reads only metadata.path's current
-owned regular rollout, using O_NOFOLLOW and stable identity/stat checks with a
-512 MiB stream cap and 64 MiB row cap. Require exact translated completed-item
+Native Codex localImage recovery for originals and owned continuations reads
+metadata.path's current owned regular rollout. After a native rollover, it may
+also read exact previously verified ledger origins, never discover candidate
+files. Persist `localImageRollouts` per turn/item/canonical-message identity at
+verified promotion, filtering out later source turns beyond the committed count.
+A legacy verified record's saved path can establish those origins once. Retained
+images must remain inside the saved canonical prefix and match its full digest;
+new image messages require current-rollout evidence. Preserve origins across
+later path updates, without adding image-free rollovers. Conflicting duplicate
+proofs, partial provenance, missing files, aliases or moved message identities
+fail explicitly. Use O_NOFOLLOW and stable identity/stat checks across at most
+256 explicit files, with a 512 MiB aggregate scan cap and 64 MiB row cap.
+Native archival may relocate the current file. A missing former path is not
+required when the exact requested images are already completely proven by the
+authoritative/retained sources and the saved canonical checkpoint still matches;
+an origin still needed for any image remains mandatory. Image-free reads do not
+probe obsolete paths. Existing conflicting evidence is never ignored.
+Require exact translated completed-item
 equality with the full API item, matching thread/turn/context/passthrough IDs,
 one earlier embedded user response, exact text, and image wrapper path/number/order
 agreement before a closed turn. Keep image descriptors as inert metadata and
@@ -324,7 +339,8 @@ identities still pause synchronization.
 
 The CLI also appends an `isMeta` image-source sidecar after an imported image
 packet, including one text block per image on multi-image inputs (or the observed
-single-block newline representation). It is excluded from logical history only with the exact pinned text
+single-block newline representation). It is excluded from logical history only
+with the exact pinned text
 format, matching parent packet, prompt ID/time/cwd, paste IDs and authenticated
 packet. Other metadata or user text is retained. The native parent graph is
 validated before this exclusion, and ambiguous codec identity mappings fail.

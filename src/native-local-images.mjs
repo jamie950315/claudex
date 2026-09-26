@@ -3,12 +3,13 @@ import { lstat, open, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual, TextDecoder } from 'node:util';
 
-export const LOCAL_IMAGE_ROLLOUT_LIMITS = Object.freeze({ maxBytes: 512 * 1024 * 1024, maxRowBytes: 64 * 1024 * 1024 });
+export const LOCAL_IMAGE_ROLLOUT_LIMITS = Object.freeze({ maxBytes: 512 * 1024 * 1024, maxRowBytes: 64 * 1024 * 1024, maxRollouts: 256 });
 const defaultIO = { lstat, open, realpath };
 const keys = (value, expected) => value && typeof value === 'object' && !Array.isArray(value)
   && Object.keys(value).sort().join(',') === [...expected].sort().join(',');
 const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.size === b.size
   && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+const regular = info => info.isFile() && !info.isSymbolicLink() && info.uid === process.getuid();
 const fail = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
 const requestKey = ({ turnId, item }) => JSON.stringify([turnId, item.id]);
 
@@ -64,8 +65,8 @@ function candidateImages(payload, request, activeTurn, contextTurn) {
  * a unique earlier response in the same closed turn binds text, path and order.
  * Imported text remains data, and external image paths/URLs are never read.
  */
-export function createCodexLocalImageResolver({ path, threadId, maxBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxBytes,
-  maxRowBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxRowBytes, io = defaultIO }) {
+function createSingleRolloutImageResolver({ path, threadId, maxBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxBytes,
+  maxRowBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxRowBytes, io = defaultIO, allowAbsent = false, onScanned = () => {} }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path
       || typeof threadId !== 'string' || !threadId) fail('an authoritative absolute rollout path and thread identity are required.');
   for (const [name, value] of Object.entries({ maxBytes, maxRowBytes }))
@@ -89,7 +90,6 @@ export function createCodexLocalImageResolver({ path, threadId, maxBytes = LOCAL
     }
     if (await io.realpath(dirname(path)) !== dirname(path)) fail('rollout parent path must already be canonical.');
     const initial = await io.lstat(path);
-    const regular = info => info.isFile() && !info.isSymbolicLink() && info.uid === process.getuid();
     if (!regular(initial) || initial.size > maxBytes) fail('rollout must be an owned regular file within the scan byte limit.');
     const file = await io.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     let stream, total = 0, rowBytes = 0, parts = [], ordinal = 0, activeTurn = null, contextTurn = null, imageBytes = 0;
@@ -174,8 +174,10 @@ export function createCodexLocalImageResolver({ path, threadId, maxBytes = LOCAL
       const after = await file.stat(), current = await io.lstat(path);
       if (!regular(current) || !same(initial, after) || !same(initial, current) || total !== initial.size)
         fail('transcript changed while being read during image recovery; no recovery was returned.');
-      if (!ordinal || found.size !== requests.length || [...byId.values()].some(state => !state.started || !state.closed || !state.completion))
+      if (!ordinal || !allowAbsent && found.size !== requests.length || [...byId.values()].some(state =>
+        (!allowAbsent || state.started || state.closed || state.completion || state.candidate) && (!state.started || !state.closed || !state.completion)))
         fail('current rollout lacks complete unambiguous image provenance; referenced histories were not searched.');
+      onScanned({ bytes: total, identity: `${initial.dev}:${initial.ino}`, stat: initial });
       return found;
     } finally {
       stream?.destroy();
@@ -184,15 +186,114 @@ export function createCodexLocalImageResolver({ path, threadId, maxBytes = LOCAL
   };
 }
 
+/** Previously verified image-bearing rollouts are explicit ledger evidence,
+ * never a history_base search. Each retained image is still re-read against
+ * the complete current API item; the caller must verify its saved semantic
+ * checkpoint before accepting the emitted provenance for another promotion.
+ */
+export function createCodexLocalImageResolver({ path, threadId, retainedRollouts = [], retainedPath,
+  onResolved = () => {}, maxBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxBytes,
+  maxRowBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxRowBytes, io = defaultIO,
+  validateRetainedPath = sourcePath => io.lstat(sourcePath) }) {
+  const validPath = value => typeof value === 'string' && isAbsolute(value) && resolve(value) === value;
+  if (!Array.isArray(retainedRollouts) || retainedRollouts.length > LOCAL_IMAGE_ROLLOUT_LIMITS.maxRollouts)
+    fail('retained rollout evidence exceeds its bounded schema.');
+  const retained = new Map(), bindings = new Map();
+  for (const entry of retainedRollouts) {
+    if (!keys(entry, ['path', 'requests']) || !validPath(entry.path) || retained.has(entry.path)
+        || !Array.isArray(entry.requests) || !entry.requests.length || entry.requests.length > 25000)
+      fail('invalid retained rollout evidence.');
+    const ids = new Set();
+    for (const request of entry.requests) {
+      if (!keys(request, ['turnId', 'itemId', 'messageIndex']) || typeof request.turnId !== 'string' || !request.turnId
+          || typeof request.itemId !== 'string' || !request.itemId
+          || !Number.isSafeInteger(request.messageIndex) || request.messageIndex < 0)
+        fail('invalid retained native image identity.');
+      const key = JSON.stringify([request.turnId, request.itemId]);
+      if (ids.has(key) || bindings.has(key)) fail('ambiguous retained native image identity.');
+      ids.add(key); bindings.set(key, entry.path);
+      if (bindings.size > 25000) fail('retained native image identities exceed the complete API item bound.');
+    }
+    retained.set(entry.path, ids);
+  }
+  if (retainedPath !== undefined && !validPath(retainedPath)) fail('invalid previously verified rollout path.');
+  if (retainedPath && retainedPath !== path && !retained.has(retainedPath)) retained.set(retainedPath, null);
+  if (retained.size + (retained.has(path) ? 0 : 1) > LOCAL_IMAGE_ROLLOUT_LIMITS.maxRollouts)
+    fail('retained rollout evidence exceeds its bounded schema.');
+  // Construct eagerly so malformed current paths and limits retain their
+  // original fail-fast behavior, before any retained file is inspected.
+  createSingleRolloutImageResolver({ path, threadId, maxBytes, maxRowBytes, io });
+  return async (requests, options) => {
+    const found = new Map(), origins = new Map(), identities = new Set(), observed = new Map(); let scanned = 0;
+    const knownRequests = new Map(requests.map(request => [requestKey(request), request]));
+    for (const key of bindings.keys()) if (!knownRequests.has(key))
+      fail('retained native image disappeared from the complete API history.');
+    for (const [sourcePath, ids] of [[path, null], ...[...retained].filter(([value]) => value !== path)]) {
+      const selected = ids ? requests.filter(request => ids.has(requestKey(request))) : requests;
+      if (!selected.length) continue;
+      if (sourcePath !== path) {
+        try { await validateRetainedPath(sourcePath); }
+        catch (error) {
+          // Native archival can move the exact current rollout. Its new
+          // authoritative path may replace a missing old path only when it
+          // already proves every associated API image; checkpoint validation
+          // remains mandatory in the runtime before these origins are saved.
+          if (error.code === 'ENOENT' && selected.every(request => found.has(requestKey(request)))) continue;
+          if (error.code === 'ENOENT') fail('explicit retained rollout image evidence is missing; referenced histories were not searched.');
+          throw error;
+        }
+      }
+      const scan = createSingleRolloutImageResolver({ path: sourcePath, threadId,
+        maxBytes: maxBytes - scanned, maxRowBytes, io,
+        allowAbsent: ids === null && retained.size > 0,
+        onScanned({ bytes, identity, stat }) {
+          if (identities.has(identity)) fail('retained rollout paths alias the same native file.');
+          identities.add(identity); observed.set(sourcePath, stat); scanned += bytes;
+        } });
+      const images = await scan(selected, options);
+      for (const [key, value] of images) {
+        if (found.has(key) && !isDeepStrictEqual(found.get(key), value))
+          fail('current and retained rollouts contain conflicting native image proofs.');
+        if (!found.has(key)) { found.set(key, value); origins.set(key, sourcePath); }
+      }
+    }
+    if (found.size !== requests.length) fail('explicit rollout evidence lacks complete native image provenance; referenced histories were not searched.');
+    if ([...found.values()].flat().reduce((sum, image) => sum + Buffer.byteLength(image.url), 0) > options.maxBytes)
+      fail('recovered image byte limit exceeded; no partial recovery was returned.');
+    for (const [sourcePath, stat] of observed) {
+      const current = await io.lstat(sourcePath);
+      if (!regular(current) || !same(stat, current))
+        fail('transcript changed while being read across retained image evidence; no recovery was returned.');
+    }
+    const rollouts = new Map();
+    for (const request of requests) {
+      const sourcePath = origins.get(requestKey(request)), list = rollouts.get(sourcePath) ?? [];
+      list.push({ turnId: request.turnId, itemId: request.item.id, messageIndex: request.messageIndex }); rollouts.set(sourcePath, list);
+    }
+    onResolved({ localImageRollouts: [...rollouts].map(([sourcePath, values]) => ({ path: sourcePath, requests: values })),
+      retainedRequests: requests.filter(request => origins.get(requestKey(request)) !== path),
+      nativeMessageCount: options.nativeMessageCount });
+    return found;
+  };
+}
+
 /** Hydrate just local-image blocks after the stable native API read. Keep the
  * original input descriptor as inert metadata; no other native item is changed.
  */
 export async function hydrateNativeLocalImages(snapshot, resolveLocalImages, maxBytes) {
-  const requests = snapshot.turns.flatMap(turn => turn.items.filter(item => item.type === 'userMessage'
-    && item.content?.some(input => input.type === 'localImage')).map(item => ({ turnId: turn.id, item })));
+  let nativeMessageCount = 0;
+  const requests = snapshot.turns.flatMap(turn => {
+    const items = turn.items.flatMap(item => {
+      const messageIndex = nativeMessageCount++;
+      return item.type === 'userMessage' && item.content?.some(input => input.type === 'localImage')
+        ? [{ turnId: turn.id, item, messageIndex }] : [];
+    });
+    if (['failed', 'interrupted'].includes(turn.status)) nativeMessageCount++;
+    return items;
+  });
   if (!requests.length || resolveLocalImages === undefined) return snapshot;
   if (typeof resolveLocalImages !== 'function') fail('local-image resolver must be a function.');
-  const resolved = await resolveLocalImages(requests, { maxBytes, threadId: snapshot.threadId });
+  const resolved = await resolveLocalImages(requests, { maxBytes, threadId: snapshot.threadId, nativeMessageCount });
   if (!(resolved instanceof Map) || resolved.size !== requests.length) fail('local-image resolver returned an incomplete mapping.');
   return { ...snapshot, turns: snapshot.turns.map(turn => ({ ...turn, items: turn.items.map(item => {
     const images = resolved.get(requestKey({ turnId: turn.id, item }));

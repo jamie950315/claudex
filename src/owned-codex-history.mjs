@@ -142,7 +142,7 @@ export async function exportOwnedCodexHistory({ client, limits, completedPrefix 
   const sessionId = options.sessionId ?? options.targetSessionId;
   const native = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix });
   // An immutable checkpoint must still contain its exact inline packet; only
-  // later native-authored inputs may use current-rollout image recovery.
+  // later native-authored inputs may use verified native-rollout image recovery.
   const content = bootstrapContent(native.turns[0].items[0]);
   const snapshot = await hydrateNativeLocalImages(native, resolveLocalImages, limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes);
   if (archiveRoot) options.resolveArchive = await prepareArchiveResolver({ root: archiveRoot,

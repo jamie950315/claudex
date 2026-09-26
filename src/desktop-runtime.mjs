@@ -215,14 +215,49 @@ export class DesktopRuntime {
       const cwd = await realpath(metadata.cwd);
       const path = await this.safePath(metadata.path, this.codexHome);
       const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
-      let data;
+      const failImageEvidence = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
+      const verifiedCheckpoint = record.verified === true && Number.isSafeInteger(record.checkpoint?.count)
+        && record.checkpoint.count > 0 && /^[a-f0-9]{64}$/.test(record.checkpoint.digest ?? '');
+      if (record.localImageRollouts !== undefined && !verifiedCheckpoint)
+        failImageEvidence('Retained native image evidence requires a verified canonical checkpoint.');
+      const retainedRollouts = record.localImageRollouts ?? [];
+      const retainedPath = verifiedCheckpoint && record.path && record.path !== path
+        ? record.path : undefined;
+      let data, imageEvidence;
+      const resolveLocalImages = createCodexLocalImageResolver({ path, threadId: nativeId, retainedRollouts, retainedPath,
+        onResolved: evidence => { imageEvidence = evidence; },
+        validateRetainedPath: sourcePath => this.safePath(sourcePath, this.codexHome) });
       try {
         data = record.managed
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
-            completedPrefix: true, archiveRoot: this.root, limits,
-            resolveLocalImages: createCodexLocalImageResolver({ path, threadId: nativeId }) })
+            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages })
           : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits,
-            resolveLocalImages: createCodexLocalImageResolver({ path, threadId: nativeId }) });
+            resolveLocalImages });
+        if (imageEvidence) {
+          // An owned bootstrap expands two native items into its authenticated
+          // portable prefix. Later native items retain that exact offset.
+          const offset = data.common.messages.length - imageEvidence.nativeMessageCount;
+          if ((!record.managed && offset !== 0) || !Number.isSafeInteger(offset))
+            failImageEvidence('Native image provenance has an invalid canonical message offset.');
+          if (imageEvidence.retainedRequests.length || retainedRollouts.length || retainedPath !== undefined) {
+            if (!verifiedCheckpoint || data.common.messages.length < record.checkpoint.count
+                || fingerprint(data.common, record.checkpoint.count) !== record.checkpoint.digest)
+              failImageEvidence('Retained native image evidence does not match its verified canonical checkpoint.');
+            if (imageEvidence.retainedRequests.some(request => request.messageIndex + offset < 0
+                || request.messageIndex + offset >= record.checkpoint.count))
+              failImageEvidence('Retained native image evidence cannot supply a new message outside its verified checkpoint.');
+            const positions = new Map(imageEvidence.localImageRollouts.flatMap(entry => entry.requests)
+              .map(request => [JSON.stringify([request.turnId, request.itemId]), request.messageIndex + offset]));
+            for (const entry of retainedRollouts) for (const request of entry.requests)
+              if (request.messageIndex >= record.checkpoint.count
+                  || positions.get(JSON.stringify([request.turnId, request.itemId])) !== request.messageIndex)
+                failImageEvidence('Retained native image evidence changed its canonical message identity.');
+          }
+          data.localImageRollouts = imageEvidence.localImageRollouts.map(entry => ({ ...entry,
+            requests: entry.requests.map(request => ({ ...request, messageIndex: request.messageIndex + offset })) }));
+        } else if (retainedRollouts.length) {
+          failImageEvidence('Retained native images disappeared from the complete API history.');
+        }
       } catch (error) {
         throw new Error(`${error.message} [Codex thread ${nativeId}]`, { cause: error });
       }

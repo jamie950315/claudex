@@ -204,9 +204,15 @@ For a Codex original or a later turn in an owned continuation, a native `localIm
 current authoritative rollout's embedded input image even when its old attachment
 file is missing. Recovery requires the complete native/API user item, thread and
 turn identities, a unique earlier user response, exact text, and ordered image
-wrappers with matching paths to agree. It reads only that owned regular rollout,
-with no-follow opens, a stable file identity/stat check, a 512 MiB scan limit and
-64 MiB row limit. It never opens the historical image path, fetches a URL or searches
+wrappers with matching paths to agree. After native rollover, previously verified
+image-bearing rollout origins may also supply images inside the saved canonical
+checkpoint. Their exact turn/item/message positions and full checkpoint digest
+must still match; new image messages require current-rollout evidence. The ledger
+retains only actual image origins across verified promotions, not every rollover,
+and never commits later source origins beyond the copied checkpoint. Reads use
+no-follow opens and stable file identity/stat checks across at most 256 exact
+origins, a 512 MiB aggregate scan limit and 64 MiB row limit. Conflicting duplicate
+proofs or partial provenance remain blocked. It never opens the historical image path, fetches a URL or searches
 `history_base` files. MIME/base64 validation and the configured converted-history
 budget still apply. These are the persisted model-input bytes, not a claim that
 the original upload was unresized. Ambiguous, missing or changed provenance remains

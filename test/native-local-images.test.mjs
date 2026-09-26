@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { constants } from 'node:fs';
-import { access, appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -354,4 +354,141 @@ test('DesktopRuntime binds verified image recovery to its authoritative current 
   const result = await runtime.inspect({ side: 'codex', nativeId: f.threadId, managed: false });
   assert.equal(result.common.messages[0].content.filter(block => block.type === 'image').length, 2);
   await assert.rejects(runtime.inspect({ side: 'codex', nativeId: f.threadId, managed: true, conversationId: randomUUID() }), /Owned Codex checkpoint contains an unsupported native user input/);
+});
+
+async function rolloverFixture(t, { owned = false } = {}) {
+  const f = await (owned ? ownedFixture(t) : fixture(t));
+  let currentPath = f.path;
+  const request = f.client.request;
+  f.client.request = async (method, params) => method === 'thread/read'
+    ? { thread: { id: f.threadId, path: currentPath, cwd: f.cwd, status: { type: 'idle' } } }
+    : request(method, params);
+  const runtime = await new DesktopRuntime({ root: join(f.base, 'state'), codexHome: f.codexHome, claudeHome: f.claudeHome,
+    clientFactory: async () => f.client, ownerFactory() { assert.fail('No Claude worker is needed'); } }).initialize();
+  if (owned) runtime.key = f.key;
+  t.after(() => runtime.close());
+  const record = { side: 'codex', nativeId: f.threadId, path: f.path, verified: true, managed: owned,
+    ...(owned ? { kind: 'snapshot', conversationId: f.conversationId } : { kind: 'original' }) };
+  const original = await runtime.inspect(record);
+  record.checkpoint = { count: original.common.messages.length, digest: original.digest };
+  const rollover = async ({ duplicateOriginal = false, image = true } = {}) => {
+    currentPath = join(f.codexHome, 'sessions', `rollout-${f.threadId}_${randomUUID()}.jsonl`);
+    const rows = structuredClone(f.rows), turnId = randomUUID(), itemId = randomUUID();
+    rows[0].payload.history_base = { path: '/never-follow/a-history-base.jsonl' };
+    if (duplicateOriginal) {
+      await writeFile(currentPath, rows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 });
+      return { path: currentPath, rows };
+    }
+    for (const row of rows) if (row.payload?.turn_id) row.payload.turn_id = turnId;
+    const response = rows[4].payload, rawItem = rows[5].payload.item;
+    response.id = randomUUID(); response.internal_chat_message_metadata_passthrough.turn_id = turnId;
+    response.content[0].text += ' next'; rawItem.id = itemId; rawItem.content[0].text += ' next';
+    for (const block of response.content) if (block.type === 'input_image') block.image_url = `data:image/png;base64,${Buffer.from('Next image').toString('base64')}`;
+    const item = structuredClone(f.item); item.id = itemId; item.content[0].text += ' next';
+    if (!image) { item.content.splice(1); rows.splice(1); }
+    f.turns.push({ id: turnId, status: 'completed', itemsView: 'full', startedAt: 102, completedAt: 103,
+      items: [item, { type: 'agentMessage', id: randomUUID(), phase: 'final_answer', text: 'Next completed answer' }] });
+    await writeFile(currentPath, rows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 });
+    return { path: currentPath, rows, turnId, itemId };
+  };
+  return { ...f, runtime, record, original, rollover };
+}
+
+test('verified image origins survive source promotion and an image-free later rollover', async t => {
+  for (const owned of [false, true]) {
+    const f = await rolloverFixture(t, { owned }), before = await readFile(f.path);
+    const second = await f.rollover(), data = await f.runtime.inspect(f.record);
+    assert.equal(fingerprint(data.common, f.record.checkpoint.count), f.record.checkpoint.digest);
+    assert.deepEqual(data.localImageRollouts.map(entry => entry.path), [f.path, second.path]);
+    assert.deepEqual(data.localImageRollouts.flatMap(entry => entry.requests).map(request => request.messageIndex), owned ? [2, 4] : [0, 2]);
+    Object.assign(f.record, { path: data.path, checkpoint: { count: data.common.messages.length, digest: data.digest },
+      localImageRollouts: data.localImageRollouts });
+    await f.rollover({ image: false });
+    const third = await f.runtime.inspect(f.record);
+    assert.deepEqual(third.localImageRollouts, data.localImageRollouts);
+    assert.equal(fingerprint(third.common, f.record.checkpoint.count), f.record.checkpoint.digest);
+    assert.deepEqual(await readFile(f.path), before);
+    assert.equal(third.common.messages.filter(message => message.content.some(block => block.type === 'image')).length, 2);
+  }
+});
+
+test('retained image recovery requires the saved canonical prefix, identity and an already committed image position', async t => {
+  const changed = await rolloverFixture(t);
+  await changed.rollover();
+  await assert.rejects(changed.runtime.inspect({ ...changed.record, checkpoint: { ...changed.record.checkpoint, digest: '0'.repeat(64) } }), /verified canonical checkpoint/);
+  await assert.rejects(changed.runtime.inspect({ ...changed.record, verified: false }), /lacks complete|missing/);
+
+  const outside = await rolloverFixture(t, { owned: true });
+  await outside.rollover();
+  const checkpoint = { count: outside.canonical.messages.length, digest: fingerprint(outside.canonical) };
+  await assert.rejects(outside.runtime.inspect({ ...outside.record, checkpoint }), /outside its verified checkpoint/);
+
+  const identity = await rolloverFixture(t);
+  const second = await identity.rollover(), data = await identity.runtime.inspect(identity.record);
+  const origins = structuredClone(data.localImageRollouts); origins[0].requests[0].messageIndex++;
+  await assert.rejects(identity.runtime.inspect({ ...identity.record, path: second.path,
+    checkpoint: { count: data.common.messages.length, digest: data.digest }, localImageRollouts: origins }), /canonical message identity/);
+});
+
+test('rollover does not read an unverified previous path or replace missing provenance with a history reference', async t => {
+  const f = await rolloverFixture(t);
+  await f.rollover();
+  await assert.rejects(f.runtime.inspect({ side: 'codex', nativeId: f.threadId, managed: false,
+    path: '/must-not-read/unknown.jsonl' }), /lacks complete/);
+  await assert.rejects(f.runtime.inspect({ ...f.record, localImageRollouts: f.original.localImageRollouts, verified: false }), /verified canonical checkpoint/);
+  await assert.rejects(f.runtime.inspect({ ...f.record, path: '/must-not-read/unknown.jsonl' }), /retained rollout image evidence is missing/);
+});
+
+test('duplicated rollover image evidence must agree exactly and partial current proof cannot fall back', async t => {
+  const f = await rolloverFixture(t);
+  const copy = await f.rollover({ duplicateOriginal: true }), accepted = await f.runtime.inspect(f.record);
+  assert.deepEqual(accepted.localImageRollouts.map(entry => entry.path), [copy.path]);
+  copy.rows[4].payload.content[2].image_url = `data:image/png;base64,${Buffer.from('Conflicting image').toString('base64')}`;
+  await writeFile(copy.path, copy.rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  await assert.rejects(f.runtime.inspect(f.record), /conflicting native image proofs/);
+  copy.rows.splice(4, 2);
+  await writeFile(copy.path, copy.rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  await assert.rejects(f.runtime.inspect(f.record), /lacks complete unambiguous/);
+});
+
+test('retained scans share the aggregate byte limit and preserve strict file and evidence schemas', async t => {
+  const f = await fixture(t), current = join(f.codexHome, 'sessions', 'current.jsonl');
+  await writeFile(current, JSON.stringify(f.rows[0]) + '\n', { mode: 0o600 });
+  const currentBytes = (await lstat(current)).size, previousBytes = (await lstat(f.path)).size;
+  const resolver = options => createCodexLocalImageResolver({ path: current, threadId: f.threadId,
+    retainedPath: f.path, ...options });
+  await assert.rejects(f.run({ resolveLocalImages: resolver({ maxBytes: previousBytes + currentBytes - 1 }) }), /scan byte limit/);
+  const link = join(f.codexHome, 'sessions', 'link.jsonl'); await symlink(f.path, link);
+  await assert.rejects(f.run({ resolveLocalImages: resolver({ retainedPath: link }) }), /owned regular file/);
+  assert.throws(() => resolver({ retainedRollouts: Array.from({ length: 257 }, () => ({})) }), /bounded schema/);
+  assert.throws(() => resolver({ retainedRollouts: [{ path: f.path, requests: [{ turnId: f.turnId, itemId: f.itemId }] }] }), /invalid retained native image identity/);
+  const evidence = [{ path: f.path, requests: [{ turnId: f.turnId, itemId: f.itemId, messageIndex: 0 }] }];
+  await assert.rejects(f.run({ resolveLocalImages: resolver({ retainedRollouts: [{ ...evidence[0],
+    requests: [{ ...evidence[0].requests[0], itemId: randomUUID() }] }] }) }), /disappeared from the complete API history/);
+});
+
+test('a current rollout change during a later retained scan invalidates the whole image proof', async t => {
+  const f = await fixture(t), current = join(f.codexHome, 'sessions', 'current.jsonl');
+  await writeFile(current, JSON.stringify(f.rows[0]) + '\n', { mode: 0o600 });
+  const io = { lstat, realpath, async open(path, flags) {
+    if (path === f.path) await appendFile(current, '\n');
+    return open(path, flags);
+  } };
+  const resolver = createCodexLocalImageResolver({ path: current, threadId: f.threadId, retainedPath: f.path, io });
+  await assert.rejects(f.run({ resolveLocalImages: resolver }), /changed while being read across retained image evidence/);
+});
+
+test('native archival rebinds only images proven at the authoritative relocated path', async t => {
+  const f = await rolloverFixture(t);
+  f.record.localImageRollouts = f.original.localImageRollouts;
+  const current = await f.rollover({ duplicateOriginal: true });
+  await rename(f.path, join(f.codexHome, 'sessions', 'do-not-search.jsonl'));
+  const data = await f.runtime.inspect(f.record);
+  assert.equal(data.digest, f.record.checkpoint.digest);
+  assert.deepEqual(data.localImageRollouts.map(entry => entry.path), [current.path]);
+  await assert.rejects(f.runtime.inspect({ ...f.record, localImageRollouts: undefined,
+    checkpoint: { ...f.record.checkpoint, digest: '0'.repeat(64) } }), /verified canonical checkpoint/);
+  current.rows.splice(1);
+  await writeFile(current.path, current.rows.map(row => JSON.stringify(row)).join('\n') + '\n');
+  await assert.rejects(f.runtime.inspect(f.record), /retained rollout image evidence is missing/);
 });

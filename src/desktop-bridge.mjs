@@ -12,6 +12,21 @@ function matches(common, checkpoint) {
 }
 function checkpoint(common) { return { count: common.messages.length, digest: fingerprint(common) }; }
 
+function imageOrigins(side, data, committed) {
+  if (data.localImageRollouts === undefined) return {};
+  if (side !== 'codex' || !Array.isArray(data.localImageRollouts))
+    throw new Error('Native image origins require verified Codex read metadata.');
+  // A recovery read can include later completed turns. Preserve only origins
+  // inside the checkpoint actually committed by this transaction, not that tail.
+  return { localImageRollouts: data.localImageRollouts.map(origin => ({ ...origin,
+    requests: origin.requests.filter(request => {
+      if (!Number.isSafeInteger(request.messageIndex) || request.messageIndex < 0)
+        throw new Error('Native image origin lacks its canonical message position.');
+      return request.messageIndex < committed.count;
+    }),
+  })).filter(origin => origin.requests.length) };
+}
+
 /** Durable bidirectional coordinator: stable Claude owner, bounded Codex snapshots.
  * Adapters implement native writes; this class never edits a native transcript.
  */
@@ -73,7 +88,8 @@ export class DesktopBridge {
         canonical: checkpoint(common) };
       state.records.push({ id: randomUUID(), conversationId: id, side: source.side, nativeId: data.nativeId,
         path: data.path ?? source.path, cwd: common.meta.cwd, managed: false, kind: 'original', verified: true,
-        status: 'current', checkpoint: checkpoint(common), bytes: data.bytes ?? 0, createdAt: this.now() });
+        status: 'current', checkpoint: checkpoint(common), bytes: data.bytes ?? 0, createdAt: this.now(),
+        ...imageOrigins(source.side, data, checkpoint(common)) });
       await this.save(state, { event: 'tracked', conversationId: id, side: source.side });
       return { conversationId: id, existing: false };
     });
@@ -115,6 +131,7 @@ export class DesktopBridge {
         ...record, id: randomUUID(), conversationId, cwd, path: data.path,
         managed: false, kind: 'original', verified: true, status: 'current',
         checkpoint: canonical, bytes: data.bytes ?? 0, createdAt: this.now(),
+        ...imageOrigins(record.side, data, canonical),
       });
       await this.save(state, { event: 'cold-import-paired', conversationId });
       return { conversationId, existing: false };
@@ -235,7 +252,8 @@ export class DesktopBridge {
       const targetData = await this.inspect(pending.record);
       if (!matches(targetData.common, pending.checkpoint)) throw new Error('Native destination did not preserve the complete copied checkpoint.');
       pending.record = { ...pending.record, path: targetData.path ?? pending.record.path, verified: true,
-        checkpoint: pending.checkpoint, bytes: targetData.bytes ?? 0 };
+        checkpoint: pending.checkpoint, bytes: targetData.bytes ?? 0,
+        ...imageOrigins(pending.record.side, targetData, pending.checkpoint) };
       pending.phase = 'applied';
       await this.save(state, { event: 'verified', conversationId: pending.record.conversationId });
       const latestSource = await this.inspect(source);
@@ -245,7 +263,8 @@ export class DesktopBridge {
         await this.adapters[target.side].assertIdle(target);
         if ((await this.inspect(target)).digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
       }
-      Object.assign(source, { path: latestSource.path ?? source.path, checkpoint: pending.checkpoint, bytes: latestSource.bytes ?? source.bytes });
+      Object.assign(source, { path: latestSource.path ?? source.path, checkpoint: pending.checkpoint, bytes: latestSource.bytes ?? source.bytes,
+        ...imageOrigins(source.side, latestSource, pending.checkpoint) });
       if (pending.reuse) {
         const index = state.records.findIndex(record => record.id === pending.record.id);
         if (index < 0) throw new Error('Reusable owner record is missing.');
