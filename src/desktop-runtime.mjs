@@ -7,7 +7,7 @@ import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock 
 import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude } from './claude.mjs';
-import { decodeOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
+import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
 import { createCodexLocalImageResolver } from './native-local-images.mjs';
@@ -238,17 +238,20 @@ export class DesktopRuntime {
     const resolveArchive = packetHistory ? await prepareArchiveResolver({ root: this.root,
       contents: data.rows.filter(row => row.type === 'user').map(row => row.message?.content),
       conversationId: record.conversationId, targetSessionId: record.nativeId, key: this.key }) : undefined;
-    const prefix = completedClaudePrefix({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
-      ...(packetHistory ? { key: this.key, resolveArchive } : {}) });
-    const parsed = packetHistory
-      ? decodeOwnedClaudeHistory({ text: prefix.text, conversationId: record.conversationId, sessionId: record.nativeId, key: this.key, resolveArchive,
-        resetBootstrap: owner && !retainedData ? owner.status().lastReset : undefined, versionPolicy: this.versionPolicy })
-      : { common: decodeClaude(prefix.text) };
+    let parsed;
+    if (packetHistory) {
+      parsed = decodeCompletedOwnedClaudeHistory({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
+        key: this.key, resolveArchive, resetBootstrap: owner && !retainedData ? owner.status().lastReset : undefined,
+        versionPolicy: this.versionPolicy });
+    } else {
+      const prefix = completedClaudePrefix({ text: data.text });
+      parsed = { common: decodeClaude(prefix.text), incompleteTail: prefix.incompleteTail };
+    }
     if (importPacket && !parsed.importedPackets) throw new Error('Imported Claude original is missing its authenticated bootstrap packet.');
     assertComplete(parsed.common);
     parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
     if (!UUID.test(parsed.common.meta.id) || record.nativeId && parsed.common.meta.id !== record.nativeId) throw new Error('Claude session identity changed.');
-    return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common), incompleteTail: prefix.incompleteTail };
+    return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common) };
   }
 
   async plan(side, { conversationId, nativeId, common, title, target, contextReset = false }) {

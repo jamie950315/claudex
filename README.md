@@ -293,12 +293,26 @@ pool or an unlimited-active-session resource guarantee.
 
 New conversations, active owners, and changed historical imports are checked
 before unchanged historical imports. During the fair historical-validation sweep,
-the watcher refreshes discovery and foreground synchronization between complete
-native operations, with a default two-second interval. Failed or incomplete dirty
+the watcher refreshes foreground synchronization between complete native
+operations, with a default two-second interval. Discovery and newly enrolled
+deliveries use a separate clock and also run between individual active-owner
+checks, so a long foreground sweep cannot hold new conversations until its end.
+These refreshes are serial and nonrecursive; the original sweep keeps advancing.
+Failed or incomplete dirty
 checks keep their foreground priority until stable full verification succeeds.
 The interval is not a delivery guarantee: foreground reads, a single in-flight
 native operation, handoff verification, and app UI refresh still take time. The
-bounded watcher status includes the last foreground completion time and duration.
+bounded watcher status includes foreground and discovery completion/duration,
+the maximum observed discovery gap, and the last and slowest complete sync
+operation. These timings contain no transcript content and do not measure UI
+refresh latency.
+
+Large archived Claude histories avoid repeatedly decoding the exact same packet
+within one stable snapshot and rehashing every earlier message for each delta.
+The final full fingerprint still independently checks the result. Archive chunks
+use at most four concurrent reads with all existing identity, permission and
+content checks preserved; writes remain serialized. Nothing is cached across
+snapshots, and missing or changed archive content still fails closed.
 
 Backup collection reads both current sides of every conversation with a managed
 snapshot, but does not export unrelated cold pairs that have no backups. A missing

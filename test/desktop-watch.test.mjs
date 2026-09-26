@@ -33,7 +33,7 @@ async function fixture(overrides = {}) {
       .filter(source => !known.has(`${source.side}:${source.id}`)));
   const run = options => runDesktopWatch({ root, bridge, runtime, discover,
     config: { codexHome: '/codex', claudeHome: '/claude', since: 0 }, pollMs: 0,
-    sleep: async () => {}, ...options });
+    sleep: async () => {}, now: () => 0, ...options });
   const status = async () => JSON.parse(await readFile(join(root, 'watcher-status.json'), 'utf8'));
   return { root, calls, state, runtime, bridge, discover, run, status };
 }

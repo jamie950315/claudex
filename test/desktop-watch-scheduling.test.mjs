@@ -154,7 +154,8 @@ test('foreground heartbeats neither starve a complete cold sweep nor renew absol
     ['first', 'second', 'third', 'fourth', 'first', 'second', 'third', 'fourth']);
   assert.equal(coldCalls[4].at, 44);
   assert.equal(f.count('sync', 'active'), 8);
-  assert.equal(f.count('discover'), 8);
+  // Each sweep also refreshes discovery at its final operation boundary.
+  assert.equal(f.count('discover'), 10);
 });
 
 test('waiting pending recovery stops the sweep and succeeds before any subsequent discovery or sync', async () => {
@@ -194,4 +195,87 @@ test('repeated interleaved discovery keeps unsupported diagnostics bounded to on
   assert.equal(status.blockedSources.length, 20);
   assert.ok(f.count('discover') >= 4);
   assert.equal((await f.status()).error, null);
+});
+
+test('new discovery and delivery run between slow managed-owner inspections without skipping any lifecycle check', async () => {
+  const f = await fixture();
+  for (let index = 0; index < 8; index++) {
+    const id = `owner-${index}`;
+    await f.addCold(id);
+    Object.assign(f.record(id, 'local'), { managed: true, kind: 'owner' });
+  }
+  f.onSync = id => { if (id.startsWith('owner-')) f.tick(11); };
+  f.onDiscover = () => f.count('sync', 'owner-0')
+    ? [{ side: 'claude', id: 'fresh', path: '/synthetic-fresh' }] : [];
+  await f.run();
+  const synced = f.events.filter(event => event.type === 'sync').map(event => event.id);
+  assert.deepEqual(synced.slice(0, 3), ['owner-0', 'fresh', 'owner-1']);
+  for (let index = 0; index < 8; index++) assert.equal(f.count('sync', `owner-${index}`), 1);
+  assert.equal(f.count('sync', 'fresh'), 1);
+  assert.equal(f.count('metadata'), 0);
+});
+
+test('discovery triggered by a slow fresh delivery resumes the existing sweep without recursive starvation', async () => {
+  const f = await fixture();
+  for (const id of ['first', 'second', 'third']) f.addOrdinary(id);
+  f.onSync = () => { f.tick(11); };
+  f.onDiscover = () => [
+    ...(f.count('sync', 'first') ? [{ side: 'claude', id: 'fresh-a', path: '/synthetic-fresh-a' }] : []),
+    ...(f.count('sync', 'fresh-a') ? [{ side: 'claude', id: 'fresh-b', path: '/synthetic-fresh-b' }] : []),
+  ];
+  await f.run();
+  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id),
+    ['first', 'fresh-a', 'second', 'fresh-b', 'third']);
+  assert.equal(f.count('track', 'fresh-a'), 1);
+  assert.equal(f.count('track', 'fresh-b'), 1);
+});
+
+test('an unsupported error after a newly discovered source is tracked remains a fatal sync failure', async () => {
+  const f = await fixture();
+  for (const id of ['first', 'second']) f.addOrdinary(id);
+  const message = 'Native Codex history export: converted byte limit exceeded; no partial export is returned.';
+  f.onSync = id => {
+    f.tick(11);
+    if (id === 'fresh') throw new Error(message);
+  };
+  f.onDiscover = () => f.count('sync', 'first')
+    ? [{ side: 'claude', id: 'fresh', path: '/synthetic-fresh' }] : [];
+  await assert.rejects(f.run(), error => error.message === message);
+  assert.equal(f.count('track', 'fresh'), 1);
+  assert.equal(f.count('sync', 'second'), 0);
+  assert.equal((await f.status()).error, message);
+});
+
+test('a pending fresh delivery blocks further discovery and owner inspections until recovery succeeds', async () => {
+  const f = await fixture();
+  for (const id of ['first', 'second']) {
+    await f.addCold(id);
+    Object.assign(f.record(id, 'local'), { managed: true, kind: 'owner' });
+  }
+  f.onSync = id => {
+    f.tick(11);
+    if (id === 'fresh' && f.count('sync', 'fresh') === 1) {
+      f.state.pending = { phase: 'prepared' };
+      throw new Error('Native response lost after apply.');
+    }
+  };
+  f.onDiscover = () => f.count('sync', 'first')
+    ? [{ side: 'claude', id: 'fresh', path: '/synthetic-fresh' }] : [];
+  f.onRecover = () => {
+    if (f.count('recover') === 1) throw new Error('Destination is active.');
+  };
+  await f.run({ maxPasses: 2, sleep: async () => {
+    assert.deepEqual(f.state.pending, { phase: 'prepared' });
+    assert.equal(f.count('sync', 'second'), 0);
+    assert.deepEqual(f.events.map(event => event.type),
+      ['discover', 'sync', 'discover', 'track', 'sync', 'recover']);
+    assert.match((await f.status()).waiting, /Destination is active/);
+  } });
+  const secondRecovery = f.events.findIndex((event, index) => event.type === 'recover'
+    && f.events.slice(0, index).some(previous => previous.type === 'recover'));
+  assert.ok(secondRecovery > 0);
+  assert.equal(f.events[secondRecovery + 1].type, 'discover');
+  assert.ok(f.events.findIndex(event => event.type === 'sync' && event.id === 'second') > secondRecovery);
+  assert.equal(f.count('recover'), 2);
+  assert.equal(f.state.pending, null);
 });

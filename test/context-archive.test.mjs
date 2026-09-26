@@ -335,6 +335,23 @@ test('missing or modified archives never become empty history or fallback excerp
   }
 });
 
+test('bounded concurrent chunk reads retain message order and reject a damaged later batch', async t => {
+  const source = Array.from({ length: 12 }, (_, index) => ({ role: index % 2 ? 'assistant' : 'user',
+    content: [{ type: 'text', text: `Chunk ${index} must retain its exact position.` }] }));
+  source.splice(5, 0, structuredClone(source[0]));
+  const { root, metadata } = await encoded(t, source);
+  assert.deepEqual((await loadContextArchive({ root, archive: metadata.archive })).messages, source);
+  const files = await archiveFiles(root, metadata.archive);
+  const path = join(files.directory, files.references.at(-2).hash);
+  const original = await readFile(path);
+  const changed = Buffer.from(original);
+  changed[0] ^= 1;
+  await writeFile(path, changed);
+  await assert.rejects(loadContextArchive({ root, archive: metadata.archive }), /archive content changed/);
+  await writeFile(path, original);
+  assert.deepEqual((await loadContextArchive({ root, archive: metadata.archive })).messages, source);
+});
+
 test('UTF-8 excerpts remain bounded and explicitly identify clipping', async t => {
   const source = [{ role: 'user', content: [{ type: 'text', text: '你好🌙'.repeat(10000) }] },
     { role: 'assistant', content: [{ type: 'text', text: 'Complete.' }] }];

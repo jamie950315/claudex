@@ -57,13 +57,19 @@ identities before/after sync, including superseded originals. Pending work,
 errors or missing/changed files invalidate hints; full verification becomes due
 after 60 seconds without refreshing that deadline from hints. New and active
 conversations and dirty cold imports run before the fair cold-validation sweep.
-Between complete cold operations, refresh discovery and foreground work after
-two seconds; never wait for the whole historical sweep or parallelize writers.
+Between complete cold operations, refresh foreground work after two seconds.
+Discovery and new deliveries also refresh between individual foreground syncs,
+using their own clock; a long active-owner sweep must not block new enrollment.
+Keep the original sweep moving after each nonrecursive discovery refresh; never
+restart it recursively or parallelize writers. Post-enrollment errors retain
+tracked-history severity, not unsupported-discovery warning classification.
 Raw observations select priority only; unsuccessful dirty work stays foreground
 until stable full verification. One in-flight native operation can exceed this
 interval, so it is not an end-to-end latency guarantee. Never advance semantic
-checkpoints from hints or skip a current
-managed Claude owner's lifecycle checks. Normal discovery scope is unchanged.
+checkpoints from hints or skip a current managed Claude owner's lifecycle checks.
+Bounded watcher timing fields report discovery gaps and last/slowest syncs,
+without transcript content; they are operation timings, not UI latency promises.
+Normal discovery scope is unchanged.
 Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep
 the superseded-original guards global, retain every managed snapshot in the
@@ -316,6 +322,13 @@ explicitly labeled readable excerpts. They are not AI summaries. Mixed v1/v2
 decoders reconstruct the exact canonical digest; authenticate before loading
 archives and require their signed archiveRoot to match the configured root.
 Archive assets are authoritative history, not rollback garbage.
+Archive chunk loading overlaps at most four independent read-only operations,
+retaining every file/directory identity, permission, byte and hash check and
+draining each batch on failure. Within one synchronous stable Claude snapshot,
+exact native packet content may reuse its authenticated decode. No result
+survives another snapshot. Growing prefix hashes must remain byte-equivalent
+to the existing fingerprint and are checked against a final full fingerprint;
+never use these optimizations to skip lifecycle, provenance or later file reads.
 Archive format v2 shares reference pages of at most 64 messages; full-checkpoint
 metadata growth per new message is bounded instead of quadratic. Preserve v1
 archive encoding when recovering old packetVersion2 intents without archiveVersion.

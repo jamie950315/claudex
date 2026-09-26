@@ -9,7 +9,7 @@ import { encodeArchivedContextPacket, inspectArchivedContextPacket } from '../sr
 import { prepareArchiveResolver } from '../src/context-packet-reader.mjs';
 import { encodeClaude } from '../src/claude.mjs';
 import { encodeCodexProjection } from '../src/codex-projection.mjs';
-import { completedClaudePrefix, decodeOwnedClaudeHistory } from '../src/owned-claude-history.mjs';
+import { completedClaudePrefix, decodeOwnedClaudeHistory, decodeCompletedOwnedClaudeHistory } from '../src/owned-claude-history.mjs';
 import { buildOwnedCodexCommon, decodeOwnedCodexHistoryWithArchives, exportOwnedCodexHistory } from '../src/owned-codex-history.mjs';
 import { fingerprint } from '../src/history.mjs';
 
@@ -38,6 +38,46 @@ test('mixed inline and archived Claude packets preserve the full digest and acti
   assert.equal(decoded.importedPackets, 2);
   assert.equal(decoded.digest, fingerprint({ messages: [...first, ...second] }));
   assert.deepEqual(decoded.common.messages, [...first, ...second]);
+  let resolved = 0;
+  const read = () => decodeCompletedOwnedClaudeHistory({ ...input, resolveArchive: reference => {
+    resolved++;
+    return resolveArchive(reference);
+  } });
+  assert.deepEqual(read(), { ...decoded, incompleteTail: true });
+  assert.equal(resolved, 1, 'boundary and history checks share one exact packet decode');
+  assert.deepEqual(read(), { ...decoded, incompleteTail: true });
+  assert.equal(resolved, 2, 'a new snapshot read must validate the archive again');
+});
+
+test('snapshot-scoped packet reuse cannot hide changed content, repeated operations, or changed loaded archives', async () => {
+  const f = await fixture(), messages = f.turn(1);
+  const content = await encodeArchivedContextPacket({ ...f.identity, root: f.root, messages,
+    sourceSide: 'codex', operationId: 'snapshot-packet' });
+  const resolveArchive = await prepareArchiveResolver({ ...f.identity, root: f.root, contents: [content] });
+  const encode = contents => {
+    const { rows } = encodeClaude({ meta: f.meta, messages: contents.map(content => ({ role: 'user', content })) }, f.sessionId);
+    let index = 0;
+    for (const row of rows) if (row.type === 'user') row.message.content = contents[index++];
+    return rows.map(row => JSON.stringify(row)).join('\n') + '\n';
+  };
+  const input = { text: encode([content]), conversationId: f.conversationId, sessionId: f.sessionId, key: f.key, resolveArchive };
+  const initial = decodeCompletedOwnedClaudeHistory(input);
+  assert.equal(initial.digest, fingerprint({ messages }));
+  assert.throws(() => decodeCompletedOwnedClaudeHistory({ ...input, text: encode([content, content]) }), /repeated synchronization/);
+  for (const change of [
+    value => { value[1].text += ' Modified visible excerpt'; },
+    value => { value[1].extra = 'Changed block structure'; },
+    value => { value[2].text = value[2].text.replace('snapshot-packet', 'another-operation'); },
+  ]) {
+    const changed = structuredClone(content);
+    change(changed);
+    assert.throws(() => decodeCompletedOwnedClaudeHistory({ ...input, text: encode([content, changed]) }), /signature|native packet/);
+  }
+  const loaded = resolveArchive(inspectArchivedContextPacket({ ...f.identity, content }).archive);
+  loaded.messages[0].content[0].text += ' Changed since the prior read';
+  assert.throws(() => decodeCompletedOwnedClaudeHistory(input), /binding mismatch/);
+  assert.throws(() => decodeCompletedOwnedClaudeHistory({ ...input, key: randomBytes(32) }), /signature/);
+  assert.throws(() => decodeCompletedOwnedClaudeHistory({ ...input, sessionId: randomUUID() }), /identity/);
 });
 
 test('an archived Codex projection reconstructs identical canonical content through raw and native API readers', async () => {
@@ -94,14 +134,23 @@ test('only a verified native clear prologue may precede an archived reset bootst
     receipt: { sessionId: f.sessionId, localCommand: 'clear', numTurns: 0, apiMs: 0, cost: 0 } };
   assert.throws(() => decodeOwnedClaudeHistory(options), /does not match the synchronized prefix/);
   assert.equal(decodeOwnedClaudeHistory({ ...options, resetBootstrap }).digest, fingerprint({ messages: f.turn(1) }));
+  let resolved = 0;
+  const readComplete = overrides => decodeCompletedOwnedClaudeHistory({ ...options, resetBootstrap, ...overrides,
+    resolveArchive: reference => { resolved++; return resolveArchive(reference); } });
+  assert.equal(readComplete().digest, fingerprint({ messages: f.turn(1) }));
+  assert.equal(resolved, 1, 'boundary, reset proof, and logical history share only their exact authenticated packet');
+  assert.throws(() => readComplete({ resetBootstrap: { ...resetBootstrap, receipt: { ...resetBootstrap.receipt, apiMs: 1 } } }),
+    /verified native no-query receipt/);
   const modified = structuredClone(rows);
   modified[1].message.content += ' Unexpected work';
   assert.throws(() => decodeOwnedClaudeHistory({ ...options, text: encode(modified), resetBootstrap }), /unsupported or concurrent history/);
+  assert.throws(() => readComplete({ text: encode(modified) }), /unsupported or concurrent history/);
   const concurrent = structuredClone(rows);
   concurrent.splice(3, 0, { ...base, type: 'user', uuid: randomUUID(), parentUuid: rows[2].uuid,
     message: { role: 'user', content: [{ type: 'text', text: 'Concurrent user input must remain visible' }] } });
   concurrent[4].parentUuid = concurrent[3].uuid;
   assert.throws(() => decodeOwnedClaudeHistory({ ...options, text: encode(concurrent), resetBootstrap }), /unsupported or concurrent history/);
+  assert.throws(() => readComplete({ text: encode(concurrent) }), /unsupported or concurrent history/);
   const future = rows.map(row => ({ ...row, version: '2.2.1' }));
   const futureOptions = { ...options, text: encode(future), resetBootstrap };
   assert.throws(() => decodeOwnedClaudeHistory(futureOptions), /unsupported or concurrent history/);

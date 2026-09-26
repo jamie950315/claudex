@@ -31,10 +31,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   const clearHints = () => { coldHints.clear(); coldObserved.clear(); coldDirty.clear(); };
   let foregroundCompletedAt = null;
   let foregroundDurationMs = null;
+  let discoveryCompletedAt = null;
+  let discoveryDurationMs = null;
+  let maxDiscoveryGapMs = 0;
+  let lastSync = null;
+  let slowestSync = null;
   const status = fields => writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
-    scheduler: 'interleaved',
+    scheduler: 'operation-interleaved',
     startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
-    versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, ...fields });
+    versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
+    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync, ...fields });
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
     try {
@@ -55,7 +61,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 && observedAt - previous.verifiedAt < coldValidationMs) return;
               coldHints.delete(id);
               if (before) coldDirty.add(id);
-              const result = await bridge.sync(id);
+              const beganAt = now();
+              let result;
+              try { result = await bridge.sync(id); }
+              finally {
+                lastSync = { conversationId: id, durationMs: now() - beganAt };
+                if (!slowestSync || lastSync.durationMs > slowestSync.durationMs) slowestSync = lastSync;
+              }
               if (before && result?.changed === false && result.incompleteTail === false) {
                 const latest = await bridge.status();
                 if (await coldImportInactive(latest, id, codex)) {
@@ -83,7 +95,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               throw error;
             }
           };
-          const foreground = async () => {
+          const discoverNew = async () => {
             const beganAt = now();
             let state = await bridge.status();
             if (state.pending) { clearHints(); await bridge.recover(); }
@@ -119,20 +131,47 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               }
             }
             state = await bridge.status();
+            const completedAt = now();
+            if (discoveryCompletedAt !== null) maxDiscoveryGapMs = Math.max(maxDiscoveryGapMs, completedAt - discoveryCompletedAt);
+            discoveryCompletedAt = completedAt;
+            discoveryDurationMs = completedAt - beganAt;
+            return Object.keys(state.conversations).filter(id => !existing.has(id));
+          };
+          // A whole foreground sweep can itself take tens of seconds. Refresh
+          // only discovery/new deliveries between individual operations, without
+          // recursively restarting the active sweep or running parallel writers.
+          const refreshNew = async () => {
+            if (signal?.aborted || now() - discoveryCompletedAt < Math.max(1, pollMs)) return;
+            const fresh = await discoverNew();
+            for (const id of fresh) {
+              if (signal?.aborted) break;
+              // After enrollment, errors belong to a tracked history. Keep this
+              // outside discovery's unsupported-source warning handler.
+              await sync(id);
+            }
+            await status({ waiting, blockedSourceCount, blockedSources });
+          };
+          const foreground = async () => {
+            const beganAt = now();
+            const fresh = await discoverNew();
+            const freshIds = new Set(fresh);
+            const state = await bridge.status();
             for (const cache of [coldHints, coldObserved, coldDirty]) {
               for (const id of cache.keys()) if (!state.conversations[id]) cache.delete(id);
             }
-            const fresh = [], dirty = [], active = [], background = [];
+            const dirty = [], active = [], background = [];
             for (const id of Object.keys(state.conversations)) {
               const hint = await coldImportHint(state, id);
               if (hint && coldObserved.has(id) && coldObserved.get(id) !== hint) coldDirty.add(id);
               if (hint) coldObserved.set(id, hint);
-              if (!existing.has(id)) fresh.push(id);
+              if (freshIds.has(id)) continue;
               else if (coldDirty.has(id)) dirty.push(id);
               else if (!hint) active.push(id); // Includes live managed owners and invalid/missing paths.
               else background.push(id);
             }
             for (const id of [...fresh, ...dirty, ...active]) {
+              if (signal?.aborted) break;
+              await refreshNew();
               if (signal?.aborted) break;
               await sync(id);
             }
@@ -152,6 +191,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             if (signal?.aborted) break;
             await sync(id);
           }
+          await refreshNew();
           if (!signal?.aborted && now() - lastCollection >= 60_000) {
             await bridge.collect();
             lastCollection = now();

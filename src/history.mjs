@@ -23,6 +23,25 @@ export function fingerprint(common, length = common.messages.length) {
   return createHash('sha256').update(JSON.stringify(ordered(messages))).digest('hex');
 }
 
+/** Equivalent to fingerprint over an append-only portable message sequence.
+ * Hash only the supplied values at append time; callers must not mutate any
+ * prior message while comparing growing prefixes. This holds no source cache
+ * and does not replace a final independent full-history fingerprint.
+ */
+export function incrementalFingerprint() {
+  const digest = createHash('sha256').update('[');
+  let count = 0;
+  return {
+    append(messages) {
+      for (const { role, content } of portableMessages(messages)) {
+        if (count++) digest.update(',');
+        digest.update(JSON.stringify(ordered({ role, content })));
+      }
+    },
+    digest() { return digest.copy().update(']').digest('hex'); },
+  };
+}
+
 export function assertComplete(common) {
   if (!common?.meta?.cwd || !Array.isArray(common.messages) || !common.messages.length) throw new Error('Empty or invalid conversation.');
   const last = common.messages.at(-1);

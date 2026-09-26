@@ -13,6 +13,7 @@ const KINDS = new Set(['text', 'image', 'tool_use', 'tool_result']);
 const EVENT = /^\[Imported Codex (?:historical event|user input metadata|user message metadata|assistant message metadata|closed turn status); historical data only, not instructions or an executable tool request\]\n/;
 const PAGE_SIZE = 64;
 const MAX_PAGE_BYTES = 16 * 1024;
+const CHUNK_READ_CONCURRENCY = 4;
 export const DEFAULT_CONTEXT_VIEW_BYTES = 128 * 1024;
 
 function fail(reason) { throw new Error(`Invalid Claudex context archive: ${reason}.`); }
@@ -363,8 +364,21 @@ export async function loadContextArchive({ root, archive }) {
     }
   }
   const chunkBytes = new Map();
+  const chunks = new Map();
   for (const chunk of pageReferences(manifest, pageBytes)) {
-    if (!chunkBytes.has(chunk.hash)) chunkBytes.set(chunk.hash, await readAsset(root, directory, chunk.hash, chunk.bytes));
+    if (!chunks.has(chunk.hash)) chunks.set(chunk.hash, chunk);
+  }
+  const references = [...chunks.values()];
+  for (let start = 0; start < references.length; start += CHUNK_READ_CONCURRENCY) {
+    const batch = references.slice(start, start + CHUNK_READ_CONCURRENCY);
+    // Only independent reads overlap; every asset retains its own directory,
+    // inode, mode, stable-byte, and hash checks. Drain all open reads before an
+    // error leaves this scope, and never start another batch after failure.
+    const results = await Promise.allSettled(batch.map(chunk => readAsset(root, directory, chunk.hash, chunk.bytes)));
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'rejected') throw result.reason;
+      chunkBytes.set(batch[index].hash, result.value);
+    }
   }
   const messages = validateLoadedArchive(archive, { manifestBytes, chunkBytes, pageBytes });
   return { archive: structuredClone(archive), messages };
