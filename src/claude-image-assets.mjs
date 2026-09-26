@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { isInlineBase64 } from './base64.mjs';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -12,6 +13,10 @@ const bytesHash = bytes => createHash('sha256').update(bytes).digest('hex');
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const normalizedImage = block => ({ type: 'image', source: { type: block.source?.type,
   media_type: block.source?.media_type, data: block.source?.data } });
+const pngMagic = bytes => bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+const jpegMagic = bytes => bytes.length >= 5 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff
+  && bytes.at(-2) === 0xff && bytes.at(-1) === 0xd9;
+const observedPngPreview = (original, rendered) => original === 'image/png' && rendered === 'image/jpeg';
 
 function checkFile(info, label) {
   if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid()
@@ -89,8 +94,7 @@ async function originalImage({ claudeTempRoot, cwd, sessionId, pasteId, mediaTyp
 
 function imageBytes(block) {
   const data = block?.source?.data;
-  if (block?.type !== 'image' || block.source?.type !== 'base64' || typeof data !== 'string'
-      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data))
+  if (block?.type !== 'image' || block.source?.type !== 'base64' || !isInlineBase64(data))
     throw new Error('Expected image must contain canonical inline base64.');
   const bytes = Buffer.from(data, 'base64');
   if (!bytes.length || bytes.toString('base64') !== data) throw new Error('Expected image base64 is not canonical.');
@@ -125,13 +129,22 @@ export async function captureImageAssets({ root, claudeTempRoot, cwd, sessionId,
     const original = expected[index];
     const preview = rendered[index];
     if (preview?.type !== 'image' || preview.source?.type !== 'base64'
-        || preview.source.media_type !== original.source?.media_type) throw new Error('Native image preview type differs from the durable intent.');
-    imageBytes(preview);
+        || preview.source.media_type !== original.source?.media_type
+          && !observedPngPreview(original.source?.media_type, preview.source.media_type))
+      throw new Error('Native image preview type differs from the durable intent.');
+    const previewBytes = imageBytes(preview);
     if (same(preview, original)) { image++; continue; }
     const bytes = await originalImage({ claudeTempRoot, cwd, sessionId, pasteId: row.imagePasteIds[image++], mediaType: original.source.media_type });
     if (!bytes.equals(imageBytes(original))) throw new Error('Native image cache asset differs from the durable intent.');
+    const converted = preview.source.media_type !== original.source.media_type;
+    // The pinned CLI converts a large PNG to a JPEG preview while retaining
+    // the exact PNG under the same native paste ID. No other conversion is
+    // inferred, and both original and rendered signatures must agree.
+    if (converted && (!pngMagic(bytes) || !jpegMagic(previewBytes)))
+      throw new Error('Native PNG-to-JPEG preview signatures do not match the durable intent.');
     const assetHash = bytesHash(bytes);
-    bindings[index] = { assetHash, mediaType: original.source.media_type, renderedHash: hash(normalizedImage(preview)) };
+    bindings[index] = { assetHash, mediaType: original.source.media_type,
+      ...(converted ? { renderedMediaType: preview.source.media_type } : {}), renderedHash: hash(normalizedImage(preview)) };
     originals.push({ assetHash, bytes });
     restored[index] = original;
   }
@@ -155,12 +168,19 @@ export async function restoreImageAssets({ root, rows, bindings }) {
       if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key || index >= content.length
           || !DIGEST.test(binding?.assetHash) || !DIGEST.test(binding?.renderedHash)
           || !EXTENSIONS[binding?.mediaType]) throw new Error('Saved image binding is invalid.');
+      if (Object.hasOwn(binding, 'renderedMediaType') && !observedPngPreview(binding.mediaType, binding.renderedMediaType))
+        throw new Error('Saved image conversion binding is unsupported.');
+      const renderedType = binding.renderedMediaType ?? binding.mediaType;
+      const converted = renderedType !== binding.mediaType;
+      if (converted && !observedPngPreview(binding.mediaType, renderedType)) throw new Error('Saved image conversion binding is unsupported.');
       const preview = content[index];
-      if (preview?.type !== 'image' || preview.source?.media_type !== binding.mediaType
+      if (preview?.type !== 'image' || preview.source?.media_type !== renderedType
           || hash(normalizedImage(preview)) !== binding.renderedHash) throw new Error('Bound native image preview changed.');
       const directory = await assetDirectory(root, false);
       const bytes = await readPrivateFile(join(directory, binding.assetHash), 'Image asset');
       if (bytesHash(bytes) !== binding.assetHash) throw new Error('Saved image asset hash differs.');
+      if (converted && (!pngMagic(bytes) || !jpegMagic(imageBytes(preview))))
+        throw new Error('Saved PNG-to-JPEG preview signatures differ.');
       content[index] = { type: 'image', source: { type: 'base64', media_type: binding.mediaType, data: bytes.toString('base64') } };
     }
     restored.push({ ...row, message: { ...row.message, content } });

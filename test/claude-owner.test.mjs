@@ -195,6 +195,19 @@ test('owner preserves inline image blocks and rejects unsupported content before
   await owner.close();
 });
 
+test('owner accepts and deduplicates a five-MiB image without native RegExp stack exhaustion', async () => {
+  const f = await fixture(), owner = await ClaudeOwner.open({ ...f.config, receiptTimeoutMs: 2000 });
+  const content = [{ type: 'image', source: { type: 'base64', media_type: 'image/png',
+    data: Buffer.alloc(5 * 1024 * 1024, 71).toString('base64') } }];
+  try {
+    assert.equal((await owner.append({ operationId: 'large-image', content })).duplicate, false);
+    assert.equal((await owner.append({ operationId: 'large-image', content })).duplicate, true);
+    assert.equal(f.calls.appends.length, 1);
+    assert.equal(f.calls.appends[0].shouldQuery, false);
+    assert.equal(f.calls.appends[0].message.content[0].source.data, content[0].source.data);
+  } finally { await owner.close(); }
+});
+
 test('a receipt without exact native persistence never commits', async () => {
   const f = await fixture({ persist: false }), owner = await ClaudeOwner.open(f.config);
   await assert.rejects(owner.append({ operationId: 'a', content: 'Synthetic handoff' }), /without the exact persisted/);

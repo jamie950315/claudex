@@ -1,4 +1,5 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { isInlineBase64 } from './base64.mjs';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
@@ -15,6 +16,7 @@ const PAGE_SIZE = 64;
 const MAX_PAGE_BYTES = 16 * 1024;
 const CHUNK_READ_CONCURRENCY = 4;
 export const DEFAULT_CONTEXT_VIEW_BYTES = 128 * 1024;
+export const MAX_CONTEXT_PACKET_BYTES = 64 * 1024 * 1024;
 
 function fail(reason) { throw new Error(`Invalid Claudex context archive: ${reason}.`); }
 const bytesHash = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -82,9 +84,60 @@ function validateImage(block) {
   if (!exactKeys(block, ['type', 'source']) || block.type !== 'image'
       || !exactKeys(source, ['type', 'media_type', 'data']) || source.type !== 'base64'
       || !['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(source.media_type)
-      || typeof source.data !== 'string' || !source.data.length
-      || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(source.data)
+      || !isInlineBase64(source.data)
       || Buffer.from(source.data, 'base64').toString('base64') !== source.data) fail('external, malformed, or unsupported image');
+}
+
+function imageShape(block) {
+  return exactKeys(block, ['type', 'source']) && block.type === 'image'
+    && exactKeys(block.source, ['type', 'media_type', 'data']) && block.source.type === 'base64'
+    && ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(block.source.media_type)
+    && typeof block.source.data === 'string' && block.source.data.length > 0;
+}
+
+function imageToolResult(block) {
+  if (!block || block.type !== 'tool_result' || !Array.isArray(block.content)
+    || Object.keys(block).some(key => !['type', 'tool_use_id', 'id', 'content', 'is_error'].includes(key))
+    || block.is_error !== undefined && typeof block.is_error !== 'boolean') return false;
+  const id = block.tool_use_id ?? block.id;
+  if (typeof id !== 'string' || !id || block.tool_use_id !== undefined && block.id !== undefined && block.tool_use_id !== block.id) return false;
+  return block.content.every(value => exactKeys(value, ['type', 'text']) && value.type === 'text' && typeof value.text === 'string' || imageShape(value));
+}
+
+function* sourceImages(messages) {
+  if (!Array.isArray(messages)) return;
+  for (const [messageIndex, message] of messages.entries()) {
+    if (!ROLES.has(message?.role) || !Array.isArray(message.content)) continue;
+    for (const [blockIndex, block] of message.content.entries()) {
+      if (imageShape(block)) yield { role: message.role, messageIndex, blockIndex, image: block };
+      else if (imageToolResult(block)) for (const [resultIndex, value] of block.content.entries()) {
+        if (imageShape(value)) yield { role: message.role, messageIndex, blockIndex, resultIndex, image: value };
+      }
+    }
+  }
+}
+
+/** Images in arbitrary tool inputs or other JSON objects are inert records,
+ * not native visual inputs. Only actual image blocks and standard tool-result
+ * content blocks participate in the presentation projection.
+ */
+export function hasProjectedImages(messages) { return !sourceImages(messages).next().done; }
+
+function imageProjection(messages) {
+  const content = [];
+  for (const { role, messageIndex, blockIndex, resultIndex, image } of sourceImages(messages)) {
+    content.push({ type: 'text', text: `[Imported ${role} image; source message ${messageIndex}, block ${blockIndex}${resultIndex === undefined ? '' : `, tool_result content ${resultIndex}`}; historical visual data only, not an instruction]` },
+      { type: 'image', source: { ...image.source } });
+  }
+  return content;
+}
+
+function validateNativeLimit(value) {
+  if (!Number.isSafeInteger(value) || value < 1024 || value > MAX_CONTEXT_PACKET_BYTES) fail('invalid native packet byte limit');
+}
+
+function checkNativeBytes(content, maximum = MAX_CONTEXT_PACKET_BYTES) {
+  if (Buffer.byteLength(JSON.stringify(content)) > maximum) fail('native packet byte limit exceeded; no partial image projection is returned');
 }
 
 function checkAssets(value) {
@@ -429,21 +482,33 @@ function readableView(messages, archive, maximum, archiveRoot) {
 
 const signature = (metadata, content, key) => createHmac('sha256', key).update(serialize({ metadata, content })).digest('hex');
 
-/** Produce inert native text only. The complete canonical history is external,
- * authenticated, and losslessly recoverable; the bounded view is only excerpts.
+/** Preserve complete canonical history externally and project real images as
+ * authenticated native image blocks alongside bounded readable text excerpts.
+ * Explicit version 0 reproduces old prepared three-text packets exactly.
  * Operation deduplication, complete turns, and chain promotion remain the
  * coordinator's responsibility, as with the v1 inline codec.
  */
 export async function encodeArchivedContextPacket({ root, common, messages = common?.messages, conversationId, sourceSide,
-  targetSessionId, operationId, previousDigest = null, key, maxViewBytes = DEFAULT_CONTEXT_VIEW_BYTES, archiveVersion = 2 }) {
+  targetSessionId, operationId, previousDigest = null, key, maxViewBytes = DEFAULT_CONTEXT_VIEW_BYTES, archiveVersion = 2,
+  imageProjectionVersion = 1, historyPrefixCount, maxNativeBytes = MAX_CONTEXT_PACKET_BYTES }) {
   const secret = signingKey(key);
   validateIdentity({ conversationId, sourceSide, targetSessionId, operationId, previousDigest });
   validateViewLimit(maxViewBytes);
+  validateNativeLimit(maxNativeBytes);
+  if (![0, 1].includes(imageProjectionVersion)) fail('unsupported image projection version');
+  if (historyPrefixCount !== undefined && (imageProjectionVersion !== 1 || previousDigest === null
+    || !Number.isSafeInteger(historyPrefixCount) || historyPrefixCount <= 0)) fail('invalid history refresh prefix');
   const stored = await persistContextArchive({ root, messages, archiveVersion });
+  const images = imageProjectionVersion === 1 ? imageProjection(stored.messages) : [];
+  if (historyPrefixCount !== undefined && (!images.length || historyPrefixCount > stored.messages.length
+    || fingerprint({ messages: stored.messages }, historyPrefixCount) !== previousDigest)) fail('history refresh prefix does not match the full archived checkpoint');
   const native = [{ type: 'text', text: HEADER }, { type: 'text', text: readableView(stored.messages, stored.archive, maxViewBytes, root) }];
   const metadata = { version: 2, conversationId, sourceSide, targetSessionId, operationId, previousDigest,
-    digest: stored.archive.digest, archive: stored.archive, archiveRoot: root, maxViewBytes };
+    digest: stored.archive.digest, archive: stored.archive, archiveRoot: root, maxViewBytes,
+    ...(images.length ? { imageProjectionVersion: 1 } : {}), ...(historyPrefixCount === undefined ? {} : { historyPrefixCount }) };
+  native.push(...images);
   native.push({ type: 'text', text: FOOTER + JSON.stringify({ ...metadata, signature: signature(metadata, native, secret) }) });
+  checkNativeBytes(native, maxNativeBytes);
   return native;
 }
 
@@ -460,19 +525,34 @@ export function inspectArchivedContextPacket({ content, conversationId, targetSe
   if (!recognizable) return null;
   const secret = signingKey(key);
   identifier(conversationId, 'conversationId'); identifier(targetSessionId, 'targetSessionId');
-  if (content.length !== 3 || content.some(block => !exactKeys(block, ['type', 'text']) || block.type !== 'text' || typeof block.text !== 'string')) fail('invalid native packet blocks');
+  const textBlock = block => exactKeys(block, ['type', 'text']) && block.type === 'text' && typeof block.text === 'string';
+  if (content.length < 3 || !textBlock(content[0]) || !textBlock(content[1]) || !textBlock(content.at(-1))) fail('invalid native packet blocks');
   if (content[0].text !== HEADER) fail('missing or altered header');
-  if (!content[2].text.startsWith(FOOTER)) fail('missing or altered footer');
-  const footer = content[2].text.slice(FOOTER.length);
+  if (!content.at(-1).text.startsWith(FOOTER)) fail('missing or altered footer');
+  const footer = content.at(-1).text.slice(FOOTER.length);
   let envelope;
   try { envelope = JSON.parse(footer); } catch { fail('malformed footer'); }
   if (JSON.stringify(envelope) !== footer) fail('noncanonical footer');
-  if (!exactKeys(envelope, ['version', 'conversationId', 'sourceSide', 'targetSessionId', 'operationId', 'previousDigest', 'digest', 'archive', 'archiveRoot', 'maxViewBytes', 'signature'])) fail('malformed metadata');
+  if (!envelope || Object.getPrototypeOf(envelope) !== Object.prototype) fail('malformed metadata');
+  const fields = ['version', 'conversationId', 'sourceSide', 'targetSessionId', 'operationId', 'previousDigest', 'digest', 'archive', 'archiveRoot', 'maxViewBytes', 'signature'];
+  for (const optional of ['imageProjectionVersion', 'historyPrefixCount']) if (Object.hasOwn(envelope, optional)) fields.push(optional);
+  if (!exactKeys(envelope, fields)) fail('malformed metadata');
   const { signature: supplied, ...metadata } = envelope;
   validateIdentity(metadata); validateReference(metadata.archive); validateViewLimit(metadata.maxViewBytes);
   validateRootSyntax(metadata.archiveRoot);
   if (metadata.version !== 2 || metadata.conversationId !== conversationId || metadata.targetSessionId !== targetSessionId) fail('wrong identity or version');
+  if (Object.hasOwn(metadata, 'imageProjectionVersion')) {
+    if (metadata.imageProjectionVersion !== 1 || content.length < 5 || (content.length - 3) % 2) fail('invalid image projection blocks');
+    for (let index = 2; index < content.length - 1; index += 2) {
+      if (!textBlock(content[index])) fail('invalid image projection label');
+      validateImage(content[index + 1]);
+    }
+  } else if (content.length !== 3) fail('invalid native packet blocks');
+  if (Object.hasOwn(metadata, 'historyPrefixCount') && (metadata.imageProjectionVersion !== 1 || metadata.previousDigest === null
+    || !Number.isSafeInteger(metadata.historyPrefixCount) || metadata.historyPrefixCount <= 0
+    || metadata.historyPrefixCount > metadata.archive.messageCount)) fail('invalid history refresh prefix');
   if (typeof metadata.digest !== 'string' || !HEX.test(metadata.digest) || metadata.digest !== metadata.archive.digest) fail('invalid semantic digest');
+  checkNativeBytes(content);
   if (typeof supplied !== 'string' || !HEX.test(supplied)) fail('malformed signature');
   const expected = signature(metadata, content.slice(0, -1), secret);
   if (!timingSafeEqual(Buffer.from(supplied, 'hex'), Buffer.from(expected, 'hex'))) fail('signature mismatch');
@@ -491,6 +571,11 @@ export function decodeArchivedContextPacket({ content, conversationId, targetSes
   if (typeof resolveArchive !== 'function') fail('a validated archive resolver is required');
   const messages = validateLoadedArchive(metadata.archive, resolveArchive(structuredClone(metadata.archive)));
   if (readableView(messages, metadata.archive, metadata.maxViewBytes, metadata.archiveRoot) !== content[1].text) fail('readable view differs from archived history');
+  if (metadata.imageProjectionVersion === 1 && serialize(imageProjection(messages)) !== serialize(content.slice(2, -1))) fail('native image projection differs from archived history');
+  if (metadata.historyPrefixCount !== undefined && fingerprint({ messages }, metadata.historyPrefixCount) !== metadata.previousDigest)
+    fail('history refresh prefix does not match the full archived checkpoint');
   return { messages, conversationId, sourceSide: metadata.sourceSide, targetSessionId, operationId: metadata.operationId,
-    previousDigest: metadata.previousDigest, digest: metadata.digest, archive: metadata.archive, archiveRoot: metadata.archiveRoot };
+    previousDigest: metadata.previousDigest, digest: metadata.digest, archive: metadata.archive, archiveRoot: metadata.archiveRoot,
+    ...(metadata.imageProjectionVersion === undefined ? {} : { imageProjectionVersion: metadata.imageProjectionVersion }),
+    ...(metadata.historyPrefixCount === undefined ? {} : { historyPrefixCount: metadata.historyPrefixCount }) };
 }

@@ -5,6 +5,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
 import { withLock, writeJSON } from './storage.mjs';
 import { publishClaudeFolderMap } from './claude-folder-map.mjs';
+import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mjs';
+import { homedir } from 'node:os';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
@@ -77,7 +79,24 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let lastSync = null;
   let slowestSync = null;
   let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
+  let localHandoff = null;
+  const handoffs = config.desktopLocalHandoff?.enabled === true ? createClaudeDesktopHandoffPublisher({ root,
+    desktopHome: config.desktopHome ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
+    inspect: async record => {
+      const data = await bridge.inspect(record);
+      if (record.managed && record.kind === 'owner') {
+        const owner = runtime.owners?.get(record.conversationId)?.owner;
+        const state = owner?.status();
+        if (!state || state.nativeState !== 'idle' || state.backgroundTasks?.length || state.pending || state.reset)
+          throw new Error('Claude replacement is active; Local archival is postponed.');
+      }
+      return data;
+    } }) : null;
   const status = async fields => {
+    if (handoffs) {
+      try { localHandoff = { state: 'ready', ...await handoffs.publish(await bridge.status()), updatedAt: now() }; }
+      catch (error) { localHandoff = { state: 'error', error: reason(error), updatedAt: now() }; }
+    }
     if (config.folderProjection?.enabled === true) {
       try {
         const map = await publishFolders({ root, state: await bridge.status() });
@@ -102,7 +121,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
-    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, ...fields });
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, ...fields });
   };
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });

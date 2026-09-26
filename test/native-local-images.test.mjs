@@ -4,12 +4,13 @@ import { constants } from 'node:fs';
 import { access, appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 import { createCodexLocalImageResolver } from '../src/native-local-images.mjs';
 import { exportNativeHistory } from '../src/native-history.mjs';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { decodeClaude, encodeClaude } from '../src/claude.mjs';
 import { fingerprint } from '../src/history.mjs';
+import { buildOwnedCodexCommon, exportOwnedCodexHistory } from '../src/owned-codex-history.mjs';
 
 async function fixture(t) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-native-local-images-')));
@@ -62,6 +63,64 @@ async function fixture(t) {
   return { base, path, threadId, turnId, itemId, text, imagePaths, urls, rows, response, rawItem, item, turns,
     write, client, calls, openedPaths, io, resolver, run, codexHome, claudeHome, cwd };
 }
+
+async function ownedFixture(t) {
+  const f = await fixture(t), key = randomBytes(32), conversationId = randomUUID();
+  const canonical = { meta: { id: f.threadId, cwd: f.cwd, timestamp: '2026-09-25T00:00:00.000Z' }, messages: [
+    { role: 'user', content: [{ type: 'text', text: 'Original authenticated request.' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Original completed answer.' }] },
+  ] };
+  const projected = buildOwnedCodexCommon({ canonical, key, conversationId, targetSessionId: f.threadId, operationId: 'bootstrap' });
+  const bootstrap = { id: randomUUID(), status: 'completed', itemsView: 'full', startedAt: 1, completedAt: 2, items: [
+    { type: 'userMessage', id: randomUUID(), content: projected.messages[0].content.map(block => ({ ...block, text_elements: [] })) },
+    { type: 'agentMessage', id: randomUUID(), text: projected.messages[1].content[0].text, phase: 'final_answer' },
+  ] };
+  f.turns.unshift(bootstrap);
+  return { ...f, key, conversationId, canonical, bootstrap,
+    runOwned: options => exportOwnedCodexHistory({ client: f.client, key, conversationId, targetSessionId: f.threadId,
+      cwd: f.cwd, resolveLocalImages: f.resolver(), ...options }) };
+}
+
+test('owned Codex continuations recover new native attachments without changing their authenticated bootstrap', async t => {
+  const f = await ownedFixture(t), bytes = await readFile(f.path);
+  const data = await f.runOwned();
+  assert.equal(data.common.messages.length, 4);
+  assert.equal(fingerprint(data.common, 2), fingerprint(f.canonical));
+  assert.deepEqual(data.common.messages[2].content.filter(block => block.type === 'image')
+    .map(block => `data:${block.source.media_type};base64,${block.source.data}`), f.urls);
+  assert.deepEqual(f.openedPaths, [f.path]);
+  assert.deepEqual(await readFile(f.path), bytes);
+  const runtime = await new DesktopRuntime({ root: join(f.base, 'state'), codexHome: f.codexHome, claudeHome: f.claudeHome,
+    clientFactory: async () => f.client }).initialize();
+  runtime.key = f.key;
+  try {
+    const inspected = await runtime.inspect({ side: 'codex', managed: true, verified: true, kind: 'snapshot',
+      conversationId: f.conversationId, nativeId: f.threadId, path: f.path });
+    assert.equal(inspected.digest, data.digest);
+    assert.equal(inspected.common.messages[2].content.filter(block => block.type === 'image').length, 2);
+  } finally { await runtime.close(); }
+});
+
+test('owned attachment recovery does not weaken packet identity, native provenance, or missing-resolver failures', async t => {
+  const absent = await ownedFixture(t);
+  await assert.rejects(absent.runOwned({ resolveLocalImages: undefined }), /unsupported user input/);
+  assert.deepEqual(absent.openedPaths, []);
+  const bootstrap = await ownedFixture(t);
+  bootstrap.bootstrap.items[0].content[0] = { type: 'localImage', path: bootstrap.imagePaths[0], detail: null };
+  await assert.rejects(bootstrap.runOwned(), /checkpoint contains an unsupported native user input/);
+  assert.deepEqual(bootstrap.openedPaths, []);
+  const signature = await ownedFixture(t);
+  signature.bootstrap.items[0].content[0].text += ' altered header';
+  await assert.rejects(signature.runOwned(), /header|signature/);
+  for (const mutate of [
+    f => { f.rawItem.client_id = randomUUID(); },
+    f => { f.response.content[1].text = '<image name=[Image #1] path="/not-the-native-path">'; },
+    f => { f.rows[6].payload.turn_id = randomUUID(); },
+  ]) {
+    const f = await ownedFixture(t); mutate(f); await f.write();
+    await assert.rejects(f.runOwned(), /local image recovery/);
+  }
+});
 
 test('missing local files recover exact native embedded images after two stable API reads without reading image paths', async t => {
   const f = await fixture(t), before = await readFile(f.path);
@@ -287,7 +346,7 @@ test('an observed source change during the bounded raw read is never accepted', 
   await assert.rejects(f.run({ resolveLocalImages: f.resolver({ io }) }), /transcript changed while being read during image recovery/);
 });
 
-test('DesktopRuntime enables verified image recovery only for its authoritative unmanaged source path', async t => {
+test('DesktopRuntime binds verified image recovery to its authoritative current source path', async t => {
   const f = await fixture(t);
   const runtime = await new DesktopRuntime({ root: join(f.base, 'state'), codexHome: f.codexHome, claudeHome: f.claudeHome,
     clientFactory: async () => f.client, ownerFactory() { assert.fail('No Claude worker is needed'); } }).initialize();

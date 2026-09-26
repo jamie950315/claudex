@@ -137,22 +137,35 @@ export class DesktopBridge {
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
       const maintenance = [];
-      for (const { record } of readings) {
-        if (await this.adapters[record.side].needsMaintenance?.(record)) maintenance.push(record.side);
+      for (const { record, data } of readings) {
+        const kind = await this.adapters[record.side].needsMaintenance?.(record, data);
+        if (kind !== undefined && kind !== null && kind !== false && kind !== true && kind !== 'images')
+          throw new Error('Unsupported native maintenance kind.');
+        if (kind) maintenance.push({ side: record.side, kind: kind === true ? 'reset' : kind });
       }
-      if (maintenance.length > 1) throw new Error('Only one native context migration may be planned at a time.');
+      if (maintenance.filter(item => item.kind === 'reset').length > 1)
+        throw new Error('Only one native context migration may be planned at a time.');
+      // Visual repairs are independent, serial native deliveries. Select only
+      // one per transaction, with a required cold reset taking precedence.
+      const upkeep = maintenance.find(item => item.kind === 'reset') ?? maintenance[0];
       if (!changed.length && records.length === 2 && !maintenance.length) return {
         changed: false,
         ...(conversation.discoveryMode === 'cold-import' ? { incompleteTail: readings.some(({ data }) => data.incompleteTail) } : {}),
       };
-      const reading = changed[0] ?? (maintenance.length ? readings.find(entry => entry.record.side !== maintenance[0]) : readings[0]);
+      const reading = changed[0] ?? (upkeep ? readings.find(entry => entry.record.side !== upkeep.side) : readings[0]);
       if (!reading) throw new Error('Context migration requires its verified paired source.');
       const { record: source, data } = reading;
       const side = other(source.side);
-      const contextReset = maintenance.includes(side);
+      const contextReset = upkeep?.side === side && upkeep.kind === 'reset';
+      const contextRefresh = upkeep?.side === side && upkeep.kind === 'images';
       const target = this.current(state, id, side);
       if (target) await this.adapters[side].assertIdle(target);
-      const originalToArchive = side !== 'codex' ? null : target?.managed === false ? target
+      // A visual-only refresh of an already managed snapshot must not acquire
+      // a new archival intent for a legacy preserved original. Its semantic
+      // checkpoint is unchanged; the managed predecessor still has its own
+      // full native retirement/dependency guards.
+      const visualOnlyManagedRefresh = contextRefresh && !changed.length && target?.managed === true;
+      const originalToArchive = side !== 'codex' || visualOnlyManagedRefresh ? null : target?.managed === false ? target
         : state.records.find(record => record.conversationId === id && record.side === 'codex'
           && record.status === 'original' && !record.managed && !record.archivedAt);
       if (originalToArchive) {
@@ -169,10 +182,14 @@ export class DesktopBridge {
       // Preserve the logical title. After verification, archive the superseded
       // Codex original rather than keeping two same-title active entries.
       const title = conversation.title;
-      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset });
+      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset, contextRefresh });
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
       if (contextReset && (side !== 'claude' || !reuse || planned.kind !== 'owner' || planned.contextReset !== true))
         throw new Error('Context migration requires a reusable owned Claude reset plan.');
+      if (planned.contextRefresh && (contextReset || side !== 'claude' || !reuse || planned.kind !== 'owner'
+        || planned.imageProjectionVersion !== 1)) throw new Error('Visual refresh requires the same verified Claude owner.');
+      if (contextRefresh && (planned.imageProjectionVersion !== 1 || side === 'claude' && !planned.contextRefresh))
+        throw new Error('Visual maintenance requires an explicit native image projection.');
       if (reuse && (side !== 'claude' || target.kind !== 'owner' || planned.kind !== 'owner')) throw new Error('Only a verified native Claude owner may reuse its identity.');
       if (reuse) await this.adapters[side].assertIdle(target);
       const record = { ...planned, id: reuse ? target.id : randomUUID(), side, conversationId: id, cwd: conversation.cwd,

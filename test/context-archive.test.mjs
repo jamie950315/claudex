@@ -73,7 +73,8 @@ test('v2 bounded excerpts reconstruct all exact portable roles, text, images, to
   const untouched = structuredClone(source);
   const { root, content, metadata, loaded } = await encoded(t, source, { maxViewBytes: 2048 });
   assert.deepEqual(source, untouched);
-  assert.ok(content.every(block => block.type === 'text'));
+  assert.equal(content.filter(block => block.type === 'image').length, 1);
+  assert.equal(metadata.imageProjectionVersion, 1);
   assert.ok(Buffer.byteLength(content[1].text) <= 2048);
   assert.ok(Buffer.byteLength(JSON.stringify(content)) < 5000);
   assert.match(content[1].text, /not an AI summary or lossless inline history/);

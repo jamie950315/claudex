@@ -46,6 +46,41 @@ test('capture binds the exact native preview to original cache bytes and restore
   assert.equal(await restoreImageAssets({ root: f.root, rows: unbound, bindings: {} }), unbound);
 });
 
+test('the observed large PNG-to-JPEG preview restores exact PNG bytes and media type under its original paste identity', async () => {
+  const f = await fixture();
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jvXcAAAAASUVORK5CYII=', 'base64');
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02, 0xff, 0xd9]);
+  const expectedContent = [{ type: 'text', text: 'One image' }, image(png)];
+  const preview = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } };
+  const row = { ...f.row, message: { role: 'user', content: [expectedContent[0], preview] } };
+  const path = join(f.claudeTempRoot, resolve(f.cwd).replace(/[^a-zA-Z0-9]/g, '-'), f.sessionId, 'images', '1.png');
+  await writeFile(path, png);
+  const input = { ...f, row, expectedContent, expectedHash: hash(expectedContent) };
+  const captured = await captureImageAssets(input);
+  assert.equal(captured.bindings[1].mediaType, 'image/png');
+  assert.equal(captured.bindings[1].renderedMediaType, 'image/jpeg');
+  const bindings = { [row.uuid]: captured.bindings };
+  const restored = await restoreImageAssets({ root: f.root, rows: [row], bindings });
+  assert.deepEqual(restored[0].message.content, expectedContent);
+  assert.equal(row.message.content[1].source.media_type, 'image/jpeg');
+  for (const media_type of ['image/gif', 'image/webp']) {
+    const changed = structuredClone(row); changed.message.content[1].source.media_type = media_type;
+    await assert.rejects(captureImageAssets({ ...input, row: changed }), /preview type differs/);
+    const saved = structuredClone(bindings); saved[row.uuid][1].renderedMediaType = media_type;
+    await assert.rejects(restoreImageAssets({ root: f.root, rows: [row], bindings: saved }), /conversion binding/);
+  }
+  for (const renderedMediaType of [null, '', 'image/png', undefined]) {
+    const saved = structuredClone(bindings); saved[row.uuid][1].renderedMediaType = renderedMediaType;
+    await assert.rejects(restoreImageAssets({ root: f.root, rows: [row], bindings: saved }), /conversion binding/);
+  }
+  const malformed = structuredClone(row); malformed.message.content[1].source.data = Buffer.from('not JPEG bytes').toString('base64');
+  await assert.rejects(captureImageAssets({ ...input, row: malformed }), /signatures/);
+  await writeFile(path, f.original);
+  const malformedOriginal = { ...f, row };
+  await assert.rejects(captureImageAssets(malformedOriginal), /signatures/);
+  await assert.rejects(captureImageAssets({ ...input, row: { ...row, imagePasteIds: [2] } }), /missing/);
+});
+
 test('changed text, wrong cache bytes, or unverified provenance cannot be captured', async () => {
   const f = await fixture();
   await assert.rejects(captureImageAssets({ ...f, row: { ...f.row,

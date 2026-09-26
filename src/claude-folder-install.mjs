@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, rename, link, unlink, readdir, readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { withLock } from './storage.mjs';
 import { buildDynamicFolderSource, FOLDER_SOURCE_SHA256, inspectFolderCache, replaceFolderCacheSource, sha256 } from './claude-folder-cache.mjs';
 
@@ -144,12 +145,15 @@ function ownsCurrent(manifest, hash) {
     || manifest.phase === 'prepared' && hash === manifest.previousPatchedHash;
 }
 
-async function defaultCandidate({ original, root, projectionSource, runtimeSource }) {
+async function defaultCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource,
+  registryRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
   const entry = inspectFolderCache(original);
   const projection = projectionSource ?? await readFile(new URL('./claude-folder-projection.mjs', import.meta.url), 'utf8');
   const runtime = runtimeSource ?? await readFile(new URL('./claude-folder-runtime.mjs', import.meta.url), 'utf8');
+  const handoff = handoffSource ?? await readFile(new URL('./claude-desktop-handoff-runtime.mjs', import.meta.url), 'utf8');
+  const anchor = anchorSource ?? await readFile(new URL('./claude-folder-anchor.mjs', import.meta.url), 'utf8');
   return replaceFolderCacheSource(original, buildDynamicFolderSource(entry.source,
-    { root, projectionSource: projection, runtimeSource: runtime }));
+    { root, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, registryRoot }));
 }
 
 async function operate(action, options, dependencies) {

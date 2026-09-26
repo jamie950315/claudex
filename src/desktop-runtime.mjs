@@ -12,7 +12,7 @@ import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistory
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
 import { createCodexLocalImageResolver } from './native-local-images.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
-import { encodeArchivedContextPacket } from './context-archive.mjs';
+import { encodeArchivedContextPacket, hasProjectedImages } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
 import { isAllowedCodexVersion, isSupportedCodexVersion } from './codex-versions.mjs';
@@ -87,7 +87,7 @@ export class DesktopRuntime {
       operationApplied: (record, pending) => this.operationApplied(record, pending),
       assertIdle: record => this.assertIdle(record), hide: record => this.hide(record), remove: record => this.remove(record),
       exists: record => this.recordExists(record),
-      needsMaintenance: record => this.needsMaintenance(record),
+      needsMaintenance: (record, data) => this.needsMaintenance(record, data),
       resolveAppliedRecord: (record, pending) => this.resolveAppliedRecord(record, pending),
       completePromotion: record => this.completePromotion(record),
     }]));
@@ -144,6 +144,7 @@ export class DesktopRuntime {
     let entry = this.owners.get(conversationId);
     if (entry) {
       if (entry.error) throw entry.error;
+      await entry.owner.reconcileDisplayTitle?.(title);
       return entry.owner;
     }
     const saved = this.contextMode === 'archive'
@@ -151,14 +152,19 @@ export class DesktopRuntime {
     if (forceNormal && saved?.reset) throw new Error('A pending native context reset must be restored before a normal owner starts.');
     const maintenanceOnly = !forceNormal && Boolean(saved?.remoteId);
     const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title,
-      newSessionTitle: `[Claudex] ${title ?? 'Claudex conversation'}`, versionPolicy: this.versionPolicy,
+      newSessionTitle: title ?? 'Claudex conversation', versionPolicy: this.versionPolicy,
       deferRemoteConnection: maintenanceOnly, connectAfterReset: !maintenanceOnly,
       options: { ...this.ownerOptions, pathToClaudeCodeExecutable: this.claudeBinary },
       onEvent: event => this.onEvent({ type: 'claude_notification', conversationId, event }) };
     const owner = this.ownerFactory ? this.ownerFactory(settings) : new ClaudeOwner(settings);
     entry = { owner, error: null, maintenanceOnly }; this.owners.set(conversationId, entry);
-    try { await owner.start(); return owner; }
+    try { await owner.start(); }
     catch (error) { entry.error = error; throw error; } // Retain live handles on a busy startup failure.
+    // Presentation reconciliation can observe a native metadata append after
+    // its successful control receipt. Do not poison an otherwise healthy owner
+    // with that transient read; the durable rename intent is checked next time.
+    await owner.reconcileDisplayTitle?.(title);
+    return owner;
   }
 
   async safePath(path, home) {
@@ -213,7 +219,8 @@ export class DesktopRuntime {
       try {
         data = record.managed
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
-            completedPrefix: true, archiveRoot: this.root, limits })
+            completedPrefix: true, archiveRoot: this.root, limits,
+            resolveLocalImages: createCodexLocalImageResolver({ path, threadId: nativeId }) })
           : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits,
             resolveLocalImages: createCodexLocalImageResolver({ path, threadId: nativeId }) });
       } catch (error) {
@@ -246,7 +253,9 @@ export class DesktopRuntime {
         versionPolicy: this.versionPolicy });
     } else {
       const prefix = completedClaudePrefix({ text: data.text });
-      parsed = { common: decodeClaude(prefix.text), incompleteTail: prefix.incompleteTail };
+      // Desktop checkpoints retain complete readable native history; a Local
+      // context compaction must not replace an already synchronized prefix.
+      parsed = { common: decodeClaude(prefix.text, { preserveCompactionHistory: true }), incompleteTail: prefix.incompleteTail };
     }
     if (importPacket && !parsed.importedPackets) throw new Error('Imported Claude original is missing its authenticated bootstrap packet.');
     assertComplete(parsed.common);
@@ -255,30 +264,39 @@ export class DesktopRuntime {
     return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common) };
   }
 
-  async plan(side, { conversationId, nativeId, common, title, target, contextReset = false }) {
+  async plan(side, { conversationId, nativeId, common, title, target, contextReset = false, contextRefresh = false }) {
     if (side === 'claude') {
       const owner = await this.owner(conversationId, common.meta.cwd, title);
       const status = owner.status();
       if (target?.managed && target.nativeId !== status.sessionId) throw new Error('Existing Claude owner does not match the tracked identity.');
+      const refresh = !contextReset && this.contextMode === 'archive' && target?.managed
+        && (contextRefresh || target.imageProjectionVersion !== 1 && hasProjectedImages(common.messages));
       return { nativeId: status.sessionId, path: status.transcriptPath, kind: 'owner', title,
         packetVersion: this.contextMode === 'archive' ? 2 : 1,
-        ...(this.contextMode === 'archive' ? { archiveVersion: 2 } : {}), ...(contextReset ? { contextReset: true } : {}) };
+        ...(this.contextMode === 'archive' ? { archiveVersion: 2, imageProjectionVersion: 1 } : {}),
+        ...(contextReset ? { contextReset: true } : {}), ...(refresh ? { contextRefresh: true } : {}) };
     }
     await this.codex();
+    if (contextRefresh && target) await this.assertOwnedSnapshot(target);
     return { nativeId, path: codexProjectionPath(this.codexHome, common, nativeId), kind: 'snapshot', title,
-      packetVersion: this.contextMode === 'archive' ? 2 : 1, ...(this.contextMode === 'archive' ? { archiveVersion: 2 } : {}) };
+      packetVersion: this.contextMode === 'archive' ? 2 : 1,
+      ...(this.contextMode === 'archive' ? { archiveVersion: 2, imageProjectionVersion: 1 } : {}) };
   }
 
-  async needsMaintenance(record) {
+  async needsMaintenance(record, data) {
     importedClaudeOriginal(record);
-    if (record.side !== 'claude' || !record.managed || this.contextMode !== 'archive') return false;
+    if (!record.managed || this.contextMode !== 'archive') return false;
+    const needsImages = record.packetVersion === 2 && record.imageProjectionVersion !== 1
+      && data?.common?.messages && hasProjectedImages(data.common.messages);
+    if (record.side === 'codex') return needsImages && record.kind === 'snapshot' ? 'images' : false;
+    if (record.side !== 'claude') return false;
     const owner = await this.owner(record.conversationId, record.cwd, record.title);
     if (record.packetVersion !== 2) {
       if (!owner.status().coldResetEligible) throw new Error('Inline context migration requires a fresh cold native owner; active input channels were preserved.');
       return true;
     }
     await this.activateNormalOwner(record);
-    return false;
+    return needsImages ? 'images' : false;
   }
 
   async activateNormalOwner(record) {
@@ -325,7 +343,10 @@ export class DesktopRuntime {
   async packet(record, common, pending) {
     const encode = record.packetVersion === 2 ? encodeArchivedContextPacket : encodeContextPacket;
     return encode({ root: this.root, archiveVersion: record.archiveVersion ?? 1,
-      messages: common.messages.slice(pending.previous.count), key: this.key,
+      imageProjectionVersion: record.imageProjectionVersion ?? 0,
+      maxNativeBytes: this.nativeHistoryMaxBytes,
+      ...(record.contextRefresh ? { historyPrefixCount: pending.previous.count } : {}),
+      messages: record.contextRefresh ? common.messages : common.messages.slice(pending.previous.count), key: this.key,
       conversationId: record.conversationId, sourceSide: 'codex', targetSessionId: record.nativeId,
       operationId: pending.operationId, previousDigest: pending.previous.digest });
   }
@@ -375,6 +396,8 @@ export class DesktopRuntime {
     let contextContent, resolveArchive;
     if (record.packetVersion === 2) {
       contextContent = await encodeArchivedContextPacket({ root: this.root, common, key: this.key, archiveVersion: record.archiveVersion ?? 1,
+        imageProjectionVersion: record.imageProjectionVersion ?? 0,
+        maxNativeBytes: this.nativeHistoryMaxBytes,
         conversationId: record.conversationId, targetSessionId: record.nativeId, sourceSide: 'claude', operationId: pending.operationId });
       resolveArchive = await prepareArchiveResolver({ root: this.root, contents: [contextContent], key: this.key,
         conversationId: record.conversationId, targetSessionId: record.nativeId });

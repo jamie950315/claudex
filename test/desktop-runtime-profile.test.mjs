@@ -6,7 +6,8 @@ import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { encodeContextPacket } from '../src/context-packet.mjs';
-import { encodeArchivedContextPacket } from '../src/context-archive.mjs';
+import { encodeArchivedContextPacket, inspectArchivedContextPacket } from '../src/context-archive.mjs';
+import { fingerprint } from '../src/history.mjs';
 import { encodeClaude, sessionPath } from '../src/claude.mjs';
 import { hash, snapshot, writeJSON } from '../src/storage.mjs';
 
@@ -39,7 +40,7 @@ test('a verified archived current owner resumes directly with normal user settin
     await f.runtime.inspect(f.record);
     assert.equal(f.calls[0].settings.deferRemoteConnection, false);
     assert.equal(f.calls[0].settings.title, 'Synthetic profile');
-    assert.equal(f.calls[0].settings.newSessionTitle, '[Claudex] Synthetic profile');
+    assert.equal(f.calls[0].settings.newSessionTitle, 'Synthetic profile');
     assert.equal(f.record.title, 'Synthetic profile');
     await f.runtime.needsMaintenance(f.record);
     assert.equal(f.calls.length, 1);
@@ -86,5 +87,48 @@ test('native-only Desktop startup never becomes an available synchronization bac
       pid: process.pid, childPid: process.pid, transportMode: 'native', cliVersion: 'codex-cli 99.0.0', socketPath: null });
     await assert.rejects(f.runtime.codex(), /native-only mode.*awaits version validation/);
     assert.equal(f.runtime.client, undefined);
+  } finally { await f.runtime.close(); }
+});
+
+test('a transient title-proof read does not poison or replace the healthy native owner', async () => {
+  const f = await fixture();
+  let started = 0, checked = 0;
+  f.runtime.ownerFactory = () => ({
+    async start() { started++; }, status: () => ({ closed: false }), async close() {},
+    async reconcileDisplayTitle() { if (++checked === 1) throw new Error('Transcript changed while being read.'); },
+  });
+  try {
+    await assert.rejects(f.runtime.owner(f.record.conversationId, f.record.cwd, f.record.title), /changed while/);
+    await f.runtime.owner(f.record.conversationId, f.record.cwd, f.record.title);
+    assert.equal(started, 1); assert.equal(checked, 2);
+  } finally { await f.runtime.close(); }
+});
+
+test('legacy text-only image owners refresh a full checkpoint while old pending packets remain byte-compatible', async () => {
+  const f = await fixture();
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AQID' } };
+  const common = { meta: { cwd: f.record.cwd }, messages: [
+    { role: 'user', content: [{ type: 'text', text: 'Image question' }, image] },
+    { role: 'assistant', content: [{ type: 'text', text: 'Answer' }] },
+  ] };
+  try {
+    await f.runtime.inspect(f.record);
+    assert.equal(await f.runtime.needsMaintenance(f.record, { common }), 'images');
+    assert.equal(await f.runtime.needsMaintenance({ ...f.record, imageProjectionVersion: 1 }, { common }), false);
+    assert.equal(await f.runtime.needsMaintenance({ ...f.record, side: 'codex', kind: 'snapshot' }, { common }), 'images');
+    const planned = await f.runtime.plan('claude', { conversationId: f.record.conversationId, common,
+      title: f.record.title, target: f.record });
+    assert.equal(planned.nativeId, f.record.nativeId);
+    assert.equal(planned.contextRefresh, true); assert.equal(planned.imageProjectionVersion, 1);
+    const record = { ...f.record, ...planned };
+    const packet = await f.runtime.packet(record, common, { operationId: 'visual-refresh',
+      previous: { count: 2, digest: fingerprint(common) } });
+    assert.equal(packet.filter(block => block.type === 'image').length, 1);
+    const metadata = inspectArchivedContextPacket({ content: packet, key: f.runtime.key,
+      conversationId: record.conversationId, targetSessionId: record.nativeId });
+    assert.equal(metadata.historyPrefixCount, 2);
+    const legacy = await f.runtime.packet({ ...record, contextRefresh: undefined, imageProjectionVersion: undefined },
+      common, { operationId: 'old-prepared-operation', previous: { count: 0, digest: null } });
+    assert.equal(legacy.length, 3); assert.ok(legacy.every(block => block.type === 'text'));
   } finally { await f.runtime.close(); }
 });

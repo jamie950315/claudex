@@ -113,7 +113,8 @@ function nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, d
  * a publication boundary. A newer unfinished user turn is deliberately kept
  * local until it finishes, rather than blocking earlier completed work.
  */
-function completedPrefix({ text, key }, decodePacket) {
+function completedPrefix(options, decodePacket) {
+  const { text, key } = options;
   let offset = 0, cutoff = 0;
   for (const line of text.split('\n')) {
     offset += line.length + 1;
@@ -128,29 +129,58 @@ function completedPrefix({ text, key }, decodePacket) {
     }
   }
   if (!cutoff) throw new Error('Wait for a complete assistant turn or verified synchronized checkpoint.');
-  return { text: text.slice(0, cutoff), incompleteTail: text.slice(cutoff).split('\n').filter(Boolean).some(line => {
-    const row = JSON.parse(line);
-    return !row.isSidechain && (row.type === 'user' || row.type === 'assistant');
-  }) };
+  const tail = text.slice(cutoff).split('\n').filter(Boolean).map(JSON.parse).filter(row =>
+    !row.isSidechain && (row.type === 'user' || row.type === 'assistant'));
+  if (key && tail.length === 1 && tail[0].type === 'user' && tail[0].isMeta === true
+    && Array.isArray(tail[0].message?.content) && tail[0].message.content.length === 1
+    && tail[0].message.content[0]?.type === 'text' && typeof tail[0].message.content[0].text === 'string'
+    && tail[0].message.content[0].text.startsWith('[Image: source: ')) {
+    // The pinned CLI adds one image-source sidecar after a no-query packet.
+    // It is complete only after the FULL native graph and authenticated parent
+    // prove that this sole trailing message is exactly that inert annotation.
+    const validated = decodeOwnedNative(options, decodePacket);
+    const imageAnnotations = nativeImageAnnotationKeys(text, validated.native,
+      { sessionId: options.sessionId, versionPolicy: validated.versionPolicy }, decodePacket);
+    if (imageAnnotations.has(messageKey({ role: 'user', content: tail[0].message.content, timestamp: tail[0].timestamp })))
+      return { text, incompleteTail: false, validated: { ...validated, imageAnnotations } };
+  }
+  return { text: text.slice(0, cutoff), incompleteTail: tail.length > 0 };
 }
 
 export function completedClaudePrefix(options) {
-  return completedPrefix(options, packetDecoder(options));
+  const { text, incompleteTail } = completedPrefix(options, packetDecoder(options));
+  return { text, incompleteTail };
+}
+
+function decodeOwnedNative({ text, sessionId, versionPolicy = 'strict' }, decodePacket) {
+  versionPolicy = normalizeVersionPolicy(versionPolicy);
+  const rows = text.split('\n').filter(Boolean).map(JSON.parse);
+  const firstCompaction = rows.findIndex(row => !row.isSidechain && row.type === 'system' && row.subtype === 'compact_boundary');
+  if (firstCompaction >= 0 && !rows.slice(0, firstCompaction).some(row => !row.isSidechain && row.type === 'user' && decodePacket(row.message?.content)))
+    throw new Error('Owned Claude compaction requires its authenticated earlier checkpoint.');
+  const native = decodeClaude(text, { preserveCompactionHistory: true, authenticatePreservedPacket(row, boundary, summary) {
+    if (row.sessionId !== sessionId || row.sessionId !== boundary.sessionId || row.cwd !== boundary.cwd
+      || row.version !== boundary.version || row.version !== summary.version
+      || !runtimeVersionPermitted(row.version, '2.1.281', versionPolicy)) return false;
+    const packet = decodePacket(row.message?.content);
+    return packet?.sourceSide === 'codex';
+  } });
+  if (native.meta.id !== sessionId) throw new Error('Owned Claude history has a different native session identity.');
+  return { native, versionPolicy };
 }
 
 /** Recover logical conversation history without mistaking imports for new turns.
  * The native SDK remains the only writer. Callers must snapshot the source and
  * require an idle owner before using this view as a completed source checkpoint.
  */
-function ownedClaudeHistory({ text, conversationId, sessionId, resetBootstrap, versionPolicy = 'strict' }, decodePacket) {
-  versionPolicy = normalizeVersionPolicy(versionPolicy);
-  const native = decodeClaude(text);
-  if (native.meta.id !== sessionId) throw new Error('Owned Claude history has a different native session identity.');
+function ownedClaudeHistory(options, decodePacket, validated) {
+  const { text, conversationId, sessionId, resetBootstrap } = options;
+  const { native, versionPolicy } = validated ?? decodeOwnedNative(options, decodePacket);
   // Validate the full native parent graph first. Then exclude only the known
   // CLI image-source format tied to an authenticated no-query packet. Warn
   // policy relaxes version tags, not the sidecar's provenance or format.
   // The sidecar stays in the native transcript and is not an authored turn.
-  const imageAnnotations = nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, decodePacket);
+  const imageAnnotations = validated?.imageAnnotations ?? nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, decodePacket);
   const resetAnnotations = resetTransportKeys(text, native, { sessionId, resetBootstrap, versionPolicy }, decodePacket);
   const messages = [];
   const prefixFingerprint = incrementalFingerprint();
@@ -177,8 +207,11 @@ function ownedClaudeHistory({ text, conversationId, sessionId, resetBootstrap, v
     if (operations.has(packet.operationId)) throw new Error('Owned Claude history contains a repeated synchronization operation.');
     const previous = messages.length ? prefixFingerprint.digest() : null;
     if (packet.previousDigest !== previous) throw new Error('Owned Claude history does not match the synchronized prefix; no branch was selected.');
+    if (packet.historyPrefixCount !== undefined && (packet.historyPrefixCount !== messages.length
+      || fingerprint({ messages: packet.messages }, packet.historyPrefixCount) !== previous))
+      throw new Error('Owned Claude image refresh does not match the complete synchronized prefix; no history was duplicated.');
     operations.add(packet.operationId);
-    append(packet.messages);
+    append(packet.historyPrefixCount === undefined ? packet.messages : packet.messages.slice(packet.historyPrefixCount));
     importedPackets++;
     followsPacket = true;
   }
@@ -202,5 +235,5 @@ export function decodeOwnedClaudeHistory(options) {
 export function decodeCompletedOwnedClaudeHistory(options) {
   const decodePacket = packetDecoder(options);
   const prefix = completedPrefix(options, decodePacket);
-  return { ...ownedClaudeHistory({ ...options, text: prefix.text }, decodePacket), incompleteTail: prefix.incompleteTail };
+  return { ...ownedClaudeHistory({ ...options, text: prefix.text }, decodePacket, prefix.validated), incompleteTail: prefix.incompleteTail };
 }

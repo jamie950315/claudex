@@ -93,6 +93,32 @@ test('raw full API bootstrap expands without metadata or provenance additions ch
   assert.equal(result.nativeDigest, 'synthetic-native-digest');
 });
 
+test('archived Codex bootstraps contain real native image inputs and bind them to the full canonical checkpoint', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-codex-archive-images-')));
+  const common = canonical();
+  const contextContent = await encodeArchivedContextPacket({ ...identity, root, common, sourceSide: 'claude' });
+  assert.equal(contextContent.filter(block => block.type === 'image').length, 1);
+  const resolveArchive = await prepareArchiveResolver({ ...identity, root, contents: [contextContent] });
+  const projection = buildOwnedCodexCommon({ ...identity, canonical: common, contextContent, resolveArchive });
+  const native = apiSnapshot(projection);
+  assert.equal(native.turns[0].items[0].content.filter(block => block.type === 'image').length, 1);
+  const restored = decodeOwnedCodexNativeHistory({ ...identity, snapshot: native, cwd: '/tmp', resolveArchive });
+  assert.equal(restored.digest, fingerprint(common));
+  assert.deepEqual(restored.common.messages[0].content.find(block => block.type === 'image'), common.messages[0].content.find(block => block.type === 'image'));
+  assert.equal(decodeOwnedCodexHistory({ ...identity, text: encode(projection), resolveArchive }).digest, fingerprint(common));
+});
+
+test('a Codex bootstrap cannot masquerade as a refresh of already existing native history', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-codex-refresh-refusal-')));
+  const common = canonical();
+  const contextContent = await encodeArchivedContextPacket({ ...identity, root, common, sourceSide: 'claude',
+    previousDigest: fingerprint(common), historyPrefixCount: common.messages.length });
+  const resolveArchive = await prepareArchiveResolver({ ...identity, root, contents: [contextContent] });
+  assert.throws(() => buildOwnedCodexCommon({ ...identity, canonical: common, contextContent, resolveArchive }), /full canonical checkpoint/);
+  const projection = built(); projection.messages[0].content = contextContent;
+  assert.throws(() => decodeOwnedCodexNativeHistory({ ...identity, snapshot: apiSnapshot(projection), cwd: '/tmp', resolveArchive }), /invalid source side or prefix/);
+});
+
 test('API continuation preserves actual turns and compaction events as inert history without another notice', () => {
   const snapshot = apiSnapshot();
   const later = { id: 'later-turn', status: 'completed', itemsView: 'full', startedAt: 200, completedAt: 201, items: [

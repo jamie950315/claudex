@@ -136,6 +136,66 @@ test('alternating native turns keep one Claude owner, bounded Codex snapshots, a
   assert.ok(f.calls.plan.every(call => call.title === 'Question 0'));
 });
 
+test('image visibility repairs run serially on both managed sides without adding semantic turns', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('codex', 1); await f.bridge.sync(f.conversationId);
+  const before = (await f.bridge.status()).conversations[f.conversationId].canonical;
+  const owner = (await f.current('claude')).nativeId;
+  for (const side of ['codex', 'claude']) {
+    const adapter = f.bridge.adapters[side], plan = adapter.plan;
+    adapter.needsMaintenance = async record => record.managed && record.imageProjectionVersion !== 1 ? 'images' : false;
+    adapter.plan = async options => ({ ...await plan(options), imageProjectionVersion: 1,
+      ...(side === 'claude' && options.contextRefresh ? { contextRefresh: true } : {}) });
+  }
+  assert.equal((await f.bridge.sync(f.conversationId)).side, 'codex');
+  assert.equal((await f.bridge.sync(f.conversationId)).side, 'claude');
+  assert.equal((await f.current('claude')).nativeId, owner);
+  assert.deepEqual((await f.bridge.status()).conversations[f.conversationId].canonical, before);
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, false);
+});
+
+test('a persisted image refresh recovers without another native append or semantic checkpoint growth', async () => {
+  const f = await fixture({}, 'codex'); await f.bridge.sync(f.conversationId);
+  const before = (await f.bridge.status()).conversations[f.conversationId].canonical;
+  const adapter = f.bridge.adapters.claude, plan = adapter.plan;
+  adapter.needsMaintenance = async record => record.imageProjectionVersion !== 1 ? 'images' : false;
+  adapter.plan = async options => ({ ...await plan(options), imageProjectionVersion: 1, contextRefresh: true });
+  f.fail.afterApply = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after durable native apply/);
+  const applied = f.calls.apply.length;
+  assert.equal((await f.bridge.status()).pending.record.contextRefresh, true);
+  await f.bridge.recover();
+  assert.equal(f.calls.apply.length, applied);
+  assert.deepEqual((await f.bridge.status()).conversations[f.conversationId].canonical, before);
+});
+
+test('unknown maintenance kinds cannot silently choose a native rewrite path', async () => {
+  const f = await fixture();
+  f.bridge.adapters.claude.needsMaintenance = async () => 'unknown';
+  await assert.rejects(f.bridge.sync(f.conversationId), /Unsupported native maintenance/);
+  assert.equal(f.calls.apply.length, 0);
+});
+
+test('visual-only managed refresh does not acquire a new archive intent for a preserved dependent original', async () => {
+  const f = await fixture({}, 'codex'); await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1); await f.bridge.sync(f.conversationId);
+  await f.bridge.locked(async state => {
+    const original = state.records.find(record => record.side === 'codex' && !record.managed);
+    delete original.archivedAt;
+    await f.bridge.save(state);
+  });
+  f.files.get('/original').dependent = true;
+  const count = f.calls.archiveOriginal.length, before = (await f.bridge.status()).conversations[f.conversationId].canonical;
+  const adapter = f.bridge.adapters.codex, plan = adapter.plan;
+  adapter.needsMaintenance = async record => record.imageProjectionVersion !== 1 ? 'images' : false;
+  adapter.plan = async options => ({ ...await plan(options), imageProjectionVersion: 1 });
+  assert.equal((await f.bridge.sync(f.conversationId)).side, 'codex');
+  assert.equal(f.calls.archiveOriginal.length, count);
+  assert.deepEqual((await f.bridge.status()).conversations[f.conversationId].canonical, before);
+  assert.equal((await f.bridge.status()).records.find(record => record.nativeId === 'original').archivedAt, undefined);
+});
+
 test('same-title Codex continuation archives its original only after verified promotion', async () => {
   const f = await fixture({}, 'codex');
   const original = copy(f.files.get('/original').common);

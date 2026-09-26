@@ -145,16 +145,40 @@ uncertain append. Native user turns are never interrupted for synchronization.
 New Desktop installations select `contextMode: "archive"`. The complete portable
 history is stored in authenticated, content-addressed `history-assets` under the
 private state root. Native messages show deterministic readable excerpts, not an
-AI summary: at most 128 KiB per view and 8 KiB per text excerpt, with exact source
-indices and an explicit manifest path for details. Native-event/tool bodies,
-images, and unshown text remain in the archive and must reconstruct the identical
-canonical digest. Missing, changed, or wrong-root archives stop synchronization.
+AI summary: the text view is at most 128 KiB, with at most 8 KiB per text excerpt,
+exact source indices and an explicit manifest path for details. Supported source
+images and tool-result images also appear as authenticated native image blocks,
+so the receiving model has actual visual inputs rather than only an archive path.
+Native-event/tool bodies, original images and unshown text remain in the archive
+and must reconstruct the identical canonical digest. Missing, changed, or
+wrong-root archives stop synchronization. The full native packet, including
+images, must fit the existing byte limits; oversize projections fail explicitly
+without silently omitting or truncating images.
 These assets are authoritative conversation content, not disposable rollback data.
 Archive v2 uses shared pages of at most 64 message references and a small manifest,
 so successive full checkpoints do not duplicate an ever-growing reference list.
 Archive v1 remains readable and reproducible for existing prepared operations.
 The v1 inline packet format remains readable; already prepared v1 transactions
 keep their original encoding during recovery.
+
+Image-bearing archive packets sign `imageProjectionVersion: 1`. Earlier
+three-text-only packets preserved image bytes on disk but did not expose those
+images to the receiving model; matching archive hashes alone did not prove visual
+delivery. Explicit projection version `0` reproduces those older prepared
+operations byte for byte. Only genuine source image blocks and standard
+tool-result image content are projected; image-shaped objects inside arbitrary
+tool inputs remain inert historical JSON.
+
+Older managed image histories receive a one-time serial visual-context repair,
+gated by the saved record's image-projection version. Codex receives a new bounded
+managed generation; Claude receives a complete authenticated checkpoint in its
+existing owner, without `/clear`, a model call or a new native/Remote Control ID.
+`historyPrefixCount` binds the checkpoint to the exact prior canonical prefix:
+only any genuinely new tail is added to logical history, never a second copy of
+earlier messages. Normal activity, conflict, pending-operation and retention
+guards still apply. Transport and digest checks must be supplemented with actual
+model-input acceptance after deployment; they do not by themselves prove the
+receiving model can see the images.
 
 Desktop native history reads default to a 16 MiB byte budget and 100 turns per
 page. The private state root's `config.json` can explicitly set
@@ -167,7 +191,7 @@ Raw and converted histories must both fit the byte budget. Exceeding a limit
 reports the source thread ID and stops that operation without retry, truncation,
 fallback, or weakening authentication and canonical-history checks.
 
-For an unmanaged Codex source, a native `localImage` may be recovered from the
+For a Codex original or a later turn in an owned continuation, a native `localImage` may be recovered from the
 current authoritative rollout's embedded input image even when its old attachment
 file is missing. Recovery requires the complete native/API user item, thread and
 turn identities, a unique earlier user response, exact text, and ordered image
@@ -178,6 +202,9 @@ with no-follow opens, a stable file identity/stat check, a 512 MiB scan limit an
 budget still apply. These are the persisted model-input bytes, not a claim that
 the original upload was unresized. Ambiguous, missing or changed provenance remains
 blocked; the source file is never rewritten.
+An owned bootstrap remains an inline signed checkpoint, not a candidate for
+historical-path recovery. Adding another attachment after switching apps uses
+the same current-rollout provenance checks and retains the exact earlier prefix.
 
 An existing inline owner migrates only in a fresh, unexposed maintenance process
 after its previous writer has actually exited. A connected owner's idle state or
@@ -212,10 +239,12 @@ or backup collection; neither history is overwritten.
 #### Daily desktop use
 
 1. Work in Codex normally and wait for the current reply to finish.
-2. In Claude Desktop's Code page, open the corresponding conversation marked
-   **Connected via Remote Control**. Wait for the new history to arrive, then
-   continue there. Ordinary Chat/Cowork conversations are not this bridge's
-   synchronized entry point.
+2. In Claude Desktop's Code page, open the corresponding same-title conversation
+   in the original project folder. With native folders and Local handoffs enabled,
+   the superseded Local entry is archived after verification; no title prefix is
+   needed to identify the continuation. Its native connection still uses Remote
+   Control. Wait for delivery before continuing. Ordinary Chat/Cowork conversations
+   are not this bridge's synchronized entry point.
 3. After Claude finishes, return to the current task with the original title
    in Codex. Do not resume the superseded original for the same work branch.
 4. Repeat as needed. Both applications may remain open in Desktop mode, but
@@ -239,15 +268,15 @@ needed. A fresh native Desktop session, automatic Codex visibility and an
 actual Codex reply recalling the Claude response have been verified.
 
 The first return from Codex uses a **separate managed Remote Control session**
-with the same logical title. It does not append into the original Desktop-owned
-Local session. Continue in the entry marked **Connected via Remote Control**
-after that handoff. The original Local entry remains preserved and is not
-automatically archived or deleted; writing new work there after the handoff
-causes an explicit original-history conflict. This is not in-place two-way
-writing to the original Local session, and Codex's original-archival policy does
-not apply to that Desktop-owned entry. Ordinary Chat/Cowork and remote-only
-sessions without an accessible supported native transcript are outside this
-verified discovery path.
+with the same title and no `[Claudex]` prefix. It does not append into the original
+Desktop-owned Local session. With the opt-in native Local handoff below, the
+verified Local predecessor is archived through Claude's own lifecycle API, and
+the same-title continuation remains in its existing project folder. Original
+contents are preserved, not deleted or rewritten. Opening an archived original
+and adding new work still causes an explicit original-history conflict; it does
+not merge branches. This is a same-title handoff, not in-place two-way writing
+under the Local native ID. Ordinary Chat/Cowork and remote-only sessions without
+an accessible supported native transcript are outside this discovery path.
 
 #### Historical Local imports
 
@@ -277,16 +306,19 @@ this is not evidence that every historical conversation can be imported.
 Continue a newly adopted import in its Local entry. A completed Claude turn can
 produce the usual Codex continuation, subject to the unchanged original-archive
 and dependency guards. Returning from Codex creates a **separate Remote Control
-entry**: continue there afterward, leaving the Local original preserved. Further
+entry** with the same title. Native Local handoffs can archive the verified Local
+predecessor while preserving its contents. Further
 work in the superseded Local original is an explicit conflict, not an automatic
 merge. This is the same Local-to-Remote-Control transition described above.
 
-New managed Remote Control entries are named **`[Claudex] <original title>`**
-to distinguish the continuation from its preserved Local source. For example,
-continue in `[Claudex] Ping` after replying in Codex, not the old Local `Ping`.
-The logical title and Codex task names remain unchanged. Existing owners are not
-bulk-renamed; an explicit rename in Claude's native UI is preserved when Remote
-Control reconnects. Without the optional folder presentation adapter below,
+New managed Remote Control entries use the **original conversation title**,
+matching Codex generations. Existing owned names with the exact legacy
+`[Claudex]` prefix are migrated through the live owner's native rename API.
+The durable migration journal and native transcript proof prevent an ambiguous
+rename from silently succeeding or being sent again. Unrelated manual names
+are preserved, including on Remote Control reconnection. No standalone helper
+appends rename metadata into a live transcript. Without the optional folder
+presentation adapter below,
 Remote Control entries may be under **Other** or in **Search**, rather than
 inside the Local project's group. Pinning, title prefixes, or a new same-name
 custom group do not satisfy the folder-placement requirement.
@@ -317,7 +349,8 @@ This is a **version-pinned presentation compatibility patch**, not an official
 Claude folder-assignment API. It updates one Zstandard-compressed HTTP cache
 resource, with validated stream checksums, exact source hash and anchor checks,
 an immutable backup and a recovery journal under `ui-folder-compat`. It does not
-modify the signed app, credentials, session registry or transcript. Node must
+modify the signed app or credentials, or directly edit session registries or
+transcripts. Optional native archival is the separate guarded action below. Node must
 provide Zstandard and CRC32 support. The checked frontend asset is
 `shared-23-Db0dcGkF.js`, original decoded SHA-256
 `01bc6cf8d85b25edda8a396f00e664872a03288f6c06aff03d1aa0f2fa466ebf`.
@@ -329,12 +362,79 @@ The watcher publishes `folder-map.json` atomically, using only verified current
 owner IDs and canonical directories. The renderer uses Claude's existing guarded
 read-only file API; no local HTTP server, credential copy or extra native worker
 is involved. Pending transitions preserve the previous map. Missing/invalid data
-disables the presentation override and reports a diagnostic.
+disables the presentation override and reports a diagnostic. When native Local
+handoffs are enabled, separate verified identity anchors allow the original
+folder grouping to survive archival of its last visible Local entry. The
+renderer reads the archived native session and git metadata through the app's
+existing APIs and its exact session normalizer; it does not invent a folder key
+or create a similarly named group.
 
 To undo, stop the watcher safely and run `node bin/claudex.mjs desktop folders
 disable`, then restart the idle Claude app and watcher. The map is cleared and
 the exact original cache resource is restored only if the current file remains
 installer-owned. Original conversations and backups are preserved.
+Disabling folders also disables native Local handoffs.
+
+#### Native Local predecessor archival
+
+After enabling folders, safely stop the watcher before changing this setting:
+
+```sh
+node bin/claudex.mjs desktop handoffs enable
+node bin/claudex.mjs desktop handoffs status
+```
+
+Restart the idle Claude app after the cache adapter upgrade, then start the
+watcher. The optional consumer uses Claude's observed native Local archive API,
+not direct database, registry or transcript writes. Both newly promoted and
+existing verified Local-to-Remote-Control pairs are eligible. It does not archive
+unrelated sessions, rename manual titles or register another Local writer.
+
+Before issuing an intent, the coordinator verifies the original against its own
+complete saved checkpoint and the idle replacement against the current canonical
+history. It binds the exact Local UI/CLI mapping, registered Remote Control ID,
+cwd, title, last activity and original byte-prefix proof. Commands expire after
+15 seconds; pending work and newly observed activity revoke them. The renderer
+reads fresh Local state twice, checks title, identity, cwd, activity, idle state,
+drafts and dependencies, and rechecks the command immediately before archival.
+Because native session/transcript DTOs can report the Desktop UI ID instead of
+the CLI ID, it also rereads the exact original registry JSON through the guarded
+native read-only file API. The path must be beneath the pinned native registry
+root with the exact Local filename; persisted UI/CLI IDs, cwd, title and activity
+must match the intent. No registry or database file is modified directly.
+Worktree cleanup is disabled. Archive outcome and original history preservation
+must be verified; an unresolved action is not silently treated as completed.
+
+Presentation anchors have a separate lifecycle: new work may retain a previously
+verified grouping only while the current ledger, owner native/Remote Control
+identity and original Local mapping still agree. An anchor never authorizes an
+archive, and expired commands are never made actionable by retained grouping.
+There remains **one fixed Local original archive per logical conversation**, not
+another copy each round. It is not disposable quota data. Generated previous
+copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
+the audit remains capped at 50 entries.
+
+This path is version-pinned and guarded, not an external writer lease. A manifest
+or ready service is not native UI acceptance: verify the old Local entry is
+archived, the same-title continuation remains in the original folder, and its
+history still opens normally. Automated protocol coverage does not alone prove
+those running-app results.
+
+Native UI checks have verified existing Local predecessors and a fresh
+image-origin Local predecessor become archived, while native titles use their
+original names without the owned legacy prefix. Inspect the native **Active**
+view when checking that only the current conversation is shown: **All** may
+intentionally include the recoverable archived originals. No code hides those
+rows or deletes their history. Prefix removal applies to conversation titles;
+authenticated Claudex import labels and transport receipts inside history remain
+unchanged.
+
+To disable only automatic Local archival, stop the watcher and run
+`node bin/claudex.mjs desktop handoffs disable`. This clears pending commands;
+it does not unarchive predecessors, delete histories or change the current
+Remote Control writer.
+
+#### Scheduling and collection
 
 Idle historical imports do not each reserve a long-lived SDK process. For these
 `cold-import` pairs only, the watcher may skip repeated full reads after a
@@ -404,8 +504,10 @@ and unverified auxiliary data prevent automatic original archival. Existing
 conversations with such dependencies remain untouched; no dependency guard is
 removed merely to produce a cleaner sidebar.
 
-Earlier `[Claudex]` task names remain until their next safe Codex handoff; this
-does not bulk-rename or archive existing sessions on installation. An older
+Earlier `[Claudex]` Codex task names remain until their next safe Codex handoff.
+Exact legacy owned Claude prefixes use the guarded native title migration above;
+unrelated manual names are not overwritten. Existing verified Local predecessors
+are eligible only when native Local handoffs are enabled and all guards pass. An older
 pending transaction retains its saved name and archive behavior during recovery.
 If an older preserved original has not been archived, it must pass the same
 preflight before a new same-title generation is allocated.
@@ -440,7 +542,8 @@ node bin/claudex.mjs sync CONVERSATION_ID --from claude
 `track` returns the logical conversation ID. The watcher handles subsequent
 completed turns automatically. Original contents are preserved. The legacy
 adapter leaves original entries visible; Desktop mode archives a verified
-superseded Codex original as described above. Neither mode treats original
+superseded Codex original, and its opt-in native Local handoff archives a verified
+Claude predecessor, as described above. Neither mode treats original
 content as a disposable generated backup.
 
 ## Bounded retention
@@ -532,8 +635,8 @@ are not presented as if they survived compaction.
 - Codex: a nonempty native `compacted.message` without replacement history.
 - Claude: an explicit `compact_boundary` linked to one readable
   `isCompactSummary` record and a complete independent continuation chain.
-- Encrypted/empty summaries, Codex replacement histories, and Claude preserved
-  segments are not transferable by this adapter. The latest boundary controls;
+- Encrypted/empty summaries, Codex replacement histories, and general Claude
+  preserved-segment chains are not transferable. The latest boundary controls;
   an older readable summary cannot substitute for a newer opaque one.
 - Codex `history_base` references are not flattened into tail-only conversations.
   Without a validated self-contained native summary, their earlier prefix must
@@ -545,6 +648,19 @@ boundary is new, occurs after the saved native byte count, and the entire saved
 byte prefix still matches its hash. Checkpoints advance only after successful
 promotion. Conflicts on the other side still block replacement. Original files
 remain untouched; the existing retention limits apply to summarized generations.
+
+SDK-owned Desktop conversations have an additional exact-history path. Fresh
+native Claude compaction keeps the complete earlier authenticated canonical
+prefix and the explicitly linked readable summary, then adds only a complete
+continuation. Native UUID, parent, logical-parent, session and cwd links must all
+agree; a summary cannot legitimize a missing, changed or duplicate earlier row.
+The observed native `/compact` form that preserves one trailing SDK no-query
+packet is supported only when both preserved-metadata objects identify that same
+physical prefix row and its summary anchor, and the packet authenticates under
+the existing conversation. It is counted once, not replayed as new history.
+This narrow exception does not enable arbitrary preserved segments or opaque
+history. Malformed references, unknown forms and incomplete tails still block
+checkpoint advancement.
 
 ## Claude Desktop boundary
 
@@ -562,17 +678,19 @@ and symlinked stores refuse retirement instead of treating ownership as absent.
 The verified Desktop-origin export above is read-only and does not establish
 permission for an external writer to take over the Local transcript.
 
-Automatic per-generation Desktop registration is not enabled: the inspected
-Desktop `2.7032.0` offers no external no-inference archive/delete lifecycle API.
-Importing every generation without that lifecycle would accumulate desktop
-entries; moving their transcripts away would break those entries. The bridge
-therefore refuses replacement or retirement of a CLI session registered with
-Desktop, including archived desktop records. It does not alter Desktop's
-database, trust settings, or internal IPC.
+Automatic per-generation Local registration is not enabled. The legacy external
+adapter has no writer lease or supported lifecycle that would make a registered
+Local transcript replaceable or disposable. Importing each generation would
+accumulate entries, and moving their transcripts away would break those entries.
+It therefore refuses replacement or deletion of Desktop-owned transcripts,
+including archived records, without editing the database or trust settings.
 
-This remains a limit of the legacy adapter, not a completed automatic
-desktop synchronization feature. The foreground native CLI and desktop app
-also retain their own authentication and workspace-trust requirements.
+The separate opt-in Desktop consumer described above invokes the observed native
+archive action from the app after verifying an independent Remote Control
+replacement. This does not transfer Local write ownership or enable automatic
+Local generation registration. Native authentication and workspace-trust
+requirements remain unchanged, and there is no direct registry or private IPC
+injection shortcut.
 
 A controlled desktop probe verifies another possible direction: selecting the
 project through the native folder picker permits CLI resume; two synthetic
@@ -638,10 +756,31 @@ files are not rewritten. Missing or changed assets fail explicitly. These
 originals are conversation content, not expiring rollback copies; identical
 images deduplicate and image-free sync rounds do not add asset records.
 
+Large-attachment regression and isolated real SDK checks cover approximately
+5.5 MiB PNG and JPEG inputs, later text-only deltas, a native restart, removal of
+the temporary cache from the read path, and complete archived reconstruction.
+The observed large PNG-to-JPEG preview conversion is accepted only with exact
+PNG/JPEG magic bytes, the native paste identity, matching original intent and
+preview hashes, and durable original-byte binding. Logical reads restore the
+original PNG, not a recompressed replacement. Other format conversions and
+ambiguous cache identities remain unsupported. These native transport checks do
+not by themselves establish model visual understanding or arbitrary attachment
+format support.
+
+Separate real Desktop vision acceptance covers PNG and JPEG transfers in both
+directions, followed by another large PNG added to an already continued Codex
+task. The receiving models identify banner geometry, background and noise, and
+retain the earlier test codes. Native app preprocessing can resize an upload
+before Claudex sees it; the verified cross-app byte contract is the persisted
+native model input, with complete originals retained for bridge-owned previews.
+
 Native image-source sidecars are transport metadata, not new authored messages.
 The decoder excludes only the exact pinned annotation associated with the same
 authenticated packet and native prompt identity, preserving the next delta's
 digest chain. Arbitrary metadata and ordinary user text are not discarded.
+When that exact validated sidecar is the only trailing message after a no-query
+image packet, full native graph and packet validation establish a completed
+transport boundary. A genuine newer user turn still remains withheld.
 
 `src/context-packet.mjs` carries reversibly labeled foreign messages as native
 text and inline images, never executable tool requests. A bounded structural

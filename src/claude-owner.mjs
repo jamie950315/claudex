@@ -1,4 +1,5 @@
 import { spawn, execFile } from 'node:child_process';
+import { isInlineBase64 } from './base64.mjs';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { dirname, join, resolve, delimiter, isAbsolute } from 'node:path';
@@ -124,8 +125,7 @@ function validateContent(content) {
     if (block.type === 'text' && typeof block.text === 'string' && block.text.trim()) continue;
     if (block.type === 'image' && block.source?.type === 'base64'
       && ['image/png', 'image/jpeg', 'image/gif', 'image/webp'].includes(block.source.media_type)
-      && typeof block.source.data === 'string' && block.source.data.length > 0
-      && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(block.source.data)) continue;
+      && isInlineBase64(block.source.data)) continue;
     throw new Error('Handoffs support text and inline base64 images only.');
   }
 }
@@ -422,6 +422,53 @@ export class ClaudeOwner {
     }
     if (pending.phase === 'sent') throw new Error('Append delivery is uncertain and its native UUID is absent; automatic resend is refused.');
     return false;
+  }
+
+  /** Migrate only this bridge's exact former display prefix. The live SDK is
+   * the sole writer; never use the standalone transcript-appending rename API.
+   */
+  async reconcileDisplayTitle(title) {
+    if (typeof title !== 'string' || !title.trim() || title.length > 4096) return false;
+    const oldTitle = `[Claudex] ${title}`;
+    if (this.state.displayTitleReconciled === 1 && !this.state.displayTitleMigration) return false;
+    if (!this.state.remoteId && this.state.displayTitle !== oldTitle && !this.state.displayTitleMigration) return false;
+    if (this.closed || this.closing || this.blocked || this.deferRemoteConnection || this.state.reset || this.state.pending
+      || this.nativeState !== 'idle' || this.backgroundTasks.length || this.appendBusy || this.resetBusy) return false;
+    const nativeTitle = data => data.rows.filter(row => row.type === 'custom-title'
+      && row.sessionId === this.state.sessionId).at(-1)?.customTitle;
+    let actual = nativeTitle(await this.inspectTranscript());
+    const pending = this.state.displayTitleMigration;
+    if (pending && (pending.sessionId !== this.state.sessionId || pending.from !== oldTitle
+      || pending.to !== title || !['prepared', 'sent'].includes(pending.phase)))
+      throw new Error('Claude display-title migration identity changed.');
+    if (actual !== undefined && actual !== oldTitle) {
+      if (typeof actual !== 'string' || !actual.trim()) throw new Error('Invalid native Claude display title.');
+      // A completed rename is recoverable; a different manual title is kept.
+      this.state.displayTitle = actual;
+      this.state.displayTitleReconciled = 1;
+      delete this.state.displayTitleMigration;
+      await this.save();
+      return actual === title;
+    }
+    if (actual === undefined && this.state.displayTitle !== oldTitle && !pending) {
+      this.state.displayTitleReconciled = 1; await this.save(); return false;
+    }
+    if (pending?.phase === 'sent')
+      throw new Error('Claude display-title rename outcome is uncertain; no request was resent.');
+    if (typeof this.query?.renameSession !== 'function')
+      throw new Error('Native Claude owner does not support an identity-bound title update.');
+    this.state.displayTitleMigration = { sessionId: this.state.sessionId, from: oldTitle, to: title, phase: 'prepared' };
+    await this.save();
+    this.state.displayTitleMigration.phase = 'sent';
+    await this.save();
+    await this.query.renameSession(title, this.state.sessionId);
+    actual = nativeTitle(await this.inspectTranscript());
+    if (actual !== title) throw new Error('Native Claude title update is not durably verified.');
+    this.state.displayTitle = title;
+    this.state.displayTitleReconciled = 1;
+    delete this.state.displayTitleMigration;
+    await this.save();
+    return true;
   }
 
   async connect() {

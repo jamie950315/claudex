@@ -12,7 +12,7 @@ and generated sessions outside the repository.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
-- Preserve original contents and never prune originals as generated backups. The authorized Desktop same-title handoff may archive an unchanged, independent Codex original only after verifying its replacement.
+- Preserve original contents and never prune originals as generated backups. Authorized same-title handoffs may archive an unchanged superseded original only after verifying its replacement and the applicable native lifecycle guards; archival never grants an external transcript writer lease.
 
 ## Adapters
 
@@ -48,8 +48,9 @@ without inference, not the completeness of a bulk migration. Missing cwd/assets,
 empty or unsupported histories remain explicit exclusions; incomplete tails are
 withheld. Do not label a partial import as all-history success.
 Claude Local continuations use normal Codex snapshot/original-dependency guards;
-the return from Codex creates a separate managed Remote Control entry. Preserve
-the Local original and direct subsequent work to Remote Control. Cold imports
+the return from Codex creates a separate managed Remote Control entry with the
+same title. The opt-in native Local handoff archives the verified superseded
+Local entry while preserving its contents; it never reuses the Local writer. Cold imports
 avoid idle SDK workers only until that transition; active owners remain long-lived.
 Only cold-import pairs may use ephemeral watcher hints after stable, complete
 no-change verification. Include all record lifecycle/checkpoint fields and file
@@ -101,15 +102,20 @@ working directories, or unsigned reasoning replay. Visible reasoning is labeled
 text; encrypted reasoning and native permissions do not migrate.
 
 Readable native compaction summaries plus complete continuation are supported.
+Owned Claude history retains its complete authenticated prefix through a fresh,
+explicitly linked native compaction. The observed single preserved SDK no-query
+packet is accepted only with exact native identities, summary anchors and an
+authenticated packet already present once in that prefix; it is not replayed.
 Semantic baseline resets require a new boundary after an unchanged saved byte
 prefix; checkpoints advance only on successful promotion. Opaque Codex summaries,
-replacement histories, and Claude preserved-segment chains remain blocked.
+replacement histories, and general Claude preserved-segment chains remain blocked.
 
 Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
-Desktop-owned transcripts must not be replaced, hidden, or pruned (even if archived
-in Desktop). No external no-inference lifecycle API is established, so automatic
-Desktop generation registration is not enabled. Never claim that CLI discovery
-proves Desktop Recents visibility or implement database/IPC injection as a shortcut.
+Desktop-owned transcripts must not be replaced or pruned, even when archived.
+Automatic per-generation Local registration is not enabled. The opt-in renderer
+consumer may invoke the observed native archive API after a verified same-title
+Remote Control replacement; it never writes registry/database files or takes
+over a Local transcript. CLI discovery alone does not prove Desktop visibility.
 
 Claude Desktop Code > New > Local outbound discovery is now actually verified:
 the pinned Desktop writes its native transcript under ~/.claude/projects,
@@ -118,12 +124,14 @@ is needed. A real Codex continuation recalled the original Claude response.
 The UI local_<UUID> may differ from registry.cliSessionId; ownership checks must
 use the bounded stable registry mapping, including archived entries, and retain
 conservative filename protection. Never assume the UI suffix is the native ID.
-Returning from Codex creates a separate managed Remote Control entry; it does
-not write into or automatically archive the Desktop-owned Local original.
-Clearly instruct users to continue via Connected via Remote Control thereafter.
-New managed Claude owners use a persisted `[Claudex] <logical title>` display
-title, separate from the bridge's logical title and Codex projection names.
-The choice is saved before first registration; legacy owners are not bulk-renamed.
+Returning from Codex creates a separate managed Remote Control entry with the
+same logical title, without a `[Claudex]` prefix. The opt-in native Local handoff
+archives the verified Local predecessor so the ordinary same-title entry is the
+continuation; it does not append into or reuse the original Local native ID.
+New managed owners persist the logical display title before registration.
+Existing owned titles with the exact legacy `[Claudex]` prefix are migrated by
+the live owner's `query.renameSession(title, nativeId)`, with a durable rename
+journal, native persistence proof and recovery. Unrelated manual names survive.
 Remote Control reattachment omits the name so native/cloud UI renames survive
 reconnection. Do not use the SDK's standalone JSONL-appending rename helper
 against a live owner. Existing entries may be renamed or pinned through native UI
@@ -134,7 +142,8 @@ custom group are not substitutes. `desktop folders enable|disable|status` manage
 an opt-in, version-pinned presentation adapter for the observed Claude frontend.
 It patches only one owned HTTP cache resource, preserving an immutable original
 and a prepared/installed recovery journal under the private root. It does not
-modify ASAR, signatures, login data, native session registries or writer routing.
+modify ASAR, signatures, login data or writer routing, and never edits native
+session registry files directly. Native archival remains a separate guarded action.
 Unknown source bytes/schema or foreign cache changes fail explicitly. A changed
 frontend asset URL may require revalidation; never claim arbitrary future builds
 are covered. Initial installation/upgrades require an idle Claude app restart
@@ -149,6 +158,37 @@ and live map-update checks verify entries in the original claudex folder, withou
 pinning or a custom group. Tests must not substitute fixture success for this UI
 evidence. `folderProjection` status describes map/resource readiness, not proof
 that a particular running renderer loaded the adapter.
+
+`desktop handoffs enable|disable|status` controls native Local predecessor
+archival. Configuration changes require a safely stopped watcher and the folder
+adapter enabled. A cache upgrade requires an idle Claude app restart. Existing
+verified pairs are eligible; this is not an unchecked bulk archival operation.
+The coordinator publishes bounded, 15-second archive intents only after exact
+original/checkpoint and replacement/canonical verification. Pending work or new
+activity revokes commands before expensive verification. The renderer rereads
+native identities, title, cwd, activity, idle state, drafts and dependencies before
+the normal archive API, with worktree cleanup disabled. An outcome is not accepted
+until native archive state and original history preservation are verified.
+The native getSession/getTranscript DTO may expose only the Desktop UI ID, not
+the CLI ID. Before archival, reread the exact original registry JSON through the
+guarded native readFileAtCwd API; require its path beneath the pinned native
+registry root, the exact local_<UI ID>.json filename, and matching UI/CLI IDs,
+cwd, title and activity. This is read-only, not a registry/database mutation.
+Separate presentation anchors survive new turns only while current owner native
+ID/RC ID, ledger cwd and source Local-to-CLI registry mapping still match. They
+never authorize archive actions or advance checkpoints; expired commands cannot
+be revived by an anchor. Archived folder anchors use the observed native session
+normalizer and actual git metadata, not invented keys or labels. Keep one fixed
+Local original archive per logical conversation, never a new original per turn.
+Generated predecessors retain the existing one-previous-per-side, seven-day,
+512 MiB aggregate rollback and 50-audit-entry bounds; originals are not deletable
+quota entries. Native automatic archival UI acceptance is a separate requirement
+from unit tests, manifest publication or service readiness.
+Native UI checks now verify existing Local predecessors and a fresh image-origin
+Local predecessor are archived, with native Active filtering instead of hiding
+rows in code. The All view may still show recoverable archived sources. Actual
+native titles have lost their owned legacy prefix; authenticated transport labels
+inside conversation content intentionally retain their existing Claudex markers.
 Do not claim same-Local-ID bidirectional writing or generic Chat/Cowork support.
 
 A native Desktop probe verifies two then four synthetic messages under one ID,
@@ -190,7 +230,7 @@ owned native exports enforce the configured raw/converted byte budget. Keep the
 256-page, 25,000-item and 64 MiB transport-frame limits unchanged. Limit errors
 identify the source thread; never add automatic retries, truncation or fallback.
 
-Unmanaged native Codex localImage recovery reads only metadata.path's current
+Native Codex localImage recovery for originals and owned continuations reads only metadata.path's current
 owned regular rollout, using O_NOFOLLOW and stable identity/stat checks with a
 512 MiB stream cap and 64 MiB row cap. Require exact translated completed-item
 equality with the full API item, matching thread/turn/context/passthrough IDs,
@@ -199,6 +239,9 @@ agreement before a closed turn. Keep image descriptors as inert metadata and
 validate the recovered data URI and converted-history budget. Never read API
 image paths, fetch URLs, search history_base files or silently choose a candidate.
 This preserves native persisted model-input bytes, not proven unresized uploads.
+Owned bootstraps must still be inline authenticated checkpoints before hydration;
+only subsequent native inputs can use this recovery path. Packet authentication,
+exact transport receipts and all continuation provenance checks remain mandatory.
 Accept only the observed passthrough key sets: turn_id alone, plus create_time,
 or plus create_time and content_item_kinds. Validate every present value; never
 invent absent timestamps. A raw response may omit its own id, but a present id
@@ -264,9 +307,13 @@ content-addressed private image-assets store and bind the native preview hash.
 Logical reads restore the original and validate the packet; native files are
 never rewritten. Missing originals, altered previews or changed text fail closed.
 Image bindings grow with actual image occurrences, not image-free sync rounds;
-identical originals deduplicate across owners. Archive assets are authoritative
-conversation content, not disposable rollback snapshots. Unsupported format
-conversion and ambiguous cache identities still pause synchronization.
+identical originals deduplicate across owners. The observed large PNG-to-JPEG
+native preview is restored only with matching PNG/JPEG magic bytes, exact paste
+identity, saved preview hash and original pending-intent hash. Regression and
+isolated native checks cover roughly 5.5 MiB PNG/JPEG inputs, subsequent deltas,
+restart and archived reconstruction. Archive assets are authoritative content,
+not disposable rollback snapshots. Other format conversion and ambiguous cache
+identities still pause synchronization.
 
 The CLI also appends an `isMeta` image-source sidecar after an imported image
 packet. It is excluded from logical history only with the exact pinned text
@@ -352,10 +399,36 @@ that grows on every synchronization round.
 
 Desktop `contextMode: "archive"` stores complete portable messages in private
 content-addressed history-assets and sends signed v2 packets with bounded,
-explicitly labeled readable excerpts. They are not AI summaries. Mixed v1/v2
-decoders reconstruct the exact canonical digest; authenticate before loading
+explicitly labeled readable text excerpts and authenticated native image blocks.
+They are not AI summaries. Archive storage alone is not visual model input: the
+former three-text-only packet preserved images on disk but did not present them
+to the receiving model. Image-bearing packets now sign imageProjectionVersion:1
+and project exact supported source/tool-result images alongside the text view.
+Arbitrary image-shaped tool input JSON remains inert, not visual input. Native
+packet byte limits still fail explicitly without dropping or truncating images.
+Explicit imageProjectionVersion:0 reproduces existing prepared three-text packet
+bytes exactly; recovery must not silently change a saved operation's encoding.
+Mixed v1/v2 decoders reconstruct the exact canonical digest; authenticate before loading
 archives and require their signed archiveRoot to match the configured root.
 Archive assets are authoritative history, not rollback garbage.
+One-time image-context repair uses the record's imageProjectionVersion flag.
+DesktopBridge serially creates a bounded new managed Codex snapshot and refreshes
+the same Claude owner with a complete authenticated checkpoint. historyPrefixCount
+must match the exact prior canonical prefix; only a genuinely new tail advances
+logical history. Repeated historical messages/images are not new authored turns.
+The Claude refresh retains its native and Remote Control IDs, performs no /clear,
+and invokes no model. Existing original, activity, pending, dependency and quota
+guards remain intact. Archive digest/fixture success does not establish model
+visual acceptance; verify actual model input after deploying the representation.
+Visual-only replacement of an already managed Codex snapshot does not acquire a
+new archival intent for a legacy preserved original; its checkpoint is unchanged.
+Preflight and retirement still verify the managed target's independence, and
+superseded-original content/activity guards remain global.
+Fresh native vision acceptance verifies PNG and JPEG pictures in both directions,
+including a new large image attached after a Codex handoff. The receiving models
+identify visible details and retain earlier codes; canonical image hashes and
+original prefixes remain exact. Native apps can resize uploads before persistence;
+do not label their persisted model-input bytes as unresized uploaded originals.
 Archive chunk loading overlaps at most four independent read-only operations,
 retaining every file/directory identity, permission, byte and hash check and
 draining each batch on failure. Within one synchronous stable Claude snapshot,

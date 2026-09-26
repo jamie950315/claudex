@@ -1,6 +1,6 @@
-import { lstat, open, readdir } from 'node:fs/promises';
+import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const LOCAL_RECORD = /^local_([a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12})\.json$/i;
@@ -76,4 +76,54 @@ export async function desktopOwnsSession(root, nativeId) {
     return false;
   }
   return visit(root, 0);
+}
+
+/** Resolve exact native-to-Desktop identities without granting write ownership.
+ * Unlike the conservative ownership denylist above, an action intent requires
+ * an unambiguous parsed record; filename identity alone is never sufficient.
+ */
+export async function readDesktopSessionMappings(root, nativeIds) {
+  if (!Array.isArray(nativeIds) || nativeIds.length > 4096 || nativeIds.some(id => typeof id !== 'string' || !UUID.test(id)))
+    throw new Error('Invalid Desktop session mapping identities.');
+  const wanted = new Set(nativeIds.map(id => id.toLowerCase())), result = new Map();
+  if (!root || !wanted.size) return result;
+  if (!isAbsolute(root) || resolve(root) !== root) throw new Error('Desktop registry root must be canonical.');
+  let scanned = 0;
+  async function visit(path, depth) {
+    let before;
+    try { before = await lstat(path); }
+    catch (error) { if (error.code === 'ENOENT' && depth === 0) return; throw error; }
+    if (!before.isDirectory() || before.isSymbolicLink() || before.uid !== process.getuid()
+      || await realpath(path) !== path) throw new Error('Desktop session storage is not a canonical owned directory.');
+    const entries = await readdir(path, { withFileTypes: true });
+    scanned += entries.length;
+    if (scanned > 16_384) throw new Error('Desktop session registry scan exceeded its safety bound.');
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) throw new Error('Symlinked desktop session storage cannot be checked safely.');
+      const match = LOCAL_RECORD.exec(entry.name);
+      if (!match && entry.name.startsWith('local_') && entry.name.endsWith('.json'))
+        throw new Error('Ambiguous Desktop session registry filename.');
+      const target = join(path, entry.name);
+      if (match) {
+        const info = await lstat(target), record = await readRecord(target, info);
+        if (record.sessionId !== `local_${match[1]}` || typeof record.cliSessionId !== 'string' || !UUID.test(record.cliSessionId))
+          throw new Error('Ambiguous Desktop session registry identity.');
+        const id = record.cliSessionId.toLowerCase();
+        if (!wanted.has(id)) continue;
+        if (result.has(id)) throw new Error('Multiple Desktop records map to the same native session.');
+        if (typeof record.cwd !== 'string' || !isAbsolute(record.cwd) || resolve(record.cwd) !== record.cwd
+          || typeof record.title !== 'string' || !record.title.trim() || record.title.length > 4096
+          || /[\x00-\x1f\x7f]/.test(record.title) || typeof record.isArchived !== 'boolean'
+          || !Number.isSafeInteger(record.lastActivityAt) || record.lastActivityAt < 0)
+          throw new Error('Desktop session mapping lacks exact cwd, title, activity or archive metadata.');
+        result.set(id, { sessionId: record.sessionId, nativeId: record.cliSessionId, cwd: record.cwd,
+          title: record.title, lastActivityAt: record.lastActivityAt, isArchived: record.isArchived,
+          registryPath: target, registryIdentity: Object.fromEntries(['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'nlink']
+            .map(key => [key, info[key]])) });
+      } else if (entry.isDirectory() && depth < 2) await visit(target, depth + 1);
+    }
+    if (!sameFile(before, await lstat(path))) throw new Error('Desktop session storage changed during mapping lookup.');
+  }
+  await visit(root, 0);
+  return result;
 }

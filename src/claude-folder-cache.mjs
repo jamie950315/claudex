@@ -99,15 +99,20 @@ export function buildFolderSourceProof(source, overrides) {
 /** Native readFileAtCwd retains Claude's workspace/path policy. The reader is
  * disabled outside Desktop, and only the exact private JSON map is read.
  */
-export function buildDynamicFolderSource(source, { root, projectionSource, runtimeSource }) {
+export function buildDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource = '', anchorSource = '', registryRoot }) {
   if (sha256(Buffer.from(source)) !== FOLDER_SOURCE_SHA256) fail('unvalidated frontend source');
   if (typeof root !== 'string' || !root.startsWith('/') || /[\0\r\n]/.test(root)) fail('invalid mapping root');
   const projection = projectionSource.replace(/^export /gm, '');
   const runtime = runtimeSource.replace(/^import[^\n]+\n/, '').replace(/^export /gm, '');
+  const handoff = handoffSource.replace(/^import[^\n]+\n/gm, '').replace(/^export /gm, '');
+  const anchor = anchorSource.replace(/^export /gm, '');
+  if (handoff && (typeof registryRoot !== 'string' || !registryRoot.startsWith('/') || /[\0\r\n]/.test(registryRoot)))
+    fail('native handoffs require a canonical Desktop registry root');
   const begin = source.indexOf('function UP('), end = source.indexOf('function WP(', begin);
   if (begin < 0 || end < begin) fail('project-key function changed');
   const original = source.slice(begin, end).replace('function UP(', 'function __cldxNativeProjectKey(');
-  const bootstrap = `const __cldx=(()=>{${projection}\n${runtime}\nreturn createClaudeFolderRuntime({readMap:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)})})();`;
+  const lifecycle = handoff ? `,createHandoff:o=>createClaudeDesktopHandoffRuntime({...o,registryRoot:${JSON.stringify(registryRoot)},readManifest:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"desktop-handoff.json"):null,native:pe,normalizeAnchor:typeof normalizeClaudeLocalFolderAnchor==="function"?normalizeClaudeLocalFolderAnchor:undefined,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex native handoff] "+e)})` : '';
+  const bootstrap = `const __cldx=(()=>{${projection}\n${anchor}\n${handoff}\n${runtime}\nreturn createClaudeFolderRuntime({readMap:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)${lifecycle}})})();`;
   let result = source.slice(0, begin) + bootstrap + original
     + 'function UP(e){return __cldx.lookup(e)?.projectKey??__cldxNativeProjectKey(e)}' + source.slice(end);
   const listBegin = result.indexOf('var KP=[],'), listEnd = result.indexOf('function JP(', listBegin);

@@ -3,6 +3,7 @@ import { decodeTransportPacket as decodeContextPacket, prepareArchiveResolver } 
 import { decodeCodex } from './native-drivers.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { convertNativeTurns, readStableNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
+import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { hasPortableInitialDelegation } from './codex-delegation.mjs';
 
 const RECEIPT_LABEL = '[Claudex import receipt — not an AI response]';
@@ -23,7 +24,7 @@ export function buildOwnedCodexCommon({ canonical, key, conversationId, targetSe
   const digest = fingerprint(canonical);
   if (contextContent) {
     const verified = decodeContextPacket({ content, conversationId, targetSessionId, key, resolveArchive });
-    if (!verified || verified.digest !== digest || verified.sourceSide !== 'claude' || verified.previousDigest !== null
+    if (!verified || verified.digest !== digest || verified.sourceSide !== 'claude' || verified.previousDigest !== null || verified.historyPrefixCount !== undefined
         || verified.operationId !== operationId) throw new Error('Prepared Codex context does not match the full canonical checkpoint.');
   }
   return {
@@ -49,7 +50,7 @@ export function decodeOwnedCodexHistory({ text, conversationId, targetSessionId,
   if (bootstrap?.role !== 'user') throw new Error('Owned Codex history is missing its initial checkpoint packet.');
   const packet = decodeContextPacket({ content: bootstrap.content, conversationId, targetSessionId: sessionId, key, resolveArchive });
   if (!packet) throw new Error('Owned Codex history is missing its authenticated checkpoint packet.');
-  if (packet.sourceSide !== 'claude' || packet.previousDigest !== null) throw new Error('Owned Codex checkpoint has an invalid source side or prefix.');
+  if (packet.sourceSide !== 'claude' || packet.previousDigest !== null || packet.historyPrefixCount !== undefined) throw new Error('Owned Codex checkpoint has an invalid source side or prefix.');
   if (acknowledgement?.role !== 'assistant' || acknowledgement.content.length !== 1
       || acknowledgement.content[0].type !== 'text' || acknowledgement.content[0].text !== receipt(packet.digest)) {
     throw new Error('Owned Codex checkpoint is missing its exact transport receipt.');
@@ -116,7 +117,7 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   const content = bootstrapContent(first.items[0]);
   const packet = decodeContextPacket({ content, conversationId, targetSessionId: sessionId, key, resolveArchive });
   if (!packet) throw new Error('Owned Codex history is missing its authenticated checkpoint packet.');
-  if (packet.sourceSide !== 'claude' || packet.previousDigest !== null) throw new Error('Owned Codex checkpoint has an invalid source side or prefix.');
+  if (packet.sourceSide !== 'claude' || packet.previousDigest !== null || packet.historyPrefixCount !== undefined) throw new Error('Owned Codex checkpoint has an invalid source side or prefix.');
   const acknowledgement = first.items[1];
   onlyKeys(acknowledgement, ['type', 'id', 'text', 'phase', 'memoryCitation', 'delivery', 'questions'], 'receipt metadata');
   if (acknowledgement.type !== 'agentMessage' || acknowledgement.phase !== 'final_answer'
@@ -137,11 +138,15 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   return { common, digest: fingerprint(common), importedPackets: 1, operationId: packet.operationId, bootstrapDigest: packet.digest, nativeDigest: snapshot.digest };
 }
 
-export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, ...options }) {
+export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, resolveLocalImages, ...options }) {
   const sessionId = options.sessionId ?? options.targetSessionId;
-  const snapshot = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix });
+  const native = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix });
+  // An immutable checkpoint must still contain its exact inline packet; only
+  // later native-authored inputs may use current-rollout image recovery.
+  const content = bootstrapContent(native.turns[0].items[0]);
+  const snapshot = await hydrateNativeLocalImages(native, resolveLocalImages, limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes);
   if (archiveRoot) options.resolveArchive = await prepareArchiveResolver({ root: archiveRoot,
-    contents: [bootstrapContent(snapshot.turns[0].items[0])], conversationId: options.conversationId,
+    contents: [content], conversationId: options.conversationId,
     targetSessionId: sessionId, key: options.key });
   const result = decodeOwnedCodexNativeHistory({ ...options, snapshot });
   if (Buffer.byteLength(JSON.stringify(result.common)) > (limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes)) throw new Error('Owned Codex history exceeds the converted byte limit; no partial history was returned.');

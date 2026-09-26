@@ -47,6 +47,7 @@ const help = `Claudex: bounded local conversation handoffs (no model calls)
   claudex desktop install         Enable all-project Desktop mode at the next normal app start
   claudex desktop uninstall       Remove the owned next-start override; preserve conversations
   claudex desktop folders enable|disable|status    Version-pinned Claude folder presentation
+  claudex desktop handoffs enable|disable|status   Archive verified Local predecessors using native Claude
 
 Global: --root PATH (default ~/.local/share/claudex). Service installation is opt-in.
 Only generated copies are retired. Original imported sessions are never deleted.
@@ -118,6 +119,11 @@ async function main() {
     return;
   }
   if (command === 'desktop') {
+    if (positionals[1] === 'handoffs' && positionals[2] === 'status') {
+      output({ enabled: config.desktopLocalHandoff?.enabled === true,
+        watcher: (await readJSON(join(root, 'watcher-status.json'), null))?.localHandoff ?? null });
+      return;
+    }
     if (positionals[1] === 'folders' && positionals[2] === 'status') {
       output({ enabled: config.folderProjection?.enabled === true,
         installation: await readJSON(join(root, 'ui-folder-compat', 'manifest.json'), null),
@@ -127,7 +133,17 @@ async function main() {
     if (await readJSON(join(root, 'watch.lock'), null) && !(positionals[1] === 'install' && config.mode === 'desktop')) {
       throw new Error('Stop the bridge watcher safely before changing Desktop installation.');
     }
-    if (positionals[1] === 'folders') {
+    if (positionals[1] === 'handoffs') {
+      if (config.mode !== 'desktop' || process.platform !== 'darwin' || !config.folderProjection?.enabled)
+        throw new Error('Native Local handoffs require the verified macOS Claude folder adapter.');
+      if (!['enable', 'disable'].includes(positionals[2])) throw new Error('Use desktop handoffs enable, disable, or status.');
+      const enabled = positionals[2] === 'enable';
+      const previous = await readJSON(join(root, 'desktop-handoff.json'), null);
+      await writeJSON(join(root, 'desktop-handoff.json'), { version: 1, kind: 'claude-local-archive',
+        generatedAt: null, expiresAt: null, anchorsUpdatedAt: Date.now(), actions: [], anchors: previous?.anchors ?? [] });
+      await writeJSON(configPath, { ...config, desktopLocalHandoff: { enabled } });
+      output({ enabled, note: 'The next watcher verifies complete replacements before publishing expiring native archive intents. Original transcripts and worktrees are retained.' });
+    } else if (positionals[1] === 'folders') {
       if (config.mode !== 'desktop' || process.platform !== 'darwin') throw new Error('Claude folder presentation requires macOS Desktop mode.');
       const { ensureClaudeFolderCache, restoreClaudeFolderCache } = await import('../src/claude-folder-install.mjs');
       const { publishClaudeFolderMap } = await import('../src/claude-folder-map.mjs');
@@ -141,8 +157,11 @@ async function main() {
         await writeJSON(configPath, { ...config, folderProjection: { enabled: true, cachePath } });
         output({ enabled: true, map, resource, note: 'Restart Claude only when idle once to load the presentation adapter. Subsequent verified owners update through the read-only map without reload.' });
       } else if (positionals[2] === 'disable') {
+        const previous = await readJSON(join(root, 'desktop-handoff.json'), null);
+        await writeJSON(join(root, 'desktop-handoff.json'), { version: 1, kind: 'claude-local-archive', generatedAt: null,
+          expiresAt: null, anchorsUpdatedAt: Date.now(), actions: [], anchors: previous?.anchors ?? [] });
         await publishClaudeFolderMap({ root, state: { version: 2, conversations: {}, records: [], pending: null } });
-        await writeJSON(configPath, { ...config, folderProjection: { enabled: false, cachePath } });
+        await writeJSON(configPath, { ...config, folderProjection: { enabled: false, cachePath }, desktopLocalHandoff: { enabled: false } });
         const resource = await restoreClaudeFolderCache({ root, cachePath });
         output({ enabled: false, resource, note: 'Map cleared and original cache resource restored; restart Claude only when idle to fully unload the presentation adapter.' });
       } else throw new Error('Use desktop folders enable, disable, or status.');

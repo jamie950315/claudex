@@ -4,7 +4,7 @@ import { access, mkdir, open } from 'node:fs/promises';
 import { fromCommon, toCommon } from 'txcript';
 import { hash, snapshot, publishExclusive } from './storage.mjs';
 import { portableMessages } from './history.mjs';
-import { claudeCompaction } from './compaction.mjs';
+import { claudeCompaction, claudeCompactionHistory } from './compaction.mjs';
 
 export function projectDirectory(claudeHome, cwd) {
   return join(claudeHome, 'projects', resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'));
@@ -76,9 +76,9 @@ export async function appendClaudeSession({ path, common, id, expectedHash }) {
   return { hash: hash(source.text + batch.text), lastUuid: batch.rows.at(-1)?.uuid ?? lastUuid };
 }
 
-export function decodeClaude(text) {
+export function decodeClaude(text, { preserveCompactionHistory = false, authenticatePreservedPacket } = {}) {
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
-  const compact = claudeCompaction(text, rows);
+  const compact = preserveCompactionHistory ? claudeCompactionHistory(text, rows, authenticatePreservedPacket) : claudeCompaction(text, rows);
   const main = (compact?.rows ?? rows).filter(row => !row.isSidechain);
   const ids = new Set(main.filter(row => row.uuid).map(row => row.uuid));
   const children = new Map();

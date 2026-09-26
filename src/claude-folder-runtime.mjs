@@ -4,12 +4,13 @@ import { buildClaudeFolderProjection, lookupClaudeFolderProjection } from './cla
  * or mutated. This factory is also embedded in the version-pinned UI resource.
  */
 export function createClaudeFolderRuntime({ readMap, intervalMs = 2000, setTimer = setTimeout, clearTimer = clearTimeout,
-  onError = () => {} } = {}) {
+  onError = () => {}, createHandoff } = {}) {
   let entries = [], revision = 0, text = '', timer, reading = false, generation = 0, lastError = null;
   let rows, keyFunction, projectionRevision = -1;
   let projection = { version: 1, overrides: {} };
   const listeners = new Set();
   const notify = () => { revision++; for (const listener of listeners) listener(); };
+  const handoff = typeof createHandoff === 'function' ? createHandoff({ onChange: notify }) : null;
   function accept(result) {
     if (!result || typeof result.contents !== 'string' || result.contents.length > 2 * 1024 * 1024 || result.isTail)
       throw new Error('Folder mapping unavailable or truncated');
@@ -42,15 +43,19 @@ export function createClaudeFolderRuntime({ readMap, intervalMs = 2000, setTimer
     getSnapshot: () => revision,
     subscribe(listener) {
       listeners.add(listener);
-      if (listeners.size === 1) { generation++; void poll(); }
+      if (listeners.size === 1) { generation++; void poll(); handoff?.start(); }
       return () => {
         listeners.delete(listener);
-        if (!listeners.size) { generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; }
+        if (!listeners.size) { generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; handoff?.stop(); }
       };
     },
     setRows(localRows, projectKey) {
+      handoff?.setRows(localRows, projectKey);
       if (rows === localRows && keyFunction === projectKey && projectionRevision === revision) return;
-      projection = buildClaudeFolderProjection({ entries, localRows, projectKey });
+      const anchors = handoff?.projectionRows() ?? [];
+      const existing = new Set(localRows.map(row => row.id));
+      projection = buildClaudeFolderProjection({ entries,
+        localRows: [...localRows, ...anchors.filter(row => !existing.has(row.id))], projectKey });
       rows = localRows; keyFunction = projectKey; projectionRevision = revision;
     },
     lookup(row) { return row?.type === 'bridge' ? lookupClaudeFolderProjection(projection, row.id) : undefined; },
