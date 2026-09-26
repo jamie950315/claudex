@@ -4,6 +4,7 @@ import { join, resolve, dirname } from 'node:path';
 import { readFile, chmod, lstat, unlink, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { privateDirectory, publishExclusive, atomicWrite, readJSON, writeJSON, hash, withLock } from './storage.mjs';
+import { resolveBundledCodex, bundledDesktopNode, isBundledCodexRelocation, verifyBundledCodex } from './codex-app-layout.mjs';
 
 const execute = promisify(execFile);
 const quote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
@@ -34,14 +35,16 @@ export async function verifyDesktopNode(node, run = execute) {
   }
 }
 
-async function recoverRuntimeUpdate(root, state, verifyRuntime) {
+async function recoverRuntimeUpdate(root, state, verifyRuntime, verifyBinary) {
   if (!state.pendingRuntime) return state;
   const next = state.pendingRuntime;
   if (next.version !== 1 || next.shim !== join(root, 'codex-launcher') || next.shim !== state.shim
-      || next.binary !== state.binary || next.launcher !== state.launcher || next.pendingRuntime) throw new Error('Invalid Desktop runtime update intent.');
+      || next.binary !== state.binary && !isBundledCodexRelocation(state.binary, next.binary)
+      || next.launcher !== state.launcher || next.pendingRuntime) throw new Error('Invalid Desktop runtime update intent.');
   const content = desktopShim({ root, ...next });
   if (hash(content) !== next.shimHash) throw new Error('Desktop runtime update content does not match its intent.');
   await verifyRuntime(next.node);
+  if (next.binary !== state.binary) await verifyBinary(next.binary);
   const info = await lstat(state.shim);
   if (!info.isFile() || info.isSymbolicLink() || info.uid !== process.getuid() || ![0o600, 0o700].includes(info.mode & 0o777)) throw new Error('Desktop launcher ownership changed during update.');
   const actual = hash(await readFile(state.shim, 'utf8'));
@@ -54,10 +57,12 @@ async function recoverRuntimeUpdate(root, state, verifyRuntime) {
 }
 
 /** Configure the native launcher for the next normal Desktop start. Never quit the app. */
-export async function installDesktopLauncher({ root, node, launcher, binary, run = execute, verifyRuntime = verifyDesktopNode, platform = process.platform }) {
+export async function installDesktopLauncher({ root, node, launcher, binary, run = execute, verifyRuntime = verifyDesktopNode,
+  verifyBinary = verifyBundledCodex, platform = process.platform }) {
   if (platform !== 'darwin') throw new Error('Automatic Desktop launcher installation requires macOS.');
   root = await privateDirectory(resolve(root));
-  node ??= join(dirname(binary), 'cua_node', 'bin', 'node');
+  binary = await resolveBundledCodex(binary, { verify: verifyBinary });
+  node ??= bundledDesktopNode(binary) ?? join(dirname(binary), 'cua_node', 'bin', 'node');
   const shim = join(root, 'codex-launcher');
   const content = desktopShim({ root, node, launcher, binary });
   await Promise.all([node, binary].map(path => access(path, constants.X_OK)));
@@ -68,15 +73,16 @@ export async function installDesktopLauncher({ root, node, launcher, binary, run
     const current = await nativeEnvironment(run);
     if (current && current !== shim) throw new Error('An existing CODEX_CLI_PATH override is in use; it was not overwritten.');
     if (state) {
-      state = await recoverRuntimeUpdate(root, state, verifyRuntime);
-      if (state.version !== 1 || state.shim !== shim || state.binary !== binary || state.launcher !== launcher) throw new Error('Existing Desktop installation differs; it was not overwritten.');
+      state = await recoverRuntimeUpdate(root, state, verifyRuntime, verifyBinary);
+      if (state.version !== 1 || state.shim !== shim || state.binary !== binary && !isBundledCodexRelocation(state.binary, binary)
+          || state.launcher !== launcher) throw new Error('Existing Desktop installation differs; it was not overwritten.');
       if (state.shimHash !== hash(content)) {
         if (state.shimHash !== hash(desktopShim({ root, ...state }))) throw new Error('Existing Desktop runtime identity is unproven.');
         await checkedShim(state);
-        const next = { ...state, node, shimHash: hash(content) };
+        const next = { ...state, node, binary, shimHash: hash(content) };
         state = { ...state, pendingRuntime: next };
         await writeJSON(manifestPath(root), state);
-        state = await recoverRuntimeUpdate(root, state, verifyRuntime);
+        state = await recoverRuntimeUpdate(root, state, verifyRuntime, verifyBinary);
       }
     } else {
       if (current && current !== shim) throw new Error('An existing CODEX_CLI_PATH override is in use; it was not overwritten.');
@@ -99,12 +105,18 @@ export async function installDesktopLauncher({ root, node, launcher, binary, run
 }
 
 /** Reapply only our exact override after login; the watcher calls this before connecting. */
-export async function applyDesktopEnvironment({ root, run = execute, verifyRuntime = verifyDesktopNode }) {
+export async function applyDesktopEnvironment({ root, run = execute, verifyRuntime = verifyDesktopNode, verifyBinary = verifyBundledCodex }) {
   root = await privateDirectory(resolve(root));
   let state = await readJSON(manifestPath(root), null);
   if (!state || state.version !== 1) throw new Error('Desktop launcher has not been installed.');
   if (state.pendingRuntime) state = await withLock(join(root, 'desktop-install.lock'), async () => recoverRuntimeUpdate(root,
-    await readJSON(manifestPath(root)), verifyRuntime), { recoverDead: true });
+    await readJSON(manifestPath(root)), verifyRuntime, verifyBinary), { recoverDead: true });
+  const currentBinary = await resolveBundledCodex(state.binary, { verify: verifyBinary });
+  if (currentBinary !== state.binary) {
+    await installDesktopLauncher({ root, node: state.node, launcher: state.launcher, binary: currentBinary,
+      run, verifyRuntime, verifyBinary });
+    state = await readJSON(manifestPath(root));
+  }
   await checkedShim(state);
   await verifyRuntime(state.node);
   const current = await nativeEnvironment(run);

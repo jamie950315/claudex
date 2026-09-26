@@ -11,6 +11,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { connectCodexSocket, inspectCodexSocket, MAX_FRAME_BYTES } from '../src/codex-websocket.mjs';
 import { isAllowedCodexVersion, isSupportedCodexVersion, SUPPORTED_CODEX_VERSIONS } from '../src/codex-versions.mjs';
 import { readVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
+import { resolveBundledCodex } from '../src/codex-app-layout.mjs';
 
 const execFileAsync = promisify(execFile);
 export const SUPPORTED_CODEX_VERSION = SUPPORTED_CODEX_VERSIONS[0];
@@ -191,7 +192,7 @@ async function passthrough(binary, args, env, owner = null) {
 
 /** Framing adapter only: it neither initializes nor modifies Desktop requests. */
 export async function runCodexLauncher(args = process.argv.slice(2), env = process.env) {
-  const binary = await resolveBinary(env.CLAUDEX_CODEX_BINARY || 'codex', env);
+  const binary = await resolveBinary(await resolveBundledCodex(env.CLAUDEX_CODEX_BINARY || 'codex'), env);
   // CUA and Browser Use launch this exact standalone stdio helper. Browser Use
   // deliberately omits the app-tools pipe; neither helper is the Desktop owner.
   if (args.length === 3 && args[0] === 'app-server' && args[1] === '--listen' && args[2] === 'stdio://') {
