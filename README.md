@@ -286,10 +286,11 @@ to distinguish the continuation from its preserved Local source. For example,
 continue in `[Claudex] Ping` after replying in Codex, not the old Local `Ping`.
 The logical title and Codex task names remain unchanged. Existing owners are not
 bulk-renamed; an explicit rename in Claude's native UI is preserved when Remote
-Control reconnects. You can also use the entry's native **Pin** action to keep
-the continuation easy to find. Pinning is not automatic. Depending on Claude's
-sidebar grouping, Remote Control entries may be under **Other** or in **Search**,
-rather than inside the Local project's group.
+Control reconnects. Depending on Claude's sidebar grouping, Remote Control
+entries may be under **Other** or in **Search**, rather than inside the Local
+project's group. Placement under the same existing local folder is not yet
+established by this integration. Pinning, title prefixes, or a new same-name
+custom group do not satisfy that folder-placement requirement.
 
 Idle historical imports do not each reserve a long-lived SDK process. For these
 `cold-import` pairs only, the watcher may skip repeated full reads after a

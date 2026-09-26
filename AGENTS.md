@@ -122,6 +122,10 @@ Remote Control reattachment omits the name so native/cloud UI renames survive
 reconnection. Do not use the SDK's standalone JSONL-appending rename helper
 against a live owner. Existing entries may be renamed or pinned through native UI
 when requested; pinning is not automatic and does not merge a Local entry.
+The required sidebar behavior is placement under the same existing local
+project/folder group as the source. Pinning, title prefixes, and a new same-name
+custom group are not substitutes. Correct cwd does not prove Desktop folder
+membership; this Remote Control integration has not established that mapping.
 Do not claim same-Local-ID bidirectional writing or generic Chat/Cowork support.
 
 A native Desktop probe verifies two then four synthetic messages under one ID,
