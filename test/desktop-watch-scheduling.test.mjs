@@ -110,9 +110,9 @@ test('a superseded original changed after its cold item was visited is rechecked
       throw new Error('Superseded original first-superseded changed; no branch was selected.');
     }
   };
-  await assert.rejects(f.run(), /Superseded original first-superseded changed/);
-  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id), ['first', 'second', 'first']);
-  assert.match((await f.status()).error, /Superseded original/);
+  await f.run();
+  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id), ['first', 'second', 'first', 'third']);
+  assert.match((await f.status()).blockedConversations[0].reason, /Superseded original/);
 });
 
 for (const outcome of ['waiting', 'incomplete', 'racing-append']) {
@@ -235,7 +235,7 @@ test('discovery triggered by a slow fresh delivery resumes the existing sweep wi
   assert.equal(f.count('track', 'fresh-b'), 1);
 });
 
-test('an unsupported error after a newly discovered source is tracked remains a fatal sync failure', async () => {
+test('an unsupported error after enrollment remains a tracked-history block, not a discovery warning', async () => {
   const f = await fixture();
   for (const id of ['first', 'second']) f.addOrdinary(id);
   const message = 'Native Codex history export: converted byte limit exceeded; no partial export is returned.';
@@ -245,10 +245,11 @@ test('an unsupported error after a newly discovered source is tracked remains a 
   };
   f.onDiscover = () => f.count('sync', 'first')
     ? [{ side: 'claude', id: 'fresh', path: '/synthetic-fresh' }] : [];
-  await assert.rejects(f.run(), error => error.message === message);
+  await f.run();
   assert.equal(f.count('track', 'fresh'), 1);
-  assert.equal(f.count('sync', 'second'), 0);
-  assert.equal((await f.status()).error, message);
+  assert.equal(f.count('sync', 'second'), 1);
+  assert.equal((await f.status()).blockedConversations[0].reason, message);
+  assert.equal((await f.status()).blockedConversations[0].conversationId, 'fresh');
 });
 
 test('a pending fresh delivery blocks further discovery and owner inspections until recovery succeeds', async () => {
@@ -367,7 +368,7 @@ test('active priority observes superseded originals without weakening their conf
     if (id === 'first') await writeFile(f.record('target', 'superseded').path, 'changed superseded original\n');
     if (id === 'target') throw new Error('Superseded original changed; no branch was selected.');
   };
-  await assert.rejects(f.run(), /Superseded original changed/);
-  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id), ['first', 'target']);
-  assert.match((await f.status()).error, /Superseded original changed/);
+  await f.run();
+  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id), ['first', 'target', 'second']);
+  assert.match((await f.status()).blockedConversations[0].reason, /Superseded original changed/);
 });

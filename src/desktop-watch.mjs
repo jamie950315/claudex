@@ -10,9 +10,14 @@ import { homedir } from 'node:os';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
+// These are explicit history guards, not permission to choose a branch or retry
+// an arbitrary failed native operation. Keep the owning process alive so one
+// blocked handoff does not disconnect every unrelated Remote Control session.
+const HISTORY_BLOCKED = /^(?:Owned Claude history does not match the synchronized prefix; no branch was selected\.|Owned Claude image refresh does not match the complete synchronized prefix; no history was duplicated\.|Conversation history diverged before the common checkpoint; no branch was selected\.|Both sides changed; no history was replaced\.|Superseded original .*changed;.*|Source changed (?:during handoff|before promotion); pending evidence was preserved\.|Destination changed during handoff; no branch was selected\.|Native destination did not preserve the complete copied checkpoint\.|A retained snapshot was edited; it was not retired\.|Current history changed; prior snapshots were preserved\.|Snapshot retention cannot be satisfied safely; new allocations are paused\.)$/i;
 const reason = error => String(error?.message ?? error).slice(0, 500);
 const isWaiting = error => WAITING.test(reason(error));
 const isUnsupported = error => UNSUPPORTED.test(reason(error));
+const isHistoryBlocked = error => HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
 function usesActiveHints(state, id) {
   return state.conversations[id]?.discoveryMode !== 'cold-import'
@@ -43,15 +48,25 @@ async function activeActivityHint(state, id) {
 export async function runDesktopWatch({ root, bridge, runtime, config, signal, pollMs = 2000,
   discover = discoverSources, sleep = (ms, options) => delay(ms, undefined, options),
   now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
+  blockedRetryMs = 30_000,
   publishFolders = publishClaudeFolderMap,
   maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
   if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
   if (!Number.isInteger(coldValidationMs) || coldValidationMs < 1) throw new Error('Invalid cold-import validation interval.');
+  if (!Number.isInteger(blockedRetryMs) || blockedRetryMs < 1) throw new Error('Invalid blocked-history revalidation interval.');
   const statusPath = join(root, 'watcher-status.json');
   const startedAt = now();
   let lastCollection = startedAt;
   let passes = 0;
+  let blocked = null;
+  const blockedConversations = new Map();
+  const deferredBlock = Symbol('deferred history revalidation');
+  const block = (previous, error, fields) => ({ ...fields, reason: reason(error),
+    since: previous?.since ?? now(), lastAttemptAt: now(), retryAt: now() + blockedRetryMs,
+    attempts: Math.min(Number.MAX_SAFE_INTEGER, (previous?.attempts ?? 0) + 1) });
+  const blockingStatus = () => ({ blocked, blockedConversationCount: blockedConversations.size,
+    blockedConversations: [...blockedConversations.values()].slice(0, 20) });
   // Ephemeral scheduling hints only. Durable checkpoints are never inferred
   // from file metadata, and every process starts with full verification.
   const coldHints = new Map();
@@ -121,7 +136,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
-    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, ...fields });
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
+    synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : fields.waiting ? 'waiting' : 'ready',
+    ...blockingStatus(), ...fields });
   };
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
@@ -131,9 +148,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         let blockedSourceCount = 0;
         const blockedSources = [];
         try {
+          // A pending transaction remains the only allowed native operation.
+          // Waiting out this backoff does not clear it or allocate a new target.
+          if (blocked && now() < blocked.retryAt) throw deferredBlock;
           // The transport is a prerequisite. Never enroll a source while it is absent.
           const codex = await runtime.codex();
           const sync = async id => {
+            if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt) return;
             try {
               const state = await bridge.status();
               const before = await coldImportHint(state, id);
@@ -151,6 +172,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 lastSync = { conversationId: id, durationMs: now() - beganAt };
                 if (!slowestSync || lastSync.durationMs > slowestSync.durationMs) slowestSync = lastSync;
               }
+              blockedConversations.delete(id);
               if (before && result?.changed === false && result.incompleteTail === false) {
                 const latest = await bridge.status();
                 if (await coldImportInactive(latest, id, codex)) {
@@ -191,6 +213,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               if (isWaiting(error)) {
                 if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
                 waiting ??= reason(error); return;
+              }
+              if (isHistoryBlocked(error)) {
+                // No durable intent exists, so other conversations may still
+                // be verified. Their normal global quota/original guards are
+                // unchanged and may independently block a new allocation.
+                blockedConversations.set(id, block(blockedConversations.get(id), error, { conversationId: id }));
+                return;
               }
               throw error;
             }
@@ -253,7 +282,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const latest = await bridge.status();
             for (const id of Object.keys(latest.conversations)) await observeActive(latest, id);
             for (const id of activeDirty) if (!latest.conversations[id]) { activeDirty.delete(id); activeObserved.delete(id); }
-            const nextDirty = [...activeDirty].find(id => id !== nextId && !fresh.includes(id));
+            const nextDirty = [...activeDirty].find(id => id !== nextId && !fresh.includes(id)
+              && (!blockedConversations.has(id) || now() >= blockedConversations.get(id).retryAt));
             if (nextDirty && !signal?.aborted) {
               activePrioritySyncs++;
               await sync(nextDirty);
@@ -265,7 +295,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const fresh = await discoverNew();
             const freshIds = new Set(fresh);
             const state = await bridge.status();
-            for (const cache of [coldHints, coldObserved, coldDirty, activeObserved, activeDirty]) {
+            for (const cache of [coldHints, coldObserved, coldDirty, activeObserved, activeDirty, blockedConversations]) {
               for (const id of cache.keys()) if (!state.conversations[id]) cache.delete(id);
             }
             const dirty = [], active = [], background = [];
@@ -306,18 +336,29 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             await bridge.collect();
             lastCollection = now();
           }
+          blocked = null;
         } catch (error) {
           clearHints();
-          if (!isWaiting(error)) throw error;
-          waiting ??= reason(error);
+          if (error === deferredBlock) { /* Keep the exact pending intent and visible blocked state. */ }
+          else if (isWaiting(error)) { blocked = null; waiting ??= reason(error); }
+          else if (isHistoryBlocked(error)) {
+            const pending = (await bridge.status()).pending;
+            blocked = block(blocked, error, { scope: pending ? 'pending' : 'coordinator',
+              conversationId: pending?.record?.conversationId ?? null,
+              operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
+          } else throw error;
         }
         await status({ waiting, blockedSourceCount, blockedSources });
         if (!signal?.aborted && passes < maxPasses) {
-          try { await sleep(pollMs, { signal }); }
+          // Abortable, bounded sleep prevents a broken persisted history from
+          // causing a hot recover loop. Normal healthy polling stays unchanged.
+          const pauseMs = blocked ? Math.max(pollMs, Math.min(60_000, blocked.retryAt - now())) : pollMs;
+          try { await sleep(pauseMs, { signal }); }
           catch (error) { if (error.name !== 'AbortError' || !signal?.aborted) throw error; }
         }
       }
-      await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: null });
+      await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: null,
+        ...blockingStatus() });
     } catch (error) {
       await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
       // A busy ClaudeOwner must keep its live handle; closing it can interrupt user work.

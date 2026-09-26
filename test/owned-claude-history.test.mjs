@@ -105,6 +105,50 @@ test('native image-source sidecars do not become authored turns or break the nex
   assert.throws(() => read('warn'), /signature|digest|packet/);
 });
 
+test('multi-image native sidecars stay complete across restart placeholders and the next delta', () => {
+  const a = turn('two images'), b = turn('next delta');
+  a[0].content.push(...['image/png', 'image/jpeg'].map(media_type =>
+    ({ type: 'image', source: { type: 'base64', media_type, data: 'aGVsbG8=' } })));
+  const annotation = { role: 'user', content: ['1.png', '2.jpg'].map(file =>
+    ({ type: 'text', text: `[Image: source: /private/tmp/claude-501/-tmp/${sessionId}/images/${file}]` })) };
+  const placeholder = { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] };
+  const rows = encodeClaude({ meta, messages: [packet(a, 'two-image-a'), annotation, placeholder,
+    packet(b, 'two-image-b', fingerprint({ messages: a }))] }, sessionId).rows;
+  const authored = rows.filter(row => row.type === 'user' || row.type === 'assistant');
+  Object.assign(authored[0], { version: '2.1.281', promptSource: 'sdk', queueTranscriptOnly: true,
+    promptId: 'two-image-prompt', imagePasteIds: [1, 2] });
+  Object.assign(authored[1], { version: '2.1.281', isMeta: true, promptId: 'two-image-prompt' });
+  Object.assign(authored[2].message, { model: '<synthetic>', stop_reason: 'stop_sequence', stop_sequence: '',
+    usage: { input_tokens: 0, output_tokens: 0 } });
+  const read = (input = rows) => decodeCompletedOwnedClaudeHistory({
+    text: input.map(row => JSON.stringify(row)).join('\n') + '\n', conversationId, sessionId, key });
+  const sidecarIndex = rows.indexOf(authored[1]);
+  const initial = read(rows.slice(0, sidecarIndex + 1));
+  assert.equal(initial.incompleteTail, false);
+  assert.equal(initial.digest, fingerprint({ messages: a }));
+  const resumed = read(rows.slice(0, rows.indexOf(authored[2]) + 1));
+  assert.equal(resumed.digest, initial.digest);
+  assert.equal(resumed.incompleteTail, false);
+  assert.equal(read().digest, fingerprint({ messages: [...a, ...b] }));
+  assert.equal(read().common.messages.length, 4);
+  // Joined legacy text is the same annotation, not a new authored turn.
+  const exact = structuredClone(authored[1].message.content);
+  authored[1].message.content = [{ type: 'text', text: exact.map(block => block.text).join('\n') }];
+  assert.equal(read().digest, fingerprint({ messages: [...a, ...b] }));
+  for (const invalid of [exact.toReversed(), exact.slice(0, 1), [...exact, { type: 'text', text: 'User content' }],
+    [exact[0], { type: 'text', text: exact[1].text + '\nExtra user content' }]]) {
+    authored[1].message.content = invalid;
+    assert.throws(() => read(), /synchronized prefix/);
+    assert.equal(read(rows.slice(0, sidecarIndex + 1)).incompleteTail, true);
+  }
+  authored[1].message.content = exact;
+  authored[0].imagePasteIds = [1, 1];
+  assert.throws(() => read(), /synchronized prefix/);
+  authored[0].imagePasteIds = [1, 2];
+  authored[1].timestamp = '2026-09-25T00:00:01Z';
+  assert.throws(() => read(), /synchronized prefix/);
+});
+
 function appendNativeCompaction(rows, messages = turn('after compact')) {
   const boundary = { type: 'system', subtype: 'compact_boundary', uuid: randomUUID(), parentUuid: null,
     logicalParentUuid: rows.filter(row => row.uuid && !row.isSidechain).at(-1)?.uuid,

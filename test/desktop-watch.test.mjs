@@ -183,11 +183,151 @@ test('unsupported new histories have a bounded warning count and do not stop oth
   assert.equal((await f.status()).error, null);
 });
 
-test('conflicting tracked histories stop the watcher without choosing a branch', async () => {
+test('conflicting tracked histories stay blocked without stopping owners or choosing a branch', async () => {
   const f = await fixture({ bridge: { async sync() { throw new Error('Both sides changed; no history was replaced.'); } } });
-  await assert.rejects(f.run({ maxPasses: 1 }), /Both sides changed/);
-  assert.match((await f.status()).error, /Both sides changed/);
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.synchronization, 'degraded');
+  assert.match(pass.blockedConversations[0].reason, /Both sides changed/);
+  assert.equal(pass.blockedConversations[0].conversationId, 'new');
   assert.equal(f.state.pending, null);
+});
+
+const prefixMismatch = 'Owned Claude history does not match the synchronized prefix; no branch was selected.';
+
+test('an observed pending prefix mismatch keeps the watcher alive and preserves the sole native intent', async () => {
+  const f = await fixture();
+  let clock = 0, discoverCount = 0, closeCount = 0;
+  const owner = { remoteId: 'same-remote-control-session', close() { closeCount++; } };
+  f.runtime.owners = new Map([['unrelated', { owner }]]);
+  const pending = { phase: 'prepared', operationId: 'same-operation', record: { conversationId: 'new' },
+    common: { messages: ['complete checkpoint'] } };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    f.state.pending = structuredClone(pending);
+    throw new Error(prefixMismatch);
+  };
+  f.bridge.recover = async () => { f.calls.recover++; throw new Error(prefixMismatch); };
+  const snapshots = [], pauses = [];
+  await f.run({ maxPasses: 3, now: () => clock, discover: async (...args) => { discoverCount++; return f.discover(...args); },
+    sleep: async ms => {
+      snapshots.push(await f.status()); pauses.push(ms); clock += ms;
+      assert.deepEqual(f.state.pending, pending);
+      assert.equal(f.runtime.owners.get('unrelated').owner, owner);
+      assert.equal(closeCount, 0);
+    } });
+  assert.deepEqual(pauses, [30_000, 30_000]);
+  assert.equal(discoverCount, 1);
+  assert.deepEqual(f.calls.sync, ['new']);
+  assert.equal(f.calls.recover, 3);
+  assert.equal(f.calls.collect, 0);
+  assert.deepEqual(f.state.pending, pending);
+  assert.deepEqual(snapshots.map(status => [status.running, status.synchronization, status.blocked.scope]),
+    [[true, 'blocked', 'pending'], [true, 'blocked', 'pending']]);
+  assert.equal(snapshots[0].blocked.operationId, 'same-operation');
+  assert.equal(snapshots[0].blocked.reason, prefixMismatch);
+  assert.equal(snapshots[1].blocked.attempts, 2);
+});
+
+test('a blocked startup recovery performs no discovery or allocation before verified recovery succeeds', async () => {
+  const f = await fixture();
+  let clock = 0;
+  const pending = { phase: 'prepared', operationId: 'saved-operation', record: { conversationId: 'saved' } };
+  f.state.pending = structuredClone(pending);
+  f.bridge.recover = async () => {
+    f.calls.recover++;
+    if (f.calls.recover === 1) throw new Error(prefixMismatch);
+    assert.deepEqual(f.state.pending, pending);
+    f.state.pending = null;
+  };
+  await f.run({ maxPasses: 2, now: () => clock, sleep: async ms => {
+    const status = await f.status();
+    assert.equal(status.running, true);
+    assert.equal(status.blocked.phase, 'prepared');
+    assert.deepEqual(f.calls.track, []);
+    assert.deepEqual(f.calls.sync, []);
+    clock += ms;
+  } });
+  assert.equal(f.calls.recover, 2);
+  assert.equal(f.state.pending, null);
+  assert.deepEqual(f.calls.track, ['/new']);
+  assert.deepEqual(f.calls.sync, ['new']);
+  assert.equal((await f.status()).blocked, null);
+});
+
+test('pending recovery cannot hot-loop when a wakeup occurs before its revalidation deadline', async () => {
+  const f = await fixture();
+  f.state.pending = { phase: 'prepared' };
+  f.bridge.recover = async () => { f.calls.recover++; throw new Error(prefixMismatch); };
+  await f.run({ maxPasses: 4, sleep: async () => {} });
+  assert.equal(f.calls.recover, 1);
+  assert.deepEqual(f.calls.track, []);
+  assert.deepEqual(f.calls.sync, []);
+  assert.equal((await f.status()).blocked.attempts, 1);
+});
+
+test('nonpending guards isolate bounded conversation diagnostics and revalidate on a fixed cadence', async () => {
+  const f = await fixture();
+  let clock = 0, pass;
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id !== 'good') throw new Error(prefixMismatch);
+  };
+  const sources = Array.from({ length: 25 }, (_, index) => ({ side: 'claude', id: `bad-${index}`, path: `/bad-${index}` }));
+  sources.push({ side: 'claude', id: 'good', path: '/good' });
+  await f.run({ maxPasses: 4, now: () => clock, blockedRetryMs: 30,
+    discover: async (_config, known) => sources.filter(source => !known.has(`${source.side}:${source.id}`)),
+    sleep: async () => { pass = await f.status(); clock += 10; } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.synchronization, 'degraded');
+  assert.equal(pass.blocked, null);
+  assert.equal(pass.blockedSourceCount, 0);
+  assert.equal(pass.blockedConversationCount, 25);
+  assert.equal(pass.blockedConversations.length, 20);
+  assert.equal(f.calls.sync.filter(id => id === 'good').length, 4);
+  for (let index = 0; index < 25; index++) assert.equal(f.calls.sync.filter(id => id === `bad-${index}`).length, 2);
+  assert.equal(f.state.pending, null);
+});
+
+test('a conversation leaves the blocked set only after a successful full sync', async () => {
+  const f = await fixture();
+  let clock = 0;
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (f.calls.sync.length === 1) throw new Error(prefixMismatch);
+    return { changed: false, incompleteTail: false };
+  };
+  await f.run({ maxPasses: 2, now: () => clock, sleep: async () => { clock = 30_000; } });
+  assert.deepEqual(f.calls.sync, ['new', 'new']);
+  assert.equal((await f.status()).blockedConversationCount, 0);
+});
+
+test('blocked recovery remains abortable without clearing its pending transaction', async () => {
+  const f = await fixture(), controller = new AbortController();
+  const pending = { phase: 'prepared' };
+  f.state.pending = pending;
+  f.bridge.recover = async () => { f.calls.recover++; throw new Error(prefixMismatch); };
+  await f.run({ signal: controller.signal, sleep: async (_ms, { signal }) => {
+    assert.equal(signal, controller.signal);
+    controller.abort();
+    throw Object.assign(new Error('Aborted'), { name: 'AbortError' });
+  } });
+  assert.equal(f.state.pending, pending);
+  assert.equal(f.calls.recover, 1);
+  assert.equal((await f.status()).running, false);
+});
+
+test('unclassified native sync and recovery failures are not silently retried', async () => {
+  for (const pending of [null, { phase: 'prepared' }]) {
+    const f = await fixture();
+    f.state.pending = pending;
+    const fail = async () => { throw new Error('Unexpected native lifecycle schema.'); };
+    f.bridge.sync = fail;
+    f.bridge.recover = fail;
+    await assert.rejects(f.run({ maxPasses: 2 }), /Unexpected native lifecycle schema/);
+    assert.equal((await f.status()).error, 'Unexpected native lifecycle schema.');
+  }
 });
 
 const boundedNativeDiscoveryErrors = [
@@ -221,10 +361,10 @@ test('unenrolled native image, provenance, size and incomplete stored histories 
 });
 
 for (const message of boundedNativeDiscoveryErrors) {
-  test(`tracked history still stops on ${message}`, async () => {
+  test(`tracked history remains explicitly blocked on ${message}`, async () => {
     const f = await fixture({ bridge: { async sync() { throw new Error(message); } } });
-    await assert.rejects(f.run({ maxPasses: 1 }), error => error.message === message);
-    assert.equal((await f.status()).error, message);
+    await f.run({ maxPasses: 1 });
+    assert.equal((await f.status()).blockedConversations[0].reason, message);
     assert.equal(f.state.pending, null);
   });
 }

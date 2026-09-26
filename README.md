@@ -44,12 +44,21 @@ node bin/claudex.mjs service install
 node bin/claudex.mjs service status
 ```
 
-The service runs at login. An unsafe error stops it rather than retrying an
-ambiguous write. `status` shows the last error without transcript contents.
+The service runs at login. `status` shows errors without transcript contents.
 Unsupported histories found during discovery are left untouched and skipped,
 so they do not stop unrelated projects. Status reports their count and at most
 20 source paths/reasons; this diagnostic list does not accumulate over time.
-Failures involving already tracked history or pending writes still stop safely.
+In Desktop mode, recognized tracked-history conflicts and export guards pause
+synchronization while keeping the watcher and existing Claude Remote Control
+owners alive. Status reports `synchronization: blocked` for a coordinator-wide
+hold or `degraded` for individually held syncs, with bounded reasons and the next
+revalidation time. Revalidation is spaced at least 30 seconds apart; it does not
+clear failed operations or resend uncertain inputs. A pending transaction blocks
+all discovery, new syncs and collection until verified recovery succeeds. Without
+a pending transaction, other conversations continue their normal checks, including
+global original-history and quota guards that may still block new deliveries.
+Unclassified unsafe failures (and the legacy watcher) still stop rather than retry
+blindly. This is not a guarantee against process crashes or network outages.
 `service stop` unloads it for the current login; `service start` loads it again.
 `service uninstall` removes its LaunchAgent but preserves conversation data.
 Only one watcher can run for a state root.
@@ -254,8 +263,9 @@ No per-repository bridge setup, manual import or routine command is required
 after installation. Synchronization occurs at complete-turn boundaries, not
 token by token; wait for delivery rather than assuming a fixed delay. The Mac,
 background service and shared Codex backend must be available. Remote Control
-also requires connectivity to the user's Claude account. Unsupported tracked
-history or an ambiguous write stops safely instead of retrying blindly.
+also requires connectivity to the user's Claude account. Recognized tracked-history
+guards hold synchronization with explicit status while preserving live owners;
+ambiguous writes are never retried blindly.
 
 #### Starting in Claude Desktop
 

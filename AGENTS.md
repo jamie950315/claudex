@@ -30,8 +30,15 @@ seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
 All-project discovery skips unsupported unenrolled histories and reports a
-bounded diagnostic list; pending transactions and tracked-history failures still
-stop synchronization. Discovery starts at initialization, not a bulk history import.
+bounded diagnostic list. In Desktop mode, recognized tracked-history guards
+pause synchronization without exiting the watcher or closing live Claude owners.
+A pending transaction blocks all discovery, new syncs and collection until normal
+verified recovery succeeds; it is never cleared or resent to regain availability.
+Without pending work, affected syncs are held individually, but global original
+and quota guards still apply to other deliveries. Revalidation is paced at 30
+seconds, with explicit bounded blocked status. Unclassified unsafe failures remain
+fatal rather than being retried blindly. Discovery starts at initialization, not
+a bulk history import.
 
 Historical backfill is an explicit module API in `src/cold-import.mjs`, not a public
 CLI command or a changed discovery cutoff. Its private journal reserves one target
@@ -316,7 +323,8 @@ not disposable rollback snapshots. Other format conversion and ambiguous cache
 identities still pause synchronization.
 
 The CLI also appends an `isMeta` image-source sidecar after an imported image
-packet. It is excluded from logical history only with the exact pinned text
+packet, including one text block per image on multi-image inputs (or the observed
+single-block newline representation). It is excluded from logical history only with the exact pinned text
 format, matching parent packet, prompt ID/time/cwd, paste IDs and authenticated
 packet. Other metadata or user text is retained. The native parent graph is
 validated before this exclusion, and ambiguous codec identity mappings fail.

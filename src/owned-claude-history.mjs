@@ -89,9 +89,13 @@ function nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, d
     const packet = decodePacket(parent.message?.content);
     if (!packet || packet.sourceSide !== 'codex') continue;
     const images = parent.message.content.filter(block => block.type === 'image');
-    if (images.length !== parent.imagePasteIds.length || !Array.isArray(row.message?.content) || row.message.content.length !== 1
-        || row.message.content[0].type !== 'text' || typeof row.message.content[0].text !== 'string') continue;
-    const lines = row.message.content[0].text.split('\n');
+    const content = row.message?.content;
+    if (images.length !== parent.imagePasteIds.length || !Array.isArray(content) || !content.length
+        || content.some(block => block.type !== 'text' || typeof block.text !== 'string')) continue;
+    // The pinned CLI emits one text block per image for multi-image inputs.
+    // Also retain the previously supported single-block newline representation.
+    // Do not flatten arbitrary block/line combinations or discard extra text.
+    const lines = content.length === 1 ? content[0].text.split('\n') : content.map(block => block.text);
     if (lines.length !== images.length || typeof parent.cwd !== 'string') continue;
     const encodedProject = parent.cwd.replace(/[^a-zA-Z0-9]/g, '-');
     const valid = lines.every((line, index) => {
@@ -132,9 +136,9 @@ function completedPrefix(options, decodePacket) {
   const tail = text.slice(cutoff).split('\n').filter(Boolean).map(JSON.parse).filter(row =>
     !row.isSidechain && (row.type === 'user' || row.type === 'assistant'));
   if (key && tail.length === 1 && tail[0].type === 'user' && tail[0].isMeta === true
-    && Array.isArray(tail[0].message?.content) && tail[0].message.content.length === 1
-    && tail[0].message.content[0]?.type === 'text' && typeof tail[0].message.content[0].text === 'string'
-    && tail[0].message.content[0].text.startsWith('[Image: source: ')) {
+    && Array.isArray(tail[0].message?.content) && tail[0].message.content.length > 0
+    && tail[0].message.content.every(block => block.type === 'text' && typeof block.text === 'string'
+      && block.text.startsWith('[Image: source: '))) {
     // The pinned CLI adds one image-source sidecar after a no-query packet.
     // It is complete only after the FULL native graph and authenticated parent
     // prove that this sole trailing message is exactly that inert annotation.
