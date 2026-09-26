@@ -124,8 +124,25 @@ against a live owner. Existing entries may be renamed or pinned through native U
 when requested; pinning is not automatic and does not merge a Local entry.
 The required sidebar behavior is placement under the same existing local
 project/folder group as the source. Pinning, title prefixes, and a new same-name
-custom group are not substitutes. Correct cwd does not prove Desktop folder
-membership; this Remote Control integration has not established that mapping.
+custom group are not substitutes. `desktop folders enable|disable|status` manages
+an opt-in, version-pinned presentation adapter for the observed Claude frontend.
+It patches only one owned HTTP cache resource, preserving an immutable original
+and a prepared/installed recovery journal under the private root. It does not
+modify ASAR, signatures, login data, native session registries or writer routing.
+Unknown source bytes/schema or foreign cache changes fail explicitly. A changed
+frontend asset URL may require revalidation; never claim arbitrary future builds
+are covered. Initial installation/upgrades require an idle Claude app restart
+because the app can retain old resources in memory despite a page reload.
+The watcher publishes only verified current owner RC IDs and canonical cwd to
+private `folder-map.json`. The renderer polls it through the existing guarded
+LocalSessions.readFileAtCwd API and React subscription; no HTTP listener or new
+worker is created. Match an existing same-host Local/CLI row and use its actual
+native Folder key and label. Missing or conflicting matches get no override.
+Rows, IDs, types, routes and native histories remain unchanged. Native cold-start
+and live map-update checks verify entries in the original claudex folder, without
+pinning or a custom group. Tests must not substitute fixture success for this UI
+evidence. `folderProjection` status describes map/resource readiness, not proof
+that a particular running renderer loaded the adapter.
 Do not claim same-Local-ID bidirectional writing or generic Chat/Cowork support.
 
 A native Desktop probe verifies two then four synthetic messages under one ID,

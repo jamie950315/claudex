@@ -97,6 +97,43 @@ test('tracked and owned identities are not enrolled again on later passes', asyn
   assert.equal(f.calls.codex, 3);
 });
 
+test('opt-in folder maps update during discovery refreshes without adding native writers', async () => {
+  const f = await fixture(), maps = [], resources = [];
+  let pass;
+  await f.run({ maxPasses: 2, config: { folderProjection: { enabled: true, cachePath: '/synthetic-cache' } },
+    publishFolders: async ({ state }) => { maps.push(Object.keys(state.conversations)); return { changed: true, entries: 1, deferred: null }; },
+    maintainFolders: async options => { resources.push(options.cachePath); return { changed: false }; },
+    sleep: async () => { pass = await f.status(); } });
+  assert.ok(maps.some(ids => ids.includes('new')));
+  assert.deepEqual(resources, ['/synthetic-cache']);
+  assert.equal(pass.folderProjection.state, 'ready');
+  assert.equal(pass.folderProjection.entries, 1);
+  assert.deepEqual(f.calls.track, ['/new']);
+});
+
+test('folder presentation errors are exposed without allocating replacement owners or interrupting sync', async () => {
+  const f = await fixture(); let pass;
+  await f.run({ maxPasses: 2, config: { folderProjection: { enabled: true } },
+    publishFolders: async () => { throw new Error('Folder map identity mismatch'); },
+    maintainFolders: async () => { throw new Error('Must not run after failed map publication'); },
+    sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.folderProjection.state, 'error');
+  assert.match(pass.folderProjection.error, /identity mismatch/);
+  assert.deepEqual(f.calls.track, ['/new']);
+  assert.equal(f.calls.sync.length, 2);
+});
+
+test('an unsupported folder resource stays visibly failed until maintenance succeeds', async () => {
+  const f = await fixture(); let pass, attempts = 0;
+  await f.run({ maxPasses: 2, config: { folderProjection: { enabled: true } },
+    publishFolders: async () => ({ changed: false, entries: 1, deferred: null }),
+    maintainFolders: async () => { attempts++; throw new Error('Unvalidated frontend source'); },
+    sleep: async () => { pass = await f.status(); } });
+  assert.equal(attempts, 1);
+  assert.equal(pass.folderProjection.state, 'error');
+  assert.match(pass.folderProjection.error, /Unvalidated frontend/);
+});
+
 test('a busy destination waits and retries after it becomes idle', async () => {
   let busy = true;
   const f = await fixture({ bridge: { async sync(id) {

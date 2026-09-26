@@ -46,6 +46,7 @@ const help = `Claudex: bounded local conversation handoffs (no model calls)
   claudex version-policy [strict|warn]    Show or change version-only enforcement
   claudex desktop install         Enable all-project Desktop mode at the next normal app start
   claudex desktop uninstall       Remove the owned next-start override; preserve conversations
+  claudex desktop folders enable|disable|status    Version-pinned Claude folder presentation
 
 Global: --root PATH (default ~/.local/share/claudex). Service installation is opt-in.
 Only generated copies are retired. Original imported sessions are never deleted.
@@ -117,10 +118,35 @@ async function main() {
     return;
   }
   if (command === 'desktop') {
+    if (positionals[1] === 'folders' && positionals[2] === 'status') {
+      output({ enabled: config.folderProjection?.enabled === true,
+        installation: await readJSON(join(root, 'ui-folder-compat', 'manifest.json'), null),
+        watcher: (await readJSON(join(root, 'watcher-status.json'), null))?.folderProjection ?? null });
+      return;
+    }
     if (await readJSON(join(root, 'watch.lock'), null) && !(positionals[1] === 'install' && config.mode === 'desktop')) {
       throw new Error('Stop the bridge watcher safely before changing Desktop installation.');
     }
-    if (positionals[1] === 'install') {
+    if (positionals[1] === 'folders') {
+      if (config.mode !== 'desktop' || process.platform !== 'darwin') throw new Error('Claude folder presentation requires macOS Desktop mode.');
+      const { ensureClaudeFolderCache, restoreClaudeFolderCache } = await import('../src/claude-folder-install.mjs');
+      const { publishClaudeFolderMap } = await import('../src/claude-folder-map.mjs');
+      const cachePath = config.folderProjection?.cachePath
+        ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data', '15bc54146dcdb4ce_0');
+      if (positionals[2] === 'enable') {
+        const state = await new DesktopBridge({ root, adapters: {} }).status();
+        const map = await publishClaudeFolderMap({ root, state });
+        if (map.deferred) throw new Error('Complete the pending native operation before enabling folder presentation.');
+        const resource = await ensureClaudeFolderCache({ root, cachePath });
+        await writeJSON(configPath, { ...config, folderProjection: { enabled: true, cachePath } });
+        output({ enabled: true, map, resource, note: 'Restart Claude only when idle once to load the presentation adapter. Subsequent verified owners update through the read-only map without reload.' });
+      } else if (positionals[2] === 'disable') {
+        await publishClaudeFolderMap({ root, state: { version: 2, conversations: {}, records: [], pending: null } });
+        await writeJSON(configPath, { ...config, folderProjection: { enabled: false, cachePath } });
+        const resource = await restoreClaudeFolderCache({ root, cachePath });
+        output({ enabled: false, resource, note: 'Map cleared and original cache resource restored; restart Claude only when idle to fully unload the presentation adapter.' });
+      } else throw new Error('Use desktop folders enable, disable, or status.');
+    } else if (positionals[1] === 'install') {
       const legacy = await new Bridge({ root, drivers: {} }).status();
       if (legacy.pending || legacy.records.length) throw new Error('Legacy conversations require an explicit migration; originals and mappings were preserved.');
       const result = await installDesktopLauncher({ root,
@@ -132,7 +158,7 @@ async function main() {
     } else if (positionals[1] === 'uninstall') {
       output(await uninstallDesktopLauncher({ root }));
       await writeJSON(configPath, { ...config, mode: 'legacy' });
-    } else throw new Error('Use desktop install or desktop uninstall.');
+    } else throw new Error('Use desktop install, uninstall, or folders.');
     return;
   }
   async function usingBridge(fn) {

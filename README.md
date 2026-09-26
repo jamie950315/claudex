@@ -286,11 +286,55 @@ to distinguish the continuation from its preserved Local source. For example,
 continue in `[Claudex] Ping` after replying in Codex, not the old Local `Ping`.
 The logical title and Codex task names remain unchanged. Existing owners are not
 bulk-renamed; an explicit rename in Claude's native UI is preserved when Remote
-Control reconnects. Depending on Claude's sidebar grouping, Remote Control
-entries may be under **Other** or in **Search**, rather than inside the Local
-project's group. Placement under the same existing local folder is not yet
-established by this integration. Pinning, title prefixes, or a new same-name
-custom group do not satisfy that folder-placement requirement.
+Control reconnects. Without the optional folder presentation adapter below,
+Remote Control entries may be under **Other** or in **Search**, rather than
+inside the Local project's group. Pinning, title prefixes, or a new same-name
+custom group do not satisfy the folder-placement requirement.
+
+#### Native folder presentation
+
+The opt-in macOS adapter places verified Claudex Remote Control continuations
+inside the **same existing Local project/folder group**. It keeps the Remote
+Control identity and input route intact; it does not register a second Local
+writer or move conversation files. It reuses the existing folder's actual key
+and label, including repository-backed folder keys. Unknown, ambiguous, SSH/WSL,
+or missing Local matches are left unchanged instead of guessing a destination.
+
+Stop the watcher safely while Claude is idle, then run:
+
+```sh
+node bin/claudex.mjs desktop folders enable
+node bin/claudex.mjs desktop folders status
+```
+
+Restart the idle Claude app once, then start the watcher again. New verified
+owners subsequently update through a small private map without another app
+reload. Native checks have verified cold startup and adding/removing an exact
+mapping while the interface remains open, with the continuation in the original
+`claudex` folder and its Remote Control route unchanged.
+
+This is a **version-pinned presentation compatibility patch**, not an official
+Claude folder-assignment API. It updates one Zstandard-compressed HTTP cache
+resource, with validated stream checksums, exact source hash and anchor checks,
+an immutable backup and a recovery journal under `ui-folder-compat`. It does not
+modify the signed app, credentials, session registry or transcript. Node must
+provide Zstandard and CRC32 support. The checked frontend asset is
+`shared-23-Db0dcGkF.js`, original decoded SHA-256
+`01bc6cf8d85b25edda8a396f00e664872a03288f6c06aff03d1aa0f2fa466ebf`.
+Claude app/web frontend updates or cache eviction may require revalidation and
+reinstallation; unknown assets are not patched automatically. Status reports
+map/resource readiness, not which version a running renderer has loaded.
+
+The watcher publishes `folder-map.json` atomically, using only verified current
+owner IDs and canonical directories. The renderer uses Claude's existing guarded
+read-only file API; no local HTTP server, credential copy or extra native worker
+is involved. Pending transitions preserve the previous map. Missing/invalid data
+disables the presentation override and reports a diagnostic.
+
+To undo, stop the watcher safely and run `node bin/claudex.mjs desktop folders
+disable`, then restart the idle Claude app and watcher. The map is cleared and
+the exact original cache resource is restored only if the current file remains
+installer-owned. Original conversations and backups are preserved.
 
 Idle historical imports do not each reserve a long-lived SDK process. For these
 `cold-import` pairs only, the watcher may skip repeated full reads after a

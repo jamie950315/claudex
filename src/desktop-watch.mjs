@@ -3,6 +3,7 @@ import { coldImportHint, coldImportInactive } from './desktop-watch-hints.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
 import { withLock, writeJSON } from './storage.mjs';
+import { publishClaudeFolderMap } from './claude-folder-map.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
@@ -13,7 +14,9 @@ const isUnsupported = error => UNSUPPORTED.test(reason(error));
 /** Run the opt-in Desktop coordinator under the same lock as the legacy watcher. */
 export async function runDesktopWatch({ root, bridge, runtime, config, signal, pollMs = 2000,
   discover = discoverSources, sleep = (ms, options) => delay(ms, undefined, options),
-  now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000 }) {
+  now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
+  publishFolders = publishClaudeFolderMap,
+  maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
   if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
   if (!Number.isInteger(coldValidationMs) || coldValidationMs < 1) throw new Error('Invalid cold-import validation interval.');
@@ -36,11 +39,33 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let maxDiscoveryGapMs = 0;
   let lastSync = null;
   let slowestSync = null;
-  const status = fields => writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
+  let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
+  const status = async fields => {
+    if (config.folderProjection?.enabled === true) {
+      try {
+        const map = await publishFolders({ root, state: await bridge.status() });
+        if (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000) {
+          lastFolderMaintenance = now();
+          try {
+            folderResource = await maintainFolders({ root, cachePath: config.folderProjection.cachePath });
+            folderResourceError = null;
+          } catch (error) { folderResourceError = reason(error); throw error; }
+        }
+        if (folderResourceError) throw new Error(folderResourceError);
+        folderProjection = { state: map.deferred ? 'deferred' : 'ready', entries: map.entries,
+          deferred: map.deferred, resource: folderResource, updatedAt: now() };
+      } catch (error) {
+        // Presentation failures remain explicit without interrupting native
+        // user work or changing the conversation coordinator's write guards.
+        folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
+      }
+    }
+    return writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
     scheduler: 'operation-interleaved',
     startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
-    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync, ...fields });
+    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync, folderProjection, ...fields });
+  };
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
     try {
