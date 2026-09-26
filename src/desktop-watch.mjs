@@ -17,7 +17,8 @@ const HISTORY_BLOCKED = /^(?:Owned Claude history does not match the synchronize
 const reason = error => String(error?.message ?? error).slice(0, 500);
 const isWaiting = error => WAITING.test(reason(error));
 const isUnsupported = error => UNSUPPORTED.test(reason(error));
-const isHistoryBlocked = error => HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
+const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
+  || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
 function usesActiveHints(state, id) {
   return state.conversations[id]?.discoveryMode !== 'cold-import'

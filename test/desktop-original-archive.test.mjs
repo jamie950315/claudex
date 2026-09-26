@@ -5,9 +5,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
+import { DesktopBridge } from '../src/desktop-bridge.mjs';
 import { CodexClient } from '../src/codex.mjs';
-import { createCodexProjection } from '../src/codex-projection.mjs';
+import { createCodexProjection, encodeCodexProjection, codexProjectionPath, registerCodexProjection } from '../src/codex-projection.mjs';
 import { fingerprint } from '../src/history.mjs';
+import { writeJSON } from '../src/storage.mjs';
+import { originalArchiveGuard } from '../src/codex-original-archive-tree.mjs';
 
 const messages = [
   { role: 'user', content: [{ type: 'text', text: 'Synthetic original question' }] },
@@ -149,6 +152,40 @@ test('an archive outcome with concurrent content remains uncommitted and is neve
   assert.equal(state.calls.filter(call => call.method === 'thread/delete').length, 0);
 });
 
+test('read-only archive preflight remains retriable but an unknown dispatched request cannot be resent', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-archive-unknown-'))), conversationId = randomUUID();
+  const common = { meta: { cwd: root }, messages }, canonical = { count: messages.length, digest: fingerprint(common) };
+  const original = { id: randomUUID(), nativeId: randomUUID(), side: 'codex', conversationId, cwd: root,
+    managed: false, verified: true, kind: 'original', status: 'original', checkpoint: canonical };
+  const replacement = { ...original, id: randomUUID(), nativeId: randomUUID(), managed: true, kind: 'snapshot', status: 'current' };
+  const calls = [];
+  let preflightFailure = true;
+  const adapters = { codex: {
+    inspect: async record => ({ common, nativeId: record.nativeId, digest: canonical.digest, incompleteTail: false }),
+    assertArchiveReplacement: async () => {},
+    prepareOriginalArchiveTree: async () => ({ version: 1, parentId: original.nativeId, members: [{ id: original.nativeId, disposition: 'archive' }] }),
+    archiveOriginalTree: async (_record, _proof, { allowWrite, beforeDispatch }) => {
+      calls.push(allowWrite);
+      if (preflightFailure) { preflightFailure = false; throw originalArchiveGuard('Synthetic preflight still busy'); }
+      if (allowWrite) { await beforeDispatch(); throw new Error('Native request outcome unknown'); }
+      throw originalArchiveGuard('Original archive request outcome is unknown; no native request was repeated.');
+    },
+  } };
+  const bridge = new DesktopBridge({ root, adapters });
+  await writeJSON(join(root, 'desktop-state.json'), { version: 2, conversations: { [conversationId]: { id: conversationId, title: 'Same title', cwd: root, canonical } },
+    records: [original, replacement], pending: null, audit: [] });
+  await assert.rejects(bridge.reconcileOriginalArchive(conversationId, original.nativeId), /Synthetic preflight still busy/);
+  assert.equal((await bridge.status()).pending.phase, 'prepared');
+  await assert.rejects(bridge.recover(), /Native request outcome unknown/);
+  const saved = await bridge.status();
+  assert.equal(saved.pending.kind, 'original-archive');
+  assert.equal(saved.pending.phase, 'requested');
+  await assert.rejects(bridge.recover(), error => error.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED' && /no native request was repeated/.test(error.message));
+  assert.deepEqual(calls, [true, true, false]);
+  assert.deepEqual((await bridge.status()).pending, saved.pending);
+  assert.equal((await bridge.status()).records.length, 2);
+});
+
 test('native original archival preserves exact history beside an independent same-name successor and refuses a fork',
   { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 60000 }, async t => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-original-archive-native-')));
@@ -182,4 +219,129 @@ test('native original archival preserves exact history beside an independent sam
     await assert.rejects(runtime.adapters.codex.archiveOriginal(dependentOriginal), /dependent fork|dependent threads|auxiliary data/);
     assert.ok((await client.request('thread/list', { archived: false, limit: 100 })).data.some(thread => thread.id === successor.id));
     t.diagnostic(`Native original archival evidence: ${root}`);
+  });
+
+test('native archive preserves history while cascading to spawned children but not ordinary forks',
+  { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 60000 }, async t => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-dependent-archive-native-')));
+    const cwd = join(root, 'project'), codexHome = join(root, 'codex');
+    await Promise.all([cwd, codexHome].map(path => mkdir(path)));
+    const connect = async () => { const client = new CodexClient({ binary: process.env.CLAUDEX_CODEX_BINARY || 'codex', codexHome, cwd, env: { HOME: root } }); await client.initialize(); return client; };
+    let client = await connect();
+    t.after(() => client.close());
+    const id = randomUUID(), childId = randomUUID();
+    const common = { meta: { id, cwd, timestamp: new Date().toISOString() }, messages };
+    const original = await createCodexProjection({ client, codexHome, common, id, title: 'Preserved parent', historyMode: 'paginated' });
+    const rows = encodeCodexProjection(common, childId, { historyMode: 'paginated' }).trim().split('\n').map(JSON.parse);
+    Object.assign(rows[0].payload, { forked_from_id: id, parent_thread_id: id,
+      source: { subagent: { thread_spawn: { parent_thread_id: id, depth: 1, agent_path: '/root/synthetic', agent_nickname: 'Synthetic', agent_role: null } } } });
+    const childPath = codexProjectionPath(codexHome, common, childId);
+    await writeFile(childPath, rows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600, flag: 'wx' });
+    await registerCodexProjection({ client, path: childPath, id: childId, cwd, title: 'Preserved child' });
+    const fork = await client.request('thread/fork', { threadId: id, cwd });
+    const forkId = fork.thread.id;
+    await client.close(); client = await connect();
+    const read = async threadId => {
+      const { thread } = await client.request('thread/read', { threadId, includeTurns: true });
+      return { id: thread.id, path: thread.path, turns: thread.turns, source: thread.source, forkedFromId: thread.forkedFromId,
+        bytes: await readFile(thread.path, 'utf8'), status: thread.status.type };
+    };
+    const before = await Promise.all([id, childId, forkId].map(read));
+    assert.ok(before.every(value => value.status === 'notLoaded'));
+    assert.equal(before[1].source.subAgent.thread_spawn.parent_thread_id, id);
+    assert.equal(before[2].forkedFromId, id);
+    await client.request('thread/archive', { threadId: id });
+    const after = await Promise.all([id, childId, forkId].map(read));
+    assert.match(after[0].path, /\/archived_sessions\//);
+    assert.equal(after[0].bytes, before[0].bytes);
+    assert.deepEqual(after[0].turns, before[0].turns);
+    assert.match(after[1].path, /\/archived_sessions\//);
+    assert.deepEqual({ ...after[1], path: before[1].path }, before[1]);
+    assert.deepEqual(after[2], before[2]);
+    await client.close(); client = await connect();
+    for (let i = 0; i < after.length; i++) assert.deepEqual(await read(after[i].id), after[i]);
+    const liveFork = await client.resumeThread(forkId, { cwd });
+    assert.deepEqual(liveFork.thread.turns, before[2].turns);
+    await client.close(); client = await connect();
+    await client.request('thread/unarchive', { threadId: id });
+    assert.equal((await read(id)).bytes, before[0].bytes);
+    assert.equal((await read(id)).path, original.path);
+    const restoredChild = await read(childId);
+    assert.equal(restoredChild.bytes, before[1].bytes);
+    if (restoredChild.path.includes('/archived_sessions/')) await client.request('thread/unarchive', { threadId: childId });
+    for (const dependent of after.slice(1)) {
+      const resumed = await client.resumeThread(dependent.id, { cwd });
+      assert.equal(resumed.thread.id, dependent.id);
+      assert.deepEqual(resumed.thread.turns, dependent.turns);
+    }
+    t.diagnostic(`Native dependent archival proof (spawned child cascades, ordinary fork does not), no inference: ${root}`);
+  });
+
+test('explicit native original-tree reconciliation journals a lost receipt and recovers without resending',
+  { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 60000 }, async t => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-archive-recovery-native-')));
+    const cwd = join(root, 'project'), codexHome = join(root, 'codex'), claudeHome = join(root, 'claude'), stateRoot = join(root, 'state');
+    await Promise.all([cwd, codexHome, claudeHome].map(path => mkdir(path)));
+    const options = { root: stateRoot, codexHome, claudeHome,
+      clientFactory: async () => new CodexClient({ binary: process.env.CLAUDEX_CODEX_BINARY || 'codex', codexHome, cwd, env: { HOME: root } }) };
+    let runtime = await new DesktopRuntime(options).initialize();
+    t.after(() => runtime.close());
+    let bridge = new DesktopBridge({ root: stateRoot, adapters: runtime.adapters });
+    const client = await runtime.codex(), originalId = randomUUID(), childId = randomUUID(), title = 'Same-title legacy original';
+    const common = { meta: { id: originalId, cwd, timestamp: new Date().toISOString() }, messages };
+    const original = await createCodexProjection({ client, codexHome, common, id: originalId, title, historyMode: 'paginated' });
+    const { conversationId } = await bridge.track({ side: 'codex', nativeId: originalId, title });
+    const canonical = (await runtime.inspect({ side: 'codex', nativeId: originalId, managed: false })).common;
+    canonical.meta.timestamp = common.meta.timestamp;
+    const childRows = encodeCodexProjection(common, childId, { historyMode: 'paginated' }).trim().split('\n').map(JSON.parse);
+    Object.assign(childRows[0].payload, { forked_from_id: originalId, parent_thread_id: originalId,
+      source: { subagent: { thread_spawn: { parent_thread_id: originalId, depth: 1, agent_path: '/root/synthetic', agent_nickname: 'Synthetic', agent_role: null } } } });
+    const childPath = codexProjectionPath(codexHome, common, childId);
+    await writeFile(childPath, childRows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600, flag: 'wx' });
+    await registerCodexProjection({ client, path: childPath, id: childId, cwd, title: 'Completed internal agent' });
+    const record = { ...await runtime.plan('codex', { conversationId, nativeId: randomUUID(), common: canonical, title }),
+      id: randomUUID(), conversationId, side: 'codex', cwd, managed: true, verified: true, status: 'current', checkpoint: { count: canonical.messages.length, digest: fingerprint(canonical) } };
+    await runtime.apply(record, canonical, { operationId: randomUUID() });
+    const protectedFork = (await client.request('thread/fork', { threadId: originalId, cwd })).thread;
+    const archivedFork = (await client.request('thread/fork', { threadId: originalId, cwd })).thread;
+    await client.request('thread/archive', { threadId: archivedFork.id });
+    const forkProofs = [];
+    for (const fork of [protectedFork, archivedFork]) {
+      const { thread } = await client.request('thread/read', { threadId: fork.id, includeTurns: true });
+      forkProofs.push({ id: thread.id, path: thread.path, turns: thread.turns, bytes: await readFile(thread.path, 'utf8') });
+    }
+    const state = await bridge.status();
+    state.records[0].status = 'original'; state.records.push(record);
+    await writeJSON(join(stateRoot, 'desktop-state.json'), state);
+    const originalBytes = await readFile(original.path, 'utf8'), childBytes = await readFile(childPath, 'utf8');
+    await runtime.close(); runtime = await new DesktopRuntime(options).initialize();
+    bridge = new DesktopBridge({ root: stateRoot, adapters: runtime.adapters });
+    const c = await runtime.codex(), nativeRequest = c.request.bind(c); let writes = 0;
+    c.request = async (method, params) => {
+      const result = await nativeRequest(method, params);
+      if (method === 'thread/archive') { writes++; throw new Error('Synthetic lost archive receipt'); }
+      return result;
+    };
+    await assert.rejects(bridge.reconcileOriginalArchive(conversationId, originalId), /Synthetic lost archive receipt/);
+    assert.equal((await bridge.status()).pending.phase, 'requested');
+    assert.equal(writes, 1);
+    await runtime.close(); runtime = await new DesktopRuntime(options).initialize();
+    bridge = new DesktopBridge({ root: stateRoot, adapters: runtime.adapters });
+    const recoveredClient = await runtime.codex(), readOnlyRecovery = recoveredClient.request.bind(recoveredClient);
+    recoveredClient.request = async (method, params) => { assert.notEqual(method, 'thread/archive'); assert.notEqual(method, 'thread/delete'); return readOnlyRecovery(method, params); };
+    const result = await bridge.recover();
+    assert.equal(result.preservedDescendants, 1);
+    const final = await bridge.status(), kept = final.records.find(value => value.nativeId === originalId);
+    assert.equal(final.pending, null);
+    assert.equal(kept.managed, false);
+    assert.ok(kept.archivedAt);
+    for (const proof of forkProofs) {
+      const { thread } = await recoveredClient.request('thread/read', { threadId: proof.id, includeTurns: true });
+      assert.deepEqual({ id: thread.id, path: thread.path, turns: thread.turns, bytes: await readFile(thread.path, 'utf8') }, proof);
+    }
+    assert.equal(await readFile(kept.path, 'utf8'), originalBytes);
+    assert.equal(await readFile(kept.archivedTree.members.find(value => value.id === childId).path, 'utf8'), childBytes);
+    assert.equal((await bridge.reconcileOriginalArchive(conversationId, originalId)).changed, false);
+    assert.equal((await runtime.inspect(record)).digest, record.checkpoint.digest);
+    t.diagnostic(`Journaled native archival and restart evidence: ${root}`);
   });

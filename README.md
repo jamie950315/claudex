@@ -57,11 +57,41 @@ clear failed operations or resend uncertain inputs. A pending transaction blocks
 all discovery, new syncs and collection until verified recovery succeeds. Without
 a pending transaction, other conversations continue their normal checks, including
 global original-history and quota guards that may still block new deliveries.
-Unclassified unsafe failures (and the legacy watcher) still stop rather than retry
-blindly. This is not a guarantee against process crashes or network outages.
+Unclassified unsafe failures stop the affected worker. The installed supervisor
+restarts unexpected exits with 5/10/20/40/60-second backoff, preserving pending
+work and checking writer locks first. Live native children, malformed locks or
+uncertain child identities block another writer. Launchd also recovers supervisor
+crashes without replacing a surviving watcher. This is process recovery, not
+permission to resend an uncertain native write or choose a history branch.
 `service stop` unloads it for the current login; `service start` loads it again.
 `service uninstall` removes its LaunchAgent but preserves conversation data.
 Only one watcher can run for a state root.
+
+For a visible macOS menu-bar status and native notifications:
+
+```sh
+node bin/claudex.mjs status-app install
+```
+
+This builds and signs the small native app with a valid local Apple Development
+identity and enables login startup. Approve notifications once when macOS asks.
+The window distinguishes readiness, waiting, blocked recovery, offline processes
+and stale status. **Notifications…** tests delivery; **Diagnostics** opens the
+status files. Persistent alerts are debounced/deduplicated and recovery is also
+reported, without including conversation content. Quitting the display leaves
+synchronization running. Normal macOS Focus and notification settings apply.
+
+An existing legacy original with completed spawned agents can be reconciled
+using `archive-original CONVERSATION_ID --id NATIVE_ID` while the watcher is
+safely stopped. The verified original and its direct spawned children are archived
+through the native API with exact content preservation. Ordinary forks remain
+unchanged. This is not bulk archival and does not relax deletion guards.
+
+The current App's CLI entrypoint is
+`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`.
+Claudex recognizes the old flat and new packaged layouts in the same App,
+verifies the native OpenAI signature and preserves its signed Node runtime.
+It never edits the App bundle or switches to an unrelated PATH binary.
 
 ### Experimental Desktop mode
 

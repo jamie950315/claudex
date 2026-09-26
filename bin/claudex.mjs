@@ -18,6 +18,7 @@ import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { installDesktopLauncher, applyDesktopEnvironment, uninstallDesktopLauncher } from '../src/desktop-install.mjs';
 import { isAllowedCodexVersion, isSupportedCodexVersion } from '../src/codex-versions.mjs';
 import { normalizeVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
+import { closeDesktopSafely } from '../src/desktop-shutdown.mjs';
 
 const { values, positionals } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, from: { type: 'string' }, source: { type: 'string' }, id: { type: 'string' }, title: { type: 'string' },
@@ -39,9 +40,11 @@ const help = `Claudex: bounded local conversation handoffs (no model calls)
   claudex status                  Show current native IDs without transcript content
   claudex gc                      Apply owned-backup retention
   claudex recover                 Resume one interrupted transaction
+  claudex archive-original CONVERSATION_ID --id NATIVE_ID    Reconcile one preserved Codex original
   claudex abort                   Remove one unpublished owned projection
   claudex recover-lock            Clear a dead bridge process lock (never a live one)
   claudex service install|start|stop|status|uninstall    macOS background operation
+  claudex status-app install|status    macOS menu bar status and notifications
   claudex doctor                  Check native versions
   claudex version-policy [strict|warn]    Show or change version-only enforcement
   claudex desktop install         Enable all-project Desktop mode at the next normal app start
@@ -118,6 +121,13 @@ async function main() {
     } else output(await controlService(positionals[1], options));
     return;
   }
+  if (command === 'status-app') {
+    const { installStatusApp, statusStatusApp } = await import('../src/status-app-install.mjs');
+    if (positionals[1] === 'status') output(await statusStatusApp({ root }));
+    else if (positionals[1] === 'install') output(await installStatusApp({ root, identity: process.env.CLAUDEX_SIGNING_IDENTITY }));
+    else throw new Error('Use status-app install or status.');
+    return;
+  }
   if (command === 'desktop') {
     if (positionals[1] === 'handoffs' && positionals[2] === 'status') {
       output({ enabled: config.desktopLocalHandoff?.enabled === true,
@@ -192,11 +202,12 @@ async function main() {
     output({ mode: config.mode || 'legacy', versionPolicy, contextMode: config.mode === 'desktop' ? config.contextMode ?? 'inline' : null,
       allProjects: config.allProjects === true, conversations: Object.values(state.conversations), records: state.records,
       pending: state.pending ? { phase: state.pending.phase, nativeId: state.pending.record.nativeId, side: state.pending.record.side } : null,
-      audit: state.audit, watcher: await readJSON(join(root, 'watcher-status.json'), null) });
+      audit: state.audit, watcher: await readJSON(join(root, 'watcher-status.json'), null),
+      service: await readJSON(join(root, 'service-status.json'), null) });
     return;
   }
   if (config.mode === 'desktop') {
-    if (!['watch', 'track', 'sync', 'gc', 'recover'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, and recover; owner appends cannot be aborted as disposable files.');
+    if (!['watch', 'track', 'sync', 'gc', 'recover', 'archive-original'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, recover, and archive-original; owner appends cannot be aborted as disposable files.');
     const runtime = await new DesktopRuntime({ ...config, root }).initialize();
     const bridge = new DesktopBridge({ root, adapters: runtime.adapters, policy: config.policy });
     const controller = new AbortController();
@@ -214,14 +225,21 @@ async function main() {
         } else if (command === 'sync') {
           if (!positionals[1]) throw new Error('Supply a conversation ID.');
           output(await bridge.sync(positionals[1]));
+        } else if (command === 'archive-original') {
+          if (!positionals[1] || !values.id) throw new Error('Supply the logical conversation ID and exact original native ID.');
+          output(await bridge.reconcileOriginalArchive(positionals[1], values.id));
         } else output(await bridge[command === 'gc' ? 'collect' : 'recover']());
       });
     } finally {
-      process.off('SIGINT', stop); process.off('SIGTERM', stop);
-      // close() explicitly refuses to interrupt a real user's active Claude turn.
-      // Keep its live handles if shutdown is unsafe; never process.exit().
-      try { await runtime.close(); }
-      catch (error) { console.error(`Claudex preserved a live native owner: ${error.message}`); }
+      // Keep signal handlers until every owner can exit safely. A second stop
+      // signal must not become the default immediate termination of user work.
+      try { await closeDesktopSafely(runtime, { onWaiting: async error => {
+        const path = join(root, 'watcher-status.json');
+        const status = await readJSON(path, null);
+        if (status?.pid === process.pid) await writeJSON(path, { ...status, running: false, updatedAt: Date.now(),
+          shutdown: { state: 'waiting', reason: error.message } });
+      } }); }
+      finally { process.off('SIGINT', stop); process.off('SIGTERM', stop); }
     }
     return;
   }
@@ -306,7 +324,7 @@ async function main() {
     if (!stopped) await delay(2000);
   }
   await writeJSON(join(root, 'watcher-status.json'), { running: false, pid: process.pid, stoppedAt: Date.now(), error: null });
-  });
+  }, { recoverDead: true });
 }
 
 main().catch(async error => {

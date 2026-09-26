@@ -29,7 +29,8 @@ test('service configuration escapes XML, uses exact executable arguments and no 
   const result = serviceDefinition({ root: '/tmp/bridge & test', cli: '/tmp/a<b.mjs', node: '/bin/node', path: '/bin' });
   assert.match(result.plist, /bridge &amp; test/);
   assert.match(result.plist, /a&lt;b.mjs/);
-  assert.match(result.plist, /<key>KeepAlive<\/key><false\/>/);
+  assert.match(result.plist, /<key>KeepAlive<\/key><dict><key>SuccessfulExit<\/key><false\/><\/dict>/);
+  assert.match(result.plist, /<key>AbandonProcessGroup<\/key><true\/>/);
   assert.match(result.plist, /<key>StandardOutPath<\/key><string>\/dev\/null<\/string>/);
 });
 

@@ -18,6 +18,7 @@ import { assertComplete, fingerprint } from './history.mjs';
 import { isAllowedCodexVersion, isSupportedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
+import { snapshotOriginalArchiveTree, compareOriginalArchiveTree, originalArchiveGuard } from './codex-original-archive-tree.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -94,6 +95,9 @@ export class DesktopRuntime {
     Object.assign(this.adapters.codex, {
       assertCanArchiveOriginal: record => this.assertCanArchiveOriginal(record),
       archiveOriginal: record => this.archiveOriginal(record),
+      assertArchiveReplacement: (original, replacement, title) => this.assertArchiveReplacement(original, replacement, title),
+      prepareOriginalArchiveTree: record => this.prepareOriginalArchiveTree(record),
+      archiveOriginalTree: (record, proof, options) => this.archiveOriginalTree(record, proof, options),
     });
   }
   async initialize() {
@@ -134,6 +138,7 @@ export class DesktopRuntime {
     }
     try {
       const initialized = await this.client.initialize();
+      this.codexNativeVersion = initialized.userAgent?.match(/^(?:Codex Desktop|codex_cli_rs|claudex)\/(\S+)/)?.[1] ?? null;
       if (initialized.codexHome && await realpath(initialized.codexHome) !== this.codexHome) throw new Error('Shared backend uses a different Codex home.');
       this.client.on?.('notification', event => this.onEvent({ type: 'codex_notification', event }));
       return this.client;
@@ -544,6 +549,55 @@ export class DesktopRuntime {
     if (!after.path.includes(`${sep}archived_sessions${sep}`) || after.hash !== before.hash)
       throw new Error('Codex original archive outcome changed; native history was preserved for inspection.');
     return { path: after.path };
+  }
+  async assertArchiveReplacement(original, replacement, title) {
+    const client = await this.codex();
+    if (!replacement.managed || !replacement.verified || replacement.status !== 'current'
+        || replacement.kind !== 'snapshot' || replacement.side !== 'codex' || original.nativeId === replacement.nativeId)
+      throw originalArchiveGuard('Original archive requires a verified independent current Codex replacement.');
+    for (const record of [original, replacement]) {
+      const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
+      if (thread.id !== record.nativeId || thread.name !== title || await realpath(thread.cwd) !== record.cwd
+          || !['idle', 'notLoaded'].includes(thread.status?.type))
+        throw originalArchiveGuard('Original archive title, identity, cwd or idle state does not match its replacement.');
+    }
+  }
+  async readOriginalArchiveTree(record) {
+    const client = await this.codex();
+    if (!['0.155.0-alpha.16.4', '0.158.0-alpha.2.1'].includes(this.codexNativeVersion))
+      throw originalArchiveGuard('Preserved original archive requires a validated native cascade-archive version.');
+    return snapshotOriginalArchiveTree({ client, codexHome: this.codexHome, parentId: record.nativeId, cwd: record.cwd,
+      safePath: path => this.safePath(path, this.codexHome) });
+  }
+  async prepareOriginalArchiveTree(record) {
+    const original = await this.originalArchiveSnapshot(record);
+    const proof = await this.readOriginalArchiveTree(record);
+    compareOriginalArchiveTree(proof, await this.readOriginalArchiveTree(record));
+    const after = await this.originalArchiveSnapshot(record);
+    if (original.path !== after.path || original.hash !== after.hash || proof.members[0].hash !== after.hash)
+      throw originalArchiveGuard('Codex original changed while preparing its preserved archive tree.');
+    return proof;
+  }
+  async archiveOriginalTree(record, proof, { allowWrite = false, beforeDispatch } = {}) {
+    const original = await this.originalArchiveSnapshot(record);
+    const before = await this.readOriginalArchiveTree(record);
+    const alreadyArchived = original.path.includes(`${sep}archived_sessions${sep}`);
+    compareOriginalArchiveTree(proof, before, { archivedOutcome: alreadyArchived });
+    if (!alreadyArchived) {
+      if (!allowWrite) throw originalArchiveGuard('Original archive request outcome is unknown; no native request was repeated.');
+      // Re-enumerate immediately before the native cascade. Any unexpected new
+      // fork, child, activity or byte change prevents dispatch.
+      compareOriginalArchiveTree(proof, await this.readOriginalArchiveTree(record));
+      if (typeof beforeDispatch !== 'function') throw originalArchiveGuard('Original archive dispatch requires its durable intent callback.');
+      await beforeDispatch();
+      await (await this.codex()).request('thread/archive', { threadId: record.nativeId });
+    }
+    const after = await this.readOriginalArchiveTree(record);
+    compareOriginalArchiveTree(proof, after, { archivedOutcome: true });
+    const confirmed = await this.originalArchiveSnapshot(record);
+    if (!confirmed.path.includes(`${sep}archived_sessions${sep}`) || confirmed.hash !== original.hash)
+      throw originalArchiveGuard('Codex original archive changed its history; evidence was preserved.');
+    return { path: confirmed.path, archivedTree: after };
   }
   async hide(record) {
     await this.assertIdle(record); await this.assertOwnedSnapshot(record);

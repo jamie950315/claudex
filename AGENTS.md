@@ -37,8 +37,28 @@ verified recovery succeeds; it is never cleared or resent to regain availability
 Without pending work, affected syncs are held individually, but global original
 and quota guards still apply to other deliveries. Revalidation is paced at 30
 seconds, with explicit bounded blocked status. Unclassified unsafe failures remain
-fatal rather than being retried blindly. Discovery starts at initialization, not
-a bulk history import.
+fatal to that worker rather than being treated as successful. Discovery starts
+at initialization, not a bulk history import.
+
+The installed macOS service has an independent supervisor. Unexpected worker
+exits restart after 5/10/20/40/60 seconds; two stable minutes reset backoff.
+Read-only ownership preflight must find prior writers and recorded children dead.
+Live/malformed/reclaiming locks or unrecorded children block duplicate writers.
+Never clear pending work, kill native user work or resend uncertain inputs to
+recover. Launchd recovers supervisor crashes; detached workers and
+AbandonProcessGroup retain surviving work until it exits safely. Normal exit
+respects intentional stop, while login startup remains installed. CLI shutdown
+rechecks only the explicit busy-owner refusal until native closure is safe.
+
+`status-app install|status` manages a separately signed macOS menu-bar app in
+the private root, with independent login startup. It only reads bounded private
+status files, distinguishes readiness from liveness/stale data, and reports
+waiting, paused, recovering or offline states. Its status window exposes
+diagnostics and notification permission/test feedback. Persistent issues are
+debounced 15 seconds and deduplicated with a 60-second minimum notice interval;
+recovery generates a notice too. Notifications contain no transcript or paths.
+Quit stops only the display. Signed, journaled upgrades require the old UI to
+exit and preserve one previous artifact. No built bundles belong in Git.
 
 Historical backfill is an explicit module API in `src/cold-import.mjs`, not a public
 CLI command or a changed discovery cutoff. Its private journal reserves one target
@@ -96,7 +116,16 @@ Never label an unvalidated version as verified. Codex has cross-process writer l
 Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
 Include `thread/loaded/list`: a fresh fork can be loaded before the stored list
-exposes it. Original archival and owned-snapshot retirement share these guards.
+exposes it. Normal original archival and owned-snapshot retirement share these guards.
+Explicit `archive-original CONVERSATION_ID --id NATIVE_ID` reconciliation may
+also preserve-archive an unchanged legacy original plus its completed/unloaded
+direct spawned-agent tree, validated on Codex .16.4 and 0.158.0-alpha.2.1.
+Enumerate general, loaded and ancestor-specific inventories; general lists can
+omit spawned children. Ordinary forks remain unchanged read-only witnesses.
+Require stable full-history/raw-byte proofs, exact same-title/cwd replacement
+and authenticated prefix before/after native archival. Journal requested only
+at dispatch; unknown outcomes recover read-only without resend. No deletion or
+relaxed ordinary retirement guards are implied.
 Claude projections use canonical project paths and owned rollback storage.
 The append helper is for controlled fixtures, not runtime concurrent writes.
 
@@ -367,6 +396,13 @@ activated the signed wrapper and restored the live app-tools path. Never
 disable peer checks or substitute an unsigned client. Stdio close does not
 schedule immediate reconnect; next-request recovery is not proof that killing
 an active backend is safe.
+The observed 0.158 package relocates Resources/codex into
+Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex; bin/codex is a shell entry.
+Resolve only the observed same-bundle layouts, verify package metadata/native
+OpenAI signatures and journal exact owned launcher migration. Bundled Node stays
+at Resources/cua_node/bin/node. Normal startup detects this package even with a
+stale recorded flat path. Unknown packaging fails explicitly, never selecting
+an unrelated CLI. This does not certify every new protocol or migrate credentials.
 
 Runtime compatibility is centralized in src/codex-versions.mjs. The .16.4 app
 update passed isolated native contracts and signed-Node launcher initialization.

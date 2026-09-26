@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, withLock } from './storage.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { DEFAULT_POLICY, planRetention } from './retention.mjs';
+import { originalArchiveGuard } from './codex-original-archive-tree.mjs';
 
 const other = side => side === 'codex' ? 'claude' : 'codex';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -222,8 +223,71 @@ export class DesktopBridge {
 
   async recover() { return this.locked(state => state.pending ? this.finish(state) : { changed: false }); }
 
+  /** Explicit legacy reconciliation only: preserves the exact original and its
+   * native spawned-agent tree, without allocating or deleting any session.
+   */
+  async reconcileOriginalArchive(conversationId, originalNativeId) {
+    return this.locked(async state => {
+      if (state.pending) throw new Error('Recover the pending desktop handoff before original archival.');
+      const original = state.records.find(record => record.conversationId === conversationId
+        && record.nativeId === originalNativeId && record.side === 'codex' && record.status === 'original'
+        && record.kind === 'original' && record.managed === false && record.verified);
+      const replacement = this.current(state, conversationId, 'codex'), conversation = state.conversations[conversationId];
+      if (!original || !replacement || !conversation) throw new Error('The exact superseded Codex original or its current replacement is missing.');
+      if (original.archivedAt) return { changed: false, conversationId, nativeId: original.nativeId };
+      await this.verifyOriginalArchiveReplacement(state, original, replacement, conversation.canonical, conversation.title);
+      const proof = await this.adapters.codex.prepareOriginalArchiveTree(original);
+      state.pending = { kind: 'original-archive', phase: 'prepared', operationId: randomUUID(),
+        record: { ...original }, originalId: original.id, replacementId: replacement.id,
+        checkpoint: conversation.canonical, title: conversation.title, archiveTree: proof };
+      await this.save(state, { event: 'original-archive-prepared', conversationId, nativeId: original.nativeId });
+      return this.finishOriginalArchive(state);
+    });
+  }
+
+  async verifyOriginalArchiveReplacement(state, original, replacement, canonical, title) {
+    if (!original || original.managed !== false || original.status !== 'original' || original.kind !== 'original'
+        || !replacement || replacement.managed !== true || !replacement.verified || replacement.status !== 'current'
+        || replacement.conversationId !== original.conversationId || replacement.side !== 'codex')
+      throw originalArchiveGuard('Original archive intent no longer matches its replacement.');
+    await this.assertOriginalsUnchanged(state, original.conversationId);
+    const data = await this.inspect(replacement);
+    if (data.incompleteTail || data.digest !== canonical.digest || data.common.messages.length !== canonical.count
+        || !matches(data.common, original.checkpoint))
+      throw originalArchiveGuard('Original archive replacement changed or does not contain the exact original prefix.');
+    await this.adapters.codex.assertArchiveReplacement(original, replacement, title);
+  }
+
+  async finishOriginalArchive(state) {
+    const pending = state.pending, original = state.records.find(record => record.id === pending.originalId),
+      replacement = state.records.find(record => record.id === pending.replacementId);
+    if (pending.kind !== 'original-archive' || !['prepared', 'requested'].includes(pending.phase)
+        || !original || original.nativeId !== pending.record.nativeId
+        || original.conversationId !== pending.record.conversationId)
+      throw originalArchiveGuard('Invalid preserved-original archive journal.');
+    await this.verifyOriginalArchiveReplacement(state, original, replacement, pending.checkpoint, pending.title);
+    const allowWrite = pending.phase === 'prepared';
+    const result = await this.adapters.codex.archiveOriginalTree(original, pending.archiveTree, { allowWrite,
+      beforeDispatch: async () => {
+        // Read-only preflight failures leave the intent prepared. Journal the
+        // uncertain-write boundary only immediately before native dispatch.
+        if (!allowWrite || pending.phase !== 'prepared') throw originalArchiveGuard('Original archive dispatch was already recorded.');
+        pending.phase = 'requested';
+        await this.save(state, { event: 'original-archive-requested', conversationId: original.conversationId });
+      } });
+    await this.verifyOriginalArchiveReplacement(state, original, replacement, pending.checkpoint, pending.title);
+    Object.assign(original, result, { archivedAt: this.now() });
+    state.pending = null;
+    const preservedDescendants = result.archivedTree.members.filter(member => member.disposition === 'archive').length - 1;
+    await this.save(state, { event: 'original-archive-completed', conversationId: original.conversationId,
+      nativeId: original.nativeId, preservedDescendants });
+    return { changed: true, conversationId: original.conversationId, nativeId: original.nativeId,
+      preservedDescendants };
+  }
+
   async finish(state) {
     const pending = state.pending;
+    if (pending.kind === 'original-archive') return this.finishOriginalArchive(state);
     await this.assertOriginalsUnchanged(state, pending.record.conversationId);
     const driver = this.adapters[pending.record.side];
     if (pending.phase !== 'promoted') {
