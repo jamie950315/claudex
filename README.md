@@ -352,6 +352,11 @@ the watcher refreshes foreground synchronization between complete native
 operations, with a default two-second interval. Discovery and newly enrolled
 deliveries use a separate clock and also run between individual active-owner
 checks, so a long foreground sweep cannot hold new conversations until its end.
+Changed existing conversations also receive priority between native operations,
+using file and lifecycle observations for scheduling only. This includes changes
+in either current side or a preserved original. A boundary serves at most one
+queued existing change before continuing the regular sweep; unchanged managed
+owners are still fully checked, and repeated busy activity cannot monopolize it.
 These refreshes are serial and nonrecursive; the original sweep keeps advancing.
 Failed or incomplete dirty
 checks keep their foreground priority until stable full verification succeeds.

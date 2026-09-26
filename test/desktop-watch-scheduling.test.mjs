@@ -65,6 +65,11 @@ async function fixture() {
     runtime: { async codex() { return codex; }, async ownedNativeIds() { return new Set(); } },
     config: {}, discover, now: () => clock, pollMs: 10, maxPasses: 1,
     sleep: async ms => f.tick(ms), ...options });
+  f.addActive = async (id, options) => {
+    await f.addCold(id, options);
+    delete state.conversations[id].discoveryMode;
+    Object.assign(f.record(id, 'local'), { managed: true, kind: 'owner' });
+  };
   return f;
 }
 
@@ -278,4 +283,91 @@ test('a pending fresh delivery blocks further discovery and owner inspections un
   assert.ok(f.events.findIndex(event => event.type === 'sync' && event.id === 'second') > secondRecovery);
   assert.equal(f.count('recover'), 2);
   assert.equal(f.state.pending, null);
+});
+
+for (const side of ['source', 'local']) {
+  test(`a changed existing ${side === 'source' ? 'Codex' : 'Claude'} side is prioritized during a long managed-owner sweep`, async () => {
+    const f = await fixture();
+    for (let index = 0; index < 8; index++) await f.addActive(`owner-${index}`);
+    let inFlight = 0, priorityStatus;
+    f.onSync = async id => {
+      assert.equal(++inFlight, 1, 'native operations remain serialized');
+      try {
+        f.tick(11);
+        if (id === 'owner-0') await writeFile(f.record('owner-7', side).path, 'original history\nnew completed turn\n');
+        if (id === 'owner-1') priorityStatus = await f.status();
+      } finally { inFlight--; }
+    };
+    await f.run();
+    const synced = f.events.filter(event => event.type === 'sync').map(event => event.id);
+    assert.deepEqual(synced.slice(0, 3), ['owner-0', 'owner-7', 'owner-1']);
+    // Priority is not a lifecycle-check skip: the fixed sweep still visits it.
+    assert.equal(f.count('sync', 'owner-7'), 2);
+    for (let index = 0; index < 7; index++) assert.equal(f.count('sync', `owner-${index}`), 1);
+    assert.equal(priorityStatus.scheduler, 'activity-interleaved');
+    assert.equal(priorityStatus.activePrioritySyncs, 1);
+    assert.equal(priorityStatus.activeDirtyCount, 0);
+  });
+}
+
+test('an existing owner changed after its visit is verified again before the same sweep finishes', async () => {
+  const f = await fixture();
+  for (const id of ['first', 'second', 'third', 'fourth']) await f.addActive(id);
+  f.onSync = async id => {
+    f.tick(11);
+    if (id === 'third') await writeFile(f.record('first', 'local').path, 'original history\nnew completed turn\n');
+  };
+  await f.run();
+  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id),
+    ['first', 'second', 'third', 'first', 'fourth']);
+});
+
+test('a verified own write gets one stable follow-up without creating an activity-hint self-loop', async () => {
+  const f = await fixture();
+  for (const id of ['first', 'second', 'third', 'fourth']) await f.addActive(id);
+  f.onSync = async id => {
+    f.tick(11);
+    if (id === 'first' && f.count('sync', 'first') === 1) {
+      await writeFile(f.record('first', 'local').path, 'original history\nowned persisted packet\n');
+      f.state.conversations.first.canonical.digest = 'promoted-checkpoint';
+      return { changed: true };
+    }
+  };
+  await f.run();
+  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id),
+    ['first', 'first', 'second', 'third', 'fourth']);
+});
+
+for (const outcome of ['waiting', 'incomplete', 'changing-metadata']) test(`dirty owners rotate after ${outcome} while each priority boundary advances the existing sweep`, async () => {
+  const f = await fixture();
+  for (let index = 0; index < 8; index++) await f.addActive(`owner-${index}`);
+  f.onSync = async id => {
+    f.tick(11);
+    if (id === 'owner-0') {
+      await writeFile(f.record('owner-6', 'local').path, 'first changed owner\n');
+      await writeFile(f.record('owner-7', 'source').path, 'second changed owner\n');
+    }
+    if (id === 'owner-6') {
+      if (outcome === 'waiting' && f.count('sync', 'owner-6') === 1) throw new Error('Claude turn is still running.');
+      if (outcome === 'incomplete') return { changed: false, incompleteTail: true };
+      if (outcome === 'changing-metadata') await writeFile(f.record('owner-6', 'local').path, `native metadata ${f.count('sync', 'owner-6')}\n`);
+    }
+  };
+  await f.run();
+  const synced = f.events.filter(event => event.type === 'sync').map(event => event.id);
+  assert.deepEqual(synced.slice(0, 7), ['owner-0', 'owner-6', 'owner-1', 'owner-7', 'owner-2', 'owner-6', 'owner-3']);
+  for (let index = 0; index < 8; index++) assert.ok(f.count('sync', `owner-${index}`) >= 1);
+});
+
+test('active priority observes superseded originals without weakening their conflict guard', async () => {
+  const f = await fixture();
+  await f.addActive('first'); await f.addActive('second'); await f.addActive('target', { superseded: true });
+  f.onSync = async id => {
+    f.tick(11);
+    if (id === 'first') await writeFile(f.record('target', 'superseded').path, 'changed superseded original\n');
+    if (id === 'target') throw new Error('Superseded original changed; no branch was selected.');
+  };
+  await assert.rejects(f.run(), /Superseded original changed/);
+  assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id), ['first', 'target']);
+  assert.match((await f.status()).error, /Superseded original changed/);
 });

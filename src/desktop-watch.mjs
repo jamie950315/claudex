@@ -1,4 +1,5 @@
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
 import { coldImportHint, coldImportInactive } from './desktop-watch-hints.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
@@ -10,6 +11,31 @@ const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex h
 const reason = error => String(error?.message ?? error).slice(0, 500);
 const isWaiting = error => WAITING.test(reason(error));
 const isUnsupported = error => UNSUPPORTED.test(reason(error));
+
+function usesActiveHints(state, id) {
+  return state.conversations[id]?.discoveryMode !== 'cold-import'
+    || state.records.some(record => record.conversationId === id && record.side === 'claude'
+      && record.managed && record.kind === 'owner' && record.status === 'current');
+}
+
+// Unlike verified cold hints, these observations ONLY change queue priority.
+// Every active conversation still receives the normal full lifecycle inspection.
+async function activeActivityHint(state, id) {
+  if (state.pending) return null;
+  const records = state.records.filter(record => record.conversationId === id);
+  if (!records.length) return null;
+  const files = [];
+  for (const record of records) {
+    if (typeof record.path !== 'string' || !isAbsolute(record.path)) return null;
+    try {
+      const info = await lstat(record.path, { bigint: true });
+      if (!info.isFile() || await realpath(record.path) !== resolve(record.path)) return null;
+      files.push([record.path, ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink']
+        .map(key => info[key].toString())]);
+    } catch { return null; }
+  }
+  return JSON.stringify({ conversation: state.conversations[id], records, files });
+}
 
 /** Run the opt-in Desktop coordinator under the same lock as the legacy watcher. */
 export async function runDesktopWatch({ root, bridge, runtime, config, signal, pollMs = 2000,
@@ -31,7 +57,18 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   // skipping verification. Keep unsuccessful dirty work in the foreground.
   const coldObserved = new Map();
   const coldDirty = new Set();
-  const clearHints = () => { coldHints.clear(); coldObserved.clear(); coldDirty.clear(); };
+  const activeObserved = new Map();
+  const activeDirty = new Set();
+  let activePrioritySyncs = 0;
+  const clearHints = () => {
+    coldHints.clear(); coldObserved.clear(); coldDirty.clear(); activeObserved.clear(); activeDirty.clear();
+  };
+  const observeActive = async (state, id) => {
+    if (!usesActiveHints(state, id)) { activeObserved.delete(id); activeDirty.delete(id); return; }
+    const hint = await activeActivityHint(state, id);
+    if (activeObserved.has(id) && activeObserved.get(id) !== hint) activeDirty.add(id);
+    activeObserved.set(id, hint);
+  };
   let foregroundCompletedAt = null;
   let foregroundDurationMs = null;
   let discoveryCompletedAt = null;
@@ -61,10 +98,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       }
     }
     return writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
-    scheduler: 'operation-interleaved',
+    scheduler: 'activity-interleaved',
     startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
-    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync, folderProjection, ...fields });
+    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, ...fields });
   };
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
@@ -84,6 +122,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               const observedAt = now();
               if (before && !coldDirty.has(id) && previous?.signature === before && observedAt >= previous.verifiedAt
                 && observedAt - previous.verifiedAt < coldValidationMs) return;
+              const activeBefore = usesActiveHints(state, id) ? await activeActivityHint(state, id) : undefined;
               coldHints.delete(id);
               if (before) coldDirty.add(id);
               const beganAt = now();
@@ -105,6 +144,20 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   }
                 }
               }
+              if (activeBefore !== undefined) {
+                const latest = await bridge.status();
+                const activeAfter = await activeActivityHint(latest, id);
+                // Preserve changes racing a read or handoff. Own writes may
+                // require one later stable verification, never a self-loop.
+                activeObserved.set(id, activeBefore);
+                if (activeBefore !== null && activeBefore === activeAfter && result?.incompleteTail !== true) {
+                  activeDirty.delete(id);
+                  activeObserved.set(id, activeAfter);
+                } else if (activeBefore !== activeAfter) activeDirty.add(id);
+              }
+              // A successful prefix read can still be incomplete or race more
+              // native metadata. Unsatisfied priority work must yield too.
+              if (activeDirty.delete(id)) activeDirty.add(id);
             }
             catch (error) {
               coldHints.delete(id);
@@ -116,7 +169,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 await bridge.recover();
                 return;
               }
-              if (isWaiting(error)) { waiting ??= reason(error); return; }
+              if (isWaiting(error)) {
+                if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
+                waiting ??= reason(error); return;
+              }
               throw error;
             }
           };
@@ -162,10 +218,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             discoveryDurationMs = completedAt - beganAt;
             return Object.keys(state.conversations).filter(id => !existing.has(id));
           };
-          // A whole foreground sweep can itself take tens of seconds. Refresh
-          // only discovery/new deliveries between individual operations, without
-          // recursively restarting the active sweep or running parallel writers.
-          const refreshNew = async () => {
+          // A whole foreground sweep can itself take tens of seconds. Discover
+          // new work and observe existing active files between operations. One
+          // dirty active owner may jump ahead per boundary; the fixed sweep still
+          // advances, and managed lifecycle checks are never skipped by metadata.
+          const refreshNew = async nextId => {
             if (signal?.aborted || now() - discoveryCompletedAt < Math.max(1, pollMs)) return;
             const fresh = await discoverNew();
             for (const id of fresh) {
@@ -174,6 +231,14 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               // outside discovery's unsupported-source warning handler.
               await sync(id);
             }
+            const latest = await bridge.status();
+            for (const id of Object.keys(latest.conversations)) await observeActive(latest, id);
+            for (const id of activeDirty) if (!latest.conversations[id]) { activeDirty.delete(id); activeObserved.delete(id); }
+            const nextDirty = [...activeDirty].find(id => id !== nextId && !fresh.includes(id));
+            if (nextDirty && !signal?.aborted) {
+              activePrioritySyncs++;
+              await sync(nextDirty);
+            }
             await status({ waiting, blockedSourceCount, blockedSources });
           };
           const foreground = async () => {
@@ -181,7 +246,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const fresh = await discoverNew();
             const freshIds = new Set(fresh);
             const state = await bridge.status();
-            for (const cache of [coldHints, coldObserved, coldDirty]) {
+            for (const cache of [coldHints, coldObserved, coldDirty, activeObserved, activeDirty]) {
               for (const id of cache.keys()) if (!state.conversations[id]) cache.delete(id);
             }
             const dirty = [], active = [], background = [];
@@ -189,14 +254,15 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               const hint = await coldImportHint(state, id);
               if (hint && coldObserved.has(id) && coldObserved.get(id) !== hint) coldDirty.add(id);
               if (hint) coldObserved.set(id, hint);
+              await observeActive(state, id);
               if (freshIds.has(id)) continue;
-              else if (coldDirty.has(id)) dirty.push(id);
+              else if (coldDirty.has(id) || activeDirty.has(id)) dirty.push(id);
               else if (!hint) active.push(id); // Includes live managed owners and invalid/missing paths.
               else background.push(id);
             }
             for (const id of [...fresh, ...dirty, ...active]) {
               if (signal?.aborted) break;
-              await refreshNew();
+              await refreshNew(id);
               if (signal?.aborted) break;
               await sync(id);
             }

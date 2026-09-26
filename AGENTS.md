@@ -60,6 +60,12 @@ conversations and dirty cold imports run before the fair cold-validation sweep.
 Between complete cold operations, refresh foreground work after two seconds.
 Discovery and new deliveries also refresh between individual foreground syncs,
 using their own clock; a long active-owner sweep must not block new enrollment.
+Stable file/lifecycle observations also prioritize changed existing conversations
+between native operations. This includes superseded originals and both current
+sides, not just new enrollment or cold imports. These observations only reorder
+full syncs; unchanged managed owners still receive normal lifecycle verification.
+Serve at most one queued existing change per boundary and keep the regular sweep
+advancing, so repeated busy activity cannot starve other conversations.
 Keep the original sweep moving after each nonrecursive discovery refresh; never
 restart it recursively or parallelize writers. Post-enrollment errors retain
 tracked-history severity, not unsupported-discovery warning classification.
