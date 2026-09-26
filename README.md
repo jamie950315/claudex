@@ -281,6 +281,16 @@ entry**: continue there afterward, leaving the Local original preserved. Further
 work in the superseded Local original is an explicit conflict, not an automatic
 merge. This is the same Local-to-Remote-Control transition described above.
 
+New managed Remote Control entries are named **`[Claudex] <original title>`**
+to distinguish the continuation from its preserved Local source. For example,
+continue in `[Claudex] Ping` after replying in Codex, not the old Local `Ping`.
+The logical title and Codex task names remain unchanged. Existing owners are not
+bulk-renamed; an explicit rename in Claude's native UI is preserved when Remote
+Control reconnects. You can also use the entry's native **Pin** action to keep
+the continuation easy to find. Pinning is not automatic. Depending on Claude's
+sidebar grouping, Remote Control entries may be under **Other** or in **Search**,
+rather than inside the Local project's group.
+
 Idle historical imports do not each reserve a long-lived SDK process. For these
 `cold-import` pairs only, the watcher may skip repeated full reads after a
 successful complete, unchanged verification. It compares every record, including

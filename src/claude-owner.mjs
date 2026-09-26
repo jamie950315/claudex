@@ -145,7 +145,7 @@ export class ClaudeOwner {
     return owner;
   }
 
-  constructor({ root, conversationId, cwd, claudeHome = join(homedir(), '.claude'), title = 'Claudex conversation',
+  constructor({ root, conversationId, cwd, claudeHome = join(homedir(), '.claude'), title = 'Claudex conversation', newSessionTitle,
     queryFactory, sdkVersion, claudeVersion, options = {}, onEvent = () => {}, receiptTimeoutMs = 30_000,
     deferRemoteConnection = false, connectAfterReset = true, settingsResolver, policyPreflight = inspectMaintenancePolicy,
     versionPolicy = 'strict' }) {
@@ -157,7 +157,7 @@ export class ClaudeOwner {
     if (deferRemoteConnection && (options.extraArgs || typeof options.settings === 'string' || options.connect))
       throw new Error('Cold owners require a local process and inline settings without extra native arguments.');
     this.root = resolve(root); this.conversationId = conversationId; this.cwd = resolve(cwd);
-    this.claudeHome = resolve(claudeHome); this.title = title; this.options = options;
+    this.claudeHome = resolve(claudeHome); this.title = title; this.newSessionTitle = newSessionTitle; this.options = options;
     this.queryFactory = queryFactory; this.sdkVersion = sdkVersion; this.claudeVersion = claudeVersion;
     this.versionPolicy = normalizeVersionPolicy(versionPolicy); this.versionWarning = null; this.versionWarningEmitted = false;
     this.settingsResolver = settingsResolver; this.injectedSettingsResolver = typeof settingsResolver === 'function';
@@ -229,10 +229,14 @@ export class ClaudeOwner {
       if (this.state && (this.state.version !== 1 || this.state.conversationId !== this.conversationId || this.state.cwd !== this.cwd
         || this.state.claudeHome !== this.claudeHome || !UUID.test(this.state.sessionId))) throw new Error('Owner state identity does not match this conversation.');
       if (!this.state) {
+        const displayTitle = this.newSessionTitle ?? this.title;
+        if (typeof displayTitle !== 'string' || !displayTitle.trim()) throw new Error('New Claude owner display title must be nonempty text.');
         this.state = { version: 1, conversationId: this.conversationId, cwd: this.cwd, claudeHome: this.claudeHome,
-          sessionId: randomUUID(), remoteId: null, registration: null, pending: null, lastAppend: null };
+          sessionId: randomUUID(), remoteId: null, registration: null, pending: null, lastAppend: null, displayTitle };
         await this.save();
       }
+      if (this.state.displayTitle !== undefined && (typeof this.state.displayTitle !== 'string' || !this.state.displayTitle.trim()))
+        throw new Error('Saved Claude owner display title must be nonempty text.');
       this.transcriptPath = sessionPath(this.claudeHome, this.cwd, this.state.sessionId);
       if (this.state.blocked) throw new Error(this.state.blocked);
       if (this.state.reset && !this.deferRemoteConnection) throw new Error('A pending context reset requires a deferred cold maintenance owner.');
@@ -255,7 +259,7 @@ export class ClaudeOwner {
       if (this.deferRemoteConnection) await this.verifyMaintenancePolicy(runtimeEnv);
       this.query = this.queryFactory({ prompt: this.input, options: {
         settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code' },
-        ...this.options, cwd: this.cwd, title: this.title, persistSession: true,
+        ...this.options, cwd: this.cwd, title: this.state.displayTitle ?? this.title, persistSession: true,
         // Maintenance is a separate, input-isolated process profile. Do not
         // load normal user/project extensions or mutate persistent settings.
         ...(this.deferRemoteConnection ? { settingSources: [], strictMcpConfig: true,
@@ -428,7 +432,9 @@ export class ClaudeOwner {
     this.everConnected = true;
     if (!this.state.remoteId) { this.state.registration = 'registering'; await this.save(); }
     const previous = this.state.remoteId;
-    const response = await this.query.enableRemoteControl(true, this.title,
+    // A name is chosen only for the first registration. Reattachment must not
+    // overwrite the native/cloud title, including an explicit user UI rename.
+    const response = await this.query.enableRemoteControl(true, previous ? undefined : this.state.displayTitle ?? this.title,
       { keepSessionOnExit: true, ...(previous ? { reattachSessionId: previous } : {}) });
     if (!REMOTE_ID.test(response?.bridge_session_id) || previous && response.bridge_session_id !== previous) {
       this.blocked = 'Remote Control did not preserve the owned conversation identity.';

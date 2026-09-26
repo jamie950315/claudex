@@ -115,6 +115,13 @@ conservative filename protection. Never assume the UI suffix is the native ID.
 Returning from Codex creates a separate managed Remote Control entry; it does
 not write into or automatically archive the Desktop-owned Local original.
 Clearly instruct users to continue via Connected via Remote Control thereafter.
+New managed Claude owners use a persisted `[Claudex] <logical title>` display
+title, separate from the bridge's logical title and Codex projection names.
+The choice is saved before first registration; legacy owners are not bulk-renamed.
+Remote Control reattachment omits the name so native/cloud UI renames survive
+reconnection. Do not use the SDK's standalone JSONL-appending rename helper
+against a live owner. Existing entries may be renamed or pinned through native UI
+when requested; pinning is not automatic and does not merge a Local entry.
 Do not claim same-Local-ID bidirectional writing or generic Chat/Cowork support.
 
 A native Desktop probe verifies two then four synthetic messages under one ID,

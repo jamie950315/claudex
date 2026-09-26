@@ -150,7 +150,8 @@ export class DesktopRuntime {
       ? await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null) : null;
     if (forceNormal && saved?.reset) throw new Error('A pending native context reset must be restored before a normal owner starts.');
     const maintenanceOnly = !forceNormal && Boolean(saved?.remoteId);
-    const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title, versionPolicy: this.versionPolicy,
+    const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title,
+      newSessionTitle: `[Claudex] ${title ?? 'Claudex conversation'}`, versionPolicy: this.versionPolicy,
       deferRemoteConnection: maintenanceOnly, connectAfterReset: !maintenanceOnly,
       options: { ...this.ownerOptions, pathToClaudeCodeExecutable: this.claudeBinary },
       onEvent: event => this.onEvent({ type: 'claude_notification', conversationId, event }) };

@@ -38,6 +38,9 @@ test('a verified archived current owner resumes directly with normal user settin
   try {
     await f.runtime.inspect(f.record);
     assert.equal(f.calls[0].settings.deferRemoteConnection, false);
+    assert.equal(f.calls[0].settings.title, 'Synthetic profile');
+    assert.equal(f.calls[0].settings.newSessionTitle, '[Claudex] Synthetic profile');
+    assert.equal(f.record.title, 'Synthetic profile');
     await f.runtime.needsMaintenance(f.record);
     assert.equal(f.calls.length, 1);
     assert.equal(f.calls[0].closed, false);

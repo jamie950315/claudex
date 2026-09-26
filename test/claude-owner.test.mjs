@@ -308,3 +308,90 @@ test('tampered native UUID content prevents crash recovery', async () => {
   await assert.rejects(ClaudeOwner.open(f.config), /does not match/);
   assert.equal(f.calls.appends.length, 1);
 });
+
+test('a newly created owner persists its distinct display title without changing the logical title', async () => {
+  const f = await fixture();
+  const config = { ...f.config, title: 'Ping', newSessionTitle: '[Claudex] Ping' };
+  const owner = await ClaudeOwner.open(config);
+  try {
+    assert.equal(owner.title, 'Ping');
+    assert.equal(f.calls.options[0].title, '[Claudex] Ping');
+    assert.equal(JSON.parse(await readFile(owner.statePath)).displayTitle, '[Claudex] Ping');
+    await owner.append({ operationId: 'first', content: 'Synthetic handoff' });
+    assert.equal(f.calls.remote[0].title, '[Claudex] Ping');
+    assert.equal(f.calls.remote[0].settings.reattachSessionId, undefined);
+    assert.equal(f.calls.appends[0].shouldQuery, false);
+  } finally { await owner.close(); }
+});
+
+test('a saved creation title survives restart before the first Remote Control registration', async () => {
+  const f = await fixture();
+  const config = { ...f.config, title: 'Ping', newSessionTitle: '[Claudex] Ping' };
+  let owner = await ClaudeOwner.open(config);
+  const nativeId = owner.status().sessionId;
+  await owner.close();
+  owner = await ClaudeOwner.open({ ...config, newSessionTitle: '[Different creation default] Ping' });
+  try {
+    assert.equal(owner.status().sessionId, nativeId);
+    assert.equal(f.calls.options.at(-1).title, '[Claudex] Ping');
+    await owner.append({ operationId: 'after-restart', content: 'Synthetic handoff' });
+    assert.equal(f.calls.remote.at(-1).title, '[Claudex] Ping');
+    assert.equal(JSON.parse(await readFile(owner.statePath)).displayTitle, '[Claudex] Ping');
+  } finally { await owner.close(); }
+});
+
+test('registered owner restart reattaches without imposing a title or repeatedly adding a prefix', async () => {
+  const f = await fixture();
+  const config = { ...f.config, title: 'Ping', newSessionTitle: '[Claudex] Ping' };
+  let owner = await ClaudeOwner.open(config);
+  await owner.append({ operationId: 'first', content: 'Synthetic handoff' });
+  const nativeId = owner.status().sessionId, remoteId = owner.status().remoteId;
+  await owner.close();
+  for (let restart = 0; restart < 2; restart++) {
+    owner = await ClaudeOwner.open({ ...config, newSessionTitle: '[Claudex] [Claudex] Ping' });
+    try {
+      assert.equal(owner.title, 'Ping');
+      assert.equal(owner.status().sessionId, nativeId);
+      assert.equal(owner.status().remoteId, remoteId);
+      assert.equal(f.calls.options.at(-1).title, '[Claudex] Ping');
+      assert.equal(f.calls.remote.at(-1).title, undefined);
+      assert.equal(f.calls.remote.at(-1).settings.reattachSessionId, remoteId);
+      assert.equal(JSON.parse(await readFile(owner.statePath)).displayTitle, '[Claudex] Ping');
+    } finally { await owner.close(); }
+  }
+  assert.equal(f.calls.appends.length, 1);
+});
+
+test('a legacy owner without a display title is not bulk-renamed by a new creation default', async () => {
+  const f = await fixture();
+  const config = { ...f.config, title: 'Legacy title' };
+  let owner = await ClaudeOwner.open(config);
+  await owner.append({ operationId: 'legacy', content: 'Synthetic handoff' });
+  const statePath = owner.statePath, remoteId = owner.status().remoteId;
+  await owner.close();
+  const saved = JSON.parse(await readFile(statePath));
+  delete saved.displayTitle;
+  await writeFile(statePath, JSON.stringify(saved));
+  owner = await ClaudeOwner.open({ ...config, newSessionTitle: '[Claudex] Legacy title' });
+  try {
+    assert.equal(f.calls.options.at(-1).title, 'Legacy title');
+    assert.equal(f.calls.remote.at(-1).title, undefined);
+    assert.equal(f.calls.remote.at(-1).settings.reattachSessionId, remoteId);
+    assert.equal(Object.hasOwn(JSON.parse(await readFile(statePath)), 'displayTitle'), false);
+  } finally { await owner.close(); }
+});
+
+test('a malformed saved display title fails before starting a native owner or registering Remote Control', async () => {
+  for (const displayTitle of ['', null, 42, { text: 'Invalid title' }]) {
+    const f = await fixture();
+    const owner = await ClaudeOwner.open({ ...f.config, title: 'Ping', newSessionTitle: '[Claudex] Ping' });
+    const statePath = owner.statePath;
+    await owner.close();
+    const saved = JSON.parse(await readFile(statePath));
+    await writeFile(statePath, JSON.stringify({ ...saved, displayTitle }));
+    await assert.rejects(ClaudeOwner.open(f.config), /title/i);
+    assert.equal(f.calls.options.length, 1);
+    assert.equal(f.calls.remote.length, 0);
+    assert.equal(f.calls.appends.length, 0);
+  }
+});
