@@ -54,8 +54,15 @@ avoid idle SDK workers only until that transition; active owners remain long-liv
 Only cold-import pairs may use ephemeral watcher hints after stable, complete
 no-change verification. Include all record lifecycle/checkpoint fields and file
 identities before/after sync, including superseded originals. Pending work,
-errors or missing/changed files invalidate hints; full verification is mandatory
-every 60 seconds. Never advance semantic checkpoints from hints or skip a current
+errors or missing/changed files invalidate hints; full verification becomes due
+after 60 seconds without refreshing that deadline from hints. New and active
+conversations and dirty cold imports run before the fair cold-validation sweep.
+Between complete cold operations, refresh discovery and foreground work after
+two seconds; never wait for the whole historical sweep or parallelize writers.
+Raw observations select priority only; unsuccessful dirty work stays foreground
+until stable full verification. One in-flight native operation can exceed this
+interval, so it is not an end-to-end latency guarantee. Never advance semantic
+checkpoints from hints or skip a current
 managed Claude owner's lifecycle checks. Normal discovery scope is unchanged.
 Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep

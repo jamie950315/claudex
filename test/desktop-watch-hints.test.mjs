@@ -47,7 +47,7 @@ test('stable cold imports skip repeated full sync without changing transcripts o
   const f = await fixture();
   const originalState = structuredClone(f.state);
   await f.run({ maxPasses: 4 });
-  assert.deepEqual(f.calls.sync, ['cold', 'ordinary', 'ordinary', 'ordinary', 'ordinary']);
+  assert.deepEqual(f.calls.sync, ['ordinary', 'cold', 'ordinary', 'ordinary', 'ordinary']);
   assert.deepEqual(f.calls.metadata, ['source', 'superseded']);
   assert.deepEqual(f.state, originalState);
   for (const record of f.state.records) assert.equal(await readFile(record.path, 'utf8'), 'original history\n');

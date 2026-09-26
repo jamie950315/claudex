@@ -24,9 +24,17 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   // Ephemeral scheduling hints only. Durable checkpoints are never inferred
   // from file metadata, and every process starts with full verification.
   const coldHints = new Map();
+  // Observations only select priority; unlike coldHints, they never authorize
+  // skipping verification. Keep unsuccessful dirty work in the foreground.
+  const coldObserved = new Map();
+  const coldDirty = new Set();
+  const clearHints = () => { coldHints.clear(); coldObserved.clear(); coldDirty.clear(); };
+  let foregroundCompletedAt = null;
+  let foregroundDurationMs = null;
   const status = fields => writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
+    scheduler: 'interleaved',
     startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
-    versionWarnings: runtime.versionWarnings?.() ?? [], ...fields });
+    versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, ...fields });
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
     try {
@@ -37,46 +45,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         try {
           // The transport is a prerequisite. Never enroll a source while it is absent.
           const codex = await runtime.codex();
-          let state = await bridge.status();
-          if (state.pending) { coldHints.clear(); await bridge.recover(); }
-          state = await bridge.status();
-          const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
-          for (const id of await runtime.ownedNativeIds()) known.add(id);
-          const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false }, known);
-          for (const source of candidates) {
-            if (signal?.aborted) break;
+          const sync = async id => {
             try {
-              if (source.side === 'codex') {
-                const nativeId = source.nativeId ?? source.id ?? await codexSessionId(source.path);
-                const metadata = (await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(error => {
-                  if (/not found|no rollout/i.test(reason(error))) throw new Error('Referenced Codex history is unavailable.');
-                  throw error;
-                }))?.thread;
-                if (!metadata || metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
-                if (isCodexSubagentSource(metadata.source)) continue;
-              }
-              await bridge.track(source);
-              // Discovery can return duplicate paths for one native identity.
-              const latest = await bridge.status();
-              for (const record of latest.records) known.add(`${record.side}:${record.nativeId}`);
-            } catch (error) {
-              if (isWaiting(error)) { waiting ??= reason(error); continue; }
-              if (!isUnsupported(error)) throw error;
-              blockedSourceCount++;
-              if (blockedSources.length < 20) blockedSources.push({ side: source.side, path: source.path, reason: reason(error) });
-            }
-          }
-          state = await bridge.status();
-          for (const id of coldHints.keys()) if (!state.conversations[id]) coldHints.delete(id);
-          for (const id of Object.keys(state.conversations)) {
-            if (signal?.aborted) break;
-            try {
+              const state = await bridge.status();
               const before = await coldImportHint(state, id);
               const previous = coldHints.get(id);
               const observedAt = now();
-              if (before && previous?.signature === before && observedAt >= previous.verifiedAt
-                && observedAt - previous.verifiedAt < coldValidationMs) continue;
+              if (before && !coldDirty.has(id) && previous?.signature === before && observedAt >= previous.verifiedAt
+                && observedAt - previous.verifiedAt < coldValidationMs) return;
               coldHints.delete(id);
+              if (before) coldDirty.add(id);
               const result = await bridge.sync(id);
               if (before && result?.changed === false && result.incompleteTail === false) {
                 const latest = await bridge.status();
@@ -84,7 +62,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   const after = await coldImportHint(latest, id);
                   // A concurrent append, replacement or lifecycle transition
                   // must force another full sync, not refresh a stale hint.
-                  if (before === after) coldHints.set(id, { signature: after, verifiedAt: now() });
+                  if (before === after) {
+                    coldHints.set(id, { signature: after, verifiedAt: now() });
+                    coldDirty.delete(id);
+                  }
                 }
               }
             }
@@ -93,24 +74,90 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               // A native write may have committed before its response failed. Recover
               // its durable intent and verify the native target before proceeding.
               if ((await bridge.status()).pending) {
-                coldHints.clear();
-                try { await bridge.recover(); }
-                catch (recoveryError) {
-                  if (isWaiting(recoveryError)) { waiting ??= reason(recoveryError); continue; }
-                  throw recoveryError;
-                }
-                continue;
+                clearHints();
+                // Do not discover or start another sync while recovery waits.
+                await bridge.recover();
+                return;
               }
-              if (isWaiting(error)) { waiting ??= reason(error); continue; }
+              if (isWaiting(error)) { waiting ??= reason(error); return; }
               throw error;
             }
+          };
+          const foreground = async () => {
+            const beganAt = now();
+            let state = await bridge.status();
+            if (state.pending) { clearHints(); await bridge.recover(); }
+            state = await bridge.status();
+            const existing = new Set(Object.keys(state.conversations));
+            const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
+            for (const id of await runtime.ownedNativeIds()) known.add(id);
+            // Each refresh reports one discovery snapshot, not an accumulating
+            // count of the same unsupported source during a long cold sweep.
+            blockedSourceCount = 0;
+            blockedSources.length = 0;
+            const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false }, known);
+            for (const source of candidates) {
+              if (signal?.aborted) break;
+              try {
+                if (source.side === 'codex') {
+                  const nativeId = source.nativeId ?? source.id ?? await codexSessionId(source.path);
+                  const metadata = (await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(error => {
+                    if (/not found|no rollout/i.test(reason(error))) throw new Error('Referenced Codex history is unavailable.');
+                    throw error;
+                  }))?.thread;
+                  if (!metadata || metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
+                  if (isCodexSubagentSource(metadata.source)) continue;
+                }
+                await bridge.track(source);
+                const latest = await bridge.status();
+                for (const record of latest.records) known.add(`${record.side}:${record.nativeId}`);
+              } catch (error) {
+                if (isWaiting(error)) { waiting ??= reason(error); continue; }
+                if (!isUnsupported(error)) throw error;
+                blockedSourceCount++;
+                if (blockedSources.length < 20) blockedSources.push({ side: source.side, path: source.path, reason: reason(error) });
+              }
+            }
+            state = await bridge.status();
+            for (const cache of [coldHints, coldObserved, coldDirty]) {
+              for (const id of cache.keys()) if (!state.conversations[id]) cache.delete(id);
+            }
+            const fresh = [], dirty = [], active = [], background = [];
+            for (const id of Object.keys(state.conversations)) {
+              const hint = await coldImportHint(state, id);
+              if (hint && coldObserved.has(id) && coldObserved.get(id) !== hint) coldDirty.add(id);
+              if (hint) coldObserved.set(id, hint);
+              if (!existing.has(id)) fresh.push(id);
+              else if (coldDirty.has(id)) dirty.push(id);
+              else if (!hint) active.push(id); // Includes live managed owners and invalid/missing paths.
+              else background.push(id);
+            }
+            for (const id of [...fresh, ...dirty, ...active]) {
+              if (signal?.aborted) break;
+              await sync(id);
+            }
+            foregroundCompletedAt = now();
+            foregroundDurationMs = foregroundCompletedAt - beganAt;
+            await status({ waiting, blockedSourceCount, blockedSources });
+            return background;
+          };
+          // Keep a fair, complete cold sweep, but yield between native operations
+          // for fresh discovery and active/dirty work. Never parallelize writers
+          // or interrupt a verification/transaction. The 60s hint expiry is still
+          // absolute; elapsed background work does not renew it.
+          const background = await foreground();
+          for (const id of background) {
+            if (signal?.aborted) break;
+            if (now() - foregroundCompletedAt >= Math.max(1, pollMs)) await foreground();
+            if (signal?.aborted) break;
+            await sync(id);
           }
           if (!signal?.aborted && now() - lastCollection >= 60_000) {
             await bridge.collect();
             lastCollection = now();
           }
         } catch (error) {
-          coldHints.clear();
+          clearHints();
           if (!isWaiting(error)) throw error;
           waiting ??= reason(error);
         }

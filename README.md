@@ -285,11 +285,20 @@ Idle historical imports do not each reserve a long-lived SDK process. For these
 `cold-import` pairs only, the watcher may skip repeated full reads after a
 successful complete, unchanged verification. It compares every record, including
 superseded originals, and file identities/timestamps before and after verification.
-The default 60-second deadline forces another full check. Errors, pending work,
+The default 60-second expiry makes another full check due. Errors, pending work,
 changed or missing files invalidate those hints. Hints never advance a history checkpoint.
 Once a current managed Remote Control owner exists, normal per-pass inspection
 resumes and its native process remains long-lived; this is not a general owner
 pool or an unlimited-active-session resource guarantee.
+
+New conversations, active owners, and changed historical imports are checked
+before unchanged historical imports. During the fair historical-validation sweep,
+the watcher refreshes discovery and foreground synchronization between complete
+native operations, with a default two-second interval. Failed or incomplete dirty
+checks keep their foreground priority until stable full verification succeeds.
+The interval is not a delivery guarantee: foreground reads, a single in-flight
+native operation, handoff verification, and app UI refresh still take time. The
+bounded watcher status includes the last foreground completion time and duration.
 
 Backup collection reads both current sides of every conversation with a managed
 snapshot, but does not export unrelated cold pairs that have no backups. A missing
