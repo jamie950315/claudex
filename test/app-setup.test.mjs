@@ -143,3 +143,15 @@ test('native account inspection preserves the OS username without forwarding API
   assert.equal(environment.ANTHROPIC_API_KEY, undefined);
   assert.equal(environment.CLAUDE_CONFIG_DIR, undefined);
 });
+
+test('a live watcher pending dependency hold is shown as paused rather than transport startup', async t => {
+  const { root, setup } = await fixture(t);
+  await writeFile(join(root, 'config.json'), JSON.stringify({ version: 1, mode: 'desktop', allProjects: true, versionPolicy: 'strict' }), { mode: 0o600 });
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify({ mode: 'desktop', pid: process.pid, running: true,
+    updatedAt: Date.now(), synchronization: 'blocked', blocked: { scope: 'pending', reason: 'Owned projection has dependent threads.' } }), { mode: 0o600 });
+  const report = await setup.inspect();
+  const row = report.components.find(item => item.id === 'synchronization');
+  assert.equal(row.state, 'blocked');
+  assert.match(row.detail, /older snapshot has dependent threads/);
+  assert.match(row.detail, /pending transaction.*preserved/);
+});

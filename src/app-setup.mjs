@@ -151,11 +151,16 @@ export class AppSetup {
       const compatible = found?.codex?.version && isAllowedCodexVersion(found.codex.version, normalizeVersionPolicy(config?.versionPolicy));
       const claudeCompatible = config?.versionPolicy === 'warn' || found?.claude?.version?.split(/\s+/)[0] === '2.1.281';
       const configured = config?.mode === 'desktop' && config?.allProjects === true;
+      const held = live && (watcher.synchronization === 'blocked' || watcher.synchronization === 'degraded'
+        || watcher.blocked || watcher.blockedConversationCount || watcher.blockedSourceCount);
       const synchronized = live && Number.isFinite(watcher.foregroundCompletedAt) && watcher.synchronization === 'ready'
         && !watcher.waiting && !watcher.blocked && !watcher.blockedConversationCount && !watcher.blockedSourceCount;
       rows.push(component('synchronization', 'Conversation synchronization', !config ? 'missing' : !compatible || !claudeCompatible ? 'blocked'
-        : !configured || !synchronized ? 'waiting' : 'ready', !config ? 'All-project synchronization will be configured automatically.'
+        : held ? 'blocked' : !configured || !synchronized ? 'waiting' : 'ready', !config ? 'All-project synchronization will be configured automatically.'
         : !compatible || !claudeCompatible ? 'This native runtime is outside the synchronization policy. Collaboration can still be set up independently.'
+          : held ? (watcher.blocked?.reason === 'Owned projection has dependent threads.'
+            ? 'Synchronization is paused: an older snapshot has dependent threads. The pending transaction and all histories are preserved; no input is resent.'
+            : 'The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.')
           : !configured ? 'Existing synchronization settings are preserved until a safe configuration change is possible.'
             : synchronized ? 'The watcher reports ready and is running for all projects.' : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', 'retry'));
       rows.push(component('folders', 'Native project folders', watcher?.folderProjection?.state === 'error' ? 'blocked'

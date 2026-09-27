@@ -242,6 +242,37 @@ test('conflicting tracked histories stay blocked without stopping owners or choo
 
 const prefixMismatch = 'Owned Claude history does not match the synchronized prefix; no branch was selected.';
 
+test('dependent threads hold a promoted pending snapshot without restarting or retiring it', async () => {
+  const f = await fixture();
+  let clock = 0, discoverCount = 0, closeCount = 0;
+  const owner = { close() { closeCount++; } };
+  f.runtime.owners = new Map([['unrelated', { owner }]]);
+  const pending = { phase: 'promoted', operationId: 'protected-retirement',
+    targetId: 'dependent-snapshot', record: { conversationId: 'protected', side: 'codex' } };
+  f.state.pending = structuredClone(pending);
+  f.bridge.recover = async () => { f.calls.recover++; throw new Error('Owned projection has dependent threads.'); };
+  const snapshots = [];
+  await f.run({ maxPasses: 3, now: () => clock, discover: async () => { discoverCount++; return []; },
+    sleep: async ms => {
+      snapshots.push(await f.status());
+      clock += ms;
+      assert.deepEqual(f.state.pending, pending);
+    } });
+  assert.equal(f.calls.recover, 3);
+  assert.equal(discoverCount, 0);
+  assert.deepEqual(f.calls.track, []);
+  assert.deepEqual(f.calls.sync, []);
+  assert.equal(f.calls.collect, 0);
+  assert.equal(closeCount, 0);
+  assert.deepEqual(f.state.pending, pending);
+  assert.deepEqual(snapshots.map(status => [status.running, status.synchronization, status.blocked.scope]),
+    [[true, 'blocked', 'pending'], [true, 'blocked', 'pending']]);
+  assert.equal(snapshots[0].blocked.phase, 'promoted');
+  assert.equal(snapshots[0].blocked.operationId, 'protected-retirement');
+  assert.equal(snapshots[0].blocked.reason, 'Owned projection has dependent threads.');
+  assert.equal(snapshots[1].blocked.attempts, 2);
+});
+
 test('an observed pending prefix mismatch keeps the watcher alive and preserves the sole native intent', async () => {
   const f = await fixture();
   let clock = 0, discoverCount = 0, closeCount = 0;
