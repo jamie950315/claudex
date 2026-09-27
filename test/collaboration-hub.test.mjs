@@ -35,6 +35,37 @@ const request = (peer, method, params, token) => ({ peer, token, method, params 
 const controller = (hub, peer, method, params) => request(peer, method, params, hub.controllerToken);
 const status = (hub, id) => hub.dispatch(controller(hub, 'codex', 'status', { taskId: id }));
 
+test('app policy enables task-scoped writes for any project while explicit read-only remains read-only', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'synthetic done' }), { allowWrite: true, defaultPermission: 'workspace-write' });
+  const write = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'claude', cwd: root, prompt: 'Write within the task', requestId: 'app-write' }));
+  const read = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: '/tmp', prompt: 'Inspect only', permission: 'read-only', requestId: 'app-read' }));
+  assert.equal((await status(hub, write.taskId)).permission, 'workspace-write');
+  assert.equal((await status(hub, read.taskId)).permission, 'read-only');
+  const list = await hub.dispatch(controller(hub, 'codex', 'list', {}));
+  assert.equal(list.limits.allProjects, true);
+  assert.equal(list.limits.defaultPermission, 'workspace-write');
+  await until(async () => (await status(hub, write.taskId)).status === 'completed' && (await status(hub, read.taskId)).status === 'completed');
+});
+
+test('a read-only parent does not inherit the app default write permission for its child', async t => {
+  const gate = pending(); let parentToken;
+  const { root, hub } = await setup(t, async ({ provider }) => provider === 'codex' ? gate.promise : { text: 'child done' }, {
+    allowWrite: true, defaultPermission: 'workspace-write', mcp: ({ provider, token }) => { if (provider === 'codex') parentToken = token; return {}; },
+  });
+  const parent = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root, permission: 'read-only', prompt: 'parent', requestId: 'parent-read' }));
+  await until(() => parentToken);
+  const child = await hub.dispatch(request('codex', 'start', { provider: 'claude', cwd: root, prompt: 'child', requestId: 'child-inherited' }, parentToken));
+  const done = await until(async () => { const value = await status(hub, child.taskId); return value.status === 'completed' && value; });
+  assert.equal(done.permission, 'read-only');
+  await hub.dispatch(request('codex', 'status', { taskId: child.taskId }, parentToken));
+  gate.resolve({ text: 'parent done' });
+  await until(async () => (await status(hub, parent.taskId)).status === 'completed');
+});
+
+test('a writable default cannot bypass the broker write authorization', () => {
+  assert.throws(() => new CollaborationHub({ root: '/tmp', run: async () => {}, defaultPermission: 'workspace-write' }), /authorization/);
+});
+
 test('start reaches a durable result without model inference', async t => {
   const { hub } = await setup(t, async ({ provider, prompt }) => {
     assert.equal(provider, 'codex');

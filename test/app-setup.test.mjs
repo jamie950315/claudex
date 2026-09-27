@@ -1,0 +1,145 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir, userInfo } from 'node:os';
+import { join } from 'node:path';
+import { AppSetup, appPrivateJSON } from '../src/app-setup.mjs';
+
+const readyProviders = (base, versions = {}) => ({
+  codex: { binary: join(base, 'codex'), app: join(base, 'Codex.app'), version: versions.codex ?? 'codex-cli 0.155.0-alpha.16.4' },
+  claude: { binary: join(base, 'claude'), app: join(base, 'Claude.app'), version: versions.claude ?? '2.1.281' },
+});
+
+async function fixture(t, options = {}) {
+  const base = await mkdtemp(join(tmpdir(), 'claudex-app-setup-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const root = join(base, 'state'), home = join(base, 'home'), runtimeDirectory = join(base, 'runtime');
+  await mkdir(root, { mode: 0o700 });
+  await mkdir(home, { mode: 0o700 });
+  await mkdir(join(runtimeDirectory, 'bin'), { recursive: true });
+  await mkdir(join(runtimeDirectory, 'lib', 'node_modules', 'npm', 'bin'), { recursive: true });
+  await writeFile(join(runtimeDirectory, 'bin', 'node'), '', { mode: 0o755 });
+  await writeFile(join(runtimeDirectory, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), '');
+  const events = [];
+  const providers = options.providers ?? readyProviders(base);
+  const run = async (_command, args) => {
+    if (args[0] === 'login' && args[1] === 'status') {
+      events.push(['auth-codex']);
+      return { stdout: options.codexLoggedOut ? 'Not logged in' : 'Logged in using ChatGPT', stderr: '' };
+    }
+    if (args[0] === 'auth' && args[1] === 'status') {
+      events.push(['auth-claude']);
+      return { stdout: JSON.stringify({ loggedIn: !options.claudeLoggedOut, authMethod: 'claude.ai', apiProvider: 'firstParty' }), stderr: '' };
+    }
+    throw new Error(`Unexpected synthetic command: ${args.join(' ')}`);
+  };
+  const setup = new AppSetup({ root, home, runtimeDirectory, engineRoot: base, run, platform: 'darwin',
+    discover: async () => providers, ensure: async () => { events.push(['ensure-providers']); return providers; },
+    collaborationInstall: async (input, _options) => { events.push(['collaboration', input]); },
+    desktopInstall: async input => { events.push(['desktop', input]); },
+    serviceInstall: async input => { events.push(['service', input]); },
+    ownership: async () => ({ allowed: options.ownerAllowed !== false }),
+    foldersInstall: async input => { events.push(['folders', input]); },
+  });
+  setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' } });
+  return { base, root, home, runtimeDirectory, providers, setup, events };
+}
+
+test('new setup enables all projects and task-scoped writes in broker and sync config', async t => {
+  const { root, setup, events } = await fixture(t);
+  const report = await setup.setup();
+  const broker = events.find(([kind]) => kind === 'collaboration')?.[1];
+  assert.equal(broker.allowWrite, true);
+  assert.equal(broker.defaultPermission, 'workspace-write');
+  const config = JSON.parse(await readFile(join(root, 'config.json'), 'utf8'));
+  assert.equal(config.mode, 'desktop');
+  assert.equal(config.allProjects, true);
+  assert.deepEqual(config.projects, []);
+  assert.ok(events.some(([kind]) => kind === 'desktop'));
+  assert.ok(events.some(([kind]) => kind === 'service'));
+  assert.equal(report.version, 1);
+  assert.equal(report.allProjects, true);
+  assert.equal(report.allowWrite, true);
+});
+
+test('missing provider login leaves existing synchronization config intact', async t => {
+  const { root, setup, events } = await fixture(t, { claudeLoggedOut: true });
+  const existing = '{"version":1,"mode":"desktop","allProjects":false,"custom":"keep"}\n';
+  await writeFile(join(root, 'config.json'), existing, { mode: 0o600 });
+  const report = await setup.setup();
+  assert.equal(await readFile(join(root, 'config.json'), 'utf8'), existing);
+  assert.ok(events.some(([kind]) => kind === 'ensure-providers'));
+  assert.ok(events.some(([kind]) => kind === 'auth-codex'));
+  assert.ok(events.some(([kind]) => kind === 'auth-claude'));
+  assert.ok(!events.some(([kind]) => ['collaboration', 'desktop', 'service'].includes(kind)));
+  assert.equal(report.components.find(row => row.id === 'claude-login').state, 'login-required');
+  assert.notEqual(report.phase, 'ready');
+});
+
+test('active native owner prevents sync mutation without blocking independent broker setup', async t => {
+  const { root, setup, events } = await fixture(t, { ownerAllowed: false });
+  const report = await setup.setup();
+  assert.ok(events.some(([kind]) => kind === 'collaboration'));
+  assert.ok(!events.some(([kind]) => kind === 'desktop' || kind === 'service'));
+  assert.equal(await appPrivateJSON(join(root, 'config.json')), null);
+  assert.equal(report.components.find(row => row.id === 'synchronization').state, 'blocked');
+});
+
+test('unsafe or malformed private state and failed provider inspection never report ready', async t => {
+  const { base, root, setup, providers } = await fixture(t);
+  const outside = join(base, 'outside.json');
+  await writeFile(outside, '{}', { mode: 0o600 });
+  await symlink(outside, join(root, 'config.json'));
+  assert.equal((await setup.inspect({ providers })).components.find(row => row.id === 'synchronization').state, 'blocked');
+  await assert.rejects(appPrivateJSON(join(root, 'config.json')));
+  await rm(join(root, 'config.json'));
+  await writeFile(join(root, 'config.json'), '{broken', { mode: 0o600 });
+  assert.equal((await setup.inspect({ providers })).components.find(row => row.id === 'synchronization').state, 'blocked');
+  setup.discover = async () => { throw new Error('Unsigned native application'); };
+  const report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'providers').state, 'blocked');
+  assert.notEqual(report.phase, 'ready');
+});
+
+test('unknown native versions under strict policy are explicitly not ready', async t => {
+  const { root, setup, base } = await fixture(t);
+  await writeFile(join(root, 'config.json'), JSON.stringify({ version: 1, mode: 'desktop', allProjects: true, versionPolicy: 'strict' }), { mode: 0o600 });
+  const report = await setup.inspect({ providers: readyProviders(base, { codex: 'codex-cli 999.0.0', claude: '999.0.0' }) });
+  assert.equal(report.components.find(row => row.id === 'synchronization').state, 'blocked');
+  assert.equal(report.phase, 'blocked');
+});
+
+test('reopening an already configured app does not stop or rewrite a live synchronization owner', async t => {
+  const { root, base, setup, events, providers } = await fixture(t, { ownerAllowed: false });
+  const config = { version: 1, mode: 'desktop', allProjects: true, projects: [], binary: providers.codex.binary,
+    claudeBinary: providers.claude.binary, versionPolicy: 'strict' };
+  await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  await writeFile(join(root, 'desktop-launcher.json'), JSON.stringify({ launcher: join(base, 'bin', 'claudex-codex.mjs') }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), JSON.stringify({ cli: join(base, 'bin', 'claudex.mjs') }), { mode: 0o600 });
+  await setup.setup();
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'config.json'), 'utf8')), config);
+  assert.ok(!events.some(([kind]) => ['desktop', 'service', 'folders'].includes(kind)));
+});
+
+test('missing prerequisite desktop apps do not install services or touch synchronization config', async t => {
+  const { base, root, setup, events } = await fixture(t);
+  const providers = readyProviders(base); providers.claude.app = null;
+  setup.ensure = async () => providers;
+  const report = await setup.setup();
+  assert.equal(report.components.find(row => row.id === 'claude-desktop').state, 'missing');
+  assert.ok(!events.some(([kind]) => ['collaboration', 'desktop', 'service', 'folders'].includes(kind)));
+  assert.equal(await appPrivateJSON(join(root, 'config.json')), null);
+});
+
+test('native account inspection preserves the OS username without forwarding API credentials', async t => {
+  const { setup, home } = await fixture(t);
+  let environment;
+  setup.run = async (_command, _args, options) => { environment = options.env; return { stdout: '' }; };
+  await setup.nativeRun('/native/tool', ['--version'], { env: { USER: 'foreign-account',
+    ANTHROPIC_API_KEY: 'synthetic-test-value', CLAUDE_CONFIG_DIR: '/wrong-namespace' } });
+  assert.equal(environment.HOME, home);
+  assert.equal(environment.USER, userInfo().username);
+  assert.equal(environment.LOGNAME, userInfo().username);
+  assert.equal(environment.ANTHROPIC_API_KEY, undefined);
+  assert.equal(environment.CLAUDE_CONFIG_DIR, undefined);
+});

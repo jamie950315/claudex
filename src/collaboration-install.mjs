@@ -12,13 +12,18 @@ const xml = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt
   .replaceAll('>', '&gt;').replaceAll('"', '&quot;').replaceAll("'", '&apos;');
 
 export function collaborationDefinition({ root, cli, node = process.execPath, home = homedir(),
-  environmentPath = process.env.PATH ?? '/usr/bin:/bin', allowWrite = false }) {
+  environmentPath = process.env.PATH ?? '/usr/bin:/bin', allowWrite = false, defaultPermission = 'read-only', codexBinary, claudeBinary }) {
   if (![root, cli, node, home].every(value => typeof value === 'string' && isAbsolute(value)))
     throw new Error('Collaboration root, CLI, Node and home must be absolute paths.');
   if (typeof allowWrite !== 'boolean' || typeof environmentPath !== 'string' || environmentPath.includes('\0'))
     throw new Error('Collaboration write access or PATH is invalid.');
   const label = `dev.0ruka.claudex.collaboration.${digest(resolve(root)).slice(0, 12)}`;
-  const args = [node, cli, 'serve', '--root', root, ...(allowWrite ? ['--allow-write'] : [])];
+  if (!['read-only', 'workspace-write'].includes(defaultPermission) || defaultPermission === 'workspace-write' && !allowWrite)
+    throw new Error('Default permission exceeds installation authorization.');
+  for (const binary of [codexBinary, claudeBinary]) if (binary !== undefined && !isAbsolute(binary)) throw new Error('Provider executables must be absolute.');
+  const args = [node, cli, 'serve', '--root', root, ...(allowWrite ? ['--allow-write'] : []),
+    ...(defaultPermission !== 'read-only' ? ['--default-permission', defaultPermission] : []),
+    ...(codexBinary ? ['--codex-binary', codexBinary] : []), ...(claudeBinary ? ['--claude-binary', claudeBinary] : [])];
   const path = join(home, 'Library', 'LaunchAgents', `${label}.plist`);
   const plist = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
 <key>Label</key><string>${xml(label)}</string>

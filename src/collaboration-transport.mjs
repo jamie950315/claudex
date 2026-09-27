@@ -151,7 +151,7 @@ const tool = (name, description, properties, required = []) => ({
 const str = { type: 'string', minLength: 1 };
 const integer = { type: 'integer', minimum: 0 };
 const toolDefinitions = [
-  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId, then status/wait for results. Read-only by default; writes require broker and parent authorization. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model: str, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
+  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId, then status/wait for results. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model: str, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
   tool('handoff', 'Transfer this same task to the other provider. Read status for the current revision first. Include progress, remaining work and constraints. After acknowledgement stop work and end your turn; do not wait on yourself. Transfer occurs only after successful native completion. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
   tool('status', 'Read task status without starting a model.', { taskId: str }, ['taskId']),
@@ -198,7 +198,7 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
         const { name, arguments: args = {} } = request.params ?? {};
         try {
           const method = validateTool(name, args);
-          const params = method === 'start' ? { permission: 'read-only', ...args } : args;
+          const params = args;
           const value = await callCollaboration({ root, peer, token, method, params, timeoutMs: method === 'wait' ? Math.min(SOCKET_LIFETIME_MS, (args.timeoutMs ?? 30000) + 5000) : SOCKET_LIFETIME_MS });
           result = { content: [{ type: 'text', text: JSON.stringify(value) }] };
         } catch (error) { result = { content: [{ type: 'text', text: String(error.message) }], isError: true }; }

@@ -7,7 +7,7 @@ and generated sessions outside the repository.
 ## Documentation
 
 Keep README.md focused on current capabilities, requirements, setup and concrete
-limits. Put the work protocol in docs/collaboration.md, native synchronization
+limits. Put graphical setup in docs/app.md, the work protocol in docs/collaboration.md, native synchronization
 details in docs/synchronization.md, and existing CLI-only installations and
 migration boundaries in docs/compatibility.md. Do not use broad maturity labels
 as substitutes for version requirements or explicit unsupported behavior.
@@ -25,6 +25,23 @@ on top of the sanitized public history; never merge private ancestors into it.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
 - Preserve original contents and never prune originals as generated backups. Authorized same-title handoffs may archive an unchanged superseded original only after verifying its replacement and the applicable native lifecycle guards; archival never grants an external transcript writer lease.
+
+## macOS app setup
+
+`native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
+who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
+replace those apps. Reuse native CLIs or fill missing CLI components from pinned
+official npm packages in the private root. Keep normal native credential
+namespaces, never copy credentials, and do not auto-start model work during setup.
+The app profile enables all projects and task-scoped writes; explicit read-only
+requests and child permission bounds remain strict. Do not loosen existing
+writer, version, resource, account or macOS guards to report a ready checklist.
+An active or incompatible existing deployment must be preserved and explained.
+Package portable Node/npm and production dependencies so end users need no Git,
+Node installation, compiler or terminal setup. Build with an explicit file
+allowlist and verify nested signatures. Development signing is not notarized
+public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
+checks native layout with synthetic data, not installed service acceptance.
 
 ## Adapters
 
@@ -58,7 +75,9 @@ API keys, and explicit collaboration MCP configuration. Ordinary sync must not
 enroll this work. These restricted profiles do not inherit arbitrary user tools,
 hooks or model settings. Models default to their native CLI defaults unless
 specified by the caller; prompts instruct workers to read project guidance.
-Default tasks are read-only. Writes require broker opt-in and task permission;
+Manual CLI tasks default to read-only. The app enables all projects and task-scoped
+writes by default, using the explicit broker defaultPermission setting. Read-only
+requests and parent restrictions must never elevate. Writes require broker opt-in and task permission;
 children cannot escalate permissions or change cwd. Claude permits bounded file
 tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
 with bypass-permission flags. Writable work needs a caller-selected dedicated
