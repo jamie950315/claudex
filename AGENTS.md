@@ -64,6 +64,14 @@ own turn rather than forcibly transferring an unrelated native UI conversation.
 Storage, context, concurrency, depth and execution limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
+Separately authorized live CLI acceptance verifies Codex-to-Claude and
+Claude-to-Codex child delegation with exact result return, plus two consecutive
+owner transfers under one logical task ID. The tested runtimes are Codex CLI
+0.158.0-alpha.2.1 and Claude Code 2.1.283. Seven model executions completed in an
+isolated read-only workspace; test files stayed unchanged and owned process
+groups exited. This is collaboration-only evidence, not a new synchronization
+version allowlist entry or proof of writable work or Desktop UI chat transfer.
+
 ## Current boundary
 
 `bin/claudex.mjs` provides explicit initialization with all-project or selected-project scope, discovery,

@@ -105,8 +105,16 @@ the invocation's owned process group and does not undo file changes.
 
 The protocol, native command profiles, cancellation and both-direction handoff
 contracts have synthetic tests, plus a real broker/stdio MCP process smoke test
-without inference. Actual model-to-model acceptance requires a separately
-authorized live run; passing these tests is not proof of native model acceptance.
+without inference. Separately user-authorized native acceptance on Codex CLI
+`0.158.0-alpha.2.1` and Claude Code `2.1.283` verifies both directions of model-created
+child delegation, exact child-result return, and a Codex-to-Claude-to-Codex whole-work
+handoff under one logical task ID. Seven real native executions completed across
+five task records in an isolated read-only workspace, with unchanged test files,
+no replay, closed owned process groups, and no observed enrollment of the checked
+native IDs by the history watcher. Existing native account logins were used.
+This proves the read-only collaboration path, not writable native acceptance,
+Desktop UI chat transfer, arbitrary future runtimes, or synchronization compatibility
+for every feature of these versions. Automated tests still never start inference.
 
 ## Setup and modes
 
