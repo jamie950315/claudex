@@ -31,17 +31,19 @@ function publicTask(task) {
 
 /** A single durable work graph. Delegation adds an edge; handoff changes its owner. */
 export class CollaborationHub extends EventEmitter {
-  constructor({ root, run, mcp, allowWrite = false, maxWorkers = 3, maxDepth = 2,
+  constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 3, maxDepth = 2,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     timeoutMs = 15 * 60 * 1000 } = {}) {
     super();
     if (!isAbsolute(root ?? '') || typeof run !== 'function') throw new Error('Absolute root and native runner are required.');
+    if (!['read-only', 'workspace-write'].includes(defaultPermission)
+      || defaultPermission === 'workspace-write' && !allowWrite) throw new Error('Default permission exceeds broker authorization.');
     for (const [name, value, max] of [['maxWorkers', maxWorkers, 8], ['maxDepth', maxDepth, 8],
       ['maxSteps', maxSteps, 100], ['maxTasks', maxTasks, 10000], ['maxRequests', maxRequests, 100000],
       ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024], ['timeoutMs', timeoutMs, 3600000]]) {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
     }
-    Object.assign(this, { root, run, mcp, allowWrite, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs });
+    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
   }
 
@@ -141,7 +143,7 @@ export class CollaborationHub extends EventEmitter {
         try { this.allowed(actor, task, this.state); return true; } catch { return false; }
       });
       return { tasks: tasks.map(({ id, parentId, owner, status, revision, updatedAt }) => ({ id, parentId, owner, status, revision, updatedAt })),
-        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.allowWrite },
+        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.allowWrite, defaultPermission: this.defaultPermission, allProjects: true },
         blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain') };
     }
     if (method === 'wait') {
@@ -190,7 +192,7 @@ export class CollaborationHub extends EventEmitter {
       if (method === 'start') {
         provider(params.provider); text(params.prompt, 'prompt');
         if (params.model !== undefined) text(params.model, 'model', 200);
-        const permission = params.permission ?? 'read-only';
+        const permission = params.permission ?? actor.task?.permission ?? this.defaultPermission;
         if (!['read-only', 'workspace-write'].includes(permission)) throw new Error('Unsupported permission.');
         if (permission === 'workspace-write' && (!this.allowWrite || actor.task?.permission === 'read-only')) throw new Error('Workspace writes are not authorized by the broker or parent.');
         if (actor.task && (actor.task.pendingHandoff || actor.task.cancelRequested)) throw new Error('Worker is relinquishing ownership.');

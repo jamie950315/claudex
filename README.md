@@ -15,8 +15,10 @@ history without asking a model to generate a reply or summarize it.
 
 ## Requirements
 
-- macOS and Node.js 22 or later.
-- Codex CLI and Claude Code installed and signed in to the accounts you want to use.
+- macOS with ChatGPT/Codex and Claude desktop apps already installed.
+- Native account access for the Codex and Claude Code workflows you want to use.
+- Node.js 22+ and Git only for command-line/source installation; the macOS app
+  bundles its runtime and can supply missing CLI components.
 - For Desktop synchronization, the native desktop applications and compatible
   runtimes listed under [Compatibility and verification](#compatibility-and-verification).
 
@@ -24,7 +26,25 @@ Claudex does not copy credentials or require a separate API key for these native
 account workflows. Model work consumes the account's available usage; execution
 limits are not a monetary spending guarantee.
 
-## Install
+## macOS app
+
+Claudex.app is the graphical setup path for people who already use the two desktop
+apps. Place it in a stable Applications location, open it, and let setup configure
+the integrations. All projects and task-scoped file editing are enabled by default;
+there is no project-by-project enrollment. The app reuses existing native tools,
+adds missing CLI components, and guides any required official sign-in.
+
+It does not download or replace ChatGPT/Codex or Claude Desktop, copy credentials,
+force-close active work, or bypass macOS permissions and compatibility checks.
+
+The current Apple Silicon app build is development-signed, not notarized for
+frictionless public distribution. See the [app guide](docs/app.md) for setup,
+verification boundaries, and developer packaging instructions. Do not treat a
+successful build as clean-machine or notarized-release acceptance.
+
+## Command-line installation
+
+This remains available for development and manually managed installations.
 
 ```sh
 git clone https://github.com/jamie950315/claudex.git
@@ -60,7 +80,7 @@ relevant context explicitly and use the protocol to read progress and results.
 
 ### Allowing file edits
 
-The default is read-only. Writing requires both broker `--allow-write` and task
+Manual CLI installation defaults to read-only. Writing requires both broker `--allow-write` and task
 `permission: "workspace-write"`. Choose the write-enabled option at first
 installation if required:
 
@@ -145,6 +165,7 @@ Important boundaries:
 
 - [Collaboration](docs/collaboration.md): tools, execution profiles, permissions,
   limits, and live acceptance scope.
+- [macOS app](docs/app.md): existing-app prerequisites, automatic setup, and packaging.
 - [Synchronization](docs/synchronization.md): Desktop setup, native integration,
   lifecycle guards, storage, and recovery.
 - [CLI-only compatibility](docs/compatibility.md): existing installations and

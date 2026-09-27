@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lstat, readFile, unlink } from 'node:fs/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
-import { runCollaborationNative } from '../src/collaboration-native.mjs';
+import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
 import { callCollaboration, runCollaborationMcp, serveCollaborationSocket } from '../src/collaboration-transport.mjs';
 import { privateDirectory, readJSON, withLock, writeJSON } from '../src/storage.mjs';
 
@@ -20,6 +20,8 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Read JSON parameters from stdin
 
 --root PATH selects the private collaboration root, not the synchronization root.
+--default-permission read-only|workspace-write selects the policy for new root tasks.
+--codex-binary PATH and --claude-binary PATH select explicit native executables.
 Default: ~/.local/share/claudex/collaboration. Requests may start real model work.
 Reads, startup, installation and status never request inference. No API keys are copied.
 Writes require both broker --allow-write and per-task permission: workspace-write.
@@ -52,11 +54,12 @@ async function reclaimEndpoint(root) {
   await unlink(path);
 }
 
-async function serve(root, allowWrite) {
+async function serve(root, allowWrite, values) {
   process.umask(0o077);
   root = await privateDirectory(root);
   return withLock(join(root, 'broker.lock'), async () => {
-    const hub = new CollaborationHub({ root, allowWrite, run: runCollaborationNative,
+    const hub = new CollaborationHub({ root, allowWrite, defaultPermission: values['default-permission'] ?? 'read-only',
+      run: createNativeCollaborationRunner({ commands: { codex: values['codex-binary'] ?? 'codex', claude: values['claude-binary'] ?? 'claude' } }),
       mcp: ({ provider, token }) => ({ command: process.execPath,
         args: [cli, 'mcp', '--root', root, '--peer', provider], env: { CLAUDEX_WORK_TOKEN: token } }) });
     // Install handlers before initialization can schedule any saved, never-dispatched work.
@@ -87,14 +90,16 @@ async function serve(root, allowWrite) {
 export async function collaborationMain(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     root: { type: 'string' }, peer: { type: 'string' }, 'allow-write': { type: 'boolean' }, help: { type: 'boolean' },
+    'default-permission': { type: 'string' }, 'codex-binary': { type: 'string' }, 'claude-binary': { type: 'string' },
   } });
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { console.log(help); return; }
   const root = resolve(values.root ?? join(process.env.CLAUDEX_HOME ?? join(homedir(), '.local', 'share', 'claudex'), 'collaboration'));
-  if (command === 'serve') return serve(root, values['allow-write'] === true);
+  if (command === 'serve') return serve(root, values['allow-write'] === true, values);
   if (command === 'install') {
     const { installCollaboration } = await import('../src/collaboration-install.mjs');
-    console.log(JSON.stringify(await installCollaboration({ root, cli, allowWrite: values['allow-write'] === true }), null, 2));
+    console.log(JSON.stringify(await installCollaboration({ root, cli, allowWrite: values['allow-write'] === true,
+      defaultPermission: values['default-permission'] ?? 'read-only', codexBinary: values['codex-binary'], claudeBinary: values['claude-binary'] }), null, 2));
     return;
   }
   const token = process.env.CLAUDEX_WORK_TOKEN ?? await controllerToken(root);

@@ -69,7 +69,10 @@ identifies its separate LaunchAgent. Stopping a broker during work cancels its
 owned invocations and does not undo their edits.
 
 
-The default is read-only. File editing requires a broker installed or started with
+Manual CLI installation defaults to read-only. The macOS app profile enables all
+projects and sets the default task permission to `workspace-write`; an explicit
+read-only request and a read-only parent's child remain read-only. File editing
+requires a broker installed or started with
 `--allow-write` **and** task `permission: "workspace-write"`. A child cannot elevate
 its parent's permission or change its workspace. Use a dedicated checkout for
 writable work: the protocol does not create worktrees, merge edits, or prevent an

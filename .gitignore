@@ -3,3 +3,7 @@ node_modules/
 .claudex/
 *.log
 coverage/
+*.app/
+*.dmg
+*.zip
+.claudex-app-*/
