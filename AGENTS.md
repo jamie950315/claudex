@@ -39,6 +39,9 @@ and quota guards still apply to other deliveries. Revalidation is paced at 30
 seconds, with explicit bounded blocked status. Unclassified unsafe failures remain
 fatal to that worker rather than being treated as successful. Discovery starts
 at initialization, not a bulk history import.
+An unenrolled source with no completed first turn does not make the entire
+watcher wait. Transport failures and tracked waits remain visible. The status
+app also surfaces the existing unsupported-new-source diagnostics.
 
 The installed macOS service has an independent supervisor. Unexpected worker
 exits restart after 5/10/20/40/60 seconds; two stable minutes reset backoff.
@@ -154,6 +157,9 @@ join and reject intervening authored input or alternate continuations. Only
 virtual graph-validation parents change; native bytes, codec input, message
 order and every tool record remain untouched. Missing/ambiguous evidence and
 actual competing branches still block; saved semantic prefixes must still match.
+The observed empty-display successful PreToolUse hook attachment may occur
+between results when its tool, native parent, session and pending-result position
+all match. Its historical command/stdout remain inert and are never executed.
 
 Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
 Desktop-owned transcripts must not be replaced or pruned, even when archived.

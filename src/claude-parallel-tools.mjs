@@ -65,9 +65,22 @@ export function parallelToolGraphParents(rows) {
     if (results.some(row => row.promptId !== results[0].promptId)) continue;
     const members = new Set([...group, ...results].map(row => row.uuid));
     const start = positions.get(first.uuid), end = positions.get(results.at(-1).uuid);
-    // Metadata without a UUID can occur while tools run. Any other authored
-    // input or graph-bearing record inside the cohort makes it ambiguous.
-    if (rows.slice(start, end + 1).some(row => (authored(row) || row.uuid) && !members.has(row.uuid))) continue;
+    const toolHook = row => {
+      const hook = row.attachment;
+      if (row.type !== 'attachment' || !nonempty(row.uuid) || duplicates.has(row.uuid) || row.message !== undefined
+          || !sameSession(row) || !members.has(row.parentUuid) || positions.get(row.parentUuid) >= positions.get(row.uuid)
+          || hook?.type !== 'hook_success' || hook.hookEvent !== 'PreToolUse' || hook.exitCode !== 0
+          || hook.content !== '' || hook.stderr !== '' || typeof hook.stdout !== 'string' || !nonempty(hook.command)
+          || !Number.isFinite(hook.durationMs) || hook.durationMs < 0) return false;
+      const call = calls.find(call => call.message.content[0].id === hook.toolUseID);
+      const result = results.find(result => result.sourceToolAssistantUUID === call?.uuid);
+      return Boolean(call && result && hook.hookName === `PreToolUse:${call.message.content[0].name}`
+        && positions.get(call.uuid) < positions.get(row.uuid) && positions.get(row.uuid) < positions.get(result.uuid));
+    };
+    // The observed CLI can persist a successful, empty-display PreToolUse hook
+    // between parallel results. Keep it in the native/codec input as inert
+    // historical metadata; its command/stdout are never executed or replayed.
+    if (rows.slice(start, end + 1).some(row => (authored(row) || row.uuid) && !members.has(row.uuid) && !toolHook(row))) continue;
     const join = results.at(-1).uuid;
     let exits = 0;
     for (const row of rows) {

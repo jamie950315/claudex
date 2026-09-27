@@ -97,6 +97,26 @@ test('tracked and owned identities are not enrolled again on later passes', asyn
   assert.equal(f.calls.codex, 3);
 });
 
+test('an unenrolled conversation without a complete first turn does not make healthy synchronization globally wait', async () => {
+  const f = await fixture(); const track = f.bridge.track;
+  f.bridge.track = async source => {
+    if (source.id === 'unfinished') throw new Error('Wait for a complete assistant turn or verified synchronized checkpoint.');
+    return track(source);
+  };
+  let during;
+  await f.run({ maxPasses: 2,
+    discover: async (_config, known) => [{ side: 'claude', id: 'unfinished', path: '/unfinished' },
+      { side: 'codex', id: 'new', path: '/new' }].filter(source => !known.has(`${source.side}:${source.id}`)),
+    sleep: async () => { during = await f.status(); } });
+  assert.equal(during.running, true);
+  assert.equal(during.waiting, null);
+  assert.equal(during.synchronization, 'ready');
+  assert.equal(during.blockedSourceCount, 0);
+  assert.deepEqual(f.calls.sync, ['new', 'new']);
+  assert.equal(f.state.conversations.unfinished, undefined);
+  assert.equal(f.state.pending, null);
+});
+
 test('opt-in folder maps update during discovery refreshes without adding native writers', async () => {
   const f = await fixture(), maps = [], resources = [];
   let pass;

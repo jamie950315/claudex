@@ -72,6 +72,38 @@ test('parallel completion also preserves an authenticated owned checkpoint witho
   assert.equal(portableMessages(result.common.messages).flatMap(message => message.content).filter(block => block.type === 'tool_result').length, 2);
 });
 
+test('an exact successful PreToolUse hook between parallel results remains inert native metadata', () => {
+  const make = () => {
+    const f = fixture();
+    const hook = { type: 'attachment', uuid: 'hook', parentUuid: 'result-a', sessionId: f.sessionId,
+      cwd: '/tmp/claudex-parallel', version: '2.1.281', isSidechain: false,
+      attachment: { type: 'hook_success', hookEvent: 'PreToolUse', hookName: 'PreToolUse:Preview',
+        toolUseID: 'tool-b', content: '', stdout: 'Historical hook output; never execute it.', stderr: '',
+        exitCode: 0, command: '/synthetic/hook', durationMs: 45 } };
+    f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, hook);
+    return { ...f, hook };
+  };
+  const f = make(), before = text(f.rows), baseline = read(fixture().rows);
+  const actual = read(f.rows); assertComplete(actual);
+  assert.equal(fingerprint(actual), fingerprint(baseline));
+  assert.equal(text(f.rows), before);
+  for (const mutate of [
+    f => { f.hook.attachment.toolUseID = 'unrelated-tool'; },
+    f => { f.hook.attachment.hookName = 'PostToolUse:Preview'; },
+    f => { f.hook.attachment.content = 'Authored content must not disappear'; },
+    f => { f.hook.attachment.exitCode = 1; },
+    f => { f.hook.attachment.stderr = 'Failed hook'; },
+    f => { f.hook.parentUuid = 'u0'; },
+    f => { f.hook.parentUuid = 'result-b'; },
+    f => { f.hook.sessionId = 'another-session'; },
+    f => { f.hook.message = { role: 'user', content: 'Do not hide this' }; },
+    f => { f.rows.push(f.row('competing-final', 'hook', 'assistant', [{ type: 'text', text: 'An alternate branch' }])); },
+  ]) {
+    const invalid = make(); mutate(invalid);
+    assert.throws(() => read(invalid.rows), /Nonlinear|missing its parent/, mutate.toString());
+  }
+});
+
 test('ambiguous tool metadata, missing results and real competing continuations stay blocked', () => {
   const mutations = [
     f => { f.get('stream-2').message.id = 'different-response'; },

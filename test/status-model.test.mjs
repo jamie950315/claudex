@@ -30,6 +30,9 @@ let paused = health(changed)
 check(paused.state == "paused" && paused.attention && paused.retryAt == now + 30000)
 changed = ready; changed["blockedConversationCount"] = 1
 check(health(changed).state == "paused")
+changed = ready; changed["blockedSourceCount"] = 1
+changed["blockedSources"] = [["reason": "A new native history requires verification"]]
+check(health(changed).attention && health(changed).title == "New conversations need attention")
 changed = ready; changed["waiting"] = "Shared Codex Desktop backend is not ready."
 check(health(changed).title == "Waiting for Codex")
 changed = ready; changed["localHandoff"] = ["state": "error", "error": "Native history changed"]
@@ -50,7 +53,7 @@ check(gate.event(for: health(), now: now + 90001) == "recovered")
 check(gate.event(for: health(), now: now + 180000) == nil)
 var busyRecovery = NoticeGate(); busyRecovery.lastIssue = "previous failure"; busyRecovery.lastNoticeAt = now - 60000
 changed = ready; changed["waiting"] = "Wait for a complete assistant turn or verified synchronized checkpoint."
-check(health(changed).operational)
+check(health(changed).operational && health(changed).title == "Waiting for a conversation to finish")
 check(busyRecovery.event(for: health(changed), now: now) == "recovered")
 changed["waiting"] = "Shared Codex Desktop backend is not ready."
 check(!health(changed).operational)

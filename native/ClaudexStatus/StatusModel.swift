@@ -108,6 +108,12 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
         return report("paused", "Some conversations paused", "\(count) conversation(s) need attention. " + (entries.first?["reason"] as? String ?? "Open diagnostics for details."), true,
                       (entries.first?["retryAt"] as? NSNumber)?.doubleValue)
     }
+    if (watcher["blockedSourceCount"] as? Int ?? 0) > 0 {
+        let sources = watcher["blockedSources"] as? [[String: Any]] ?? []
+        let count = watcher["blockedSourceCount"] as? Int ?? sources.count
+        return report("paused", "New conversations need attention", "\(count) new conversation(s) could not be enrolled. Existing conversations can continue. "
+                      + (sources.first?["reason"] as? String ?? "Open diagnostics for details."), true)
+    }
     for key in ["folderProjection", "localHandoff"] {
         if let component = watcher[key] as? [String: Any], component["state"] as? String == "error" {
             return report("paused", "Desktop integration needs attention", component["error"] as? String ?? "Folder placement or archival could not be verified.", true)
@@ -121,8 +127,9 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
                     "incomplete final", "empty or invalid conversation", "transcript changed", "source history changed",
                     "active writer", "destination is active", "Claude Code is open", "another bridge operation"]
             .contains(where: waiting.localizedCaseInsensitiveContains)
-        return report("waiting", work ? "Waiting for a safe boundary" : "Waiting for a connection",
-                      "A reply, native file update, or connection is still in progress. Claudex checks again automatically; no action is normally needed.", operational: work)
+        return report("waiting", work ? "Waiting for a conversation to finish" : "Waiting for a connection",
+                      work ? "A tracked conversation is still replying, changing, or busy. Its next handoff waits for a complete turn and an idle destination; Claudex checks again automatically."
+                      : "The connection is not ready. Claudex checks again automatically.", operational: work)
     }
     if watcher["mode"] as? String == "desktop", watcher["foregroundCompletedAt"] as? NSNumber == nil {
         return report("waiting", "Checking conversations", "Native connections and saved histories are being verified. Wait for the latest messages before switching apps.")

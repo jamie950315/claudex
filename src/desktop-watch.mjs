@@ -16,6 +16,8 @@ const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex h
 const HISTORY_BLOCKED = /^(?:Owned Claude history does not match the synchronized prefix; no branch was selected\.|Owned Claude image refresh does not match the complete synchronized prefix; no history was duplicated\.|Conversation history diverged before the common checkpoint; no branch was selected\.|Both sides changed; no history was replaced\.|Superseded original .*changed;.*|Source changed (?:during handoff|before promotion); pending evidence was preserved\.|Destination changed during handoff; no branch was selected\.|Native destination did not preserve the complete copied checkpoint\.|A retained snapshot was edited; it was not retired\.|Current history changed; prior snapshots were preserved\.|Snapshot retention cannot be satisfied safely; new allocations are paused\.)$/i;
 const reason = error => String(error?.message ?? error).slice(0, 500);
 const isWaiting = error => WAITING.test(reason(error));
+const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verified synchronized checkpoint)?\.$/.test(reason(error))
+  || /^Native Codex history export: no completed persisted history is available; wait for a complete turn\.(?: \[Codex thread [a-f0-9-]+\])?$/.test(reason(error));
 const isUnsupported = error => UNSUPPORTED.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
@@ -254,7 +256,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 const latest = await bridge.status();
                 for (const record of latest.records) known.add(`${record.side}:${record.nativeId}`);
               } catch (error) {
-                if (isWaiting(error)) { waiting ??= reason(error); continue; }
+                // An unenrolled source without a completed first turn has
+                // nothing eligible to hand off. It must not mark every healthy
+                // tracked conversation (or the whole status UI) as waiting.
+                if (isWaiting(error)) {
+                  if (!lacksFirstTurn(error)) waiting ??= reason(error);
+                  continue;
+                }
                 if (!isUnsupported(error)) throw error;
                 blockedSourceCount++;
                 if (blockedSources.length < 20) blockedSources.push({ side: source.side, path: source.path, reason: reason(error) });
