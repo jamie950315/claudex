@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Bounded local conversation handoffs between Codex and Claude Code.",
+  "description": "Bounded conversation synchronization and opt-in cross-model work between Codex and Claude Code.",
   "bin": { "claudex": "bin/claudex.mjs" },
   "scripts": { "test": "node --test test/*.test.mjs" },
   "engines": { "node": ">=22" },

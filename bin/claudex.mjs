@@ -20,7 +20,8 @@ import { isAllowedCodexVersion, isSupportedCodexVersion } from '../src/codex-ver
 import { normalizeVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
 import { closeDesktopSafely } from '../src/desktop-shutdown.mjs';
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+const collaborationRequested = process.argv[2] === 'collaboration';
+const { values, positionals } = parseArgs({ args: collaborationRequested ? ['collaboration'] : process.argv.slice(2), allowPositionals: true, options: {
   root: { type: 'string' }, from: { type: 'string' }, source: { type: 'string' }, id: { type: 'string' }, title: { type: 'string' },
   'codex-home': { type: 'string' }, 'claude-home': { type: 'string' }, 'codex-binary': { type: 'string' },
   project: { type: 'string', multiple: true }, help: { type: 'boolean' }, watch: { type: 'boolean' },
@@ -30,7 +31,7 @@ const { values, positionals } = parseArgs({ allowPositionals: true, options: {
 const command = positionals[0] || 'help';
 let root = resolve(values.root || process.env.CLAUDEX_HOME || join(homedir(), '.local', 'share', 'claudex'));
 const output = value => console.log(JSON.stringify(value, null, 2));
-const help = `Claudex: bounded local conversation handoffs (no model calls)
+const help = `Claudex: bounded conversation synchronization and opt-in model collaboration
 
   claudex init [--all-projects | --project /absolute/project] [--codex-home PATH] [--claude-home PATH]
   claudex track --from codex|claude --source PATH [--title TITLE]
@@ -51,6 +52,7 @@ const help = `Claudex: bounded local conversation handoffs (no model calls)
   claudex desktop uninstall       Remove the owned next-start override; preserve conversations
   claudex desktop folders enable|disable|status    Version-pinned Claude folder presentation
   claudex desktop handoffs enable|disable|status   Archive verified Local predecessors using native Claude
+  claudex collaboration help       Cross-model work protocol (explicit model execution)
 
 Global: --root PATH (default ~/.local/share/claudex). Service installation is opt-in.
 Only generated copies are retired. Original imported sessions are never deleted.
@@ -58,6 +60,10 @@ Close the destination session before switching; active writers block handoff.
 `;
 
 async function main() {
+  if (command === 'collaboration') {
+    const { collaborationMain } = await import('./claudex-collaboration.mjs');
+    return collaborationMain(process.argv.slice(3));
+  }
   if (command === 'help' || values.help) { console.log(help); return; }
   root = await privateDirectory(root);
   const configPath = join(root, 'config.json');

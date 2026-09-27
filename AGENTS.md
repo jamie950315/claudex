@@ -21,6 +21,49 @@ and generated sessions outside the repository.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
 - Imported history must not loop back as newly authored history.
 
+## Cross-model collaboration
+
+`collaboration` is an explicit inference-capable work protocol, separate from
+the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable
+work graph: delegation adds a parent edge and handoff transfers the same task's
+owner at a completed native boundary. MCP exposes start/send/handoff/status/wait/
+cancel/list through an owner-private Unix socket. Request IDs are idempotent;
+generation capabilities fence old workers. Never launch the next owner before
+the outgoing invocation and its owned process group finish. Never replay an
+uncertain native invocation. In-flight work found after restart becomes uncertain
+and blocks dispatch; preserve its process/session evidence and work record.
+
+`bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
+Its root is separate from sync state. Installation uses a separately journaled
+LaunchAgent and native MCP registration, never edits native conversation stores
+or restarts active apps. Controller capabilities are private files; worker
+capabilities go through environment variables, never argv or returned status.
+This fences protocol operations, not hostile same-UID processes.
+
+Native execution uses fresh Codex ephemeral exec or Claude nonpersistent print
+sessions with normal account authentication, no copied credentials, no inherited
+API keys, and explicit collaboration MCP configuration. Ordinary sync must not
+enroll this work. These restricted profiles do not inherit arbitrary user tools,
+hooks or model settings. Models default to their native CLI defaults unless
+specified by the caller; prompts instruct workers to read project guidance.
+Default tasks are read-only. Writes require broker opt-in and task permission;
+children cannot escalate permissions or change cwd. Claude permits bounded file
+tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
+with bypass-permission flags. Writable work needs a caller-selected dedicated
+checkout; this protocol does not create or merge worktrees. Concurrent writes
+within one canonical cwd are blocked, including writable parent/child overlap.
+Writable delegation defers child dispatch until the parent returns and releases
+its workspace. A waiting parent resumes with durable child results once all its
+children finish; this is explicit new work, not replay of an uncertain invocation.
+
+All automated collaboration tests inject synthetic runners or inspect protocol
+startup without inference. Do not describe these as live cross-model acceptance.
+The native work record is text-only, not a native chat/permission/context clone.
+Whole-work handoff retains logical task identity; an external caller ends its
+own turn rather than forcibly transferring an unrelated native UI conversation.
+Storage, context, concurrency, depth and execution limits fail explicitly without
+pruning history or idempotency receipts. Cancellation is not rollback.
+
 ## Current boundary
 
 `bin/claudex.mjs` provides explicit initialization with all-project or selected-project scope, discovery,
