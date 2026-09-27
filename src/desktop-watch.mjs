@@ -1,0 +1,377 @@
+import { isAbsolute, join, resolve } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
+import { coldImportHint, coldImportInactive } from './desktop-watch-hints.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
+import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
+import { withLock, writeJSON } from './storage.mjs';
+import { publishClaudeFolderMap } from './claude-folder-map.mjs';
+import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mjs';
+import { homedir } from 'node:os';
+
+const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
+const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
+// These are explicit history guards, not permission to choose a branch or retry
+// an arbitrary failed native operation. Keep the owning process alive so one
+// blocked handoff does not disconnect every unrelated Remote Control session.
+const HISTORY_BLOCKED = /^(?:Owned Claude history does not match the synchronized prefix; no branch was selected\.|Owned Claude image refresh does not match the complete synchronized prefix; no history was duplicated\.|Conversation history diverged before the common checkpoint; no branch was selected\.|Both sides changed; no history was replaced\.|Superseded original .*changed;.*|Source changed (?:during handoff|before promotion); pending evidence was preserved\.|Destination changed during handoff; no branch was selected\.|Native destination did not preserve the complete copied checkpoint\.|A retained snapshot was edited; it was not retired\.|Current history changed; prior snapshots were preserved\.|Snapshot retention cannot be satisfied safely; new allocations are paused\.)$/i;
+const reason = error => String(error?.message ?? error).slice(0, 500);
+const isWaiting = error => WAITING.test(reason(error));
+const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verified synchronized checkpoint)?\.$/.test(reason(error))
+  || /^Native Codex history export: no completed persisted history is available; wait for a complete turn\.(?: \[Codex thread [a-f0-9-]+\])?$/.test(reason(error));
+const isUnsupported = error => UNSUPPORTED.test(reason(error));
+const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
+  || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
+
+function usesActiveHints(state, id) {
+  return state.conversations[id]?.discoveryMode !== 'cold-import'
+    || state.records.some(record => record.conversationId === id && record.side === 'claude'
+      && record.managed && record.kind === 'owner' && record.status === 'current');
+}
+
+// Unlike verified cold hints, these observations ONLY change queue priority.
+// Every active conversation still receives the normal full lifecycle inspection.
+async function activeActivityHint(state, id) {
+  if (state.pending) return null;
+  const records = state.records.filter(record => record.conversationId === id);
+  if (!records.length) return null;
+  const files = [];
+  for (const record of records) {
+    if (typeof record.path !== 'string' || !isAbsolute(record.path)) return null;
+    try {
+      const info = await lstat(record.path, { bigint: true });
+      if (!info.isFile() || await realpath(record.path) !== resolve(record.path)) return null;
+      files.push([record.path, ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink']
+        .map(key => info[key].toString())]);
+    } catch { return null; }
+  }
+  return JSON.stringify({ conversation: state.conversations[id], records, files });
+}
+
+/** Run the opt-in Desktop coordinator under the same lock as the legacy watcher. */
+export async function runDesktopWatch({ root, bridge, runtime, config, signal, pollMs = 2000,
+  discover = discoverSources, sleep = (ms, options) => delay(ms, undefined, options),
+  now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
+  blockedRetryMs = 30_000,
+  publishFolders = publishClaudeFolderMap,
+  maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
+  if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
+  if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
+  if (!Number.isInteger(coldValidationMs) || coldValidationMs < 1) throw new Error('Invalid cold-import validation interval.');
+  if (!Number.isInteger(blockedRetryMs) || blockedRetryMs < 1) throw new Error('Invalid blocked-history revalidation interval.');
+  const statusPath = join(root, 'watcher-status.json');
+  const startedAt = now();
+  let lastCollection = startedAt;
+  let passes = 0;
+  let blocked = null;
+  const blockedConversations = new Map();
+  const deferredBlock = Symbol('deferred history revalidation');
+  const block = (previous, error, fields) => ({ ...fields, reason: reason(error),
+    since: previous?.since ?? now(), lastAttemptAt: now(), retryAt: now() + blockedRetryMs,
+    attempts: Math.min(Number.MAX_SAFE_INTEGER, (previous?.attempts ?? 0) + 1) });
+  const blockingStatus = () => ({ blocked, blockedConversationCount: blockedConversations.size,
+    blockedConversations: [...blockedConversations.values()].slice(0, 20) });
+  // Ephemeral scheduling hints only. Durable checkpoints are never inferred
+  // from file metadata, and every process starts with full verification.
+  const coldHints = new Map();
+  // Observations only select priority; unlike coldHints, they never authorize
+  // skipping verification. Keep unsuccessful dirty work in the foreground.
+  const coldObserved = new Map();
+  const coldDirty = new Set();
+  const activeObserved = new Map();
+  const activeDirty = new Set();
+  let activePrioritySyncs = 0;
+  const clearHints = () => {
+    coldHints.clear(); coldObserved.clear(); coldDirty.clear(); activeObserved.clear(); activeDirty.clear();
+  };
+  const observeActive = async (state, id) => {
+    if (!usesActiveHints(state, id)) { activeObserved.delete(id); activeDirty.delete(id); return; }
+    const hint = await activeActivityHint(state, id);
+    if (activeObserved.has(id) && activeObserved.get(id) !== hint) activeDirty.add(id);
+    activeObserved.set(id, hint);
+  };
+  let foregroundCompletedAt = null;
+  let foregroundDurationMs = null;
+  let discoveryCompletedAt = null;
+  let discoveryDurationMs = null;
+  let maxDiscoveryGapMs = 0;
+  let lastSync = null;
+  let slowestSync = null;
+  let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
+  let localHandoff = null;
+  const handoffs = config.desktopLocalHandoff?.enabled === true ? createClaudeDesktopHandoffPublisher({ root,
+    desktopHome: config.desktopHome ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
+    inspect: async record => {
+      const data = await bridge.inspect(record);
+      if (record.managed && record.kind === 'owner') {
+        const owner = runtime.owners?.get(record.conversationId)?.owner;
+        const state = owner?.status();
+        if (!state || state.nativeState !== 'idle' || state.backgroundTasks?.length || state.pending || state.reset)
+          throw new Error('Claude replacement is active; Local archival is postponed.');
+      }
+      return data;
+    } }) : null;
+  const status = async fields => {
+    if (handoffs) {
+      try { localHandoff = { state: 'ready', ...await handoffs.publish(await bridge.status()), updatedAt: now() }; }
+      catch (error) { localHandoff = { state: 'error', error: reason(error), updatedAt: now() }; }
+    }
+    if (config.folderProjection?.enabled === true) {
+      try {
+        const map = await publishFolders({ root, state: await bridge.status() });
+        if (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000) {
+          lastFolderMaintenance = now();
+          try {
+            folderResource = await maintainFolders({ root, cachePath: config.folderProjection.cachePath });
+            folderResourceError = null;
+          } catch (error) { folderResourceError = reason(error); throw error; }
+        }
+        if (folderResourceError) throw new Error(folderResourceError);
+        folderProjection = { state: map.deferred ? 'deferred' : 'ready', entries: map.entries,
+          deferred: map.deferred, resource: folderResource, updatedAt: now() };
+      } catch (error) {
+        // Presentation failures remain explicit without interrupting native
+        // user work or changing the conversation coordinator's write guards.
+        folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
+      }
+    }
+    return writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
+    scheduler: 'activity-interleaved',
+    startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
+    versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
+    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
+    synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : fields.waiting ? 'waiting' : 'ready',
+    ...blockingStatus(), ...fields });
+  };
+  return withLock(join(root, 'watch.lock'), async () => {
+    await status({ waiting: null, blockedSourceCount: 0, blockedSources: [] });
+    try {
+      while (!signal?.aborted && passes++ < maxPasses) {
+        let waiting = null;
+        let blockedSourceCount = 0;
+        const blockedSources = [];
+        try {
+          // A pending transaction remains the only allowed native operation.
+          // Waiting out this backoff does not clear it or allocate a new target.
+          if (blocked && now() < blocked.retryAt) throw deferredBlock;
+          // The transport is a prerequisite. Never enroll a source while it is absent.
+          const codex = await runtime.codex();
+          const sync = async id => {
+            if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt) return;
+            try {
+              const state = await bridge.status();
+              const before = await coldImportHint(state, id);
+              const previous = coldHints.get(id);
+              const observedAt = now();
+              if (before && !coldDirty.has(id) && previous?.signature === before && observedAt >= previous.verifiedAt
+                && observedAt - previous.verifiedAt < coldValidationMs) return;
+              const activeBefore = usesActiveHints(state, id) ? await activeActivityHint(state, id) : undefined;
+              coldHints.delete(id);
+              if (before) coldDirty.add(id);
+              const beganAt = now();
+              let result;
+              try { result = await bridge.sync(id); }
+              finally {
+                lastSync = { conversationId: id, durationMs: now() - beganAt };
+                if (!slowestSync || lastSync.durationMs > slowestSync.durationMs) slowestSync = lastSync;
+              }
+              blockedConversations.delete(id);
+              if (before && result?.changed === false && result.incompleteTail === false) {
+                const latest = await bridge.status();
+                if (await coldImportInactive(latest, id, codex)) {
+                  const after = await coldImportHint(latest, id);
+                  // A concurrent append, replacement or lifecycle transition
+                  // must force another full sync, not refresh a stale hint.
+                  if (before === after) {
+                    coldHints.set(id, { signature: after, verifiedAt: now() });
+                    coldDirty.delete(id);
+                  }
+                }
+              }
+              if (activeBefore !== undefined) {
+                const latest = await bridge.status();
+                const activeAfter = await activeActivityHint(latest, id);
+                // Preserve changes racing a read or handoff. Own writes may
+                // require one later stable verification, never a self-loop.
+                activeObserved.set(id, activeBefore);
+                if (activeBefore !== null && activeBefore === activeAfter && result?.incompleteTail !== true) {
+                  activeDirty.delete(id);
+                  activeObserved.set(id, activeAfter);
+                } else if (activeBefore !== activeAfter) activeDirty.add(id);
+              }
+              // A successful prefix read can still be incomplete or race more
+              // native metadata. Unsatisfied priority work must yield too.
+              if (activeDirty.delete(id)) activeDirty.add(id);
+            }
+            catch (error) {
+              coldHints.delete(id);
+              // A native write may have committed before its response failed. Recover
+              // its durable intent and verify the native target before proceeding.
+              if ((await bridge.status()).pending) {
+                clearHints();
+                // Do not discover or start another sync while recovery waits.
+                await bridge.recover();
+                return;
+              }
+              if (isWaiting(error)) {
+                if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
+                waiting ??= reason(error); return;
+              }
+              if (isHistoryBlocked(error)) {
+                // No durable intent exists, so other conversations may still
+                // be verified. Their normal global quota/original guards are
+                // unchanged and may independently block a new allocation.
+                blockedConversations.set(id, block(blockedConversations.get(id), error, { conversationId: id }));
+                return;
+              }
+              throw error;
+            }
+          };
+          const discoverNew = async () => {
+            const beganAt = now();
+            let state = await bridge.status();
+            if (state.pending) { clearHints(); await bridge.recover(); }
+            state = await bridge.status();
+            const existing = new Set(Object.keys(state.conversations));
+            const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
+            for (const id of await runtime.ownedNativeIds()) known.add(id);
+            // Each refresh reports one discovery snapshot, not an accumulating
+            // count of the same unsupported source during a long cold sweep.
+            blockedSourceCount = 0;
+            blockedSources.length = 0;
+            const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false }, known);
+            for (const source of candidates) {
+              if (signal?.aborted) break;
+              try {
+                if (source.side === 'codex') {
+                  const nativeId = source.nativeId ?? source.id ?? await codexSessionId(source.path);
+                  const metadata = (await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(error => {
+                    if (/not found|no rollout/i.test(reason(error))) throw new Error('Referenced Codex history is unavailable.');
+                    throw error;
+                  }))?.thread;
+                  if (!metadata || metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
+                  if (isCodexSubagentSource(metadata.source)) continue;
+                }
+                await bridge.track(source);
+                const latest = await bridge.status();
+                for (const record of latest.records) known.add(`${record.side}:${record.nativeId}`);
+              } catch (error) {
+                // An unenrolled source without a completed first turn has
+                // nothing eligible to hand off. It must not mark every healthy
+                // tracked conversation (or the whole status UI) as waiting.
+                if (isWaiting(error)) {
+                  if (!lacksFirstTurn(error)) waiting ??= reason(error);
+                  continue;
+                }
+                if (!isUnsupported(error)) throw error;
+                blockedSourceCount++;
+                if (blockedSources.length < 20) blockedSources.push({ side: source.side, path: source.path, reason: reason(error) });
+              }
+            }
+            state = await bridge.status();
+            const completedAt = now();
+            if (discoveryCompletedAt !== null) maxDiscoveryGapMs = Math.max(maxDiscoveryGapMs, completedAt - discoveryCompletedAt);
+            discoveryCompletedAt = completedAt;
+            discoveryDurationMs = completedAt - beganAt;
+            return Object.keys(state.conversations).filter(id => !existing.has(id));
+          };
+          // A whole foreground sweep can itself take tens of seconds. Discover
+          // new work and observe existing active files between operations. One
+          // dirty active owner may jump ahead per boundary; the fixed sweep still
+          // advances, and managed lifecycle checks are never skipped by metadata.
+          const refreshNew = async nextId => {
+            if (signal?.aborted || now() - discoveryCompletedAt < Math.max(1, pollMs)) return;
+            const fresh = await discoverNew();
+            for (const id of fresh) {
+              if (signal?.aborted) break;
+              // After enrollment, errors belong to a tracked history. Keep this
+              // outside discovery's unsupported-source warning handler.
+              await sync(id);
+            }
+            const latest = await bridge.status();
+            for (const id of Object.keys(latest.conversations)) await observeActive(latest, id);
+            for (const id of activeDirty) if (!latest.conversations[id]) { activeDirty.delete(id); activeObserved.delete(id); }
+            const nextDirty = [...activeDirty].find(id => id !== nextId && !fresh.includes(id)
+              && (!blockedConversations.has(id) || now() >= blockedConversations.get(id).retryAt));
+            if (nextDirty && !signal?.aborted) {
+              activePrioritySyncs++;
+              await sync(nextDirty);
+            }
+            await status({ waiting, blockedSourceCount, blockedSources });
+          };
+          const foreground = async () => {
+            const beganAt = now();
+            const fresh = await discoverNew();
+            const freshIds = new Set(fresh);
+            const state = await bridge.status();
+            for (const cache of [coldHints, coldObserved, coldDirty, activeObserved, activeDirty, blockedConversations]) {
+              for (const id of cache.keys()) if (!state.conversations[id]) cache.delete(id);
+            }
+            const dirty = [], active = [], background = [];
+            for (const id of Object.keys(state.conversations)) {
+              const hint = await coldImportHint(state, id);
+              if (hint && coldObserved.has(id) && coldObserved.get(id) !== hint) coldDirty.add(id);
+              if (hint) coldObserved.set(id, hint);
+              await observeActive(state, id);
+              if (freshIds.has(id)) continue;
+              else if (coldDirty.has(id) || activeDirty.has(id)) dirty.push(id);
+              else if (!hint) active.push(id); // Includes live managed owners and invalid/missing paths.
+              else background.push(id);
+            }
+            for (const id of [...fresh, ...dirty, ...active]) {
+              if (signal?.aborted) break;
+              await refreshNew(id);
+              if (signal?.aborted) break;
+              await sync(id);
+            }
+            foregroundCompletedAt = now();
+            foregroundDurationMs = foregroundCompletedAt - beganAt;
+            await status({ waiting, blockedSourceCount, blockedSources });
+            return background;
+          };
+          // Keep a fair, complete cold sweep, but yield between native operations
+          // for fresh discovery and active/dirty work. Never parallelize writers
+          // or interrupt a verification/transaction. The 60s hint expiry is still
+          // absolute; elapsed background work does not renew it.
+          const background = await foreground();
+          for (const id of background) {
+            if (signal?.aborted) break;
+            if (now() - foregroundCompletedAt >= Math.max(1, pollMs)) await foreground();
+            if (signal?.aborted) break;
+            await sync(id);
+          }
+          await refreshNew();
+          if (!signal?.aborted && now() - lastCollection >= 60_000) {
+            await bridge.collect();
+            lastCollection = now();
+          }
+          blocked = null;
+        } catch (error) {
+          clearHints();
+          if (error === deferredBlock) { /* Keep the exact pending intent and visible blocked state. */ }
+          else if (isWaiting(error)) { blocked = null; waiting ??= reason(error); }
+          else if (isHistoryBlocked(error)) {
+            const pending = (await bridge.status()).pending;
+            blocked = block(blocked, error, { scope: pending ? 'pending' : 'coordinator',
+              conversationId: pending?.record?.conversationId ?? null,
+              operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
+          } else throw error;
+        }
+        await status({ waiting, blockedSourceCount, blockedSources });
+        if (!signal?.aborted && passes < maxPasses) {
+          // Abortable, bounded sleep prevents a broken persisted history from
+          // causing a hot recover loop. Normal healthy polling stays unchanged.
+          const pauseMs = blocked ? Math.max(pollMs, Math.min(60_000, blocked.retryAt - now())) : pollMs;
+          try { await sleep(pauseMs, { signal }); }
+          catch (error) { if (error.name !== 'AbortError' || !signal?.aborted) throw error; }
+        }
+      }
+      await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: null,
+        ...blockingStatus() });
+    } catch (error) {
+      await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
+      // A busy ClaudeOwner must keep its live handle; closing it can interrupt user work.
+      throw error;
+    }
+  }, { recoverDead: true });
+}
