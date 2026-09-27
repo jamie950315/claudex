@@ -69,8 +69,14 @@ Claude-to-Codex child delegation with exact result return, plus two consecutive
 owner transfers under one logical task ID. The tested runtimes are Codex CLI
 0.158.0-alpha.2.1 and Claude Code 2.1.283. Seven model executions completed in an
 isolated read-only workspace; test files stayed unchanged and owned process
-groups exited. This is collaboration-only evidence, not a new synchronization
-version allowlist entry or proof of writable work or Desktop UI chat transfer.
+groups exited. A separate authorized writable run on the same versions verifies
+both directions of child file editing and parent yield/resumption, plus sequential
+Codex-to-Claude-to-Codex edits under one task ID. Nine native executions completed;
+exact final bytes and recorded serial ownership boundaries were checked. Only a
+temporary broker enabled writes and it was stopped afterward. The installed
+service remains read-only by default. This is bounded collaboration file-editing
+evidence, not a new synchronization version allowlist entry, generic build/test
+execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 

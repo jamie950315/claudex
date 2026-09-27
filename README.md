@@ -112,9 +112,17 @@ handoff under one logical task ID. Seven real native executions completed across
 five task records in an isolated read-only workspace, with unchanged test files,
 no replay, closed owned process groups, and no observed enrollment of the checked
 native IDs by the history watcher. Existing native account logins were used.
-This proves the read-only collaboration path, not writable native acceptance,
-Desktop UI chat transfer, arbitrary future runtimes, or synchronization compatibility
-for every feature of these versions. Automated tests still never start inference.
+Separately authorized writable acceptance on the same runtimes verifies both
+directions of child file editing, parent yield and automatic resumption, and
+Codex-to-Claude-to-Codex sequential edits of one file under the same task ID.
+Nine native executions completed across five task records in a separate temporary
+broker with writes enabled. Exact final bytes, one child per parent, recorded
+parent/child execution ordering and exited process groups were checked. The
+temporary broker was stopped afterward; the installed service kept its read-only
+default. This validates bounded text-file editing, not arbitrary builds, shell
+availability in Claude, Desktop UI chat transfer, arbitrary future runtimes, or
+synchronization compatibility for every feature of these versions. Automated
+tests still never start inference.
 
 ## Setup and modes
 
