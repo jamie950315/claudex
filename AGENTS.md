@@ -146,6 +146,15 @@ Semantic baseline resets require a new boundary after an unchanged saved byte
 prefix; checkpoints advance only on successful promotion. Opaque Codex summaries,
 replacement histories, and general Claude preserved-segment chains remain blocked.
 
+The observed Claude split-response parallel-tool graph is supported without
+choosing a branch: require one request/response/model/session identity, ordered
+apiBlockIndex records, unique tool IDs and exactly one native result per call,
+matching sourceToolAssistantUUID, prompt, cwd and version. Validate one final
+join and reject intervening authored input or alternate continuations. Only
+virtual graph-validation parents change; native bytes, codec input, message
+order and every tool record remain untouched. Missing/ambiguous evidence and
+actual competing branches still block; saved semantic prefixes must still match.
+
 Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
 Desktop-owned transcripts must not be replaced or pruned, even when archived.
 Automatic per-generation Local registration is not enabled. The opt-in renderer

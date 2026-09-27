@@ -5,6 +5,7 @@ import { fromCommon, toCommon } from 'txcript';
 import { hash, snapshot, publishExclusive } from './storage.mjs';
 import { portableMessages } from './history.mjs';
 import { claudeCompaction, claudeCompactionHistory } from './compaction.mjs';
+import { parallelToolGraphParents } from './claude-parallel-tools.mjs';
 
 export function projectDirectory(claudeHome, cwd) {
   return join(claudeHome, 'projects', resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'));
@@ -81,14 +82,16 @@ export function decodeClaude(text, { preserveCompactionHistory = false, authenti
   const compact = preserveCompactionHistory ? claudeCompactionHistory(text, rows, authenticatePreservedPacket) : claudeCompaction(text, rows);
   const main = (compact?.rows ?? rows).filter(row => !row.isSidechain);
   const ids = new Set(main.filter(row => row.uuid).map(row => row.uuid));
+  const parallelParents = parallelToolGraphParents(main);
   const children = new Map();
   for (const row of main.filter(row => row.type === 'user' || row.type === 'assistant')) {
     if (row.parentUuid && !ids.has(row.parentUuid)) throw new Error('Dependent Claude history is missing its parent; automatic handoff paused.');
-    if (row.parentUuid) {
-      const siblings = children.get(row.parentUuid) ?? new Set();
+    const parentUuid = parallelParents.get(row.uuid) ?? row.parentUuid;
+    if (parentUuid) {
+      const siblings = children.get(parentUuid) ?? new Set();
       siblings.add(row.uuid);
       if (siblings.size > 1) throw new Error('Nonlinear Claude history requires an explicit branch selection.');
-      children.set(row.parentUuid, siblings);
+      children.set(parentUuid, siblings);
     }
   }
   const common = JSON.parse(toCommon(main.map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
