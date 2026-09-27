@@ -323,6 +323,10 @@ never restart active user work. WS clients share the backend and can retire idle
 owned projections immediately (native isolated proof). The CLI's raw proxy is
 not compatible with the WS listener. Native socket aliases need strict UID,
 private-directory, inode and target validation, not blanket symlink following.
+An ENOENT during endpoint inspection is a transport-unavailable wait, not a
+fatal history failure. Recheck all socket/manifest identities on the next
+connection; permission/alias failures remain strict. Never apply this exception
+to missing transcript/archive files or resend uncertain native writes.
 
 Opt-in paginated projections preserve signed packet blocks and images in the
 full native history API; default legacy behavior is unchanged. Owned decoders

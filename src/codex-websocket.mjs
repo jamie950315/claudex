@@ -8,6 +8,18 @@ export const MAX_FRAME_BYTES = 64 * 1024 * 1024;
 
 /** Validate direct sockets and the pinned native CLI's custom-listener alias. */
 export async function inspectCodexSocket(socketPath) {
+  try { return await inspectSocket(socketPath); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    // The native endpoint can disappear while the App replaces its backend.
+    // This is transport unavailability, not a fatal history/storage failure.
+    // Keep errno for callers, but never authorize a connection without a fresh
+    // complete permission, alias and identity verification on the next pass.
+    throw Object.assign(new Error('Shared Codex transport unavailable: native socket is not present.', { cause: error }), { code: 'ENOENT' });
+  }
+}
+
+async function inspectSocket(socketPath) {
   if (!isAbsolute(socketPath)) throw new Error('The Codex socket path must be absolute');
   const [entry, directory] = await Promise.all([lstat(socketPath), lstat(dirname(socketPath))]);
   const uid = process.getuid?.();

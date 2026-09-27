@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { discoverSources } from '../src/discovery.mjs';
+import { inspectCodexSocket } from '../src/codex-websocket.mjs';
 
 async function fixture(overrides = {}) {
   const root = await mkdtemp(join(tmpdir(), 'claudex-desktop-watch-'));
@@ -88,6 +89,31 @@ test('an observed shared transport disconnect waits for a fresh connected pass',
   await f.run({ maxPasses: 2, sleep: async () => { first = await f.status(); } });
   assert.match(first.waiting, /Could not connect/);
   assert.deepEqual(f.calls.track, ['/new']);
+});
+
+test('an absent native socket keeps owners and pending work alive until the next verified connection', async () => {
+  const f = await fixture(); let closeCount = 0, attempts = 0;
+  const owner = { close() { closeCount++; } };
+  f.runtime.owners = new Map([['existing', { owner }]]);
+  const pending = { phase: 'prepared', operationId: 'unchanged-operation' };
+  f.state.pending = structuredClone(pending);
+  f.runtime.codex = async () => {
+    if (attempts++ === 0) await inspectCodexSocket(join(f.root, 'missing-native-endpoint'));
+    return { async request(_method, { threadId }) { return { thread: { id: threadId, source: 'vscode' } }; } };
+  };
+  await f.run({ maxPasses: 2, sleep: async () => {
+    const status = await f.status();
+    assert.equal(status.running, true);
+    assert.match(status.waiting, /Shared Codex transport unavailable/);
+    assert.deepEqual(f.state.pending, pending);
+    assert.equal(f.calls.recover, 0);
+    assert.deepEqual(f.calls.track, []);
+    assert.equal(f.runtime.owners.get('existing').owner, owner);
+    assert.equal(closeCount, 0);
+  } });
+  assert.equal(f.calls.recover, 1);
+  assert.deepEqual(f.calls.track, ['/new']);
+  assert.equal(closeCount, 0);
 });
 
 test('tracked and owned identities are not enrolled again on later passes', async () => {

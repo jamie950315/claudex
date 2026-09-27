@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, chmod, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, chmod, rm, symlink, realpath } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import http from 'node:http';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 import { WebSocketServer } from 'ws';
-import { CodexWebSocketClient, connectCodexSocket } from '../src/codex-websocket.mjs';
+import { CodexWebSocketClient, connectCodexSocket, inspectCodexSocket } from '../src/codex-websocket.mjs';
 
 async function fixture(t, handler) {
   const root = await mkdtemp(join(tmpdir(), 'cldx-ws-'));
@@ -100,4 +101,24 @@ test('an arbitrary socket alias is rejected even if its target is private', asyn
   const link = `${socketPath}-link`;
   await symlink(socketPath, link);
   await assert.rejects(connectCodexSocket(link), /Unexpected native Codex socket alias/);
+});
+
+test('an absent direct endpoint or native alias target reports transport unavailability', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cldx-missing-endpoint-'));
+  await chmod(root, 0o700);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const missing = join(root, randomBytes(32).toString('hex'));
+  const check = error => error.code === 'ENOENT' && error.cause?.code === 'ENOENT'
+    && /Shared Codex transport unavailable/.test(error.message) && !error.message.includes(root);
+  await assert.rejects(inspectCodexSocket(missing), check);
+  await assert.rejects(connectCodexSocket(missing), check);
+  const link = join(root, 'native-alias');
+  // Only create a link in this fixture. Never create, delete or replace a
+  // socket in the user's native daemon directory.
+  await symlink(join(await realpath('/tmp'), `codex-daemon-${process.getuid()}`, randomBytes(32).toString('hex')), link);
+  await assert.rejects(inspectCodexSocket(link), check);
+  const foreign = join(root, 'foreign-alias');
+  await symlink(join(root, 'untrusted-missing-target'), foreign);
+  await assert.rejects(inspectCodexSocket(foreign), error => /Unexpected native Codex socket alias/.test(error.message)
+    && error.code !== 'ENOENT');
 });
