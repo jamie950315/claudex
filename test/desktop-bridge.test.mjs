@@ -11,6 +11,25 @@ const turn = n => [
 ];
 const copy = value => structuredClone(value);
 
+function enableDependencyAnchors(f) {
+  const adapter = f.bridge.adapters.codex;
+  adapter.prepareDependencyAnchor = async record => {
+    const file = f.files.get(record.path);
+    if (!file?.dependent) return null;
+    if (file.busy) throw new Error('Dependency anchor is active');
+    const data = await f.bridge.inspect(record);
+    assert.equal(data.digest, record.checkpoint.digest);
+    return { dependencyIds: ['retained-child'], bytes: data.bytes,
+      dependencyAnchor: { version: 1, digest: data.digest } };
+  };
+  adapter.assertDependencyAnchor = async record => {
+    const file = f.files.get(record.path);
+    if (!file || file.busy) throw new Error('Dependency anchor is missing or active');
+    const data = await f.bridge.inspect(record);
+    if (data.digest !== record.dependencyAnchor.digest) throw new Error('Dependency anchor history changed');
+  };
+}
+
 async function fixture(policy = {}, sourceSide = 'claude') {
   const root = await mkdtemp(join(tmpdir(), 'claudex-desktop-bridge-'));
   const files = new Map();
@@ -102,6 +121,93 @@ async function fixture(policy = {}, sourceSide = 'claude') {
     },
   };
 }
+
+test('dependent old snapshots complete promoted recovery without replay, retirement or future collection', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('codex');
+  f.files.get(old.path).dependent = true;
+  await f.advance('claude', 1);
+  f.fail.afterHide = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash during snapshot retirement/);
+  assert.equal((await f.bridge.status()).pending.phase, 'promoted');
+  const writes = f.calls.apply.length, hides = f.calls.hide.length;
+  enableDependencyAnchors(f);
+  await f.bridge.recover();
+  let state = await f.bridge.status();
+  assert.equal(state.pending, null);
+  assert.equal(state.records.find(r => r.id === old.id).status, 'dependency-anchor');
+  assert.equal(f.calls.apply.length, writes);
+  assert.equal(f.calls.hide.length, hides);
+  for (let n = 2; n <= 4; n++) { await f.advance('claude', n); await f.bridge.sync(f.conversationId); }
+  await f.bridge.collect();
+  state = await f.bridge.status();
+  assert.equal(state.records.filter(r => r.status === 'previous').length, 1);
+  assert.equal(state.records.filter(r => r.status === 'dependency-anchor').length, 1);
+  assert.ok(f.files.has(old.path));
+  assert.equal(f.calls.remove.includes(old.nativeId), false);
+  assert.equal(f.files.get(old.path).hidden, false);
+  assert.ok((await f.bridge.collect()).backupBytes >= state.records.find(r => r.id === old.id).bytes);
+});
+
+test('durable anchor survives a crash before pending completion without another native write', async () => {
+  const f = await fixture(); enableDependencyAnchors(f);
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('codex'); f.files.get(old.path).dependent = true;
+  await f.advance('claude', 1);
+  const save = f.bridge.save.bind(f.bridge); let crash = true;
+  f.bridge.save = async (state, event) => {
+    await save(state, event);
+    if (crash && event?.event === 'dependency-anchor-preserved') { crash = false; throw new Error('Crash after anchor save'); }
+  };
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after anchor save/);
+  assert.equal((await f.bridge.status()).pending.phase, 'promoted');
+  const writes = f.calls.apply.length;
+  await f.bridge.recover();
+  assert.equal((await f.bridge.status()).pending, null);
+  assert.equal(f.calls.apply.length, writes);
+  assert.equal(f.calls.hide.length, 0);
+});
+
+test('promoted anchor recovery revalidates the replacement prefix before completing the transaction', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('codex'); f.files.get(old.path).dependent = true;
+  await f.advance('claude', 1); f.fail.afterHide = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash during snapshot retirement/);
+  enableDependencyAnchors(f);
+  const current = await f.current('codex');
+  f.files.get(current.path).common.messages[0].content[0].text = 'Conflicting replacement';
+  await assert.rejects(f.bridge.recover(), /Dependency anchor replacement prefix changed/);
+  const state = await f.bridge.status();
+  assert.equal(state.pending.phase, 'promoted');
+  assert.equal(state.records.find(r => r.id === old.id).status, 'previous');
+});
+
+test('protected parent edits or disappearance block new allocation instead of losing the anchor', async () => {
+  const f = await fixture(); enableDependencyAnchors(f);
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('codex'); f.files.get(old.path).dependent = true;
+  await f.advance('claude', 1); await f.bridge.sync(f.conversationId);
+  f.files.get(old.path).common.messages.push(...turn('late-branch'));
+  const writes = f.calls.apply.length;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Dependency anchor history changed/);
+  f.files.delete(old.path);
+  await assert.rejects(f.bridge.collect(), /Dependency anchor is missing/);
+  assert.equal(f.calls.apply.length, writes);
+  assert.equal((await f.bridge.status()).records.find(r => r.id === old.id).status, 'dependency-anchor');
+});
+
+test('anchor quota refuses a new replacement before allocation', async () => {
+  const f = await fixture({ maxBackupBytes: 1 }); enableDependencyAnchors(f);
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('codex'); f.files.get(old.path).dependent = true;
+  await f.advance('claude', 1);
+  const plans = f.calls.plan.length;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Dependency anchor capacity exceeded/);
+  assert.equal(f.calls.plan.length, plans);
+  assert.equal((await f.bridge.status()).pending, null);
+});
 
 test('initial enrollment saves verified image origins with the canonical checkpoint', async () => {
   const root = await mkdtemp(join(tmpdir(), 'claudex-image-origin-track-'));

@@ -242,6 +242,25 @@ test('conflicting tracked histories stay blocked without stopping owners or choo
 
 const prefixMismatch = 'Owned Claude history does not match the synchronized prefix; no branch was selected.';
 
+test('dependency anchor validation failures remain paced pending holds without restarting', async () => {
+  const f = await fixture(); let clock = 0;
+  f.state.pending = { phase: 'promoted', operationId: 'anchor-check', record: { conversationId: 'protected', side: 'codex' } };
+  f.bridge.recover = async () => {
+    f.calls.recover++;
+    throw Object.assign(new Error('Dependency anchor raw history changed.'), { code: 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED' });
+  };
+  await f.run({ maxPasses: 2, now: () => clock, sleep: async ms => {
+    const status = await f.status();
+    assert.equal(status.running, true);
+    assert.equal(status.blocked.scope, 'pending');
+    assert.equal(status.blocked.reason, 'Dependency anchor raw history changed.');
+    clock += ms;
+  } });
+  assert.equal(f.calls.recover, 2);
+  assert.equal(f.calls.collect, 0);
+  assert.equal(f.state.pending.operationId, 'anchor-check');
+});
+
 test('dependent threads hold a promoted pending snapshot without restarting or retiring it', async () => {
   const f = await fixture();
   let clock = 0, discoverCount = 0, closeCount = 0;

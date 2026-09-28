@@ -395,7 +395,7 @@ identity and original Local mapping still agree. An anchor never authorizes an
 archive, and expired commands are never made actionable by retained grouping.
 There remains **one fixed Local original archive per logical conversation**, not
 another copy each round. It is not disposable quota data. Generated previous
-copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
+disposable copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
 the audit remains capped at 50 entries.
 
 This path is version-pinned and guarded, not an external writer lease. A manifest
@@ -598,11 +598,24 @@ Per logical conversation, the steady-state managed set is:
 - Previous projections expire seven days after retirement, subject to a global
   512 MiB backup budget. Current conversations are never deleted for a quota.
 
-This means at most four managed complete copies in steady state. A transaction
+Independent snapshots therefore have at most four managed complete copies in steady state. A transaction
 can temporarily add one candidate; an error stops further allocation. The
 original enrolled session is separate and is never counted as disposable data.
 Actual new conversation content naturally grows; this is not a cap on current
 history or on the native applications' own operational logs and caches.
+
+An owned Codex snapshot with native spawned children or forks is not disposable
+rollback data. After verifying its exact authenticated checkpoint, stable raw
+bytes and dependency inventory, Desktop mode preserves it as a
+`dependency-anchor` without archiving, deleting, loading or editing its children.
+The promoted replacement and source prefixes are rechecked before the same
+transaction completes; recovery never resends that handoff. Such anchors remain
+visible native histories and are never automatically demoted or expired, even
+if their children later disappear. They still count toward the same 512 MiB
+backup budget, with a hard maximum of 64 anchors globally. New allocation is
+refused when these bounds cannot be met. The ordinary one-previous-per-side and
+seven-day limits continue to apply to disposable snapshots. Missing or changed
+anchors block synchronization instead of silently selecting a branch.
 
 The state contains one pending transaction, fixed staging slots, and the most
 recent 50 audit entries. It does not accumulate per-turn state snapshots or
@@ -621,7 +634,8 @@ Policy overrides live in `config.json` under `policy`: `previousPerSide`,
 3. Persist a transaction intent before creating a candidate.
 4. Write a complete private staging file, fsync, then publish without overwriting.
 5. Verify portable message content and native visibility before promotion.
-6. Hide the previous owned version, then prune only verified independent backups.
+6. Preserve a verified dependency-bearing Codex version as an anchor, or hide
+   the independent previous version; prune only verified independent backups.
 
 ```sh
 node bin/claudex.mjs status

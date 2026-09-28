@@ -7,6 +7,7 @@ import { originalArchiveGuard } from './codex-original-archive-tree.mjs';
 
 const other = side => side === 'codex' ? 'claude' : 'codex';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+const anchorGuard = message => Object.assign(new Error(message), { code: 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED' });
 const normalize = common => ({ ...common, messages: portableMessages(common.messages).map(({ role, content }) => ({ role, content })) });
 function matches(common, checkpoint) {
   return common.messages.length >= checkpoint.count && fingerprint(common, checkpoint.count) === checkpoint.digest;
@@ -64,6 +65,10 @@ export class DesktopBridge {
   }
 
   async assertOriginalsUnchanged(state, conversationId) {
+    for (const record of state.records.filter(record => record.status === 'dependency-anchor'
+      && (!conversationId || record.conversationId === conversationId))) {
+      await this.assertDependencyAnchor(record);
+    }
     for (const record of state.records.filter(record => !record.managed && record.status === 'original'
       && (!conversationId || record.conversationId === conversationId))) {
       const data = await this.inspect(record);
@@ -73,6 +78,56 @@ export class DesktopBridge {
       }
       if (data.incompleteTail) throw new Error('A superseded original has an in-progress turn; synchronization postponed.');
     }
+  }
+
+  async assertDependencyAnchor(record) {
+    if (record.side !== 'codex' || !record.managed || !record.verified || record.kind !== 'snapshot'
+      || record.status !== 'dependency-anchor' || !this.adapters.codex.assertDependencyAnchor)
+      throw anchorGuard('Dependency anchor cannot be verified; histories were preserved.');
+    await this.adapters.codex.assertDependencyAnchor(record);
+  }
+
+  dependencyAnchorCandidate(record, proof) {
+    if (!proof || !Array.isArray(proof.dependencyIds) || !proof.dependencyIds.length
+      || !proof.dependencyAnchor || !Number.isSafeInteger(proof.bytes) || proof.bytes < 0)
+      throw anchorGuard('Dependency anchor proof is incomplete; histories were preserved.');
+    return { ...record, status: 'dependency-anchor', dependencyIds: proof.dependencyIds,
+      dependencyAnchor: proof.dependencyAnchor, bytes: proof.bytes };
+  }
+
+  assertDependencyCapacity(state, candidate) {
+    const records = state.records.filter(record => record.managed && record.kind === 'snapshot')
+      .map(record => record.id === candidate.id ? candidate : record);
+    const plan = planRetention(records.map(record => ({ ...record, createdAt: record.retiredAt ?? record.createdAt })),
+      { now: this.now(), policy: this.policy });
+    if (plan.blocked.length) throw anchorGuard('Dependency anchor capacity exceeded; histories were preserved.');
+  }
+
+  async verifyPromotedPrefix(state, pending) {
+    const source = state.records.find(record => record.id === pending.sourceId);
+    const current = this.current(state, pending.record.conversationId, pending.record.side);
+    if (!source || current?.id !== pending.record.id || current.nativeId !== pending.record.nativeId)
+      throw anchorGuard('Dependency anchor replacement identity changed; histories were preserved.');
+    for (const record of [source, current]) {
+      if (!matches((await this.inspect(record)).common, pending.checkpoint))
+        throw anchorGuard('Dependency anchor replacement prefix changed; histories were preserved.');
+    }
+  }
+
+  async preserveDependentSnapshot(state, record, pending) {
+    const prepare = this.adapters[record.side].prepareDependencyAnchor;
+    if (!prepare) return false;
+    const proof = await prepare(record);
+    if (!proof) return false;
+    const candidate = this.dependencyAnchorCandidate(record, proof);
+    this.assertDependencyCapacity(state, candidate);
+    if (pending) await this.verifyPromotedPrefix(state, pending);
+    // Revalidate after the other native reads and before the durable transition.
+    await this.assertDependencyAnchor(candidate);
+    Object.assign(record, candidate);
+    await this.save(state, { event: 'dependency-anchor-preserved', conversationId: record.conversationId,
+      nativeId: record.nativeId, dependencyCount: record.dependencyIds.length });
+    return true;
   }
 
   async track(source) {
@@ -195,6 +250,10 @@ export class DesktopBridge {
       // Cleanup precedes allocation; a protected backup cannot create an
       // unlimited stream of replacement generations.
       await this.collectInLock(state);
+      if (side === 'codex' && target?.managed && this.adapters.codex.prepareDependencyAnchor) {
+        const proof = await this.adapters.codex.prepareDependencyAnchor(target);
+        if (proof) this.assertDependencyCapacity(state, this.dependencyAnchorCandidate(target, proof));
+      }
       const operationId = randomUUID();
       const common = { ...data.common, meta: { ...data.common.meta, cwd: conversation.cwd, timestamp: new Date(this.now()).toISOString() } };
       // Preserve the logical title. After verification, archive the superseded
@@ -347,8 +406,15 @@ export class DesktopBridge {
     const old = state.records.find(record => record.id === pending.targetId);
     if (!pending.reuse && old?.managed) {
       if (old.kind !== 'snapshot') throw new Error('A stable native owner cannot be retired as a snapshot.');
-      await this.assertUnchanged(old);
-      Object.assign(old, await driver.hide(old));
+      if (old.status === 'dependency-anchor') {
+        await this.verifyPromotedPrefix(state, pending);
+        await this.assertDependencyAnchor(old);
+      } else {
+        if (!await this.preserveDependentSnapshot(state, old, pending)) {
+          await this.assertUnchanged(old);
+          Object.assign(old, await driver.hide(old));
+        }
+      }
     }
     if (pending.archiveOriginalId) {
       const original = state.records.find(record => record.id === pending.archiveOriginalId);
@@ -372,7 +438,9 @@ export class DesktopBridge {
   async assertUnchanged(record) {
     if (!record.managed || record.kind !== 'snapshot' || !record.verified) throw new Error('Unowned or unverified retirement target.');
     await this.adapters[record.side].assertIdle(record);
-    if ((await this.inspect(record)).digest !== record.checkpoint.digest) throw new Error('A retained snapshot was edited; it was not retired.');
+    const data = await this.inspect(record);
+    if (data.incompleteTail || data.common.messages.length !== record.checkpoint.count
+      || data.digest !== record.checkpoint.digest) throw new Error('A retained snapshot was edited; it was not retired.');
   }
 
   async collect() {
@@ -399,8 +467,10 @@ export class DesktopBridge {
         state.records = state.records.filter(value => value.id !== record.id);
         continue;
       }
-      await this.assertUnchanged(record);
-      record.bytes = (await this.inspect(record)).bytes ?? record.bytes;
+      if (!await this.preserveDependentSnapshot(state, record)) {
+        await this.assertUnchanged(record);
+        record.bytes = (await this.inspect(record)).bytes ?? record.bytes;
+      }
     }
     const plan = planRetention(state.records.filter(record => record.managed && record.kind === 'snapshot')
       .map(record => ({ ...record, createdAt: record.retiredAt ?? record.createdAt })), { now: this.now(), policy: this.policy });

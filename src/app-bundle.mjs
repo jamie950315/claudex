@@ -12,7 +12,7 @@ export const ENGINE_SRC = Object.freeze([
   'claude-folder-anchor.mjs', 'claude-folder-cache.mjs', 'claude-folder-install.mjs',
   'claude-folder-map.mjs', 'claude-folder-projection.mjs', 'claude-folder-runtime.mjs',
   'claude-image-assets.mjs', 'claude-owner.mjs', 'claude-parallel-tools.mjs', 'claude.mjs',
-  'codex-app-layout.mjs', 'codex-delegation.mjs', 'codex-original-archive-tree.mjs',
+  'codex-app-layout.mjs', 'codex-delegation.mjs', 'codex-dependencies.mjs', 'codex-original-archive-tree.mjs',
   'codex-projection.mjs', 'codex-versions.mjs', 'codex-websocket.mjs', 'codex.mjs',
   'cold-import.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
   'collaboration-native.mjs', 'collaboration-transport.mjs', 'compaction.mjs',

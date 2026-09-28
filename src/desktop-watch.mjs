@@ -20,6 +20,7 @@ const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verif
   || /^Native Codex history export: no completed persisted history is available; wait for a complete turn\.(?: \[Codex thread [a-f0-9-]+\])?$/.test(reason(error));
 const isUnsupported = error => UNSUPPORTED.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
+  || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
   || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
 function usesActiveHints(state, id) {

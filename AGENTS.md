@@ -118,9 +118,19 @@ execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 
+Dependency-bearing owned Codex snapshots are preserved as managed
+`dependency-anchor` records, not archived/deleted or relabeled unmanaged.
+Require stable metadata-only native dependency inventories, exact authenticated
+canonical history and raw-byte proofs, and rechecked promoted source/replacement
+prefixes. Finalize only the original verified pending transaction; never resend.
+Anchors are immutable guarded history sources, remain in the global backup byte
+quota, and have a hard global count cap of 64. They are separate from disposable
+previous snapshots' count/age limits. Missing or changed anchors block; never
+auto-demote them, remove children, or skip preallocation capacity checks.
+
 `bin/claudex.mjs` provides explicit initialization with all-project or selected-project scope, discovery,
 watching, synchronization, recovery, collection, and optional macOS LaunchAgent
-installation. Defaults retain one current and one previous copy per side,
+installation. Disposable-copy defaults retain one current and one previous copy per side,
 seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
@@ -327,7 +337,7 @@ never authorize archive actions or advance checkpoints; expired commands cannot
 be revived by an anchor. Archived folder anchors use the observed native session
 normalizer and actual git metadata, not invented keys or labels. Keep one fixed
 Local original archive per logical conversation, never a new original per turn.
-Generated predecessors retain the existing one-previous-per-side, seven-day,
+Disposable generated predecessors retain the existing one-previous-per-side, seven-day,
 512 MiB aggregate rollback and 50-audit-entry bounds; originals are not deletable
 quota entries. Native automatic archival UI acceptance is a separate requirement
 from unit tests, manifest publication or service readiness.
