@@ -190,6 +190,28 @@ test('controller resolves exited read-only uncertainty durably without replay or
   assert.equal(calls, 0);
 });
 
+test('writable uncertainty requires reconciliation and preserves its attestation without replay', async t => {
+  let calls = 0;
+  const { root, hub } = await setup(t, async () => { calls++; return { text: 'unexpected' }; }, {
+    allowWrite: true,
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+  });
+  const task = await uncertainFixture(hub, root, { permission: 'workspace-write' });
+  await assert.rejects(hub.dispatch(resolution(hub, task, { workspaceReconciled: true })), /reconciliation notes/);
+  await assert.rejects(hub.dispatch(resolution(hub, task, { workspaceReconciled: 'true', reconciliationNotes: 'Checked' })), /acknowledgement/);
+  const request = resolution(hub, task, { workspaceReconciled: true, reconciliationNotes: 'Validated retained outputs; partial outputs handled by controller.' });
+  await hub.dispatch(request);
+  const done = await status(hub, task.id);
+  assert.equal(done.status, 'failed');
+  assert.equal(done.resolution.workspaceReconciled, true);
+  assert.equal(done.resolution.workspaceReconciliation.cwd, root);
+  assert.match(done.resolution.workspaceReconciliation.notes, /Validated/);
+  assert.equal(done.error, task.error);
+  assert.deepEqual(done.lastExecution, task.lastExecution);
+  assert.equal((await hub.dispatch(request)).replayed, true);
+  assert.equal(calls, 0);
+});
+
 test('uncertain resolution refuses missing identity, live processes, inspection errors and stale revisions', async t => {
   for (const scenario of [
     { name: 'missing pid', extra: { lastExecution: null }, pattern: /identity is missing/ },
@@ -201,6 +223,12 @@ test('uncertain resolution refuses missing identity, live processes, inspection 
     { name: 'stale revision', params: { revision: 2 }, pattern: /revision changed/ },
     { name: 'success claim', params: { outcome: 'completed' }, pattern: /explicit failed outcome/ },
     { name: 'writable uncertainty', extra: { permission: 'workspace-write' }, pattern: /workspace reconciliation/ },
+    { name: 'reconciled writable live group', extra: { permission: 'workspace-write' },
+      params: { workspaceReconciled: true, reconciliationNotes: 'Reviewed output files.' },
+      proof: { groupAbsent: false }, pattern: /both be confirmed absent/ },
+    { name: 'reconciled writable stale revision', extra: { permission: 'workspace-write' },
+      params: { workspaceReconciled: true, reconciliationNotes: 'Reviewed output files.', revision: 2 },
+      pattern: /revision changed/ },
   ]) await t.test(scenario.name, async t => {
     const { root, hub } = await setup(t, async () => ({ text: 'unused' }), {
       inspectProcessGroup: pid => { if (scenario.failure) throw scenario.failure; return { pid, inspectedAt: 123, processAbsent: true, groupAbsent: true, ...scenario.proof }; },

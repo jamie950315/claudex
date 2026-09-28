@@ -258,12 +258,14 @@ failure or explicit cancellation. Bounded wait/socket request timeouts do not ca
 work. Storage, context, concurrency, depth and generation limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
-Controller-only `request resolve` may close an inspected read-only uncertain
+Controller-only `request resolve` may close an inspected uncertain
 invocation as failed, never successful or replayable. Require exact revision and
 current execution generation, absent recorded PID and process group, no in-memory
 worker or unresolved descendants. Preserve original error and execution evidence
-with the resolution receipt. Writable uncertainty still requires separate
-workspace reconciliation. Queued work may dispatch once the final hold is resolved.
+with the resolution receipt. Writable uncertainty requires controller attestation
+`workspaceReconciled: true` plus nonempty `reconciliationNotes`, saved with exact
+directory grants in the receipt. This attests to prior workspace inspection, not
+automatic validation or rollback. Queued work may dispatch once the final hold is resolved.
 Codex collaboration supports explicitly selected non-Git directories using
 `--skip-git-repo-check`; native sandbox and approval restrictions remain unchanged.
 Only an exact no-stdout, no-session pre-execution Git refusal with a closed process

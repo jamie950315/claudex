@@ -361,19 +361,24 @@ process/session and workspace before operator recovery; do not clear the ledger
 to regain availability. Completed work remains readable. Cancellation targets only
 the invocation's owned process group and does not undo file changes.
 
-A controller can explicitly close an inspected **read-only** uncertain task as
+A controller can explicitly close an inspected uncertain task as
 failed through `claudex collaboration request resolve --peer codex`, supplying
 JSON on stdin with `taskId`, the current `revision`, a stable `requestId`,
 `outcome: "failed"` and a nonempty `reason` of at most 2,048 bytes. This operation
 is not an MCP worker tool. The broker checks that the recorded native PID and its
 process group are both absent, refuses permission or inspection errors, active
-in-memory workers, missing process evidence, writable tasks and unfinished
+in-memory workers, missing process evidence and unfinished
 descendants. The original messages, error, native execution evidence and result
 are preserved together with a durable resolution and inspection timestamp.
 It never claims success or reruns that task. Removing the last uncertainty allows
 other queued work and waiting parents to proceed; inspect or cancel unwanted
-queued work before resolving. Writable uncertainty still requires separate
-workspace reconciliation.
+queued work before resolving. For writable work, first inspect and reconcile all
+affected files, then also supply `workspaceReconciled: true` and nonempty
+`reconciliationNotes` (at most 4,096 bytes) describing retained/validated outputs,
+partial changes and their disposition. This is an explicit controller attestation,
+not an automatic filesystem validation. The receipt preserves these notes and the
+task's exact directory grants. It never deletes files, rolls back edits or bypasses
+the process-absence and revision checks.
 
 ## Verification scope
 

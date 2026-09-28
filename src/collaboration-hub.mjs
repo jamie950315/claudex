@@ -347,7 +347,16 @@ export class CollaborationHub extends EventEmitter {
           if (task.status !== 'uncertain' || params.outcome !== 'failed') throw new Error('Resolution requires uncertain work and an explicit failed outcome.');
           if (params.revision !== task.revision) throw new Error('Task revision changed; read status before resolving.');
           const reason = text(params.reason, 'resolution reason', 2048);
-          if (task.permission !== 'read-only') throw new Error('Writable uncertain execution requires separate workspace reconciliation.');
+          let workspaceReconciliation;
+          if (task.permission === 'workspace-write') {
+            if (params.workspaceReconciled !== true)
+              throw new Error('Writable uncertain execution requires explicit workspace reconciliation acknowledgement.');
+            workspaceReconciliation = {
+              notes: text(params.reconciliationNotes, 'workspace reconciliation notes', 4096),
+              cwd: task.cwd, projectRoot: task.projectRoot ?? task.cwd,
+              readOnlyDirs: copy(task.readOnlyDirs ?? []), writableDirs: copy(task.writableDirs ?? []),
+            };
+          }
           const descendants = Object.values(state.tasks).filter(candidate => {
             let cursor = candidate;
             while (cursor) { if (cursor.id === task.id) return true; cursor = state.tasks[cursor.parentId]; }
@@ -368,7 +377,8 @@ export class CollaborationHub extends EventEmitter {
             throw new Error('Recorded native process and process group must both be confirmed absent.');
           task.resolution = { outcome: 'failed', reason, previousStatus: task.status, previousError: task.error,
             previousRevision: task.revision, inspectedAt: proof.inspectedAt, pid,
-            processAbsent: true, groupAbsent: true, resolvedAt: Date.now(), controller: actor.peer };
+            processAbsent: true, groupAbsent: true, resolvedAt: Date.now(), controller: actor.peer,
+            ...(workspaceReconciliation ? { workspaceReconciled: true, workspaceReconciliation } : {}) };
           task.status = 'failed';
         } else if (method === 'send') {
           text(params.message, 'message');
