@@ -978,6 +978,14 @@ Do not use a hook-trust bypass. Existing user hooks and native credentials remai
 unchanged. The installed command is synchronous, bounded and returns no model
 instructions; it only records session identity and the event type.
 
+Authorized live native-model checks verify Codex-origin and Claude Code-origin
+replies are delivered automatically, including a new Claude conversation created
+while the watcher is idle. A Codex continuation recalled the Claude reply from
+the synchronized history without receiving the token again, and its real reply
+was delivered back to the managed Claude session with equal canonical histories.
+These checks used isolated read-only test projects; they do not claim a separate
+Claude Desktop UI reply was generated.
+
 ## Restart verification and unchanged history
 
 An unchanged cold-import pair with two verified unmanaged originals can reuse a

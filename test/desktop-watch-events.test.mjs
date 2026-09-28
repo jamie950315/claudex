@@ -183,3 +183,21 @@ test('new-source completion before the first complete turn is published gets a b
   assert.deepEqual(f.calls.sync, [existing.id, sourceId]);
   assert.equal(f.calls.wait[1].timeoutMs, 250);
 });
+
+test('Claude path-only discovery binds the hook identity before enrollment', async () => {
+  const f = await fixture(), existing = f.add(), nativeId = randomUUID(), unrelated = randomUUID();
+  let received = false;
+  f.bridge.track = async source => {
+    assert.equal(source.nativeId, nativeId);
+    f.calls.track.push(source.nativeId);
+    f.add(source.side, source.nativeId, source.nativeId);
+  };
+  await f.run({ maxPasses: 2,
+    discover: async () => { f.calls.discover++; return received ? [
+      { side: 'claude', path: `/synthetic/projects/${unrelated}.jsonl` },
+      { side: 'claude', path: `/synthetic/projects/${nativeId}.jsonl` },
+    ] : []; },
+    events: f.eventQueue([() => { received = true; return [{ side: 'claude', nativeId, kind: 'completed' }]; }]) });
+  assert.deepEqual(f.calls.track, [nativeId]);
+  assert.deepEqual(f.calls.sync, [existing.id, nativeId]);
+});

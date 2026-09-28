@@ -108,6 +108,9 @@ native Codex trust review; never bypass or forge trust receipts. CLI hooks insta
 and hooks status configure/inspect them; graphical setup installs them too.
 Perform one startup/reconnection reconciliation, then sleep until an event.
 Map exact native IDs, including preserved originals, to affected logical work.
+Discovery may return only side/path. In event-filtered discovery, obtain a Claude
+ID from its validated UUID filename and a Codex ID from its native header, then
+pass that explicit nativeId into track so the adapter verifies the actual identity.
 Recover an existing pending transaction first, preserve all write/history guards,
 and acknowledge only the consumed inbox revision. Newer events survive a sync.
 Completion-before-flush gets at most three event-scoped follow-ups at 250/1000/3000

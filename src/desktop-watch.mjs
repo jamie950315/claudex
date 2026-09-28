@@ -1,4 +1,4 @@
-import { isAbsolute, join, resolve } from 'node:path';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import { lstat, realpath } from 'node:fs/promises';
 import { coldImportHint, coldImportInactive, persistentColdEligible, persistentColdNativeIdentity } from './desktop-watch-hints.mjs';
 import { ColdVerificationCache, captureVerificationFiles } from './cold-verification-cache.mjs';
@@ -389,6 +389,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               try {
                 if (onlyKeys) {
                   if (!nativeId && source.side === 'codex') nativeId = await codexSessionId(source.path);
+                  if (!nativeId && source.side === 'claude') {
+                    const candidate = basename(source.path, '.jsonl');
+                    if (/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(candidate)) nativeId = candidate;
+                  }
                   if (!onlyKeys.has(`${source.side}:${String(nativeId).toLowerCase()}`)) continue;
                 }
                 if (source.side === 'codex') {
@@ -400,7 +404,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   if (!metadata || metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
                   if (isCodexSubagentSource(metadata.source)) continue;
                 }
-                await bridge.track(source);
+                await bridge.track({ ...source, ...(nativeId ? { nativeId } : {}) });
                 const latest = await bridge.status();
                 for (const record of latest.records) known.add(`${record.side}:${record.nativeId}`);
               } catch (error) {
