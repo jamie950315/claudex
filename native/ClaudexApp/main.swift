@@ -266,9 +266,11 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func createStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = " Claudex"
-        statusItem.button?.image = NSImage(systemSymbolName: "arrow.triangle.2.circlepath", accessibilityDescription: "Claudex")
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        statusItem.button?.title = ""
+        statusItem.button?.imagePosition = .imageOnly
+        statusItem.button?.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "Claudex")
+        statusItem.button?.image?.size = NSSize(width: 18, height: 18)
         statusItem.button?.image?.isTemplate = true
         let menu = NSMenu()
         menu.delegate = self

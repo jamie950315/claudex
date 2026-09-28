@@ -50,11 +50,11 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
 
     func refresh() {
         report = loadHealth(root)
-        let labels = ["ready": "Ready", "waiting": "Waiting", "recovering": "Recovering", "paused": "Paused",
-                      "offline": "Offline", "unknown": "Check", "stopping": "Stopping", "stopped": "Stopped"]
         if let button = item?.button {
-            button.title = " Claudex · " + L(labels[report.state] ?? "Check")
-            button.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: L(report.title))
+            button.title = ""
+            button.imagePosition = .imageOnly
+            button.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "Claudex")
+            button.image?.size = NSSize(width: 18, height: 18)
             button.image?.isTemplate = true
             button.toolTip = L(report.title) + "\n" + LD(report.detail)
             button.setAccessibilityLabel("Claudex: " + L(report.title))

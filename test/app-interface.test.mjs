@@ -80,6 +80,11 @@ test('graphical app owns one status item and integrates the bounded health contr
   const controller = await readFile(new URL('../native/ClaudexApp/StatusController.swift', import.meta.url), 'utf8');
   const builder = await readFile(new URL('../src/app-bundle.mjs', import.meta.url), 'utf8');
   assert.equal((source.match(/NSStatusBar\.system\.statusItem\(/g) || []).length, 1);
+  assert.match(source, /statusItem\(withLength: NSStatusItem.squareLength\)/);
+  assert.match(source, /statusItem.button\?\.title = ""/);
+  assert.match(controller, /button.title = ""/);
+  assert.match(controller, /button.imagePosition = .imageOnly/);
+  assert.match(controller, /systemSymbolName: "arrow.left.arrow.right"/);
   assert.doesNotMatch(controller, /NSStatusBar\.system\.statusItem|NSApplication\.shared|app\.run\(/);
   assert.match(source, /health\.start\(item: statusItem\)/);
   assert.match(source, /runningApplications\(withBundleIdentifier:/);

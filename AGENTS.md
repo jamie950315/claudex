@@ -66,7 +66,10 @@ unknown native diagnostics remain verbatim with a translated diagnostic label.
 Read-only/synthetic modes must not persist language or onboarding preferences.
 
 The graphical app owns the sole menu bar item, a combined setup/health window, and
-notifications. It reuses the bounded native status model. Its owned login item
+notifications. It reuses the bounded native status model and an icon-only,
+square-width menu bar button with the bidirectional-arrow
+template symbol; never restore a visible app name or status suffix. Keep health
+details in the tooltip, accessibility label, menu and window. Its owned login item
 launches the same bundle in background inspection mode, not setup. Migrate only
 the verified legacy status-display login item and native display process; preserve
 its recoverable artifacts and never restart service or native conversation owners.
