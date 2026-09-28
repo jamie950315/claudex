@@ -171,6 +171,13 @@ marker counts as receipt, never as proof of task shutdown or new authorization.
 Do not wake idle chats, resolve fuzzy titles, create/archive replacement chats,
 edit transcripts/registries/SQLite, or use classifierContext as message delivery.
 Messages remain quoted peer text. No new native hook trust bypass is permitted.
+chat_list supports native-title query/provider/match filters for already hook-
+registered sessions. Enrich from bounded stable Codex session_index metadata and
+exact Claude Desktop CLI-ID mappings, never transcript guesses or title-based ID
+substitution. Preserve duplicate candidates and metadata errors; partial/duplicate
+matches require user disambiguation. chat_send expectedTitle rechecks the chosen
+native title before enqueueing, without changing exact-session addressing. This
+does not introduce managed-task-to-origin-chat mapping or unregistered chat discovery.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker

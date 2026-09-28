@@ -326,6 +326,33 @@ test('managed worker capabilities cannot send messages to unrelated native chats
   await until(async () => (await status(hub, parent.taskId)).status === 'completed');
 });
 
+test('native title search preserves ambiguous candidates and rechecks the chosen title before send', async t => {
+  const titles = new Map(); let archived = false;
+  const { hub } = await setup(t, async () => ({ text: 'unused' }), {
+    chatTitleResolver: async chats => chats.map(chat => ({ ...chat, title: titles.get(chat.sessionId) ?? null,
+      titleSource: 'synthetic-native-metadata', archived })),
+  });
+  const first = randomUUID(), second = randomUUID(), codex = randomUUID();
+  for (const [side, id] of [['claude', first], ['claude', second], ['codex', codex]]) {
+    await hub.chatMailbox.register({ provider: side, sessionId: id, cwd: hub.root, event: 'SessionStart' });
+    titles.set(id, 'Project review');
+  }
+  const found = await hub.dispatch(controller(hub, 'codex', 'chat_list', { provider: 'claude', query: 'project REVIEW', match: 'exact' }));
+  assert.equal(found.totalCount, 2);
+  assert.equal(found.exactMatchCount, 2);
+  assert.deepEqual(found.chats.map(chat => chat.sessionId), [first, second]);
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { query: 'review' }))).totalCount, 3);
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { query: 'review', match: 'exact' }))).totalCount, 0);
+  titles.set(first, 'Renamed review');
+  const params = { provider: 'claude', sessionId: first, expectedTitle: 'Project review', message: 'Please report status.', requestId: 'named-chat' };
+  await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', params)), /title changed/);
+  const queued = await hub.dispatch(controller(hub, 'codex', 'chat_send', { ...params, expectedTitle: 'Renamed review' }));
+  assert.equal(queued.targetSessionId, first);
+  archived = true;
+  await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', { ...params, expectedTitle: 'Renamed review', requestId: 'archived-chat' })), /could not be verified/);
+  assert.equal(Object.keys(hub.state.tasks).length, 0, 'search and send never create managed work');
+});
+
 test('handoff preserves identity in both directions and waits for old turn to finish', async t => {
   const calls = [];
   const tokens = new Map();

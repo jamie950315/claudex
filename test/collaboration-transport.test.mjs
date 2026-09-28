@@ -149,12 +149,14 @@ test('MCP native chat tools forward exact session targets without a resume or ar
   const { root } = await fixture(t, async request => { seen.push(request); return { state: 'queued' }; });
   const input = new PassThrough(), output = new PassThrough(); output.resume();
   const running = runCollaborationMcp({ root, peer: 'codex', token: 'controller', input, output });
-  const calls = [ ['claudex_chat_list', {}], ['claudex_chat_send', { provider: 'claude', sessionId: 'exact-session', message: 'Pause new work.', requestId: 'note-1' }],
+  const calls = [ ['claudex_chat_list', { query: 'Project review', provider: 'claude', match: 'exact' }], ['claudex_chat_send', { provider: 'claude', sessionId: 'exact-session', expectedTitle: 'Project review', message: 'Pause new work.', requestId: 'note-1' }],
     ['claudex_chat_status', { messageId: 'message-1' }] ];
   calls.forEach(([name, args], id) => input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n'));
   input.end(); await running;
   assert.deepEqual(seen.map(request => request.method).sort(), ['chat_list', 'chat_send', 'chat_status']);
   assert.equal(seen.find(request => request.method === 'chat_send').params.sessionId, 'exact-session');
+  assert.equal(seen.find(request => request.method === 'chat_send').params.expectedTitle, 'Project review');
+  assert.equal(seen.find(request => request.method === 'chat_list').params.query, 'Project review');
 });
 
 test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC lines', async t => {

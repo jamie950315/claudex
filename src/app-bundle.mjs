@@ -11,7 +11,7 @@ export const ENGINE_BIN = Object.freeze([
 ]);
 export const ENGINE_SRC = Object.freeze([
   'app-setup.mjs', 'app-providers.mjs', 'app-login.mjs',
-  'base64.mjs', 'bridge.mjs', 'chat-mailbox.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
+  'base64.mjs', 'bridge.mjs', 'chat-mailbox.mjs', 'chat-titles.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
   'claude-folder-anchor.mjs', 'claude-folder-cache.mjs', 'claude-folder-install.mjs',
   'claude-folder-map.mjs', 'claude-folder-projection.mjs', 'claude-folder-runtime.mjs',
   'claude-image-assets.mjs', 'claude-owner.mjs', 'claude-parallel-tools.mjs', 'claude-relocation.mjs', 'claude.mjs',

@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
+import { enrichChatTitles } from './chat-titles.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -79,7 +80,7 @@ function inspectExitedProcessGroup(pid) {
 export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
-    timeoutMs = 15 * 60 * 1000, inspectProcessGroup = inspectExitedProcessGroup } = {}) {
+    timeoutMs = 15 * 60 * 1000, inspectProcessGroup = inspectExitedProcessGroup, chatTitleResolver = enrichChatTitles } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -95,6 +96,7 @@ export class CollaborationHub extends EventEmitter {
     Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs, inspectProcessGroup });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
     this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
+    this.chatTitleResolver = chatTitleResolver;
   }
 
   async initialize() {
@@ -207,7 +209,16 @@ export class CollaborationHub extends EventEmitter {
         if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
           || params.cursor !== undefined && (typeof params.cursor !== 'string' || !/^\d{1,4}$/.test(params.cursor)))
           throw new Error('Invalid native chat page bounds.');
-        const all = await this.chatMailbox.list(), start = Number(params.cursor ?? 0);
+        if (params.provider !== undefined) provider(params.provider);
+        if (params.match !== undefined && !['exact', 'contains'].includes(params.match)) throw new Error('Invalid title match mode.');
+        const normalize = value => value.normalize('NFC').trim().toLowerCase();
+        const query = params.query === undefined ? null : normalize(text(params.query, 'title query', 4096));
+        const registered = (await this.chatMailbox.list()).filter(chat => params.provider === undefined || chat.provider === params.provider);
+        const titled = await this.chatTitleResolver(registered);
+        const all = titled.map(chat => ({ ...chat, titleMatch: query && typeof chat.title === 'string'
+          ? normalize(chat.title) === query ? 'exact' : normalize(chat.title).includes(query) ? 'contains' : null : null }))
+          .filter(chat => query === null || chat.titleMatch === 'exact' || params.match !== 'exact' && chat.titleMatch === 'contains');
+        const start = Number(params.cursor ?? 0);
         const chats = []; let next = start, size = 0;
         while (next < all.length && chats.length < limit) {
           const item = all[next], length = bytes(item);
@@ -215,11 +226,21 @@ export class CollaborationHub extends EventEmitter {
           chats.push(item); size += length; next++;
         }
         return { chats, nextCursor: next < all.length ? String(next) : null, totalCount: all.length,
-          deliveryMode: 'next-native-hook', idleWakeSupported: false };
+          unavailableTitleCount: titled.filter(chat => !chat.title || chat.titleError).length,
+          exactMatchCount: query === null ? null : all.filter(chat => chat.titleMatch === 'exact').length,
+          deliveryMode: 'next-native-hook', idleWakeSupported: false,
+          scope: 'hook-registered-native-chats', note: 'Titles are metadata, not unique IDs. Confirm the exact candidate when duplicate or partial titles match; send by sessionId with expectedTitle.' };
       }
       if (method === 'chat_status') return this.chatMailbox.status(params.messageId);
       if (this.closed) throw new Error('Broker is stopping; new messages are refused.');
       requestId(params.requestId);
+      if (params.expectedTitle !== undefined) {
+        text(params.expectedTitle, 'expected title', 4096);
+        const exact = (await this.chatMailbox.list()).filter(chat => chat.provider === params.provider && chat.sessionId === params.sessionId);
+        const [current] = await this.chatTitleResolver(exact);
+        if (!current || current.titleError || current.archived || current.title !== params.expectedTitle)
+          throw new Error('Native chat title changed or could not be verified. Search again; no message was queued.');
+      }
       return { ...await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider: params.provider,
         targetSessionId: params.sessionId, message: params.message, requestId: params.requestId,
         ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) }),

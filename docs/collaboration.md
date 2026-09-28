@@ -113,17 +113,29 @@ review mode. Parent edges and generation-scoped request IDs are unchanged.
 ## Messages to existing native chats
 
 Native-chat coordination is separate from managed work and history synchronization.
-An external Codex/Claude caller can use `claudex_chat_list`, select an exact
-`provider` plus `sessionId`, then call `claudex_chat_send` with `message` and a
+An external Codex/Claude caller can use `claudex_chat_list` with `query` (a full
+title or substring), optional `provider`, and `match: "exact"` or `"contains"`
+(default). Select an exact `provider` plus `sessionId`, then call
+`claudex_chat_send` with `message` and a
 stable `requestId`. Do this only for user-authorized coordination, such as asking
 another chat to stop creating work and report whether maintenance is safe.
 Managed worker capabilities cannot send to unrelated native chats.
 
 The recipient must have been observed by the installed native hooks. Follow
 `nextCursor` for additional bounded `chat_list` pages (default 50, maximum 100). The list
-contains IDs, cwd, last observed phase/event and time, not a full transcript or
-an inferred title. These are activity hints, not proof that a process is alive.
-Never guess between similarly named chats or substitute a synchronized copy.
+contains IDs, cwd, last observed phase/event and time, plus native title metadata
+when available. Codex titles come from the newest matching native session-index
+record; Claude titles use the exact Desktop registry CLI-ID mapping. No title is
+inferred from message content, folder names or synchronized copies. Lookups are
+read-only and bounded; missing, conflicting or unsafe metadata produces a title
+error rather than a guessed name. Activity is a hint, not proof a process is alive.
+Search is limited to hook-registered chats, not every conversation in either app.
+Never guess between duplicate or partial matches. Ask the user to disambiguate
+using provider and project/cwd. `exactMatchCount`, `titleMatch`, `titleSource` and
+`unavailableTitleCount` make the search coverage explicit. Pass the selected
+verbatim title as `expectedTitle` when sending: it is rechecked before enqueueing,
+and a rename, unavailable mapping or archived Claude entry fails without sending.
+The session ID remains the only address; a title is not a routing identity.
 The target stays the exact native session: no new chat, resume process, external
 writer, archival, registry/SQLite mutation, or transcript append is performed.
 
