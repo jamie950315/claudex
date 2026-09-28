@@ -57,6 +57,14 @@ failure or an uncertain outcome. Idempotency keys reject changed request payload
 and prevent duplicate dispatch; transport errors never cause automatic replay.
 Follow-ups reconstruct the bounded work record in a fresh native invocation.
 
+Deferred-child and handoff receipts include `nextAction: "end-turn"` and a short
+`finalResponse` token (`CLAUDEX_YIELD` or `CLAUDEX_HANDOFF`). At that boundary the
+worker emits only the token, with no further tools or duplicate progress report.
+The normal changed-files/checks report belongs to actual task completion, not to
+the outgoing boundary. These tokens are instructions, not completion receipts:
+the broker still waits for successful native completion and process-group exit.
+Model response and shutdown latency is not an instantaneous-transfer guarantee.
+
 ## Model selection
 
 Claudex stores separate Codex and Claude default model IDs in the private broker

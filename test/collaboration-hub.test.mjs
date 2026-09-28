@@ -276,6 +276,9 @@ test('start reaches a durable result without model inference', async t => {
   const { hub } = await setup(t, async ({ provider, prompt }) => {
     assert.equal(provider, 'codex');
     assert.match(prompt, /claudex-work-v1/);
+    assert.match(prompt, /nextAction=end-turn/);
+    assert.match(prompt, /override the normal final-report format/);
+    assert.match(prompt, /Only when finishing actual user work/);
     return { text: 'synthetic result' };
   });
   const started = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: '/tmp', prompt: 'Inspect', requestId: 'start-1' }));
@@ -299,6 +302,8 @@ test('handoff preserves identity in both directions and waits for old turn to fi
   const first = await until(async () => { const value = await status(hub, started.taskId); return value.status === 'running' && value; });
   const toClaude = await hub.dispatch(request('codex', 'handoff', { taskId: started.taskId, provider: 'claude', message: 'Continue', requestId: 'h1', revision: first.revision }, tokens.get('codex')));
   assert.equal(toClaude.handoffPending, true);
+  assert.equal(toClaude.nextAction, 'end-turn');
+  assert.equal(toClaude.finalResponse, 'CLAUDEX_HANDOFF');
   await assert.rejects(hub.dispatch(request('codex', 'cancel', { taskId: started.taskId, requestId: 'after-handoff' }, tokens.get('codex'))), /relinquished ownership/);
   assert.deepEqual(calls, ['codex']);
   gates[0].resolve({ text: 'Codex turn complete' });
@@ -389,6 +394,8 @@ test('writable child yields the workspace and resumes its parent with a durable 
       }, tokens.get('codex')));
       childId = started.taskId;
       assert.equal(started.deferredUntilParentExit, true);
+      assert.equal(started.nextAction, 'end-turn');
+      assert.equal(started.finalResponse, 'CLAUDEX_YIELD');
       await assert.rejects(hub.dispatch(request('codex', 'wait', { taskId: childId, timeoutMs: 0 }, tokens.get('codex'))), /deferred|yield/i);
       await delay(15);
       assert.deepEqual(order, ['codex'], 'child must not run before parent releases workspace');

@@ -170,6 +170,11 @@ within one canonical cwd are blocked, including writable parent/child overlap.
 Writable delegation defers child dispatch until the parent returns and releases
 its workspace. A waiting parent resumes with durable child results once all its
 children finish; this is explicit new work, not replay of an uncertain invocation.
+Deferred-child and handoff receipts use nextAction=end-turn with CLAUDEX_YIELD or
+CLAUDEX_HANDOFF. Worker instructions prioritize that single-token response over
+normal final-report formatting; put handoff context in the request before it.
+Do not treat these text tokens as proof of native completion or release a writer
+before successful native completion and process-group exit.
 
 All automated collaboration tests inject synthetic runners or inspect protocol
 startup without inference. Do not describe these as live cross-model acceptance.
