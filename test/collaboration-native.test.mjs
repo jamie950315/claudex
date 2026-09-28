@@ -37,6 +37,37 @@ function runner(fake) {
     signalGroupImpl: () => {} });
 }
 
+test('native work has no execution deadline and remains explicitly cancellable', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const provider of ['codex', 'claude']) {
+    let child;
+    let spawned;
+    const ready = new Promise(resolve => { spawned = resolve; });
+    const run = createNativeCollaborationRunner({
+      groupAliveImpl: () => false, signalGroupImpl: (_pid, signal) => child.emit('close', null, signal),
+      spawnImpl: () => {
+        child = new EventEmitter();
+        child.pid = 42;
+        child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+        child.kill = signal => { child.emit('close', null, signal); return true; };
+        child.stdin.on('finish', spawned);
+        return child;
+      },
+    });
+    const controller = new AbortController();
+    let settled = false;
+    const work = run({ provider, cwd: process.cwd(), prompt: 'Long work', signal: controller.signal });
+    work.then(() => { settled = true; }, () => { settled = true; });
+    await ready;
+    t.mock.timers.tick(48 * 60 * 60 * 1000);
+    await Promise.resolve();
+    assert.equal(settled, false, `${provider} must remain running after 48 hours`);
+    const cancelled = assert.rejects(work, /cancelled/);
+    controller.abort();
+    await cancelled;
+  }
+});
+
 test('native directory arguments preserve reference-only and explicit writable grants', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-native-scope-')));
   t.after(() => rm(root, { recursive: true, force: true }));

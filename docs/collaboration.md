@@ -60,8 +60,8 @@ failure or an uncertain outcome. Idempotency keys reject changed request payload
 and prevent duplicate dispatch; transport errors never cause automatic replay.
 Follow-ups reconstruct the bounded work record in a fresh native invocation.
 
-Deferred-child and handoff receipts include `nextAction: "end-turn"` and a short
-`finalResponse` token (`CLAUDEX_YIELD` or `CLAUDEX_HANDOFF`). At that boundary the
+Handoff receipts include `nextAction: "end-turn"` and the short
+`finalResponse` token `CLAUDEX_HANDOFF`. At that boundary the
 worker emits only the token, with no further tools or duplicate progress report.
 The normal changed-files/checks report belongs to actual task completion, not to
 the outgoing boundary. These tokens are instructions, not completion receipts:
@@ -273,14 +273,13 @@ requires a broker installed or started with
 `--allow-write` **and** task `permission: "workspace-write"`. A child cannot elevate
 its parent's permission or expand its directory grants. Use a dedicated checkout for
 writable work: the protocol does not create worktrees, merge edits, or prevent an
-unrelated editor from modifying the same files. Within a broker, overlapping
-writable tasks with overlapping canonical access roots are serialized, including
-ancestor/descendant directories and a writer overlapping another task's reference
-directory. Disjoint projects can run concurrently. Conflicting writable delegation
-returns `deferredUntilParentExit`: the parent ends its native turn to release the
-workspace, the child runs, then the parent resumes with the child's result. This
-also covers a read-only child of a writable parent. Read-only workers may run
-concurrently. Waiting on a deferred child before releasing its workspace is refused.
+unrelated editor from modifying the same files. Tasks may run concurrently in the
+same or overlapping directories, including writable parent/child tasks and a
+writer overlapping another task's reference directory. The broker does not lock
+workspaces or merge conflicting edits. Assign disjoint file responsibilities and
+coordinate shared-file changes explicitly. Children may start while their parent
+is running; use status/wait to collect their results. A parent that ends its turn
+with outstanding children resumes with their durable results after they finish.
 
 ### Project and additional directory access
 
@@ -351,8 +350,10 @@ is implied by the work protocol.
 Defaults allow up to 64 concurrent workers, delegation depth three, twelve native executions per
 task, 1,000 tasks, 10,000 idempotency receipts and a 32 MiB ledger. Context and native
 output are separately bounded. Capacity errors are explicit; no history or receipt
-is silently pruned. Tasks time out after 15 minutes. These are execution limits,
-not a monetary spending guarantee; native account quotas still apply.
+is silently pruned. Work has no elapsed-time execution timeout; long-running
+native invocations continue until completion, failure or explicit cancellation.
+The bounded wait/socket request timeouts only end the caller's wait, not the work.
+These limits are not a monetary spending guarantee; native account quotas still apply.
 
 After a broker crash, in-flight work becomes `uncertain` and blocks new dispatch.
 No native input or pending handoff is replayed. Inspect the last recorded native

@@ -222,14 +222,15 @@ requests and parent restrictions must never elevate. Writes require broker opt-i
 children cannot escalate permissions or expand directory grants. Claude permits bounded file
 tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
 with bypass-permission flags. Writable work needs a caller-selected dedicated
-checkout; this protocol does not create or merge worktrees. Concurrent writes
-with overlapping canonical access roots are blocked, including ancestor/descendant
-paths, reference readers and writable parent/child overlap.
-Writable delegation defers child dispatch until the parent returns and releases
-its workspace. A waiting parent resumes with durable child results once all its
+checkout; this protocol does not create or merge worktrees. Concurrent work in
+the same or overlapping canonical access roots is allowed, including ancestor/
+descendant paths, reference readers and writable parent/child tasks. Callers must
+assign disjoint file responsibilities and coordinate shared-file edits; there is
+no workspace lock or automatic conflict merge. Delegated children may start while
+their parent runs. A waiting parent resumes with durable child results once all its
 children finish; this is explicit new work, not replay of an uncertain invocation.
-Deferred-child and handoff receipts use nextAction=end-turn with CLAUDEX_YIELD or
-CLAUDEX_HANDOFF. Worker instructions prioritize that single-token response over
+Handoff receipts use nextAction=end-turn with CLAUDEX_HANDOFF.
+Worker instructions prioritize that single-token response over
 normal final-report formatting; put handoff context in the request before it.
 Do not treat these text tokens as proof of native completion or release a writer
 before successful native completion and process-group exit.
@@ -252,7 +253,9 @@ startup without inference. Do not describe these as live cross-model acceptance.
 The native work record is text-only, not a native chat/permission/context clone.
 Whole-work handoff retains logical task identity; an external caller ends its
 own turn rather than forcibly transferring an unrelated native UI conversation.
-Storage, context, concurrency, depth and execution limits fail explicitly without
+Work has no elapsed-time execution timeout; native invocations run until completion,
+failure or explicit cancellation. Bounded wait/socket request timeouts do not cancel
+work. Storage, context, concurrency, depth and generation limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
 Controller-only `request resolve` may close an inspected read-only uncertain

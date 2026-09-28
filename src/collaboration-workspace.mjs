@@ -108,7 +108,7 @@ export async function resolveCollaborationWorkspace({ cwd, projectRoot, readOnly
     writableDirs: writes.filter(root => !containsWorkspacePath(primary, root)) };
 }
 
-/** Any overlapping reader/writer pair must be serialized, including ancestors. */
+/** Detect shared reader/writer roots for callers; this does not impose a scheduler lock. */
 export function workspacesConflict(left, right) {
   const a = workspaceAccess(left), b = workspaceAccess(right);
   return a.writeRoots.some(root => b.readRoots.some(other => overlaps(root, other)))

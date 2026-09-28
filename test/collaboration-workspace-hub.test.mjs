@@ -94,34 +94,38 @@ test('children cannot widen grants or promote references and can downgrade to re
   assert.equal(state.permission, 'read-only');
   assert.deepEqual(state.writableDirs, []);
   assert.deepEqual(state.readOnlyDirs, [f.paths.extra, f.paths.reference].sort());
-  assert.equal(f.calls.length, 1, 'read-only child cannot race its writing parent');
+  await until(() => f.calls.length === 2);
+  assert.equal((await f.status(child.taskId)).status, 'running');
 });
 
-test('ancestor writes serialize descendant reads even with distinct explicit project roots', async t => {
+test('ancestor writes and descendant reads run concurrently with distinct explicit project roots', async t => {
   const f = await fixture(t);
   const writer = await f.start();
   await until(() => f.calls.length === 1);
   const reader = await f.start({ cwd: f.paths.sub, projectRoot: f.paths.sub, permission: 'read-only' });
-  await f.hub.pump();
-  assert.equal((await f.status(reader.taskId)).status, 'ready');
-  assert.equal(f.calls.length, 1);
-  f.releases[0]();
   await until(() => f.calls.length === 2);
-  assert.equal((await f.status(writer.taskId)).status, 'completed');
+  assert.equal((await f.status(reader.taskId)).status, 'running');
+  assert.equal((await f.status(writer.taskId)).status, 'running');
 });
 
-test('extra-root readers and writers serialize across cwd while disjoint work runs in parallel', async t => {
+test('extra-root readers and writers run concurrently alongside disjoint work', async t => {
   const f = await fixture(t);
   await f.start({ writableDirs: [f.paths.extra] });
   await until(() => f.calls.length === 1);
   const reader = await f.start({ cwd: f.paths.other, permission: 'read-only', readOnlyDirs: [f.paths.extra] });
   const disjoint = await f.start({ cwd: f.paths.reference });
-  await until(() => f.calls.length === 2);
-  assert.equal((await f.status(reader.taskId)).status, 'ready');
-  assert.equal((await f.status(disjoint.taskId)).status, 'running');
-  f.releases[0]();
   await until(() => f.calls.length === 3);
-  assert.equal(f.calls[2].cwd, f.paths.other);
+  assert.equal((await f.status(reader.taskId)).status, 'running');
+  assert.equal((await f.status(disjoint.taskId)).status, 'running');
+});
+
+test('eight writable tasks in one canonical workspace all start without a directory lock', async t => {
+  const f = await fixture(t);
+  const tasks = [];
+  for (let i = 0; i < 8; i++) tasks.push(await f.start());
+  await until(() => f.calls.length === 8);
+  for (const task of tasks) assert.equal((await f.status(task.taskId)).status, 'running');
+  assert.ok(f.calls.every(call => call.cwd === f.paths.repo));
 });
 
 test('read-only root requests reject write grants and overlapping read/write grants', async t => {

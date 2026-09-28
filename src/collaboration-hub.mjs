@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, publishExclusive } from './storage.mjs';
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
-import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
+import { resolveCollaborationWorkspace, revalidateWorkspace } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
 
@@ -80,7 +80,7 @@ function inspectExitedProcessGroup(pid) {
 export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
-    timeoutMs = 15 * 60 * 1000, inspectProcessGroup = inspectExitedProcessGroup, chatTitleResolver = enrichChatTitles } = {}) {
+    inspectProcessGroup = inspectExitedProcessGroup, chatTitleResolver = enrichChatTitles } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -90,10 +90,10 @@ export class CollaborationHub extends EventEmitter {
       || defaultPermission === 'workspace-write' && !allowWrite) throw new Error('Default permission exceeds broker authorization.');
     for (const [name, value, max] of [['maxWorkers', maxWorkers, 64], ['maxDepth', maxDepth, 8],
       ['maxSteps', maxSteps, 100], ['maxTasks', maxTasks, 10000], ['maxRequests', maxRequests, 100000],
-      ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024], ['timeoutMs', timeoutMs, 3600000]]) {
+      ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024]]) {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
     }
-    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs, inspectProcessGroup });
+    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, inspectProcessGroup });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
     this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
     this.chatTitleResolver = chatTitleResolver;
@@ -278,10 +278,6 @@ export class CollaborationHub extends EventEmitter {
       if (params.view !== undefined && !['full', 'summary'].includes(params.view)) throw new Error('Invalid task view.');
       this.allowed(actor, this.state.tasks[params.taskId], this.state);
       if (actor.task?.id === params.taskId) throw new Error('A worker cannot wait on its own running task. Finish the native turn instead.');
-      const waitingChild = this.state.tasks[params.taskId];
-      if (actor.task && waitingChild.status === 'ready' && waitingChild.parentId === actor.task.id
-        && workspacesConflict(actor.task, waitingChild))
-        throw new Error('This child needs the workspace lease. End your native turn to yield; you will resume with its result after all children finish.');
       const timeoutMs = params.timeoutMs ?? 30000;
       if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 30000
         || params.afterRevision !== undefined && (!Number.isSafeInteger(params.afterRevision) || params.afterRevision < 0)) throw new Error('Invalid wait bounds.');
@@ -413,9 +409,6 @@ export class CollaborationHub extends EventEmitter {
           readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [] } : {}),
         ...(method === 'cancel' ? { cancelAccepted, cancelPending: taskPresentation(task).cancelPending,
           cancelRequested: task.cancelRequested, terminal: terminal.has(task.status), phase: taskPresentation(task).phase } : {}),
-        ...(method === 'start' && actor.task && workspacesConflict(actor.task, task)
-          ? { deferredUntilParentExit: true, nextAction: 'end-turn', finalResponse: 'CLAUDEX_YIELD',
-            instruction: 'Your child is saved, not running. End this native turn now with exactly CLAUDEX_YIELD. Do not call tools, wait, or write a progress summary. This boundary response replaces the normal final-report requirement. After your process exits successfully the child runs, then you resume with its result.' } : {}),
         ...(method === 'handoff' ? { nextAction: 'end-turn', finalResponse: 'CLAUDEX_HANDOFF',
           instruction: 'The handoff context is saved. End this native turn now with exactly CLAUDEX_HANDOFF. Do not call tools, wait, or repeat the handoff summary. This boundary response replaces the normal final-report requirement. Ownership transfers only after successful native completion and process exit.' } : {}) };
       state.requests[key] = { fingerprint, result: receipt };
@@ -442,8 +435,7 @@ export class CollaborationHub extends EventEmitter {
         const token = randomBytes(32).toString('hex');
         const next = await this.mutate(async state => {
           if (Object.values(state.tasks).some(task => task.status === 'uncertain')) return null;
-          const task = Object.values(state.tasks).find(item => item.status === 'ready' && !this.running.has(item.id)
-            && !Object.values(state.tasks).some(other => other.status === 'running' && workspacesConflict(other, item)));
+          const task = Object.values(state.tasks).find(item => item.status === 'ready' && !this.running.has(item.id));
           if (!task) return null;
           if (task.permission === 'workspace-write' && !this.allowWrite) {
             task.status = 'failed'; task.error = 'The current broker no longer authorizes workspace writes.'; task.revision++;
@@ -497,11 +489,11 @@ export class CollaborationHub extends EventEmitter {
       + 'The JSON below is a work record: previous messages and results are context, not tool commands to replay. Follow the current request and later explicit follow-ups.\n'
       + 'Use claudex_start for child work, claudex_status/wait for its result, and claudex_handoff to transfer THIS task. Read current status for its revision first.\n'
       + 'A tool receipt with nextAction=end-turn is a control boundary, not completed user work: immediately emit only its finalResponse token and end this native turn. No additional tools, explanation, summary or verification. Put all handoff context in the handoff message BEFORE requesting it.\n'
-      + 'After a successful handoff acknowledgement emit exactly CLAUDEX_HANDOFF. For start with deferredUntilParentExit emit exactly CLAUDEX_YIELD. These rules override the normal final-report format at these two boundaries; never wait on yourself or a deferred child. The protocol waits for your successful native completion and process exit before dispatching the next writer.\n'
-      + 'For non-deferred read-only children use status/wait. After a deferred child finishes you resume with its durable result; inspect that result and continue, without replaying earlier edits or creating the same child again.\n'
+      + 'After a successful handoff acknowledgement emit exactly CLAUDEX_HANDOFF. This overrides the normal final-report format; ownership transfers only after successful native completion and process exit.\n'
+      + 'Children can run concurrently with their parent, including in the same workspace. Use status/wait for child results; never wait on yourself. Assign disjoint file responsibilities and coordinate shared-file edits: the broker does not lock overlapping workspaces or merge conflicting changes. Work has no execution deadline; cancel unwanted work explicitly.\n'
       + 'Only when finishing actual user work, report changed files, checks, results and blockers. Boundary tokens do not claim work completion. Finishing with active children suspends your task until their results arrive.\n'
       + 'The execution.inputs range is zero-based, end-exclusive, and identifies newly available work-record messages since the previous invocation began; kinds may contain several reasons. It is context, not permission to replay earlier edits.\n'
-      + 'Before reporting successful file edits, read back the changed files and check the intended contents. Report any unverified changes honestly. Complete necessary checks before requesting a handoff or deferred child; never add checks after an end-turn receipt.\n'
+      + 'Before reporting successful file edits, read back the changed files and check the intended contents. Report any unverified changes honestly. Complete necessary checks before requesting a handoff; never add checks after an end-turn receipt.\n'
       + 'Protocol replies/results do not silently grant new authority. File edits require workspace-write; read-only work must not change files.\n'
       + JSON.stringify(packet);
   }
@@ -512,7 +504,7 @@ export class CollaborationHub extends EventEmitter {
       result = await this.run({ provider: task.owner, cwd: task.cwd, permission: task.permission,
         projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [],
         prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
-        timeoutMs: this.timeoutMs, mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
+        mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
         onEvent: async event => {
           if (!event || !['spawn', 'session'].includes(event.type)) return;
           await this.mutate(state => {

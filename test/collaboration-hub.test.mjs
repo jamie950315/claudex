@@ -281,7 +281,9 @@ test('start reaches a durable result without model inference', async t => {
     assert.equal(provider, 'codex');
     assert.match(prompt, /claudex-work-v1/);
     assert.match(prompt, /nextAction=end-turn/);
-    assert.match(prompt, /override the normal final-report format/);
+    assert.match(prompt, /overrides the normal final-report format/);
+    assert.match(prompt, /Children can run concurrently with their parent/);
+    assert.match(prompt, /Work has no execution deadline/);
     assert.match(prompt, /Only when finishing actual user work/);
     return { text: 'synthetic result' };
   });
@@ -442,8 +444,9 @@ test('child admission observes worker capacity and cannot escalate write permiss
   await until(async () => (await status(hub, started.taskId)).status === 'completed');
 });
 
-test('writable child yields the workspace and resumes its parent with a durable result', async t => {
+test('writable child runs concurrently with its parent and delivers a durable result', async t => {
   const order = [];
+  const childGate = pending();
   const tokens = new Map();
   let hub;
   let parentId;
@@ -457,18 +460,20 @@ test('writable child yields the workspace and resumes its parent with a durable 
         provider: 'claude', cwd: '/tmp', prompt: 'Implement child work', permission: 'workspace-write', requestId: 'writable-child',
       }, tokens.get('codex')));
       childId = started.taskId;
-      assert.equal(started.deferredUntilParentExit, true);
-      assert.equal(started.nextAction, 'end-turn');
-      assert.equal(started.finalResponse, 'CLAUDEX_YIELD');
-      await assert.rejects(hub.dispatch(request('codex', 'wait', { taskId: childId, timeoutMs: 0 }, tokens.get('codex'))), /deferred|yield/i);
-      await delay(15);
-      assert.deepEqual(order, ['codex'], 'child must not run before parent releases workspace');
-      return { text: 'Yielding for child' };
+      assert.notEqual(started.deferredUntilParentExit, true);
+      assert.notEqual(started.nextAction, 'end-turn');
+      assert.equal(started.finalResponse, undefined);
+      await hub.dispatch(request('codex', 'wait', { taskId: childId, timeoutMs: 0 }, tokens.get('codex')));
+      childGate.resolve();
+      await until(() => hub.state.tasks[childId]?.status === 'completed');
+      assert.deepEqual(order, ['codex', 'claude'], 'child runs before the parent finishes');
+      return { text: 'Parent first result' };
     }
     if (order.length === 2) {
       assert.equal(provider, 'claude');
       assert.equal(permission, 'workspace-write');
-      assert.equal((await status(hub, parentId)).status, 'waiting');
+      assert.equal((await status(hub, parentId)).status, 'running');
+      await childGate.promise;
       return { text: 'Child changed the fixture' };
     }
     assert.equal(provider, 'codex');
@@ -497,12 +502,14 @@ test('cancelling a queued writable child releases its waiting parent', async t =
   const fixture = await setup(t, async ({ provider, prompt }) => {
     order.push(provider);
     if (order.length === 1) {
+      hub.schedule = () => {};
       const child = await hub.dispatch(request('codex', 'start', {
         provider: 'claude', cwd: '/tmp', prompt: 'Queued child', permission: 'workspace-write', requestId: 'cancel-queued-child',
       }, parentToken));
       childId = child.taskId;
-      assert.equal(child.deferredUntilParentExit, true);
+      assert.notEqual(child.deferredUntilParentExit, true);
       await hub.dispatch(controller(hub, 'codex', 'cancel', { taskId: childId, requestId: 'cancel-queued' }));
+      delete hub.schedule;
       return { text: 'Parent yielded' };
     }
     assert.equal(provider, 'codex');

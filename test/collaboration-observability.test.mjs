@@ -42,14 +42,16 @@ test('cancelling a queued child delivers its final revision once and an observin
   const fixture = await setup(t, async ({ provider }) => {
     calls.push(provider);
     if (calls.length > 1) return { text: 'Unexpected parent rerun' };
+    hub.schedule = () => {};
     const child = await hub.dispatch(request('codex', 'start', {
       provider: 'claude', cwd: '/tmp', prompt: 'Queued child', permission: 'workspace-write', requestId: 'queued-child',
     }, parentToken));
     childId = child.taskId;
-    assert.equal(child.deferredUntilParentExit, true);
+    assert.notEqual(child.deferredUntilParentExit, true);
     cancelReceipt = await hub.dispatch(controller(hub, 'codex', 'cancel', { taskId: childId, requestId: 'cancel-queued-child' }));
     // The parent reads the cancelled child's final state before ending its turn.
     observed = await hub.dispatch(request('codex', 'status', { taskId: childId }, parentToken));
+    delete hub.schedule;
     return { text: 'Parent handled the cancelled child' };
   }, { allowWrite: true, mcp: async ({ provider, token }) => { if (provider === 'codex') parentToken = token; return {}; } });
   hub = fixture.hub;
