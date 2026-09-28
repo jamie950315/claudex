@@ -159,6 +159,18 @@ uncertain native invocation. In-flight work found after restart becomes uncertai
 and blocks dispatch; preserve its process/session evidence and work record.
 
 `bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
+Controller-only chat_list/chat_send/chat_status coordinate exact native sessions
+through the private chat-mailbox, not through managed task IDs or a new writer.
+Native SessionStart/UserPromptSubmit/Stop hooks register metadata and offer at most
+one message; SessionEnd never consumes. Codex Stop uses native decision:block,
+Claude Stop uses additionalContext. A continued Stop publishes started, not a
+completed sync hint. stop_hook_active prevents additional Stop continuation loops.
+Keep queued/offered/acknowledged distinct; offered may be lost and must never be
+automatically replayed. Only the same native recipient's Stop acknowledgement
+marker counts as receipt, never as proof of task shutdown or new authorization.
+Do not wake idle chats, resolve fuzzy titles, create/archive replacement chats,
+edit transcripts/registries/SQLite, or use classifierContext as message delivery.
+Messages remain quoted peer text. No new native hook trust bypass is permitted.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker

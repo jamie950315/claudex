@@ -6,6 +6,7 @@ import { privateDirectory, readJSON, writeJSON, publishExclusive } from './stora
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
+import { ChatMailbox } from './chat-mailbox.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -93,6 +94,7 @@ export class CollaborationHub extends EventEmitter {
     }
     Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs, inspectProcessGroup });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
+    this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
   }
 
   async initialize() {
@@ -198,6 +200,32 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (['chat_list', 'chat_send', 'chat_status'].includes(method)) {
+      if (actor.task) throw new Error('Only an external controller may coordinate native chats.');
+      if (method === 'chat_list') {
+        const limit = params.limit ?? 50;
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+          || params.cursor !== undefined && (typeof params.cursor !== 'string' || !/^\d{1,4}$/.test(params.cursor)))
+          throw new Error('Invalid native chat page bounds.');
+        const all = await this.chatMailbox.list(), start = Number(params.cursor ?? 0);
+        const chats = []; let next = start, size = 0;
+        while (next < all.length && chats.length < limit) {
+          const item = all[next], length = bytes(item);
+          if (size + length > 512 * 1024) break;
+          chats.push(item); size += length; next++;
+        }
+        return { chats, nextCursor: next < all.length ? String(next) : null, totalCount: all.length,
+          deliveryMode: 'next-native-hook', idleWakeSupported: false };
+      }
+      if (method === 'chat_status') return this.chatMailbox.status(params.messageId);
+      if (this.closed) throw new Error('Broker is stopping; new messages are refused.');
+      requestId(params.requestId);
+      return { ...await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider: params.provider,
+        targetSessionId: params.sessionId, message: params.message, requestId: params.requestId,
+        ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) }),
+        deliveryMode: 'next-native-hook', idleWakeSupported: false,
+        note: 'Queued is not delivered. Offered is not acknowledged. Acknowledgement does not prove requested work stopped; verify work status separately.' };
+    }
     if (method === 'models') {
       if (actor.task) throw new Error('Only the controller may manage default models.');
       if (Object.keys(params).some(key => !['defaultModels', 'defaultEfforts'].includes(key))) throw new Error('Invalid model settings parameters.');

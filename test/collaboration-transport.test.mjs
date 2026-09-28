@@ -144,6 +144,19 @@ test('MCP directory grants are explicit bounded absolute paths on start only', a
   assert.equal(content.trim().split('\n').map(JSON.parse).filter(row => row.result.isError).length, 4);
 });
 
+test('MCP native chat tools forward exact session targets without a resume or archive request', async t => {
+  const seen = [];
+  const { root } = await fixture(t, async request => { seen.push(request); return { state: 'queued' }; });
+  const input = new PassThrough(), output = new PassThrough(); output.resume();
+  const running = runCollaborationMcp({ root, peer: 'codex', token: 'controller', input, output });
+  const calls = [ ['claudex_chat_list', {}], ['claudex_chat_send', { provider: 'claude', sessionId: 'exact-session', message: 'Pause new work.', requestId: 'note-1' }],
+    ['claudex_chat_status', { messageId: 'message-1' }] ];
+  calls.forEach(([name, args], id) => input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n'));
+  input.end(); await running;
+  assert.deepEqual(seen.map(request => request.method).sort(), ['chat_list', 'chat_send', 'chat_status']);
+  assert.equal(seen.find(request => request.method === 'chat_send').params.sessionId, 'exact-session');
+});
+
 test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC lines', async t => {
   const seen = [];
   const { root } = await fixture(t, async request => { seen.push(request); return { taskId: 'task-1', revision: 1 }; });
@@ -164,7 +177,7 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   const rows = content.trim().split('\n').map(JSON.parse);
   const byId = new Map(rows.map(row => [row.id, row]));
   assert.equal(byId.get(1).result.protocolVersion, '2025-06-18');
-  assert.equal(byId.get(2).result.tools.length, 7);
+  assert.equal(byId.get(2).result.tools.length, 10);
   const tools = byId.get(2).result.tools;
   assert.match(tools.find(tool => tool.name === 'claudex_start').description, /deferredUntilParentExit.*CLAUDEX_YIELD/);
   assert.match(tools.find(tool => tool.name === 'claudex_handoff').description, /CLAUDEX_HANDOFF: no further tools or summary/);

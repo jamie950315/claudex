@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { SyncEventInbox } from '../src/sync-events.mjs';
 import { readAppStopState } from '../src/app-stop-state.mjs';
+import { ChatMailbox } from '../src/chat-mailbox.mjs';
+import { isAbsolute, join } from 'node:path';
 
 // Hook input can contain private prompts. Parse only bounded input; persist identity hints only.
 async function main() {
@@ -21,12 +23,34 @@ async function main() {
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object') throw new Error('Invalid hook input.');
   if (input.agent_id || input.hook_event_name === 'SubagentStop') return;
-  const kind = { Stop: 'completed', UserPromptSubmit: 'started', SessionStart: 'session', Interrupt: 'interrupted', StopFailure: 'interrupted', SessionEnd: 'interrupted' }[input.hook_event_name];
+  let kind = { Stop: 'completed', UserPromptSubmit: 'started', SessionStart: 'session', Interrupt: 'interrupted', StopFailure: 'interrupted', SessionEnd: 'interrupted' }[input.hook_event_name];
   if (!kind) return;
   if ((await readAppStopState(options['--root']))?.stopped) return;
+  let output;
+  if (['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'].includes(input.hook_event_name)
+    && typeof input.cwd === 'string' && isAbsolute(input.cwd)) {
+    try {
+      const mailbox = new ChatMailbox({ root: join(options['--root'], 'collaboration', 'chat-mailbox') });
+      const identity = { provider: options['--provider'], sessionId: input.session_id };
+      await mailbox.register({ ...identity, cwd: input.cwd, event: input.hook_event_name });
+      const receipt = await mailbox.consume({ ...identity, event: input.hook_event_name,
+        stopHookActive: input.stop_hook_active === true,
+        lastAssistantMessage: typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '' });
+      if (receipt.context) {
+        if (input.hook_event_name === 'Stop') kind = 'started';
+        output = options['--provider'] === 'codex' && input.hook_event_name === 'Stop'
+          ? { decision: 'block', reason: receipt.context }
+          : { hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: receipt.context } };
+      }
+    } catch {
+      // A coordination error must not suppress ordinary synchronization hints.
+      process.stderr.write('Claudex native-chat coordination could not be verified; inspect the message receipt before retrying.\n');
+    }
+  }
   const inbox = await new SyncEventInbox({ root: options['--root'] }).initialize();
   await inbox.publish({ side: options['--provider'], nativeId: input.session_id, kind,
     ...(typeof input.turn_id === 'string' ? { turnId: input.turn_id } : {}) });
+  if (output) process.stdout.write(JSON.stringify(output) + '\n');
 }
 
 main().catch(() => { process.stderr.write('Claudex could not record the synchronization wake event.\n'); process.exitCode = 1; });

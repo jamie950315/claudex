@@ -39,6 +39,9 @@ The MCP interface exposes:
 | `claudex_wait` | Wait up to 30 seconds for a revision change or terminal result. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
 | `claudex_list` | Read the bounded work inventory and broker limits. |
+| `claudex_chat_list` | List exact native chat identities observed by installed hooks. |
+| `claudex_chat_send` | Queue an authorized coordination note for an existing native chat. |
+| `claudex_chat_status` | Inspect queued, offered, acknowledged, or expired message state. |
 
 For example, ask Codex to “use Claude to review this change and bring back its
 findings,” or ask Claude to “hand this work to Codex with the current progress
@@ -106,6 +109,73 @@ terminal, then send the parent an explicit summary; alternatively start a separa
 root review with the relevant source task IDs and context. Reopening a child while
 its parent is active intentionally notifies that parent. This is not a detached
 review mode. Parent edges and generation-scoped request IDs are unchanged.
+
+## Messages to existing native chats
+
+Native-chat coordination is separate from managed work and history synchronization.
+An external Codex/Claude caller can use `claudex_chat_list`, select an exact
+`provider` plus `sessionId`, then call `claudex_chat_send` with `message` and a
+stable `requestId`. Do this only for user-authorized coordination, such as asking
+another chat to stop creating work and report whether maintenance is safe.
+Managed worker capabilities cannot send to unrelated native chats.
+
+The recipient must have been observed by the installed native hooks. Follow
+`nextCursor` for additional bounded `chat_list` pages (default 50, maximum 100). The list
+contains IDs, cwd, last observed phase/event and time, not a full transcript or
+an inferred title. These are activity hints, not proof that a process is alive.
+Never guess between similarly named chats or substitute a synchronized copy.
+The target stays the exact native session: no new chat, resume process, external
+writer, archival, registry/SQLite mutation, or transcript append is performed.
+
+Delivery occurs at the recipient's next SessionStart, UserPromptSubmit, or Stop
+hook, using native hook context. At Stop, Codex uses its documented continuation
+decision and Claude uses additionalContext, allowing the same chat to reply.
+This can consume the recipient's normal model allowance. It does not change that
+chat's model, effort, permissions or human instructions. Coordination content is
+explicitly labeled and quoted as peer-originated text, not as human/system
+authority. It cannot grant new permissions or forcibly interrupt native work.
+
+An entirely idle chat is **not woken**. A running tool is not interrupted; a
+message can wait until the current turn ends. SessionEnd never consumes messages.
+A Stop already continued by hooks can acknowledge a previous note but cannot
+consume another, avoiding a continuation loop. Ordinary hooks with no queued
+message remain inference-free and produce no additional context. A Stop offering
+a message emits a started hint instead of a completed synchronization hint; the
+later true completion remains subject to the normal history/lifecycle guards.
+
+Receipts distinguish:
+
+- `queued`: persisted, awaiting a usable native hook; not delivered.
+- `offered`: output prepared for one hook; consumption is not proven. This state
+  never retries automatically, including after a hook crash or lost stdout.
+- `acknowledged`: the same exact recipient's native Stop reported a standalone
+  `CLAUDEX_ACK:<messageId>` line. This confirms receipt, **not completion of the
+  requested action**. Check actual work/process state before restarting services.
+- `expired`: queued message exceeded its TTL before being offered.
+
+Messages are capped at 1,500 UTF-8 bytes, with a default 15-minute TTL (up to one
+hour). The private `collaboration/chat-mailbox/state.json` is bounded to 1,024
+chats/messages/receipts and 8 MiB; it preserves receipts rather than silently
+pruning or replaying work. No raw hook prompt or transcript is stored. Hook
+registration and delivery stop when the graphical app's Quit hold is active.
+
+Native clients may need to refresh MCP tool discovery to see the three new tools;
+the CLI can use `collaboration request chat_list|chat_send|chat_status` in the
+existing source conversation meanwhile. For example, pass this JSON to
+`claudex collaboration request chat_send --peer codex` on stdin:
+
+```json
+{
+  "provider": "claude",
+  "sessionId": "EXACT_NATIVE_SESSION_ID_FROM_CHAT_LIST",
+  "message": "Please stop creating new tasks and report when your current work is safe to pause.",
+  "requestId": "maintenance-note-1"
+}
+```
+
+This is cooperative messaging, not an automatic restart negotiation or permission
+to kill a recipient's work. Task IDs from `claudex_list` are not native chat IDs.
+Existing hook configuration and its native trust checks remain unchanged.
 
 ## Model selection
 

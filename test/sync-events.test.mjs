@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { SyncEventInbox } from '../src/sync-events.mjs';
+import { ChatMailbox } from '../src/chat-mailbox.mjs';
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'claudex-events-'));
@@ -150,9 +151,9 @@ test('malformed lock evidence remains untouched rather than being retried or rem
   assert.equal(await readFile(inbox.lock, 'utf8'), 'malformed');
 });
 
-async function hook(inbox, payload) {
+async function hook(inbox, payload, provider = 'claude') {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['bin/claudex-sync-hook.mjs', '--root', inbox.root, '--provider', 'claude']);
+    const child = spawn(process.execPath, ['bin/claudex-sync-hook.mjs', '--root', inbox.root, '--provider', provider]);
     let stdout = '', stderr = '';
     child.stdout.on('data', value => { stdout += value; });
     child.stderr.on('data', value => { stderr += value; });
@@ -161,6 +162,29 @@ async function hook(inbox, payload) {
     child.stdin.end(JSON.stringify(payload));
   });
 }
+
+test('coordination Stop continues the exact chat without publishing a completed sync hint', async t => {
+  for (const provider of ['codex', 'claude']) {
+    const inbox = await fixture(t), session_id = randomUUID(), mailbox = new ChatMailbox({ root: join(inbox.root, 'collaboration', 'chat-mailbox') });
+    const base = { session_id, cwd: inbox.root };
+    assert.equal((await hook(inbox, { ...base, hook_event_name: 'SessionStart' }, provider)).stdout, '');
+    const sent = await mailbox.send({ fromProvider: provider === 'codex' ? 'claude' : 'codex', targetProvider: provider,
+      targetSessionId: session_id, message: 'Please stop creating new work and report your status.', requestId: 'coordination-1' });
+    const stopped = await hook(inbox, { ...base, hook_event_name: 'Stop', stop_hook_active: false, last_assistant_message: null }, provider);
+    assert.equal(stopped.code, 0, stopped.stderr);
+    const output = JSON.parse(stopped.stdout);
+    const context = provider === 'codex' ? output.reason : output.hookSpecificOutput.additionalContext;
+    if (provider === 'codex') assert.equal(output.decision, 'block');
+    assert.match(context, new RegExp(`CLAUDEX_ACK:${sent.messageId}`));
+    assert.equal((await inbox.list()).find(event => event.nativeId === session_id).kind, 'started');
+    assert.equal((await mailbox.status(sent.messageId)).state, 'offered');
+    const ack = await hook(inbox, { ...base, hook_event_name: 'Stop', stop_hook_active: true,
+      last_assistant_message: `Received.\nCLAUDEX_ACK:${sent.messageId}` }, provider);
+    assert.equal(ack.stdout, '');
+    assert.equal((await mailbox.status(sent.messageId)).state, 'acknowledged');
+    assert.equal((await inbox.list()).find(event => event.nativeId === session_id).kind, 'completed');
+  }
+});
 
 test('Quit suppresses hook writes until explicit application resume', async t => {
   const inbox = await fixture(t);

@@ -293,6 +293,39 @@ test('start reaches a durable result without model inference', async t => {
   assert.equal(done.active, null);
 });
 
+test('native chat coordination is controller-only and never allocates model work', async t => {
+  let calls = 0;
+  const { hub } = await setup(t, async () => { calls++; return { text: 'unused' }; });
+  const sessionId = randomUUID();
+  await hub.chatMailbox.register({ provider: 'claude', sessionId, cwd: hub.root, event: 'SessionStart' });
+  const inventory = await hub.dispatch(controller(hub, 'codex', 'chat_list', {}));
+  assert.equal(inventory.chats[0].sessionId, sessionId);
+  assert.equal(inventory.idleWakeSupported, false);
+  await hub.chatMailbox.register({ provider: 'codex', sessionId: randomUUID(), cwd: hub.root, event: 'SessionStart' });
+  const page = await hub.dispatch(controller(hub, 'codex', 'chat_list', { limit: 1 }));
+  assert.equal(page.chats.length, 1);
+  assert.equal(page.nextCursor, '1');
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { cursor: page.nextCursor }))).chats.length, 1);
+  const queued = await hub.dispatch(controller(hub, 'codex', 'chat_send', { provider: 'claude', sessionId,
+    message: 'Please finish your current work before maintenance.', requestId: 'native-note' }));
+  assert.equal(queued.state, 'queued');
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_status', { messageId: queued.messageId }))).state, 'queued');
+  assert.equal(calls, 0);
+  assert.equal(Object.keys(hub.state.tasks).length, 0);
+});
+
+test('managed worker capabilities cannot send messages to unrelated native chats', async t => {
+  const gate = pending(); let token;
+  const { hub } = await setup(t, async () => gate.promise, { mcp: value => { token = value.token; return {}; } });
+  const parent = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: '/tmp', prompt: 'Wait', requestId: 'chat-worker' }));
+  try {
+    await until(() => token);
+    for (const method of ['chat_list', 'chat_send', 'chat_status'])
+      await assert.rejects(hub.dispatch(request('codex', method, {}, token)), /external controller/);
+  } finally { gate.resolve({ text: 'done' }); }
+  await until(async () => (await status(hub, parent.taskId)).status === 'completed');
+});
+
 test('handoff preserves identity in both directions and waits for old turn to finish', async t => {
   const calls = [];
   const tokens = new Map();

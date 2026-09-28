@@ -7,7 +7,7 @@ const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models']);
+const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -168,6 +168,12 @@ const toolDefinitions = [
   tool('wait', 'Wait up to 30 seconds for a task revision without starting a model. Prefer view=summary with afterRevision to avoid repeated history; changed/timedOut/terminal/resultFinal describe the response. Unseen terminal child outcomes are still delivered and acknowledged. Use view=full for complete history.', { taskId: str, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }, ['taskId']),
   tool('cancel', 'Request cancellation. Check cancelAccepted, cancelPending and terminal: acceptance is not proof of process exit. Wait for a terminal outcome; an unsafe shutdown may remain uncertain. Completed, failed or cancelled tasks are no-ops; uncertain tasks require operator inspection and reject cancellation.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
   tool('list', 'List visible tasks.', {}, []),
+  tool('chat_list', 'List a bounded page of exact native chat identities registered by Claudex hooks, not collaboration task IDs. Controller only. Follow nextCursor for more. Last activity is a hint, not proof of a live or busy chat. Do not infer a target from similar titles.', { limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str }, []),
+  tool('chat_send', 'Queue an explicitly user-authorized peer coordination message for an existing native chat. Controller only. Use the exact provider/sessionId from chat_list. Never creates, resumes a second writer, or archives a chat. Delivery waits for a native hook; idle chats are not woken. Stop delivery can continue the existing chat with model inference. Does not grant permissions or forcibly interrupt work. Use chat_status to distinguish queued, offered and acknowledged; verify task shutdown separately before restarting services.', {
+    provider: { type: 'string', enum: ['codex', 'claude'] }, sessionId: str, message: { type: 'string', minLength: 1, maxLength: 1500 },
+    requestId: str, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 },
+  }, ['provider', 'sessionId', 'message', 'requestId']),
+  tool('chat_status', 'Read a native-chat coordination message receipt. Offered means hook output prepared, not proven read; acknowledged means the exact recipient emitted its acknowledgement marker, not that requested actions succeeded. No resend or inference.', { messageId: str }, ['messageId']),
 ];
 const byName = new Map(toolDefinitions.map(entry => [entry.name, entry]));
 
