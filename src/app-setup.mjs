@@ -150,7 +150,7 @@ export class AppSetup {
         : broker.limits?.allowWrite && broker.limits?.defaultPermission === 'workspace-write' ? 'ready' : 'waiting',
       !broker ? 'The background broker and MCP connections will be configured automatically.' : broker.blockedByUncertainWork
         ? 'Uncertain native work needs inspection. No input will be resent.' : broker.limits?.defaultPermission === 'workspace-write'
-          ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.', 'retry'));
+          ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.', broker?.blockedByUncertainWork ? 'diagnostics' : 'retry'));
     } catch (error) { rows.push(component('collaboration', 'Cross-model collaboration', 'blocked', safeFailure(error), 'retry')); }
     try {
       const config = await appPrivateJSON(join(this.root, 'config.json'));
@@ -174,17 +174,17 @@ export class AppSetup {
               ?? 'The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.')
           : !configured ? 'Existing synchronization settings are preserved until a safe configuration change is possible.'
             : synchronized ? 'The watcher reports ready and is running for all projects.'
-              : live && watcher.waiting ? watcher.waiting : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', 'retry'));
+              : live && watcher.waiting ? watcher.waiting : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', held ? 'diagnostics' : 'retry'));
       rows.push(component('folders', 'Native project folders', watcher?.folderProjection?.state === 'error' ? 'blocked'
         : config?.folderProjection?.enabled && live && watcher.folderProjection?.state === 'ready' ? 'ready' : 'waiting',
         watcher?.folderProjection?.state === 'error' ? watcher.folderProjection.error ?? 'The current frontend resource could not be verified. No replacement resource was assumed.'
           : config?.folderProjection?.enabled ? 'The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required.'
-          : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', 'retry'));
+          : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', watcher?.folderProjection?.state === 'error' ? 'diagnostics' : 'retry'));
       rows.push(component('handoffs', 'Native predecessor archival', watcher?.localHandoff?.state === 'error' ? 'blocked'
         : config?.desktopLocalHandoff?.enabled && live && watcher.localHandoff?.state === 'ready' ? 'ready' : 'waiting',
         watcher?.localHandoff?.state === 'error' ? watcher.localHandoff.error ?? 'The native handoff coordinator reports an unresolved guard. Original histories are preserved.'
           : config?.desktopLocalHandoff?.enabled ? 'Native handoffs are configured; each archival still requires verified history and native lifecycle checks.'
-          : 'Native handoff integration is waiting for verified folder setup. Original conversations remain preserved.', 'retry'));
+          : 'Native handoff integration is waiting for verified folder setup. Original conversations remain preserved.', watcher?.localHandoff?.state === 'error' ? 'diagnostics' : 'retry'));
     } catch (error) { rows.push(component('synchronization', 'Conversation synchronization', 'blocked', safeFailure(error), 'retry')); }
     for (const row of rows) if (notes[row.id]) { row.state = 'blocked'; row.detail = notes[row.id]; row.action = 'retry'; }
     const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked'

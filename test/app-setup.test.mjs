@@ -83,6 +83,7 @@ test('display integration failures remain explicit while independent setup stays
   setup.interfaceInstall = async () => { throw new Error('Legacy display bundle path differs.'); };
   const report = await setup.setup();
   assert.equal(report.components.find(row => row.id === 'interface').state, 'blocked');
+  assert.equal(report.components.find(row => row.id === 'interface').action, 'retry');
   assert.equal((await setup.inspect()).components.find(row => row.id === 'interface').state, 'blocked');
   assert.ok(events.some(([kind]) => kind === 'collaboration'));
 });
@@ -179,6 +180,7 @@ test('a live watcher pending dependency hold is shown as paused rather than tran
   assert.equal(row.state, 'blocked');
   assert.match(row.detail, /older snapshot has dependent threads/);
   assert.match(row.detail, /pending transaction.*preserved/);
+  assert.equal(row.action, 'diagnostics');
 });
 
 test('ordinary native waiting is not a request for user action and retains the exact reason', async t => {
@@ -202,6 +204,17 @@ test('actual runtime faults expose their exact reasons instead of generic setup 
     localHandoff: { state: 'error', error: 'Exact native identity conflict' } }), { mode: 0o600 });
   const report = await setup.inspect();
   assert.equal(report.phase, 'blocked');
-  for (const [id, expected] of [['synchronization', 'Exact prefix conflict'], ['folders', 'Exact frontend resource conflict'], ['handoffs', 'Exact native identity conflict']])
-    assert.equal(report.components.find(item => item.id === id).detail, expected);
+  for (const [id, expected] of [['synchronization', 'Exact prefix conflict'], ['folders', 'Exact frontend resource conflict'], ['handoffs', 'Exact native identity conflict']]) {
+    const row = report.components.find(item => item.id === id);
+    assert.equal(row.detail, expected);
+    assert.equal(row.action, 'diagnostics');
+  }
+});
+
+test('uncertain collaboration work opens diagnostics instead of retrying setup', async t => {
+  const { setup } = await fixture(t);
+  setup.collaborationStatus = async () => ({ blockedByUncertainWork: true });
+  const row = (await setup.inspect()).components.find(item => item.id === 'collaboration');
+  assert.equal(row.state, 'blocked');
+  assert.equal(row.action, 'diagnostics');
 });

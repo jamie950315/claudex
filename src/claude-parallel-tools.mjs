@@ -44,8 +44,7 @@ export function parallelToolGraphParents(rows) {
         || row.requestId !== first.requestId || row.apiBlockIndex !== index || row.message?.role !== 'assistant'
         || row.message.model !== first.message.model || row.isApiErrorMessage === true
         || row.message.stop_reason !== 'tool_use' || !Array.isArray(row.message.content) || row.message.content.length !== 1
-        || !['text', 'thinking', 'tool_use'].includes(row.message.content[0].type)
-        || index > 0 && row.parentUuid !== group[index - 1].uuid)) continue;
+        || !['text', 'thinking', 'tool_use'].includes(row.message.content[0].type))) continue;
     const calls = group.filter(row => row.message.content[0].type === 'tool_use');
     if (calls.length < 2) continue;
     const results = [];
@@ -57,7 +56,7 @@ export function parallelToolGraphParents(rows) {
       if (!nonempty(result.uuid) || duplicates.has(result.uuid) || !sameSession(result) || !nonempty(result.promptId)
           || result.message.role !== 'user' || result.sourceToolAssistantUUID !== call.uuid || result.parentUuid !== call.uuid
           || content.length !== 1 || content[0].type !== 'tool_result' || content[0].tool_use_id !== block.id
-          || positions.get(result.uuid) <= positions.get(group.at(-1).uuid)) { valid = false; break; }
+          || positions.get(result.uuid) <= positions.get(call.uuid)) { valid = false; break; }
       results.push(result);
     }
     if (!valid) continue;
@@ -81,6 +80,27 @@ export function parallelToolGraphParents(rows) {
     // between parallel results. Keep it in the native/codec input as inert
     // historical metadata; its command/stdout are never executed or replayed.
     if (rows.slice(start, end + 1).some(row => (authored(row) || row.uuid) && !members.has(row.uuid) && !toolHook(row))) continue;
+    // One streamed response may contain multiple completed tool waves. A later
+    // block must follow the last result only after every earlier call finished.
+    // Validate physical order; never reorder, omit, or choose a native branch.
+    const waveParents = new Map(), outstanding = new Set();
+    let previous = first.parentUuid, returning = false;
+    for (const row of rows.slice(start, end + 1)) {
+      if (!members.has(row.uuid)) continue;
+      if (row.type === 'assistant') {
+        if (returning && outstanding.size || row.parentUuid !== previous) { valid = false; break; }
+        returning = false;
+        const block = row.message.content[0];
+        if (block.type === 'tool_use') outstanding.add(block.id);
+      } else {
+        if (!outstanding.delete(row.message.content[0].tool_use_id)) { valid = false; break; }
+        returning = true;
+        waveParents.set(row.uuid, previous);
+      }
+      previous = row.uuid;
+    }
+    if (!valid || outstanding.size || previous !== results.at(-1).uuid
+        || positions.get(group.at(-1).uuid) > end) continue;
     const join = results.at(-1).uuid;
     let exits = 0;
     for (const row of rows) {
@@ -96,8 +116,7 @@ export function parallelToolGraphParents(rows) {
       if (members.has(parent) && (parent !== join || ++exits > 1)) { valid = false; break; }
     }
     if (!valid) continue;
-    let parent = group.at(-1).uuid;
-    for (const result of results) { parents.set(result.uuid, parent); parent = result.uuid; }
+    for (const [uuid, parent] of waveParents) parents.set(uuid, parent);
   }
   return parents;
 }

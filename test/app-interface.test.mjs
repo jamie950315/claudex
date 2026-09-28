@@ -28,6 +28,7 @@ let components = ["codex-cli", "codex-login", "codex-desktop", "claude-cli", "cl
 }
 let ready = SetupReport(version: 1, phase: .ready, allProjects: true, allowWrite: true, components: components, message: nil)
 precondition(ready.attentionComponents.isEmpty && ready.connectionSummaries.count == 2)
+precondition(!ready.needsSetupRetry)
 precondition(ready.connectionSummaries.allSatisfy { $0.state == .ready && $0.detail == "Ready to connect" })
 precondition(ready.connectionSummaries[0].action == .openCodex && ready.connectionSummaries[1].action == .openClaude)
 let missing = SetupReport(version: 1, phase: .needsAction, allProjects: true, allowWrite: true,
@@ -35,6 +36,19 @@ let missing = SetupReport(version: 1, phase: .needsAction, allProjects: true, al
 precondition(missing.attentionComponents.count == 1)
 precondition(missing.connectionSummaries[1].state == .loginRequired)
 precondition(missing.connectionSummaries[1].action == nil)
+precondition(missing.needsSetupRetry)
+let blocked = SetupReport(version: 1, phase: .blocked, allProjects: true, allowWrite: true,
+    components: components + [SetupComponent(id: "synchronization", label: "Conversation synchronization", state: .blocked,
+       detail: "Nonlinear history", action: .diagnostics)], message: nil)
+precondition(blocked.attentionComponents.count == 1 && !blocked.needsSetupRetry)
+let installationFailure = SetupReport(version: 1, phase: .blocked, allProjects: true, allowWrite: true,
+    components: blocked.components + [SetupComponent(id: "interface", label: "Claudex application", state: .blocked,
+       detail: "Installation failed", action: .retry)], message: nil)
+precondition(installationFailure.needsSetupRetry)
+let diagnosticData = try! JSONSerialization.data(withJSONObject: ["version": 1, "phase": "blocked", "allProjects": true,
+    "allowWrite": true, "components": [["id": "synchronization", "label": "Conversation synchronization", "state": "blocked",
+    "detail": "Nonlinear history", "action": "diagnostics"]]])
+precondition(!(try! SetupReport.parse(diagnosticData)).needsSetupRetry)
 let incomplete = SetupReport(version: 1, phase: .waiting, allProjects: true, allowWrite: true, components: [], message: nil)
 precondition(incomplete.connectionSummaries.allSatisfy { $0.state == .waiting })
 `);

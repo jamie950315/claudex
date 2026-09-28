@@ -437,7 +437,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .waiting: title = "Waiting automatically"; symbol = "clock"; color = .secondaryLabelColor
             case .settingUp: title = "Setup in progress"; symbol = "clock"; color = .controlAccentColor
             case .needsAction: title = "Action needed"; symbol = "person.crop.circle.badge.exclamationmark"; color = .systemOrange
-            case .blocked: title = "Setup needs attention"; symbol = "exclamationmark.triangle"; color = .systemOrange
+            case .blocked: title = report?.needsSetupRetry == true ? "Setup needs attention" : "Action needed"; symbol = "exclamationmark.triangle"; color = .systemOrange
             case nil: title = "Checking setup…"; symbol = "clock"; color = .secondaryLabelColor
             }
         }
@@ -445,14 +445,14 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let attention = report?.attentionComponents ?? []
         if !busy && failure == nil && !attention.isEmpty {
             statusDetail.stringValue = LF("Needs attention: %@", attention.map { L($0.label) }.joined(separator: ", "))
-                + "\n" + L(phase == .needsAction ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
+                + "\n" + L(report?.needsSetupRetry == true ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
         } else { statusDetail.stringValue = LD(failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report.")) }
         statusIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: L(title))
         statusIcon.contentTintColor = color
         progress.isHidden = !busy
         if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
         attentionSection.isHidden = attention.isEmpty && failure == nil && !(busy && !checkingOnly)
-        setupButton.isHidden = inspectOnly || phase == .waiting || phase == .ready
+        setupButton.isHidden = inspectOnly || (failure == nil && report?.needsSetupRetry != true)
         setupHelp.isHidden = setupButton.isHidden
         setupButton.isEnabled = !busy && !uiSmoke
         refreshButton.isEnabled = !busy
@@ -525,7 +525,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             let button = NSButton(title: L(actionTitle(action)), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
-            button.isEnabled = !busy && !inspectOnly && !uiSmoke
+            button.isEnabled = !busy && (!inspectOnly || action == .diagnostics) && !uiSmoke
             row.addArrangedSubview(button)
         }
         detail.widthAnchor.constraint(lessThanOrEqualTo: textStack.widthAnchor).isActive = true
@@ -602,6 +602,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .loginClaude: return "Sign in"
         case .openCodex, .openClaude: return "Open app"
         case .retry: return "Retry"
+        case .diagnostics: return "Diagnostics"
         }
     }
 
@@ -612,10 +613,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .openCodex: return 3
         case .openClaude: return 4
         case .retry: return 5
+        case .diagnostics: return 6
         }
     }
 
     @objc private func componentAction(_ sender: NSButton) {
+        if sender.tag == 6 { showDiagnostics(sender); return }
         guard !inspectOnly else { return }
         switch sender.tag {
         case 1: run(.login("codex"))

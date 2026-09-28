@@ -29,6 +29,7 @@ enum ComponentAction: String, Decodable {
     case openCodex = "open-codex"
     case openClaude = "open-claude"
     case retry
+    case diagnostics
 }
 
 struct SetupComponent: Decodable {
@@ -55,6 +56,13 @@ struct SetupReport: Decodable {
 
     var attentionComponents: [SetupComponent] {
         components.filter { [.blocked, .missing, .loginRequired].contains($0.state) }
+    }
+
+    var needsSetupRetry: Bool {
+        attentionComponents.contains { component in
+            guard let action = component.action else { return false }
+            return action != .diagnostics
+        }
     }
 
     var connectionSummaries: [SetupComponent] {

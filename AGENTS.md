@@ -35,6 +35,9 @@ blocked components automatically expose setup actions. The full checklist and
 technical details stay in an explicitly expanded advanced section. A prerequisite
 summary is not proof that messages have synced. Resize smoke checks must verify
 viewport growth, natural content width, a single scroll view, and compact ready mode.
+Runtime history/ownership blocks offer diagnostics, not setup retries. Show the
+global setup retry only for actionable installation/account requirements or a
+failed setup operation; keep the instructions consistent with available actions.
 
 Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
 requirements request user action, while normal runtime waits need no setup retry.
@@ -319,6 +322,11 @@ actual competing branches still block; saved semantic prefixes must still match.
 The observed empty-display successful PreToolUse hook attachment may occur
 between results when its tool, native parent, session and pending-result position
 all match. Its historical command/stdout remain inert and are never executed.
+One response may stream later blocks after a completed parallel-tool wave.
+Require contiguous response block indices, identical response identity, exact
+call/result pairing, and every outstanding result before the next wave begins.
+The next block must parent the last result in physical order. Only virtual result
+parents change; early continuations and competing joins remain blocked.
 
 Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
 Desktop-owned transcripts must not be replaced or pruned, even when archived.

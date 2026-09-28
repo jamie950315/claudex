@@ -72,6 +72,48 @@ test('parallel completion also preserves an authenticated owned checkpoint witho
   assert.equal(portableMessages(result.common.messages).flatMap(message => message.content).filter(block => block.type === 'tool_result').length, 2);
 });
 
+function waveFixture() {
+  const f = fixture();
+  const call = f.row('stream-3', 'result-b', 'assistant',
+    [{ type: 'tool_use', id: 'tool-c', name: 'Preview', input: { command: 'inert fixture C' } }],
+    { requestId: 'same-request', apiBlockIndex: 3 });
+  Object.assign(call.message, { id: 'same-response', stop_reason: 'tool_use' });
+  const result = f.row('result-c', 'stream-3', 'user',
+    [{ type: 'tool_result', tool_use_id: 'tool-c', content: 'Result C' }],
+    { sourceToolAssistantUUID: 'stream-3', promptId: 'same-prompt' });
+  f.rows.splice(f.rows.length - 1, 0, call, result);
+  f.get('final').parentUuid = 'result-c';
+  return f;
+}
+
+test('one streamed response can continue after a fully joined parallel tool wave', () => {
+  const f = waveFixture(), before = text(f.rows), prefix = read(f.rows.slice(0, 2));
+  const actual = read(f.rows); assertComplete(actual);
+  const linear = structuredClone(f.rows);
+  linear.find(row => row.uuid === 'result-a').parentUuid = 'stream-2';
+  linear.find(row => row.uuid === 'result-b').parentUuid = 'result-a';
+  assert.deepEqual(actual, read(linear));
+  assert.equal(fingerprint(actual, 2), fingerprint(prefix));
+  assert.equal(text(f.rows), before);
+  assert.equal(actual.messages.flatMap(m => m.content).filter(b => b.type === 'tool_result').length, 3);
+});
+
+test('streamed waves reject early continuation, alternate joins and changed response identity', () => {
+  for (const mutate of [
+    f => { f.get('stream-3').parentUuid = 'result-a'; },
+    f => { const call = f.get('stream-3'); f.rows.splice(f.rows.indexOf(call), 1);
+      f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, call); call.parentUuid = 'result-a'; },
+    f => { f.get('stream-3').requestId = 'other-request'; },
+    f => { f.get('stream-3').apiBlockIndex = 4; },
+    f => { f.get('result-c').promptId = 'other-prompt'; },
+    f => { f.get('result-c').sourceToolAssistantUUID = 'stream-2'; },
+    f => { f.rows.push(f.row('alternate', 'result-b', 'assistant', [{ type: 'text', text: 'Other branch' }])); },
+  ]) {
+    const f = waveFixture(); mutate(f);
+    assert.throws(() => read(f.rows), /Nonlinear|missing its parent/, mutate.toString());
+  }
+});
+
 test('an exact successful PreToolUse hook between parallel results remains inert native metadata', () => {
   const make = () => {
     const f = fixture();
