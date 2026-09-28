@@ -28,17 +28,20 @@ on top of the sanitized public history; never merge private ancestors into it.
 
 ## macOS app setup
 
-The graphical app owns the sole menu bar item, setup and health windows, and
+The graphical app owns the sole menu bar item, a combined setup/health window, and
 notifications. It reuses the bounded native status model. Its owned login item
 launches the same bundle in background inspection mode, not setup. Migrate only
 the verified legacy status-display login item and native display process; preserve
 its recoverable artifacts and never restart service or native conversation owners.
 CLI-only installations may retain the standalone status display.
-Settings contains setup retries and account actions; menus expose only Settings,
-not a separate retry action. First launch automatically presents Settings and
+The combined window contains setup retries and account actions; menus expose Open Claudex,
+not a separate retry action. First launch automatically presents the main window and
 starts setup, including a fresh background launch. Subsequent login starts stay
 quiet; prior setup reports preserve existing-install behavior. Read-only and
 synthetic UI modes must not mark onboarding as presented or run setup.
+Live health appears above setup, with timestamps, recovery, notifications and
+diagnostics under Details & support. Notification clicks open the same window;
+the status controller must never create a separate window.
 
 `native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
 who already have signed ChatGPT/Codex and Claude desktop apps. Never download or

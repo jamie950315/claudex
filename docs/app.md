@@ -15,18 +15,21 @@ do not need Git, a separate Node.js installation, or terminal configuration.
 
 1. Put Claudex.app in a stable Applications location before opening it. Background
    services reference the bundle; do not move it while those services are running.
-2. Open Claudex. On first launch, Settings opens automatically and setup verifies
+2. Open Claudex. On first launch, the main window opens automatically and setup verifies
    the installed vendor apps, including when first started in background mode.
 3. Complete an official browser sign-in if requested. Desktop sign-in and CLI
    sign-in are not assumed to be interchangeable. Credentials are never copied.
 4. Let the checklist report which integrations are ready and which require an
    account, compatible runtime, idle native process, or normal app restart.
 
-Settings contains the account actions, setup checklist, and **Retry setup**.
+The single Claudex window contains live synchronization status, account actions,
+the setup checklist, and **Retry setup**. **Details & support** expands status
+timestamps, recovery and notification information, plus diagnostics and notification
+controls. Notification clicks open this same window, not a separate status page.
 After resolving a missing requirement, use that button to continue configuration;
 it does not resend messages or bypass synchronization guards. The menu has one
-**Settings…** entry, not a separate retry action. Later login starts stay quiet,
-and reopening Settings inspects the configuration rather than rerunning setup.
+**Open Claudex…** entry, not separate status, settings or retry entries. Later login starts stay quiet,
+and reopening Claudex inspects the configuration rather than rerunning setup.
 Read-only inspection and synthetic UI checks do not mark onboarding as presented.
 
 All projects are available by default, with task-scoped file editing. Users do

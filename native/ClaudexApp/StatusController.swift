@@ -1,7 +1,7 @@
 import Cocoa
 import UserNotifications
 
-final class StatusController: NSObject, UNUserNotificationCenterDelegate, NSWindowDelegate {
+final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     let center = UNUserNotificationCenter.current()
     var item: NSStatusItem!
     var timer: Timer?
@@ -15,7 +15,8 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate, NSWind
         self.report = loadHealth(root)
         super.init()
     }
-    var window: NSWindow?
+    var onOpen: (() -> Void)?
+    var statusIcon: NSImageView?
     var headline: NSTextField?
     var descriptionText: NSTextField?
     var updatedText: NSTextField?
@@ -87,40 +88,9 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate, NSWind
         }
     }
 
-    @objc func showStatus(_ sender: Any?) {
-        if window == nil {
-            let panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 570, height: 420),
-                                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-            panel.title = "Claudex Status"; panel.isReleasedWhenClosed = false; panel.delegate = self
-            let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 14
-            stack.translatesAutoresizingMaskIntoConstraints = false
-            panel.contentView!.addSubview(stack)
-            NSLayoutConstraint.activate([stack.leadingAnchor.constraint(equalTo: panel.contentView!.leadingAnchor, constant: 26),
-                stack.trailingAnchor.constraint(equalTo: panel.contentView!.trailingAnchor, constant: -26),
-                stack.topAnchor.constraint(equalTo: panel.contentView!.topAnchor, constant: 26)])
-            let name = NSTextField(labelWithString: "CLAUDEX"); name.font = .systemFont(ofSize: 11, weight: .semibold); name.textColor = .secondaryLabelColor
-            stack.addArrangedSubview(name)
-            headline = NSTextField(wrappingLabelWithString: report.title); headline!.font = .systemFont(ofSize: 23, weight: .semibold)
-            stack.addArrangedSubview(headline!)
-            descriptionText = NSTextField(wrappingLabelWithString: report.detail); descriptionText!.font = .systemFont(ofSize: 13)
-            descriptionText!.maximumNumberOfLines = 6; stack.addArrangedSubview(descriptionText!)
-            descriptionText!.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-            updatedText = NSTextField(labelWithString: ""); updatedText!.textColor = .secondaryLabelColor; stack.addArrangedSubview(updatedText!)
-            recoveryText = NSTextField(wrappingLabelWithString: ""); recoveryText!.textColor = .secondaryLabelColor; stack.addArrangedSubview(recoveryText!)
-            permissionText = NSTextField(wrappingLabelWithString: ""); permissionText!.textColor = .secondaryLabelColor; stack.addArrangedSubview(permissionText!)
-            let buttons = NSStackView(); buttons.orientation = .horizontal; buttons.spacing = 10
-            for (title, action) in [("Open Codex", #selector(openCodex(_:))), ("Diagnostics", #selector(showDiagnostics(_:))),
-                                    ("Notifications…", #selector(notificationAction(_:)))] {
-                let button = NSButton(title: title, target: self, action: action); button.bezelStyle = .rounded; buttons.addArrangedSubview(button)
-            }
-            stack.addArrangedSubview(buttons)
-            window = panel; panel.center()
-        }
-        NSApp.setActivationPolicy(.regular)
-        updateWindow(); window!.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-    }
-
     func updateWindow() {
+        statusIcon?.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: report.title)
+        statusIcon?.contentTintColor = report.attention ? .systemOrange : report.operational ? .systemGreen : .secondaryLabelColor
         headline?.stringValue = report.title
         descriptionText?.stringValue = report.detail
         if let update = report.updatedAt {
@@ -136,19 +106,6 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate, NSWind
             : "Notifications: not enabled · click Notifications to allow alerts"
     }
 
-    func windowWillClose(_ notification: Notification) {
-        if !NSApp.windows.contains(where: { $0 != window && $0.isVisible }) {
-            NSApp.setActivationPolicy(.accessory)
-        }
-    }
-
-    @objc func openCodex(_ sender: Any?) { openApplication("com.openai.codex") }
-    @objc func openClaude(_ sender: Any?) { openApplication("com.anthropic.claudefordesktop") }
-    func openApplication(_ id: String) {
-        guard !readOnly else { return }
-        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) else { return }
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration(), completionHandler: nil)
-    }
     @objc func showDiagnostics(_ sender: Any?) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: root + "/watcher-status.json")])
     }
@@ -191,6 +148,6 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate, NSWind
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
                                 withCompletionHandler completion: @escaping () -> Void) {
-        DispatchQueue.main.async { self.showStatus(nil) }; completion()
+        DispatchQueue.main.async { self.onOpen?() }; completion()
     }
 }

@@ -31,6 +31,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var refreshTimer: Timer?
     private var setupFlowActive = false
     private var checkingOnly = true
+    private var healthTitle: NSTextField!
+    private var healthDetail: NSTextField!
+    private var healthIcon: NSImageView!
+    private var healthUpdated: NSTextField!
+    private var healthRecovery: NSTextField!
+    private var healthPermission: NSTextField!
+    private var healthDetails: NSStackView!
     private var settingsPresentedKey: String { "settingsPresented.v1:" + setupRoot }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -45,7 +52,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "Claudex")
-        for (title, action) in [("Open status…", #selector(showHealth(_:))), ("Settings…", #selector(showSetup(_:)))] {
+        for (title, action) in [("Open Claudex…", #selector(showSetup(_:)))] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
             entry.target = self
             applicationMenu.addItem(entry)
@@ -63,6 +70,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             return
         }
         createStatusItem()
+        health.headline = healthTitle
+        health.descriptionText = healthDetail
+        health.statusIcon = healthIcon
+        health.updatedText = healthUpdated
+        health.recoveryText = healthRecovery
+        health.permissionText = healthPermission
+        health.onOpen = { [weak self] in self?.showSetup(nil) }
         health.start(item: statusItem)
         let launch = SetupLaunchPolicy(background: cliArguments.contains("--background"), inspectOnly: inspectOnly,
             hasPresentedSettings: UserDefaults.standard.bool(forKey: settingsPresentedKey),
@@ -104,8 +118,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let heading = NSMenuItem(title: health.report.title, action: nil, keyEquivalent: "")
         heading.isEnabled = false
         menu.addItem(heading)
-        addMenu(menu, "Open status…", #selector(showHealth(_:)))
-        addMenu(menu, "Settings…", #selector(showSetup(_:)))
+        addMenu(menu, "Open Claudex…", #selector(showSetup(_:)))
         addMenu(menu, "Refresh status", #selector(refreshStatus(_:)))
         menu.addItem(.separator())
         addMenu(menu, "Open Codex", #selector(openCodex(_:)))
@@ -120,16 +133,16 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         let inspectionAction = action == #selector(openCodex(_:)) || action == #selector(openClaude(_:))
-        item.isEnabled = (!busy || action == #selector(showSetup(_:)) || action == #selector(showHealth(_:))
+        item.isEnabled = (!busy || action == #selector(showSetup(_:))
             || action == #selector(showDiagnostics(_:)) || action == #selector(notifications(_:)) || action == #selector(quit(_:)))
             && (!inspectOnly || !inspectionAction)
         menu.addItem(item)
     }
 
     private func createWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 700),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 740),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Claudex Settings"
+        window.title = "Claudex"
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
@@ -152,35 +165,56 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
         let brand = label("CLAUDEX", size: 11, weight: .bold, color: .secondaryLabelColor)
         stack.addArrangedSubview(brand)
-        let title = label("Setup & connections", size: 28, weight: .semibold)
-        stack.addArrangedSubview(title)
-        let intro = wrapping("Claudex checks and configures your connections automatically on first launch. Complete any sign-in or required action below. No terminal setup is needed.", size: 13)
+        let healthRow = NSStackView()
+        healthRow.orientation = .horizontal
+        healthRow.spacing = 12
+        healthIcon = NSImageView()
+        healthIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .medium)
+        healthIcon.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        healthRow.addArrangedSubview(healthIcon)
+        healthTitle = label("Checking synchronization…", size: 25, weight: .semibold)
+        healthRow.addArrangedSubview(healthTitle)
+        stack.addArrangedSubview(healthRow)
+        healthDetail = wrapping("Reading the current service status.", size: 13)
+        stack.addArrangedSubview(healthDetail)
+        healthDetail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        let disclosure = NSButton(title: "Show details & support", target: self, action: #selector(toggleDetails(_:)))
+        disclosure.bezelStyle = .inline
+        stack.addArrangedSubview(disclosure)
+        healthDetails = NSStackView()
+        healthDetails.orientation = .vertical
+        healthDetails.alignment = .leading
+        healthDetails.spacing = 6
+        healthUpdated = wrapping("", size: 11, color: .secondaryLabelColor)
+        healthRecovery = wrapping("", size: 11, color: .secondaryLabelColor)
+        healthPermission = wrapping("", size: 11, color: .secondaryLabelColor)
+        for field in [healthUpdated!, healthRecovery!, healthPermission!] {
+            healthDetails.addArrangedSubview(field)
+            field.widthAnchor.constraint(equalTo: healthDetails.widthAnchor).isActive = true
+        }
+        let support = NSStackView()
+        support.orientation = .horizontal
+        support.spacing = 10
+        for (title, action) in [("Diagnostics", #selector(showDiagnostics(_:))), ("Notifications…", #selector(notifications(_:)))] {
+            let button = NSButton(title: title, target: self, action: action)
+            button.bezelStyle = .rounded
+            button.isEnabled = !inspectOnly && !uiSmoke
+            support.addArrangedSubview(button)
+        }
+        healthDetails.addArrangedSubview(support)
+        stack.addArrangedSubview(healthDetails)
+        healthDetails.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        healthDetails.isHidden = true
+
+        let connectionDivider = NSBox()
+        connectionDivider.boxType = .separator
+        stack.addArrangedSubview(connectionDivider)
+        connectionDivider.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.addArrangedSubview(label("SETUP & CONNECTIONS", size: 11, weight: .bold, color: .secondaryLabelColor))
+        let intro = wrapping("Complete any required sign-in below. All projects are enabled with task-scoped access and native permission checks.", size: 12, color: .secondaryLabelColor)
         stack.addArrangedSubview(intro)
         intro.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-
-        let scope = NSBox()
-        scope.boxType = .custom
-        scope.borderColor = NSColor.separatorColor
-        scope.cornerRadius = 12
-        scope.fillColor = NSColor.controlBackgroundColor
-        let scopeStack = NSStackView()
-        scopeStack.orientation = .vertical
-        scopeStack.alignment = .leading
-        scopeStack.spacing = 7
-        scopeStack.translatesAutoresizingMaskIntoConstraints = false
-        scope.contentView!.addSubview(scopeStack)
-        NSLayoutConstraint.activate([
-            scopeStack.leadingAnchor.constraint(equalTo: scope.contentView!.leadingAnchor, constant: 16),
-            scopeStack.trailingAnchor.constraint(equalTo: scope.contentView!.trailingAnchor, constant: -16),
-            scopeStack.topAnchor.constraint(equalTo: scope.contentView!.topAnchor, constant: 13),
-            scopeStack.bottomAnchor.constraint(equalTo: scope.contentView!.bottomAnchor, constant: -13)
-        ])
-        scopeStack.addArrangedSubview(label("All projects", size: 16, weight: .semibold))
-        let scopeDetail = wrapping("Enabled by default. Claudex requests task-scoped access when work needs it; this does not grant unrestricted disk access or bypass native permissions.", size: 12, color: .secondaryLabelColor)
-        scopeStack.addArrangedSubview(scopeDetail)
-        scopeDetail.widthAnchor.constraint(equalTo: scopeStack.widthAnchor).isActive = true
-        stack.addArrangedSubview(scope)
-        scope.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
         let statusRow = NSStackView()
         statusRow.orientation = .horizontal
@@ -460,7 +494,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
-    @objc private func showHealth(_ sender: Any?) { health.showStatus(sender) }
+    @objc private func toggleDetails(_ sender: NSButton) {
+        healthDetails.isHidden.toggle()
+        sender.title = healthDetails.isHidden ? "Show details & support" : "Hide details & support"
+    }
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }
     @objc private func refreshStatus(_ sender: Any?) { health.refresh(); health.refreshPermission(); run(.inspect) }

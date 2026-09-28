@@ -45,7 +45,7 @@ test('graphical app owns one status item and integrates the bounded health contr
   assert.doesNotMatch(controller, /NSStatusBar\.system\.statusItem|NSApplication\.shared|app\.run\(/);
   assert.match(source, /health\.start\(item: statusItem\)/);
   assert.match(source, /runningApplications\(withBundleIdentifier:/);
-  for (const action of ['showHealth', 'showSetup', 'showDiagnostics', 'notifications']) {
+  for (const action of ['showSetup', 'showDiagnostics', 'notifications']) {
     assert.match(source, new RegExp(`#selector\\(${action}\\(_:\\)\\)`));
   }
   assert.match(controller, /report = loadHealth\(root\)/);
@@ -53,4 +53,10 @@ test('graphical app owns one status item and integrates the bounded health contr
   assert.match(controller, /gate\.event\(for: report/);
   assert.match(builder, /StatusController\.swift/);
   assert.match(builder, /ClaudexStatus', 'StatusModel\.swift/);
+  assert.equal((source.match(/NSWindow\(contentRect:/g) || []).length, 1);
+  assert.doesNotMatch(controller, /NSWindow\(|showStatus|windowWillClose/);
+  assert.doesNotMatch(source, /"Open status…"|"Settings…"|Claudex Status|Claudex Settings/);
+  assert.match(source, /"Open Claudex…"/);
+  assert.match(source, /health\.onOpen =/);
+  assert.match(controller, /self\.onOpen\?\(\)/);
 });
