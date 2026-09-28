@@ -126,6 +126,13 @@ execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 
+Owned Claude image-source annotations may use the exact parent timestamp or
+the observed one-millisecond-later timestamp. The latter requires an immediately
+adjacent physical parent, queueTranscriptOnly, identical native version, and all
+existing signed packet, prompt, session, cwd, image ID/path and graph checks.
+Apply this predicate consistently to completed tails and later delta decoding;
+never drop arbitrary image-like text or infer a general timestamp tolerance.
+
 Dependency-bearing owned Codex snapshots are preserved as managed
 `dependency-anchor` records, not archived/deleted or relabeled unmanaged.
 Require stable metadata-only native dependency inventories, exact authenticated

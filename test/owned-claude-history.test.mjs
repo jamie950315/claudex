@@ -307,6 +307,44 @@ test('one exact authenticated image-source sidecar does not leave a completed no
   assert.equal(result.digest, fingerprint({ messages: f.original }));
 });
 
+test('an adjacent queued image annotation one millisecond later remains inert through the next delta', () => {
+  const f = imageSidecarTail();
+  f.sidecar.queueTranscriptOnly = true;
+  f.sidecar.timestamp = new Date(Date.parse(f.packetRow.timestamp) + 1).toISOString();
+  const before = readRows(f.rows);
+  assert.equal(before.incompleteTail, false);
+  assert.equal(before.digest, fingerprint({ messages: f.original }));
+  const next = turn('next delta');
+  const continuation = encodeClaude({ meta, messages: [packet(next, 'after-delayed-image', before.digest)] }, sessionId)
+    .rows.find(row => row.type === 'user');
+  continuation.parentUuid = f.sidecar.uuid;
+  f.rows.push(continuation);
+  const text = textRows(f.rows);
+  const after = readRows(f.rows);
+  assert.equal(after.incompleteTail, false);
+  assert.equal(after.importedPackets, 2);
+  assert.equal(after.digest, fingerprint({ messages: [...f.original, ...next] }));
+  assert.equal(textRows(f.rows), text);
+});
+
+test('a delayed image annotation requires exact native queue, adjacency, version and one-millisecond evidence', () => {
+  for (const change of [
+    f => { f.sidecar.queueTranscriptOnly = false; },
+    f => { f.sidecar.version = '2.1.283'; },
+    f => { f.sidecar.promptId = 'different'; },
+    f => { f.sidecar.timestamp = new Date(Date.parse(f.packetRow.timestamp) + 2).toISOString(); },
+    f => { f.sidecar.timestamp = new Date(Date.parse(f.packetRow.timestamp) - 1).toISOString(); },
+    f => { f.rows.splice(f.rows.indexOf(f.sidecar), 0, { type: 'custom-title', customTitle: 'intervening metadata' }); },
+    f => { f.sidecar.message.content[0].text += ' authored input'; },
+  ]) {
+    const f = imageSidecarTail();
+    f.sidecar.queueTranscriptOnly = true;
+    f.sidecar.timestamp = new Date(Date.parse(f.packetRow.timestamp) + 1).toISOString();
+    change(f);
+    assert.equal(readRows(f.rows).incompleteTail, true);
+  }
+});
+
 test('altered, unmatched and arbitrary metadata tails remain withheld instead of becoming completion boundaries', () => {
   for (const change of [
     f => { f.sidecar.message.content[0].text += ' additional instructions'; },

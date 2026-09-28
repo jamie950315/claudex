@@ -77,12 +77,20 @@ function nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, d
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
   const byId = new Map(rows.filter(row => row.uuid).map(row => [row.uuid, row]));
   const excluded = new Set();
-  for (const row of rows) {
+  for (const [index, row] of rows.entries()) {
     if (row.type !== 'user' || row.isMeta !== true || row.isSidechain || row.sessionId !== sessionId
         || !runtimeVersionPermitted(row.version, '2.1.281', versionPolicy)) continue;
     const parent = byId.get(row.parentUuid);
+    // The observed CLI can timestamp the immediately appended image sidecar
+    // one millisecond after its no-query SDK input. This exception requires
+    // the exact adjacent physical parent and native queue/version evidence;
+    // timestamps alone never authorize discarding a message.
+    const sameInputTime = parent && (row.timestamp === parent.timestamp
+      || row.queueTranscriptOnly === true && row.version === parent.version
+        && rows[index - 1] === parent
+        && Date.parse(row.timestamp) - Date.parse(parent.timestamp) === 1);
     if (parent?.type !== 'user' || parent.sessionId !== sessionId || parent.promptSource !== 'sdk' || parent.queueTranscriptOnly !== true
-        || !row.promptId || row.promptId !== parent.promptId || row.timestamp !== parent.timestamp || row.cwd !== parent.cwd
+        || !row.promptId || row.promptId !== parent.promptId || !sameInputTime || row.cwd !== parent.cwd
         || !Array.isArray(parent.imagePasteIds) || !parent.imagePasteIds.length
         || new Set(parent.imagePasteIds).size !== parent.imagePasteIds.length
         || parent.imagePasteIds.some(id => !Number.isSafeInteger(id) || id < 0)) continue;
