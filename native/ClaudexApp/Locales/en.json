@@ -1,4 +1,11 @@
 {
+  "Connections": "Connections",
+  "Connected": "Connected",
+  "Checking connection…": "Checking connection…",
+  "Show advanced diagnostics": "Show advanced diagnostics",
+  "Hide advanced diagnostics": "Hide advanced diagnostics",
+  "Setup and troubleshooting": "Setup and troubleshooting",
+  "All setup checks passed.": "All setup checks passed.",
   "Language": "Language",
   "System default": "System default",
   "English": "English",

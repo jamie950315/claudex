@@ -28,6 +28,14 @@ on top of the sanitized public history; never merge private ancestors into it.
 
 ## macOS app setup
 
+The main window uses one outer scroll view, with a width-constrained natural-height
+document. Never restore fixed-height nested checklist/diagnostic panes. Healthy
+operation shows only Codex/Claude prerequisite summaries; actual missing/login/
+blocked components automatically expose setup actions. The full checklist and
+technical details stay in an explicitly expanded advanced section. A prerequisite
+summary is not proof that messages have synced. Resize smoke checks must verify
+viewport growth, natural content width, a single scroll view, and compact ready mode.
+
 Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
 requirements request user action, while normal runtime waits need no setup retry.
 Keep bounded per-pass waitingContexts with exact known conversation identity,
@@ -55,7 +63,7 @@ starts setup, including a fresh background launch. Subsequent login starts stay
 quiet; prior setup reports preserve existing-install behavior. Read-only and
 synthetic UI modes must not mark onboarding as presented or run setup.
 Live health appears above setup, with timestamps, recovery, notifications and
-diagnostics under Details & support. Notification clicks open the same window;
+diagnostics under advanced diagnostics. Notification clicks open the same window;
 the status controller must never create a separate window.
 
 `native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users

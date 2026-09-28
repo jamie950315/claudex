@@ -1,4 +1,11 @@
 {
+  "Connections": "接続",
+  "Connected": "接続済み",
+  "Checking connection…": "接続を確認中…",
+  "Show advanced diagnostics": "詳細な診断を表示",
+  "Hide advanced diagnostics": "詳細な診断を非表示",
+  "Setup and troubleshooting": "設定とトラブルシューティング",
+  "All setup checks passed.": "すべての設定チェックに合格しました。",
   "Language": "言語",
   "System default": "システム設定に従う",
   "English": "英語",

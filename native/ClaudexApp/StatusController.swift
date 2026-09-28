@@ -18,7 +18,7 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     var onOpen: (() -> Void)?
     var statusIcon: NSImageView?
     var issuePanel: NSView?
-    var issueText: NSTextView?
+    var issueText: NSTextField?
     var headline: NSTextField?
     var descriptionText: NSTextField?
     var updatedText: NSTextField?
@@ -98,7 +98,7 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         issuePanel?.isHidden = report.issues.isEmpty
         var details = formattedIssues(Array(report.issues.prefix(1)), includeIdentity: false)
         if report.issues.count > 1 { details += "\n\n" + LF("%@ more items are available in diagnostics.", String(report.issues.count - 1)) }
-        if issueText?.string != details { issueText?.string = details }
+        if issueText?.stringValue != details { issueText?.stringValue = details }
         if let update = report.updatedAt {
             let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
             updatedText?.stringValue = LF("Last status update: %@", formatter.string(from: Date(timeIntervalSince1970: update / 1000)))

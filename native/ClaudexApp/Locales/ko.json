@@ -1,4 +1,11 @@
 {
+  "Connections": "연결",
+  "Connected": "연결됨",
+  "Checking connection…": "연결 확인 중…",
+  "Show advanced diagnostics": "고급 진단 표시",
+  "Hide advanced diagnostics": "고급 진단 숨기기",
+  "Setup and troubleshooting": "설정 및 문제 해결",
+  "All setup checks passed.": "모든 설정 점검을 통과했습니다.",
   "Language": "언어",
   "System default": "시스템 기본값",
   "English": "영어",

@@ -53,6 +53,22 @@ struct SetupReport: Decodable {
     let components: [SetupComponent]
     let message: String?
 
+    var attentionComponents: [SetupComponent] {
+        components.filter { [.blocked, .missing, .loginRequired].contains($0.state) }
+    }
+
+    var connectionSummaries: [SetupComponent] {
+        [("codex", "Codex", ComponentAction.openCodex), ("claude", "Claude", ComponentAction.openClaude)].map { provider, title, open in
+            let entries = components.filter { ["\(provider)-cli", "\(provider)-login", "\(provider)-desktop"].contains($0.id) }
+            let issue = entries.first { [.blocked, .missing, .loginRequired].contains($0.state) }
+                ?? entries.first { $0.state != .ready }
+            let complete = entries.count == 3 && issue == nil
+            return SetupComponent(id: "\(provider)-connection", label: title, state: complete ? .ready : issue?.state ?? .waiting,
+                                  detail: complete ? "Ready to connect" : issue?.detail ?? "Checking connection…",
+                                  action: complete ? open : nil)
+        }
+    }
+
     static func parse(_ data: Data) throws -> SetupReport {
         let decoder = JSONDecoder()
         let report = try decoder.decode(SetupReport.self, from: data)

@@ -30,10 +30,15 @@ so troubleshooting evidence is not changed. CLI output remains English.
 4. Let the checklist report which integrations are ready and which require an
    account, compatible runtime, idle native process, or normal app restart.
 
-The single Claudex window contains live synchronization status, account actions,
-the setup checklist, and **Retry setup**. **Details & support** expands status
-timestamps, recovery and notification information, plus diagnostics and notification
+The single Claudex window shows live synchronization status and compact Codex and
+Claude connection summaries. Setup actions appear automatically when a component
+is missing, sign-in is required, or a fault needs attention. Healthy operation does
+not show redundant sign-in buttons or Retry setup. **Show advanced diagnostics**
+reveals the complete checklist, versions, signatures, timestamps and notification
 controls. Notification clicks open this same window, not a separate status page.
+The page has one outer scroll area: content wraps with the window width and a
+taller window reveals more content. There are no fixed-height inner checklists
+or diagnostic scrolling panes.
 Waiting and fault details are shown directly beneath the health summary, including
 known conversation names, exact reasons, next steps, and copy/diagnostic actions.
 Normal runtime waits do not request setup changes. Missing components, required

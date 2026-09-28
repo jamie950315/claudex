@@ -20,7 +20,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var statusTitle: NSTextField!
     private var statusDetail: NSTextField!
     private var cards: NSStackView!
-    private var checklistScroll: NSScrollView!
+    private var pageScroll: NSScrollView!
+    private var connections: NSStackView!
+    private var attentionSection: NSStackView!
+    private var advancedSection: NSStackView!
+    private var diagnosticCards: NSStackView!
+    private var advancedExpanded = false
     private var progress: NSProgressIndicator!
     private var setupButton: NSButton!
     private var refreshButton: NSButton!
@@ -41,7 +46,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var languagePicker: NSPopUpButton!
     private var detailsButton: NSButton?
     private var issuePanel: NSStackView!
-    private var issueText: NSTextView!
+    private var issueText: NSTextField!
     private var setupHelp: NSTextField!
     private var settingsPresentedKey: String { "settingsPresented.v1:" + setupRoot }
 
@@ -109,12 +114,11 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         guard let code = sender.selectedItem?.representedObject as? String else { return }
         Localization.shared.select(code, persist: !inspectOnly && !uiSmoke)
         let visible = window.isVisible
-        let expanded = !healthDetails.isHidden
+        let frame = window.frame
         window.delegate = nil
         window.close()
         createWindow()
-        healthDetails.isHidden = !expanded
-        if let button = detailsButton { button.title = L(expanded ? "Hide details & support" : "Show details & support") }
+        window.setFrame(frame, display: false)
         buildMainMenu()
         if !uiSmoke { bindHealthView(); health.refresh(); health.refreshPermission() }
         if visible { showSetup(nil) }
@@ -169,36 +173,55 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         menu.addItem(item)
     }
 
+    private func verticalStack(spacing: CGFloat = 12) -> NSStackView {
+        let value = NSStackView()
+        value.orientation = .vertical
+        value.alignment = .leading
+        value.spacing = spacing
+        return value
+    }
+
     private func createWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 740),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 580),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Claudex"
-        window.minSize = NSSize(width: 640, height: 640)
+        window.minSize = NSSize(width: 560, height: 420)
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
         window.backgroundColor = .windowBackgroundColor
-
         let content = NSView()
         window.contentView = content
-        let stack = NSStackView()
-        stack.orientation = .vertical
-        stack.alignment = .leading
-        stack.spacing = 14
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        content.addSubview(stack)
+        pageScroll = NSScrollView()
+        pageScroll.hasVerticalScroller = true
+        pageScroll.autohidesScrollers = true
+        pageScroll.drawsBackground = false
+        pageScroll.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(pageScroll)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: 32),
-            stack.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -32),
-            stack.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
-            stack.bottomAnchor.constraint(lessThanOrEqualTo: content.bottomAnchor, constant: -24)
+            pageScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            pageScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            pageScroll.topAnchor.constraint(equalTo: content.topAnchor),
+            pageScroll.bottomAnchor.constraint(equalTo: content.bottomAnchor)
+        ])
+        let document = TopAlignedDocumentView()
+        document.translatesAutoresizingMaskIntoConstraints = false
+        pageScroll.documentView = document
+        let stack = verticalStack(spacing: 16)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        document.addSubview(stack)
+        NSLayoutConstraint.activate([
+            document.widthAnchor.constraint(equalTo: pageScroll.contentView.widthAnchor),
+            stack.leadingAnchor.constraint(equalTo: document.leadingAnchor, constant: 28),
+            stack.trailingAnchor.constraint(equalTo: document.trailingAnchor, constant: -28),
+            stack.topAnchor.constraint(equalTo: document.topAnchor, constant: 24),
+            stack.bottomAnchor.constraint(equalTo: document.bottomAnchor, constant: -24)
         ])
 
-        let brand = label("CLAUDEX", size: 11, weight: .bold, color: .secondaryLabelColor)
         let topRow = NSStackView()
         topRow.orientation = .horizontal
         topRow.spacing = 10
-        topRow.addArrangedSubview(brand)
+        topRow.addArrangedSubview(label("CLAUDEX", size: 11, weight: .bold, color: .secondaryLabelColor))
         let spacer = NSView()
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         topRow.addArrangedSubview(spacer)
@@ -215,47 +238,31 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         topRow.addArrangedSubview(languagePicker)
         stack.addArrangedSubview(topRow)
         topRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
         let healthRow = NSStackView()
         healthRow.orientation = .horizontal
+        healthRow.alignment = .top
         healthRow.spacing = 12
         healthIcon = NSImageView()
         healthIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 26, weight: .medium)
         healthIcon.widthAnchor.constraint(equalToConstant: 32).isActive = true
+        healthIcon.heightAnchor.constraint(equalToConstant: 32).isActive = true
         healthRow.addArrangedSubview(healthIcon)
-        healthTitle = label("Checking synchronization…", size: 25, weight: .semibold)
+        healthTitle = wrapping("Checking synchronization…", size: 25)
+        healthTitle.font = .systemFont(ofSize: 25, weight: .semibold)
         healthRow.addArrangedSubview(healthTitle)
         stack.addArrangedSubview(healthRow)
+        healthRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         healthDetail = wrapping("Reading the current service status.", size: 13)
         stack.addArrangedSubview(healthDetail)
         healthDetail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        issuePanel = NSStackView()
-        issuePanel.orientation = .vertical
-        issuePanel.alignment = .leading
-        issuePanel.spacing = 8
-        let issueScroll = NSScrollView()
-        issueScroll.hasVerticalScroller = true
-        issueScroll.borderType = .lineBorder
-        issueText = NSTextView(frame: NSRect(x: 0, y: 0, width: 610, height: 100))
-        issueText.isEditable = false
+        issuePanel = verticalStack(spacing: 8)
+        issueText = wrapping("", size: 12)
         issueText.isSelectable = true
-        issueText.isRichText = false
-        issueText.font = .systemFont(ofSize: 12)
-        issueText.textColor = .labelColor
-        issueText.backgroundColor = .controlBackgroundColor
-        issueText.textContainerInset = NSSize(width: 8, height: 8)
-        issueText.isVerticallyResizable = true
-        issueText.isHorizontallyResizable = false
-        issueText.minSize = NSSize(width: 0, height: 100)
-        issueText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-        issueText.textContainer?.containerSize = NSSize(width: 610, height: CGFloat.greatestFiniteMagnitude)
-        issueText.autoresizingMask = [.width]
-        issueText.textContainer?.widthTracksTextView = true
         issueText.setAccessibilityLabel(L("Diagnostic details:"))
-        issueScroll.documentView = issueText
-        issuePanel.addArrangedSubview(issueScroll)
-        issueScroll.widthAnchor.constraint(equalTo: issuePanel.widthAnchor).isActive = true
-        issueScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        issuePanel.addArrangedSubview(issueText)
+        issueText.widthAnchor.constraint(equalTo: issuePanel.widthAnchor).isActive = true
         let issueActions = NSStackView()
         issueActions.orientation = .horizontal
         issueActions.spacing = 10
@@ -270,14 +277,69 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         issuePanel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         issuePanel.isHidden = true
 
-        let disclosure = NSButton(title: L("Show details & support"), target: self, action: #selector(toggleDetails(_:)))
-        disclosure.bezelStyle = .inline
-        detailsButton = disclosure
-        stack.addArrangedSubview(disclosure)
-        healthDetails = NSStackView()
-        healthDetails.orientation = .vertical
-        healthDetails.alignment = .leading
-        healthDetails.spacing = 6
+        let divider = NSBox()
+        divider.boxType = .separator
+        stack.addArrangedSubview(divider)
+        divider.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.addArrangedSubview(label("Connections", size: 13, weight: .semibold, color: .secondaryLabelColor))
+        connections = verticalStack(spacing: 0)
+        stack.addArrangedSubview(connections)
+        connections.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        attentionSection = verticalStack()
+        attentionSection.addArrangedSubview(label("Setup and troubleshooting", size: 13, weight: .semibold))
+        let statusRow = NSStackView()
+        statusRow.orientation = .horizontal
+        statusRow.spacing = 12
+        statusRow.alignment = .top
+        statusIcon = NSImageView()
+        statusIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 22, weight: .medium)
+        statusIcon.widthAnchor.constraint(equalToConstant: 30).isActive = true
+        statusIcon.heightAnchor.constraint(equalToConstant: 30).isActive = true
+        statusRow.addArrangedSubview(statusIcon)
+        let statusText = verticalStack(spacing: 3)
+        statusTitle = label("Checking setup…", size: 16, weight: .semibold)
+        statusDetail = wrapping("Reading the local setup state.", size: 12, color: .secondaryLabelColor)
+        statusText.addArrangedSubview(statusTitle)
+        statusText.addArrangedSubview(statusDetail)
+        statusRow.addArrangedSubview(statusText)
+        attentionSection.addArrangedSubview(statusRow)
+        statusRow.widthAnchor.constraint(equalTo: attentionSection.widthAnchor).isActive = true
+        statusDetail.widthAnchor.constraint(equalTo: statusText.widthAnchor).isActive = true
+        cards = verticalStack(spacing: 0)
+        attentionSection.addArrangedSubview(cards)
+        cards.widthAnchor.constraint(equalTo: attentionSection.widthAnchor).isActive = true
+        let setupActions = NSStackView()
+        setupActions.orientation = .horizontal
+        setupActions.spacing = 10
+        progress = NSProgressIndicator()
+        progress.style = .spinning
+        progress.controlSize = .small
+        progress.isIndeterminate = true
+        setupActions.addArrangedSubview(progress)
+        setupButton = NSButton(title: L("Retry setup"), target: self, action: #selector(retrySetup(_:)))
+        setupButton.bezelStyle = .rounded
+        setupActions.addArrangedSubview(setupButton)
+        attentionSection.addArrangedSubview(setupActions)
+        setupHelp = wrapping("After resolving a missing requirement, use Retry setup to continue configuration. It does not resend messages or force a paused synchronization to continue.", size: 11, color: .secondaryLabelColor)
+        attentionSection.addArrangedSubview(setupHelp)
+        setupHelp.widthAnchor.constraint(equalTo: attentionSection.widthAnchor).isActive = true
+        stack.addArrangedSubview(attentionSection)
+        attentionSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        let footer = NSStackView()
+        footer.orientation = .horizontal
+        footer.spacing = 12
+        refreshButton = NSButton(title: L("Refresh status"), target: self, action: #selector(refreshStatus(_:)))
+        refreshButton.bezelStyle = .rounded
+        footer.addArrangedSubview(refreshButton)
+        detailsButton = NSButton(title: L("Show advanced diagnostics"), target: self, action: #selector(toggleDetails(_:)))
+        detailsButton!.bezelStyle = .inline
+        footer.addArrangedSubview(detailsButton!)
+        stack.addArrangedSubview(footer)
+
+        advancedSection = verticalStack()
+        healthDetails = verticalStack(spacing: 6)
         healthUpdated = wrapping("", size: 11, color: .secondaryLabelColor)
         healthRecovery = wrapping("", size: 11, color: .secondaryLabelColor)
         healthPermission = wrapping("", size: 11, color: .secondaryLabelColor)
@@ -295,95 +357,19 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             support.addArrangedSubview(button)
         }
         healthDetails.addArrangedSubview(support)
-        stack.addArrangedSubview(healthDetails)
-        healthDetails.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        healthDetails.isHidden = true
-
-        let connectionDivider = NSBox()
-        connectionDivider.boxType = .separator
-        stack.addArrangedSubview(connectionDivider)
-        connectionDivider.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        stack.addArrangedSubview(label("SETUP & CONNECTIONS", size: 11, weight: .bold, color: .secondaryLabelColor))
-        let intro = wrapping("Complete any required sign-in below. All projects are enabled with task-scoped access and native permission checks.", size: 12, color: .secondaryLabelColor)
-        stack.addArrangedSubview(intro)
-        intro.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-
-        let statusRow = NSStackView()
-        statusRow.orientation = .horizontal
-        statusRow.alignment = .centerY
-        statusRow.spacing = 12
-        statusIcon = NSImageView()
-        statusIcon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 24, weight: .medium)
-        statusIcon.translatesAutoresizingMaskIntoConstraints = false
-        statusIcon.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        statusIcon.heightAnchor.constraint(equalToConstant: 30).isActive = true
-        statusRow.addArrangedSubview(statusIcon)
-        let statusText = NSStackView()
-        statusText.orientation = .vertical
-        statusText.alignment = .leading
-        statusText.spacing = 3
-        statusTitle = label("Checking setup…", size: 17, weight: .semibold)
-        statusDetail = wrapping("Reading the local setup state.", size: 12, color: .secondaryLabelColor)
-        statusText.addArrangedSubview(statusTitle)
-        statusText.addArrangedSubview(statusDetail)
-        statusRow.addArrangedSubview(statusText)
-        stack.addArrangedSubview(statusRow)
-        statusRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        statusDetail.widthAnchor.constraint(equalTo: statusText.widthAnchor).isActive = true
-
-        let separator = NSBox()
-        separator.boxType = .separator
-        stack.addArrangedSubview(separator)
-        separator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        stack.addArrangedSubview(label("SETUP CHECKLIST", size: 11, weight: .bold, color: .secondaryLabelColor))
-        let scroll = NSScrollView()
-        scroll.borderType = .noBorder
-        scroll.hasVerticalScroller = true
-        scroll.drawsBackground = false
-        scroll.translatesAutoresizingMaskIntoConstraints = false
-        cards = NSStackView()
-        cards.orientation = .vertical
-        cards.alignment = .leading
-        cards.spacing = 0
-        let container = TopAlignedDocumentView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        cards.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(cards)
-        NSLayoutConstraint.activate([
-            cards.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            cards.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            cards.topAnchor.constraint(equalTo: container.topAnchor),
-            cards.bottomAnchor.constraint(equalTo: container.bottomAnchor)
-        ])
-        scroll.documentView = container
-        checklistScroll = scroll
-        stack.addArrangedSubview(scroll)
-        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        let preferredChecklistHeight = scroll.heightAnchor.constraint(equalToConstant: 215)
-        preferredChecklistHeight.priority = .defaultLow
-        preferredChecklistHeight.isActive = true
-        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
-        container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
-
-        let footer = NSStackView()
-        footer.orientation = .horizontal
-        footer.alignment = .centerY
-        footer.spacing = 10
-        progress = NSProgressIndicator()
-        progress.style = .spinning
-        progress.controlSize = .small
-        progress.isIndeterminate = true
-        footer.addArrangedSubview(progress)
-        setupButton = NSButton(title: L("Retry setup"), target: self, action: #selector(retrySetup(_:)))
-        setupButton.bezelStyle = .rounded
-        footer.addArrangedSubview(setupButton)
-        refreshButton = NSButton(title: L("Refresh status"), target: self, action: #selector(refreshStatus(_:)))
-        refreshButton.bezelStyle = .rounded
-        footer.addArrangedSubview(refreshButton)
-        stack.addArrangedSubview(footer)
-        setupHelp = wrapping("After resolving a missing requirement, use Retry setup to continue configuration. It does not resend messages or force a paused synchronization to continue.", size: 11, color: .secondaryLabelColor)
-        stack.addArrangedSubview(setupHelp)
-        stack.addArrangedSubview(wrapping("Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window or quitting the app leaves the service running.", size: 11, color: .secondaryLabelColor))
+        advancedSection.addArrangedSubview(healthDetails)
+        healthDetails.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
+        advancedSection.addArrangedSubview(label("SETUP CHECKLIST", size: 11, weight: .bold, color: .secondaryLabelColor))
+        diagnosticCards = verticalStack(spacing: 0)
+        advancedSection.addArrangedSubview(diagnosticCards)
+        diagnosticCards.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
+        let explanation = wrapping("Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window or quitting the app leaves the service running.", size: 11, color: .secondaryLabelColor)
+        advancedSection.addArrangedSubview(explanation)
+        explanation.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
+        stack.addArrangedSubview(advancedSection)
+        advancedSection.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        advancedSection.isHidden = !advancedExpanded
+        detailsButton?.title = L(advancedExpanded ? "Hide advanced diagnostics" : "Show advanced diagnostics")
         render()
     }
 
@@ -456,7 +442,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             }
         }
         statusTitle.stringValue = L(title)
-        let attention = report?.components.filter { [.blocked, .missing, .loginRequired].contains($0.state) } ?? []
+        let attention = report?.attentionComponents ?? []
         if !busy && failure == nil && !attention.isEmpty {
             statusDetail.stringValue = LF("Needs attention: %@", attention.map { L($0.label) }.joined(separator: ", "))
                 + "\n" + L(phase == .needsAction ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
@@ -465,11 +451,23 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         statusIcon.contentTintColor = color
         progress.isHidden = !busy
         if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
-        setupButton.isHidden = inspectOnly || phase == .waiting
+        attentionSection.isHidden = attention.isEmpty && failure == nil && !(busy && !checkingOnly)
+        setupButton.isHidden = inspectOnly || phase == .waiting || phase == .ready
         setupHelp.isHidden = setupButton.isHidden
-        setupButton.isEnabled = !busy
+        setupButton.isEnabled = !busy && !uiSmoke
         refreshButton.isEnabled = !busy
-        for view in cards.arrangedSubviews { cards.removeArrangedSubview(view); view.removeFromSuperview() }
+        for container in [cards!, connections!, diagnosticCards!] {
+            for view in container.arrangedSubviews { container.removeArrangedSubview(view); view.removeFromSuperview() }
+        }
+        if let report {
+            for component in report.connectionSummaries {
+                let row = componentRow(component)
+                connections.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: connections.widthAnchor).isActive = true
+            }
+        } else {
+            connections.addArrangedSubview(wrapping("Checking connection…", size: 12, color: .secondaryLabelColor))
+        }
         if let components = report?.components, !components.isEmpty {
             let ranked = components.enumerated().sorted { left, right in
                 func priority(_ item: SetupComponent) -> Int {
@@ -479,8 +477,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             }
             for (_, component) in ranked {
                 let row = componentRow(component)
-                cards.addArrangedSubview(row)
-                row.widthAnchor.constraint(equalTo: cards.widthAnchor).isActive = true
+                diagnosticCards.addArrangedSubview(row)
+                row.widthAnchor.constraint(equalTo: diagnosticCards.widthAnchor).isActive = true
+                if [.blocked, .missing, .loginRequired].contains(component.state) {
+                    let actionRow = componentRow(component)
+                    cards.addArrangedSubview(actionRow)
+                    actionRow.widthAnchor.constraint(equalTo: cards.widthAnchor).isActive = true
+                }
             }
         } else {
             let placeholder = wrapping(busy ? "Checking local components…" : "No verified component details are available.", size: 13, color: .secondaryLabelColor)
@@ -516,11 +519,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         textStack.addArrangedSubview(detail)
         row.addArrangedSubview(textStack)
         row.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        if let action = component.action, !(action == .retry && (component.state == .ready || component.state == .waiting)) {
+        if let action = component.action,
+           !(component.state == .ready && [.retry, .loginCodex, .loginClaude].contains(action)),
+           !(action == .retry && component.state == .waiting) {
             let button = NSButton(title: L(actionTitle(action)), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
-            button.isEnabled = !busy && !inspectOnly
+            button.isEnabled = !busy && !inspectOnly && !uiSmoke
             row.addArrangedSubview(button)
         }
         detail.widthAnchor.constraint(lessThanOrEqualTo: textStack.widthAnchor).isActive = true
@@ -529,17 +534,18 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     private func runUISmoke() {
         let waitingSample = cliArguments.contains("--ui-smoke-waiting")
+        let readySample = cliArguments.contains("--ui-smoke-ready")
         let ids = ["projects", "runtime", "codex-cli", "codex-login", "codex-desktop", "claude-cli",
                    "claude-login", "claude-desktop", "collaboration", "synchronization", "folders", "handoffs"]
         let labels = ["Project access", "Bundled runtime", "Codex", "ChatGPT sign-in", "Codex Desktop integration", "Claude Code",
                       "Claude sign-in", "Claude Desktop integration", "Cross-model collaboration", "Conversation synchronization", "Native project folders", "Native predecessor archival"]
         let components = zip(ids, labels).map { id, title in
             ["id": id, "label": title,
-             "state": id == "claude-login" ? (waitingSample ? "waiting" : "login-required") : "ready",
+             "state": id == "claude-login" && !readySample ? (waitingSample ? "waiting" : "login-required") : "ready",
              "detail": "All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.",
              "action": id == "claude-login" ? "login-claude" : "retry"]
         }
-        let sample: [String: Any] = ["version": 1, "phase": waitingSample ? "waiting" : "needs-action", "allProjects": true,
+        let sample: [String: Any] = ["version": 1, "phase": readySample ? "ready" : waitingSample ? "waiting" : "needs-action", "allProjects": true,
                                      "allowWrite": true, "components": components, "message": waitingSample ? "No setup changes are required. Claudex will continue automatically." : "Independent features stay available while the remaining requirements are resolved."]
         do {
             report = try SetupReport.parse(JSONSerialization.data(withJSONObject: sample))
@@ -553,25 +559,37 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         healthUpdated.stringValue = LF("Last status update: %@", "12:34:56")
         healthRecovery.stringValue = L("Automatic service recovery: enabled")
         healthPermission.stringValue = L("Notifications: enabled · repeated alerts are suppressed")
-        healthDetails.isHidden = false
-        issuePanel.isHidden = false
-        issueText.string = LF("Conversation: %@", "Example conversation") + "\n"
+        advancedExpanded = !readySample
+        advancedSection.isHidden = !advancedExpanded
+        issuePanel.isHidden = readySample
+        issueText.stringValue = LF("Conversation: %@", "Example conversation") + "\n"
             + LF("Reason: %@", "Codex destination is active.") + "\n"
             + LF("Next step: %@", L("Wait for the reply to finish. No action is required."))
         showSetup(nil)
         DispatchQueue.main.async {
+            self.window.setContentSize(NSSize(width: 560, height: 480))
             self.window.contentView?.layoutSubtreeIfNeeded()
-            self.checklistScroll.documentView?.layoutSubtreeIfNeeded()
-            self.checklistScroll.contentView.scroll(to: .zero)
-            self.checklistScroll.reflectScrolledClipView(self.checklistScroll.contentView)
+            self.pageScroll.documentView?.layoutSubtreeIfNeeded()
+            let smallHeight = self.pageScroll.contentView.bounds.height
+            self.window.setContentSize(NSSize(width: 820, height: 900))
+            self.window.contentView?.layoutSubtreeIfNeeded()
+            self.pageScroll.documentView?.layoutSubtreeIfNeeded()
+            self.pageScroll.contentView.scroll(to: .zero)
+            self.pageScroll.reflectScrolledClipView(self.pageScroll.contentView)
             self.window.displayIfNeeded()
-            let rows = self.cards.arrangedSubviews
-            let document = self.checklistScroll.documentView
-            let valid = rows.count == ids.count && document?.isFlipped == true
-                && (document?.frame.height ?? 0) > 0 && self.cards.frame.width > 0
-                && self.checklistScroll.contentView.bounds.origin.y == 0
-                && self.setupButton.convert(self.setupButton.bounds, to: self.window.contentView).maxY <= self.window.contentView!.bounds.maxY
-                && (!waitingSample || self.setupButton.isHidden)
+            let document = self.pageScroll.documentView
+            func scrollCount(_ view: NSView) -> Int {
+                (view is NSScrollView ? 1 : 0) + view.subviews.reduce(0) { $0 + scrollCount($1) }
+            }
+            let valid = self.diagnosticCards.arrangedSubviews.count == ids.count && document?.isFlipped == true
+                && (document?.frame.height ?? 0) > 0 && self.connections.frame.width > 0
+                && self.pageScroll.contentView.bounds.height > smallHeight + 300
+                && abs((document?.frame.width ?? 0) - self.pageScroll.contentView.bounds.width) < 1
+                && scrollCount(self.window.contentView!) == 1
+                && self.connections.arrangedSubviews.count == 2
+                && self.cards.arrangedSubviews.count == (readySample || waitingSample ? 0 : 1)
+                && (!(waitingSample || readySample) || self.setupButton.isHidden)
+                && (!readySample || self.attentionSection.isHidden && (document?.frame.height ?? 0) < self.pageScroll.contentView.bounds.height)
             if valid { print("Claudex UI smoke: layout ready") }
             else { fputs("Claudex UI smoke: layout unavailable\n", stderr) }
             exit(valid ? 0 : 1)
@@ -618,8 +636,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
     @objc private func toggleDetails(_ sender: NSButton) {
-        healthDetails.isHidden.toggle()
-        sender.title = L(healthDetails.isHidden ? "Show details & support" : "Hide details & support")
+        advancedExpanded.toggle()
+        advancedSection.isHidden = !advancedExpanded
+        sender.title = L(advancedExpanded ? "Hide advanced diagnostics" : "Show advanced diagnostics")
     }
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }

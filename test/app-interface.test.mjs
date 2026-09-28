@@ -23,6 +23,20 @@ for background in [false, true] {
   precondition(inspect.showSettings == !background && !inspect.startSetup)
 }
 print("Settings launch policy passed")
+let components = ["codex-cli", "codex-login", "codex-desktop", "claude-cli", "claude-login", "claude-desktop"].map {
+    SetupComponent(id: $0, label: $0, state: .ready, detail: "Verified", action: .retry)
+}
+let ready = SetupReport(version: 1, phase: .ready, allProjects: true, allowWrite: true, components: components, message: nil)
+precondition(ready.attentionComponents.isEmpty && ready.connectionSummaries.count == 2)
+precondition(ready.connectionSummaries.allSatisfy { $0.state == .ready && $0.detail == "Ready to connect" })
+precondition(ready.connectionSummaries[0].action == .openCodex && ready.connectionSummaries[1].action == .openClaude)
+let missing = SetupReport(version: 1, phase: .needsAction, allProjects: true, allowWrite: true,
+    components: components.filter { $0.id != "claude-login" } + [SetupComponent(id: "claude-login", label: "Claude", state: .loginRequired, detail: "Sign in required", action: .loginClaude)], message: nil)
+precondition(missing.attentionComponents.count == 1)
+precondition(missing.connectionSummaries[1].state == .loginRequired)
+precondition(missing.connectionSummaries[1].action == nil)
+let incomplete = SetupReport(version: 1, phase: .waiting, allProjects: true, allowWrite: true, components: [], message: nil)
+precondition(incomplete.connectionSummaries.allSatisfy { $0.state == .waiting })
 `);
     const run = promisify(execFile);
     await run('/usr/bin/xcrun', ['swiftc', new URL('../native/ClaudexApp/SetupModel.swift', import.meta.url).pathname, main, '-o', binary]);
@@ -59,4 +73,8 @@ test('graphical app owns one status item and integrates the bounded health contr
   assert.match(source, /"Open Claudex…"/);
   assert.match(source, /health\.onOpen =/);
   assert.match(controller, /self\.onOpen\?\(\)/);
+  assert.equal((source.match(/NSScrollView\(\)/g) || []).length, 1);
+  assert.doesNotMatch(source, /preferredChecklistHeight|issueScroll|checklistScroll/);
+  assert.match(source, /pageScroll\.bottomAnchor\.constraint\(equalTo: content.bottomAnchor\)/);
+  assert.match(source, /Show advanced diagnostics/);
 });

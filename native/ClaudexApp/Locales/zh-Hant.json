@@ -1,4 +1,11 @@
 {
+  "Connections": "連線",
+  "Connected": "已連線",
+  "Checking connection…": "正在檢查連線…",
+  "Show advanced diagnostics": "顯示進階診斷",
+  "Hide advanced diagnostics": "隱藏進階診斷",
+  "Setup and troubleshooting": "設定與疑難排解",
+  "All setup checks passed.": "所有設定檢查均已通過。",
   "Language": "語言",
   "System default": "跟隨系統",
   "English": "英文",

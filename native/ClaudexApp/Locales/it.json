@@ -1,4 +1,11 @@
 {
+  "Connections": "Connessioni",
+  "Connected": "Connesso",
+  "Checking connection…": "Verifica della connessione…",
+  "Show advanced diagnostics": "Mostra diagnostica avanzata",
+  "Hide advanced diagnostics": "Nascondi diagnostica avanzata",
+  "Setup and troubleshooting": "Configurazione e risoluzione dei problemi",
+  "All setup checks passed.": "Tutte le verifiche di configurazione sono state superate.",
   "Language": "Lingua",
   "System default": "Lingua del sistema",
   "English": "Inglese",
