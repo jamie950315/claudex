@@ -67,6 +67,7 @@ test('absent shared transport waits without enrolling sources and later resumes'
     assert.deepEqual(f.calls.track, []);
   } });
   assert.match(first.waiting, /backend is not ready/);
+  assert.deepEqual(first.waitingContexts, [{ scope: 'coordinator', reason: 'Shared Codex Desktop backend is not ready.' }]);
   assert.deepEqual(f.calls.track, ['/new']);
 });
 
@@ -136,6 +137,7 @@ test('an unenrolled conversation without a complete first turn does not make hea
     sleep: async () => { during = await f.status(); } });
   assert.equal(during.running, true);
   assert.equal(during.waiting, null);
+  assert.deepEqual(during.waitingContexts, []);
   assert.equal(during.synchronization, 'ready');
   assert.equal(during.blockedSourceCount, 0);
   assert.deepEqual(f.calls.sync, ['new', 'new']);
@@ -196,6 +198,61 @@ test('a busy destination waits and retries after it becomes idle', async () => {
   assert.equal(f.calls.sync.length, 2);
 });
 
+test('tracked waits retain conversation identity and the first reason while other conversations continue', async () => {
+  const f = await fixture();
+  f.state.conversations = { busy: { title: 'Waiting conversation' }, healthy: { title: 'Healthy conversation' },
+    active: { title: 'Other active conversation' } };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id === 'busy') throw new Error('Claude turn is still running.');
+    if (id === 'active') throw new Error('Destination is active.');
+  };
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.waiting, 'Claude turn is still running.');
+  assert.deepEqual(pass.waitingContexts, [
+    { scope: 'conversation', conversationId: 'busy', title: 'Waiting conversation', reason: 'Claude turn is still running.' },
+    { scope: 'conversation', conversationId: 'active', title: 'Other active conversation', reason: 'Destination is active.' },
+  ]);
+  assert.ok(f.calls.sync.includes('healthy'));
+});
+
+test('waiting contexts are bounded and reset when the next pass becomes healthy', async () => {
+  const f = await fixture(); let busy = true; const passes = [];
+  f.state.conversations = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`busy${index}`, { title: 't'.repeat(300) }]));
+  f.bridge.sync = async () => { if (busy) throw new Error(`Claude turn is still running. ${'x'.repeat(1500)}`); };
+  await f.run({ maxPasses: 3, discover: async () => [], sleep: async () => {
+    passes.push(await f.status()); busy = false;
+  } });
+  assert.equal(passes[0].waitingContexts.length, 20);
+  assert.equal(passes[0].waitingContexts[0].title.length, 200);
+  assert.equal(passes[0].waitingContexts[0].reason.length, 1000);
+  assert.equal(passes[0].waiting.length, 500);
+  assert.equal(passes[1].waiting, null);
+  assert.deepEqual(passes[1].waitingContexts, []);
+});
+
+test('discovery wait contexts use known source identities without exposing transcript paths', async () => {
+  const f = await fixture({ bridge: { async track() { throw new Error('Transcript changed while being read.'); } } });
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [{ side: 'claude', nativeId: 'native-source', path: '/private/transcript' }],
+    sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(pass.waitingContexts, [{ scope: 'source', side: 'claude', nativeId: 'native-source',
+    reason: 'Transcript changed while being read.' }]);
+});
+
+test('pending recovery waits identify the affected conversation from the coordinator ledger', async () => {
+  const f = await fixture();
+  f.state.conversations.protected = { title: 'Protected conversation' };
+  f.state.pending = { phase: 'prepared', record: { conversationId: 'protected' } };
+  f.bridge.recover = async () => { throw new Error('Destination is active.'); };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(pass.waitingContexts, [{ scope: 'coordinator', conversationId: 'protected',
+    title: 'Protected conversation', reason: 'Destination is active.' }]);
+  assert.deepEqual(f.calls.track, []);
+});
+
 test('an ambiguous native write is recovered from its durable intent before another sync', async () => {
   let first = true;
   const f = await fixture({ bridge: { async sync(id) {
@@ -231,12 +288,15 @@ test('unsupported new histories have a bounded warning count and do not stop oth
 
 test('conflicting tracked histories stay blocked without stopping owners or choosing a branch', async () => {
   const f = await fixture({ bridge: { async sync() { throw new Error('Both sides changed; no history was replaced.'); } } });
+  const track = f.bridge.track;
+  f.bridge.track = async source => { await track(source); f.state.conversations[source.id].title = 'Conflicting conversation'; };
   let pass;
   await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
   assert.equal(pass.running, true);
   assert.equal(pass.synchronization, 'degraded');
   assert.match(pass.blockedConversations[0].reason, /Both sides changed/);
   assert.equal(pass.blockedConversations[0].conversationId, 'new');
+  assert.equal(pass.blockedConversations[0].title, 'Conflicting conversation');
   assert.equal(f.state.pending, null);
 });
 

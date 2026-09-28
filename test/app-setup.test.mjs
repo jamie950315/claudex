@@ -180,3 +180,28 @@ test('a live watcher pending dependency hold is shown as paused rather than tran
   assert.match(row.detail, /older snapshot has dependent threads/);
   assert.match(row.detail, /pending transaction.*preserved/);
 });
+
+test('ordinary native waiting is not a request for user action and retains the exact reason', async t => {
+  const { root, setup } = await fixture(t);
+  await setup.setup();
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify({ mode: 'desktop', pid: process.pid, running: true,
+    updatedAt: Date.now(), foregroundCompletedAt: Date.now(), synchronization: 'waiting',
+    waiting: 'Codex destination is active.', folderProjection: { state: 'ready' }, localHandoff: { state: 'ready' } }), { mode: 0o600 });
+  const report = await setup.inspect();
+  assert.equal(report.phase, 'waiting');
+  assert.equal(report.message, 'No setup changes are required. Claudex will continue automatically.');
+  assert.equal(report.components.find(item => item.id === 'synchronization').detail, 'Codex destination is active.');
+});
+
+test('actual runtime faults expose their exact reasons instead of generic setup messages', async t => {
+  const { root, setup } = await fixture(t);
+  await setup.setup();
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify({ pid: process.pid, running: true, updatedAt: Date.now(),
+    synchronization: 'blocked', blocked: { reason: 'Exact prefix conflict' },
+    folderProjection: { state: 'error', error: 'Exact frontend resource conflict' },
+    localHandoff: { state: 'error', error: 'Exact native identity conflict' } }), { mode: 0o600 });
+  const report = await setup.inspect();
+  assert.equal(report.phase, 'blocked');
+  for (const [id, expected] of [['synchronization', 'Exact prefix conflict'], ['folders', 'Exact frontend resource conflict'], ['handoffs', 'Exact native identity conflict']])
+    assert.equal(report.components.find(item => item.id === id).detail, expected);
+});

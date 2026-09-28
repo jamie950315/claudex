@@ -40,6 +40,19 @@ check(health(changed).attention)
 changed = ready; changed["localHandoff"] = ["state": "waiting", "deferred": "history_changed"]
 check(health(changed).state == "waiting" && !health(changed).attention)
 check(health(changed).title == "Waiting for Desktop handoff")
+changed = ready; changed["waiting"] = "Wait for a complete assistant turn or verified synchronized checkpoint."
+changed["waitingContexts"] = [["scope": "conversation", "conversationId": "thread-123", "title": "Translation task", "reason": "Wait for a complete assistant turn or verified synchronized checkpoint."]]
+check(health(changed).issues.count == 1)
+check(health(changed).issues[0].target == "Translation task")
+check(health(changed).issues[0].identity == "thread-123")
+check(health(changed).issues[0].nextStep == "Wait for the reply to finish. No action is required.")
+check(!health(changed).attention)
+changed = ready; changed["blocked"] = ["title": "Affected work", "conversationId": "thread-456", "reason": "Exact conflicting prefix"]
+check(health(changed).issues[0].target == "Affected work")
+check(health(changed).issues[0].reason == "Exact conflicting prefix")
+check(health(changed).issues[0].nextStep.contains("Do not retry setup"))
+check(health(changed).attention)
+check(health().issues.isEmpty)
 let recovering: [String: Any] = ["pid": 42, "state": "backoff", "autoRestart": true, "nextAttemptAt": now + 5000]
 check(health(ready, recovering).state == "recovering" && health(ready, recovering).autoRestart)
 check(health(ready, ["pid": 42, "state": "blocked", "blockerCount": 1,

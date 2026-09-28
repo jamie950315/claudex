@@ -34,6 +34,11 @@ The single Claudex window contains live synchronization status, account actions,
 the setup checklist, and **Retry setup**. **Details & support** expands status
 timestamps, recovery and notification information, plus diagnostics and notification
 controls. Notification clicks open this same window, not a separate status page.
+Waiting and fault details are shown directly beneath the health summary, including
+known conversation names, exact reasons, next steps, and copy/diagnostic actions.
+Normal runtime waits do not request setup changes. Missing components, required
+sign-in and actual faults appear before ready rows in the checklist; ordinary
+waiting does not offer a misleading setup retry button.
 After resolving a missing requirement, use that button to continue configuration;
 it does not resend messages or bypass synchronization guards. The menu has one
 **Open Claudex…** entry, not separate status, settings or retry entries. Later login starts stay quiet,

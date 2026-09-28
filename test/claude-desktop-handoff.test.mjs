@@ -196,6 +196,7 @@ test('activity, title, registration and file changes during verification cannot 
       assert.equal(result.deferred, 'history_changed');
       assert.equal(result.actions, 0);
       assert.equal(result.conversationId, pair.conversationId);
+      assert.equal(result.title, pair.mapping.title);
     } else await assert.rejects(f.publish(), /changed/);
     assert.deepEqual((await f.manifest()).actions, []);
   }

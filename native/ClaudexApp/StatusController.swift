@@ -17,6 +17,8 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     }
     var onOpen: (() -> Void)?
     var statusIcon: NSImageView?
+    var issuePanel: NSView?
+    var issueText: NSTextView?
     var headline: NSTextField?
     var descriptionText: NSTextField?
     var updatedText: NSTextField?
@@ -93,6 +95,10 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         statusIcon?.contentTintColor = report.attention ? .systemOrange : report.operational ? .systemGreen : .secondaryLabelColor
         headline?.stringValue = L(report.title)
         descriptionText?.stringValue = LD(report.detail)
+        issuePanel?.isHidden = report.issues.isEmpty
+        var details = formattedIssues(Array(report.issues.prefix(1)), includeIdentity: false)
+        if report.issues.count > 1 { details += "\n\n" + LF("%@ more items are available in diagnostics.", String(report.issues.count - 1)) }
+        if issueText?.string != details { issueText?.string = details }
         if let update = report.updatedAt {
             let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
             updatedText?.stringValue = LF("Last status update: %@", formatter.string(from: Date(timeIntervalSince1970: update / 1000)))
@@ -104,6 +110,25 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
             : permission == .authorized || permission == .provisional
             ? (testNotice.isEmpty ? "Notifications: enabled · repeated alerts are suppressed" : testNotice)
             : "Notifications: not enabled · click Notifications to allow alerts")
+    }
+
+    var diagnosticText: String {
+        formattedIssues(report.issues, includeIdentity: true)
+    }
+
+    private func formattedIssues(_ issues: [HealthIssue], includeIdentity: Bool) -> String {
+        issues.map { issue in
+            let target = issue.identity == nil ? L(issue.target) : issue.target
+            let identity = includeIdentity ? issue.identity.map { $0 == target ? "" : " [\($0)]" } ?? "" : ""
+            return LF("Conversation: %@", target) + identity + "\n"
+                + LF("Reason: %@", LD(issue.reason)) + "\n"
+                + LF("Next step: %@", L(issue.nextStep))
+        }.joined(separator: "\n\n")
+    }
+
+    @objc func copyDiagnostics(_ sender: Any?) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(diagnosticText, forType: .string)
     }
 
     @objc func showDiagnostics(_ sender: Any?) {

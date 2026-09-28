@@ -170,24 +170,29 @@ export class AppSetup {
         : !compatible || !claudeCompatible ? 'This native runtime is outside the synchronization policy. Collaboration can still be set up independently.'
           : held ? (watcher.blocked?.reason === 'Owned projection has dependent threads.'
             ? 'Synchronization is paused: an older snapshot has dependent threads. The pending transaction and all histories are preserved; no input is resent.'
-            : 'The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.')
+            : watcher.blocked?.reason ?? watcher.blockedConversations?.[0]?.reason ?? watcher.blockedSources?.[0]?.reason
+              ?? 'The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.')
           : !configured ? 'Existing synchronization settings are preserved until a safe configuration change is possible.'
-            : synchronized ? 'The watcher reports ready and is running for all projects.' : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', 'retry'));
+            : synchronized ? 'The watcher reports ready and is running for all projects.'
+              : live && watcher.waiting ? watcher.waiting : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', 'retry'));
       rows.push(component('folders', 'Native project folders', watcher?.folderProjection?.state === 'error' ? 'blocked'
         : config?.folderProjection?.enabled && live && watcher.folderProjection?.state === 'ready' ? 'ready' : 'waiting',
-        watcher?.folderProjection?.state === 'error' ? 'The current frontend resource could not be verified. No replacement resource was assumed.'
+        watcher?.folderProjection?.state === 'error' ? watcher.folderProjection.error ?? 'The current frontend resource could not be verified. No replacement resource was assumed.'
           : config?.folderProjection?.enabled ? 'The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required.'
           : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', 'retry'));
       rows.push(component('handoffs', 'Native predecessor archival', watcher?.localHandoff?.state === 'error' ? 'blocked'
         : config?.desktopLocalHandoff?.enabled && live && watcher.localHandoff?.state === 'ready' ? 'ready' : 'waiting',
-        watcher?.localHandoff?.state === 'error' ? 'The native handoff coordinator reports an unresolved guard. Original histories are preserved.'
+        watcher?.localHandoff?.state === 'error' ? watcher.localHandoff.error ?? 'The native handoff coordinator reports an unresolved guard. Original histories are preserved.'
           : config?.desktopLocalHandoff?.enabled ? 'Native handoffs are configured; each archival still requires verified history and native lifecycle checks.'
           : 'Native handoff integration is waiting for verified folder setup. Original conversations remain preserved.', 'retry'));
     } catch (error) { rows.push(component('synchronization', 'Conversation synchronization', 'blocked', safeFailure(error), 'retry')); }
     for (const row of rows) if (notes[row.id]) { row.state = 'blocked'; row.detail = notes[row.id]; row.action = 'retry'; }
-    const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked' : 'needs-action';
+    const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked'
+      : rows.some(row => ['missing', 'login-required'].includes(row.state)) ? 'needs-action' : 'waiting';
     return { version: 1, phase, allProjects: true, allowWrite: true, components: rows,
-      message: phase === 'ready' ? 'Claudex is configured for all projects.' : 'Independent features stay available while the remaining requirements are resolved.' };
+      message: phase === 'ready' ? 'Claudex is configured for all projects.'
+        : phase === 'waiting' ? 'No setup changes are required. Claudex will continue automatically.'
+          : 'Independent features stay available while the remaining requirements are resolved.' };
   }
 
   async setup() {

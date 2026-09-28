@@ -300,7 +300,8 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
         assertInspection(current, currentData, conversation.canonical, conversation.cwd);
         if (!equal(await fileIdentity(original.path), originalIdentity) || !equal(await fileIdentity(current.path), currentIdentity))
           throw Object.assign(new Error('Claude Desktop handoff: native history changed during handoff verification.'),
-            { code: 'CLAUDEX_HANDOFF_HISTORY_CHANGED', conversationId: conversation.id });
+            { code: 'CLAUDEX_HANDOFF_HISTORY_CHANGED', conversationId: conversation.id,
+              title: typeof conversation.title === 'string' ? conversation.title.slice(0, 200) : undefined });
         await unchanged(owner);
         const latest = (await readDesktopSessionMappings(desktopHome, [original.nativeId])).get(original.nativeId.toLowerCase());
         if (!equal(latest, mapping) || state.pending != null) fail('native registration or coordinator state changed during verification.');
@@ -356,7 +357,7 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
         const changed = await writeManifest(root, [], now(), anchors);
         if (error.code === 'CLAUDEX_HANDOFF_HISTORY_CHANGED') return {
           changed, actions: 0, anchors: anchors.length, acknowledged: [],
-          deferred: 'history_changed', conversationId: error.conversationId,
+          deferred: 'history_changed', conversationId: error.conversationId, title: error.title,
         };
       }
       catch (revokeError) { throw new AggregateError([error, revokeError], 'Claude Desktop handoff verification and manifest revocation failed.'); }

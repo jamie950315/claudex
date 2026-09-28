@@ -40,6 +40,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var healthDetails: NSStackView!
     private var languagePicker: NSPopUpButton!
     private var detailsButton: NSButton?
+    private var issuePanel: NSStackView!
+    private var issueText: NSTextView!
+    private var setupHelp: NSTextField!
     private var settingsPresentedKey: String { "settingsPresented.v1:" + setupRoot }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -97,6 +100,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         health.updatedText = healthUpdated
         health.recoveryText = healthRecovery
         health.permissionText = healthPermission
+        health.issuePanel = issuePanel
+        health.issueText = issueText
         health.onOpen = { [weak self] in self?.showSetup(nil) }
     }
 
@@ -166,8 +171,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     private func createWindow() {
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 740),
-                          styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Claudex"
+        window.minSize = NSSize(width: 640, height: 640)
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
@@ -222,6 +228,47 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         healthDetail = wrapping("Reading the current service status.", size: 13)
         stack.addArrangedSubview(healthDetail)
         healthDetail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+
+        issuePanel = NSStackView()
+        issuePanel.orientation = .vertical
+        issuePanel.alignment = .leading
+        issuePanel.spacing = 8
+        let issueScroll = NSScrollView()
+        issueScroll.hasVerticalScroller = true
+        issueScroll.borderType = .lineBorder
+        issueText = NSTextView(frame: NSRect(x: 0, y: 0, width: 610, height: 100))
+        issueText.isEditable = false
+        issueText.isSelectable = true
+        issueText.isRichText = false
+        issueText.font = .systemFont(ofSize: 12)
+        issueText.textColor = .labelColor
+        issueText.backgroundColor = .controlBackgroundColor
+        issueText.textContainerInset = NSSize(width: 8, height: 8)
+        issueText.isVerticallyResizable = true
+        issueText.isHorizontallyResizable = false
+        issueText.minSize = NSSize(width: 0, height: 100)
+        issueText.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        issueText.textContainer?.containerSize = NSSize(width: 610, height: CGFloat.greatestFiniteMagnitude)
+        issueText.autoresizingMask = [.width]
+        issueText.textContainer?.widthTracksTextView = true
+        issueText.setAccessibilityLabel(L("Diagnostic details:"))
+        issueScroll.documentView = issueText
+        issuePanel.addArrangedSubview(issueScroll)
+        issueScroll.widthAnchor.constraint(equalTo: issuePanel.widthAnchor).isActive = true
+        issueScroll.heightAnchor.constraint(equalToConstant: 100).isActive = true
+        let issueActions = NSStackView()
+        issueActions.orientation = .horizontal
+        issueActions.spacing = 10
+        for (title, action) in [("Copy diagnostic details", #selector(copyDiagnostics(_:))), ("Diagnostics", #selector(showDiagnostics(_:)))] {
+            let button = NSButton(title: L(title), target: self, action: action)
+            button.bezelStyle = .rounded
+            button.isEnabled = !uiSmoke
+            issueActions.addArrangedSubview(button)
+        }
+        issuePanel.addArrangedSubview(issueActions)
+        stack.addArrangedSubview(issuePanel)
+        issuePanel.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        issuePanel.isHidden = true
 
         let disclosure = NSButton(title: L("Show details & support"), target: self, action: #selector(toggleDetails(_:)))
         disclosure.bezelStyle = .inline
@@ -312,7 +359,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         checklistScroll = scroll
         stack.addArrangedSubview(scroll)
         scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        scroll.heightAnchor.constraint(equalToConstant: 215).isActive = true
+        let preferredChecklistHeight = scroll.heightAnchor.constraint(equalToConstant: 215)
+        preferredChecklistHeight.priority = .defaultLow
+        preferredChecklistHeight.isActive = true
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 80).isActive = true
         container.widthAnchor.constraint(equalTo: scroll.contentView.widthAnchor).isActive = true
 
         let footer = NSStackView()
@@ -331,7 +381,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         refreshButton.bezelStyle = .rounded
         footer.addArrangedSubview(refreshButton)
         stack.addArrangedSubview(footer)
-        stack.addArrangedSubview(wrapping("After resolving a missing requirement, use Retry setup to continue configuration. It does not resend messages or force a paused synchronization to continue.", size: 11, color: .secondaryLabelColor))
+        setupHelp = wrapping("After resolving a missing requirement, use Retry setup to continue configuration. It does not resend messages or force a paused synchronization to continue.", size: 11, color: .secondaryLabelColor)
+        stack.addArrangedSubview(setupHelp)
         stack.addArrangedSubview(wrapping("Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window or quitting the app leaves the service running.", size: 11, color: .secondaryLabelColor))
         render()
     }
@@ -397,6 +448,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         else {
             switch phase {
             case .ready: title = "Ready to connect"; symbol = "checkmark.circle.fill"; color = .systemGreen
+            case .waiting: title = "Waiting automatically"; symbol = "clock"; color = .secondaryLabelColor
             case .settingUp: title = "Setup in progress"; symbol = "clock"; color = .controlAccentColor
             case .needsAction: title = "Action needed"; symbol = "person.crop.circle.badge.exclamationmark"; color = .systemOrange
             case .blocked: title = "Setup needs attention"; symbol = "exclamationmark.triangle"; color = .systemOrange
@@ -404,17 +456,28 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             }
         }
         statusTitle.stringValue = L(title)
-        statusDetail.stringValue = LD(failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report."))
+        let attention = report?.components.filter { [.blocked, .missing, .loginRequired].contains($0.state) } ?? []
+        if !busy && failure == nil && !attention.isEmpty {
+            statusDetail.stringValue = LF("Needs attention: %@", attention.map { L($0.label) }.joined(separator: ", "))
+                + "\n" + L(phase == .needsAction ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
+        } else { statusDetail.stringValue = LD(failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report.")) }
         statusIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: L(title))
         statusIcon.contentTintColor = color
         progress.isHidden = !busy
         if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
-        setupButton.isHidden = inspectOnly
+        setupButton.isHidden = inspectOnly || phase == .waiting
+        setupHelp.isHidden = setupButton.isHidden
         setupButton.isEnabled = !busy
         refreshButton.isEnabled = !busy
         for view in cards.arrangedSubviews { cards.removeArrangedSubview(view); view.removeFromSuperview() }
         if let components = report?.components, !components.isEmpty {
-            for component in components {
+            let ranked = components.enumerated().sorted { left, right in
+                func priority(_ item: SetupComponent) -> Int {
+                    [.blocked, .missing, .loginRequired].contains(item.state) ? 0 : item.state == .waiting ? 1 : 2
+                }
+                return priority(left.element) == priority(right.element) ? left.offset < right.offset : priority(left.element) < priority(right.element)
+            }
+            for (_, component) in ranked {
                 let row = componentRow(component)
                 cards.addArrangedSubview(row)
                 row.widthAnchor.constraint(equalTo: cards.widthAnchor).isActive = true
@@ -453,7 +516,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         textStack.addArrangedSubview(detail)
         row.addArrangedSubview(textStack)
         row.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        if let action = component.action, !(action == .retry && component.state == .ready) {
+        if let action = component.action, !(action == .retry && (component.state == .ready || component.state == .waiting)) {
             let button = NSButton(title: L(actionTitle(action)), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
@@ -465,18 +528,19 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func runUISmoke() {
+        let waitingSample = cliArguments.contains("--ui-smoke-waiting")
         let ids = ["projects", "runtime", "codex-cli", "codex-login", "codex-desktop", "claude-cli",
                    "claude-login", "claude-desktop", "collaboration", "synchronization", "folders", "handoffs"]
         let labels = ["Project access", "Bundled runtime", "Codex", "ChatGPT sign-in", "Codex Desktop integration", "Claude Code",
                       "Claude sign-in", "Claude Desktop integration", "Cross-model collaboration", "Conversation synchronization", "Native project folders", "Native predecessor archival"]
         let components = zip(ids, labels).map { id, title in
             ["id": id, "label": title,
-             "state": id == "claude-login" ? "login-required" : "ready",
+             "state": id == "claude-login" ? (waitingSample ? "waiting" : "login-required") : "ready",
              "detail": "All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.",
              "action": id == "claude-login" ? "login-claude" : "retry"]
         }
-        let sample: [String: Any] = ["version": 1, "phase": "needs-action", "allProjects": true,
-                                     "allowWrite": true, "components": components, "message": "Independent features stay available while the remaining requirements are resolved."]
+        let sample: [String: Any] = ["version": 1, "phase": waitingSample ? "waiting" : "needs-action", "allProjects": true,
+                                     "allowWrite": true, "components": components, "message": waitingSample ? "No setup changes are required. Claudex will continue automatically." : "Independent features stay available while the remaining requirements are resolved."]
         do {
             report = try SetupReport.parse(JSONSerialization.data(withJSONObject: sample))
         } catch {
@@ -490,6 +554,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         healthRecovery.stringValue = L("Automatic service recovery: enabled")
         healthPermission.stringValue = L("Notifications: enabled · repeated alerts are suppressed")
         healthDetails.isHidden = false
+        issuePanel.isHidden = false
+        issueText.string = LF("Conversation: %@", "Example conversation") + "\n"
+            + LF("Reason: %@", "Codex destination is active.") + "\n"
+            + LF("Next step: %@", L("Wait for the reply to finish. No action is required."))
         showSetup(nil)
         DispatchQueue.main.async {
             self.window.contentView?.layoutSubtreeIfNeeded()
@@ -503,6 +571,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 && (document?.frame.height ?? 0) > 0 && self.cards.frame.width > 0
                 && self.checklistScroll.contentView.bounds.origin.y == 0
                 && self.setupButton.convert(self.setupButton.bounds, to: self.window.contentView).maxY <= self.window.contentView!.bounds.maxY
+                && (!waitingSample || self.setupButton.isHidden)
             if valid { print("Claudex UI smoke: layout ready") }
             else { fputs("Claudex UI smoke: layout unavailable\n", stderr) }
             exit(valid ? 0 : 1)
@@ -554,6 +623,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }
+    @objc private func copyDiagnostics(_ sender: Any?) { health.copyDiagnostics(sender) }
     @objc private func refreshStatus(_ sender: Any?) { health.refresh(); health.refreshPermission(); run(.inspect) }
     @objc private func openCodex(_ sender: Any?) { openApplication("com.openai.codex") }
     @objc private func openClaude(_ sender: Any?) { openApplication("com.anthropic.claudefordesktop") }

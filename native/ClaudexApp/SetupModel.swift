@@ -13,6 +13,7 @@ struct SetupLaunchPolicy {
 
 enum SetupPhase: String, Decodable {
     case ready = "ready"
+    case waiting = "waiting"
     case settingUp = "setting-up"
     case needsAction = "needs-action"
     case blocked = "blocked"

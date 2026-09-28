@@ -28,6 +28,13 @@ on top of the sanitized public history; never merge private ancestors into it.
 
 ## macOS app setup
 
+Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
+requirements request user action, while normal runtime waits need no setup retry.
+Keep bounded per-pass waitingContexts with exact known conversation identity,
+title and reason. The main window shows reasons and next steps without opening
+details, and orders non-ready setup rows first. Never infer a missing identity,
+hide a real conflict, or change synchronization semantics for a friendlier status.
+
 Claudex.app localizes presentation using complete English-keyed JSON catalogs
 under native/ClaudexApp/Locales for en, zh-Hant, zh-Hans, ja, ko, es, de, fr and it.
 Keep key and %@ placeholder parity; the builder rejects incomplete catalogs.
