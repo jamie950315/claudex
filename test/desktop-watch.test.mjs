@@ -124,6 +124,55 @@ test('tracked and owned identities are not enrolled again on later passes', asyn
   assert.equal(f.calls.codex, 3);
 });
 
+test('rapid progress coalesces within two seconds and publishes the latest state at the next boundary', async () => {
+  const f = await fixture(), publications = []; let clock = 0;
+  f.state.conversations = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`c${i}`, { title: `Conversation ${i}` }]));
+  f.bridge.sync = async id => { f.calls.sync.push(id); clock += 60; };
+  await f.run({ maxPasses: 1, discover: async () => [], now: () => clock,
+    writeStatus: async (_path, value) => publications.push(structuredClone(value)) });
+  const progress = publications.filter(value => value.running && value.foregroundCompletedAt === null);
+  assert.equal(progress.length, 3);
+  assert.equal(progress[0].updatedAt, 0);
+  assert.equal(progress[1].updatedAt, 0);
+  assert.equal(progress[1].currentOperation.conversationId, 'c0');
+  assert.equal(progress[2].updatedAt, 2040);
+  assert.equal(progress[2].checkedConversationCount, 34);
+  assert.equal(progress[2].lastSync.conversationId, 'c33');
+  assert.equal(progress[2].currentOperation, null);
+  assert.equal(publications.at(-2).checkedConversationCount, 40);
+  assert.equal(publications.at(-2).initialSweepCompletedAt, 2400);
+  assert.equal(publications.at(-1).running, false);
+  assert.deepEqual(f.calls.sync, Object.keys(f.state.conversations));
+});
+
+test('different blocked reasons publish immediately during rapid progress', async () => {
+  const f = await fixture(), publications = [];
+  f.state.conversations = { a: { title: 'A' }, b: { title: 'B' }, c: { title: 'C' } };
+  f.bridge.sync = async id => {
+    if (id === 'a') throw new Error('Both sides changed; no history was replaced.');
+    if (id === 'b') throw new Error('Owned projection has dependent threads.');
+    assert.deepEqual(publications.at(-1).blockedConversations.map(item => item.reason),
+      ['Both sides changed; no history was replaced.', 'Owned projection has dependent threads.']);
+  };
+  await f.run({ maxPasses: 1, discover: async () => [],
+    writeStatus: async (_path, value) => publications.push(structuredClone(value)) });
+  const blocked = publications.filter(value => value.running && value.synchronization === 'degraded');
+  assert.ok(blocked.some(value => value.blockedConversationCount === 1));
+  assert.ok(blocked.some(value => value.blockedConversationCount === 2));
+  assert.ok(blocked.every(value => value.updatedAt === 0));
+});
+
+test('fatal diagnostic errors bypass the progress interval', async () => {
+  const f = await fixture(), publications = [];
+  f.bridge.sync = async () => { throw new Error('Unexpected native failure'); };
+  await assert.rejects(f.run({ maxPasses: 1,
+    writeStatus: async (_path, value) => publications.push(structuredClone(value)) }), /Unexpected native failure/);
+  assert.equal(publications[0].running, true);
+  assert.equal(publications.at(-1).running, false);
+  assert.equal(publications.at(-1).stoppedAt, 0);
+  assert.equal(publications.at(-1).error, 'Unexpected native failure');
+});
+
 test('an unenrolled conversation without a complete first turn does not make healthy synchronization globally wait', async () => {
   const f = await fixture(); const track = f.bridge.track;
   f.bridge.track = async source => {

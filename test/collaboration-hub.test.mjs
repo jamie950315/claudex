@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { writeJSON } from '../src/storage.mjs';
@@ -34,6 +34,102 @@ async function until(check) {
 const request = (peer, method, params, token) => ({ peer, token, method, params });
 const controller = (hub, peer, method, params) => request(peer, method, params, hub.controllerToken);
 const status = (hub, id) => hub.dispatch(controller(hub, 'codex', 'status', { taskId: id }));
+
+async function uncertainFixture(hub, root, extra = {}) {
+  const id = randomUUID();
+  const task = { id, parentId: null, returnTo: 'codex', owner: 'codex', cwd: root, permission: 'read-only',
+    model: null, depth: 0, generation: 1, status: 'uncertain', revision: 3, createdAt: 1, updatedAt: 2,
+    active: null, pendingHandoff: null, cancelRequested: false, error: 'Native process exited with an unknown result.',
+    result: null, messages: [{ from: 'codex', kind: 'request', text: 'Inspect connectivity', at: 1 }],
+    lastExecution: { generation: 1, pid: 123456, sessionId: null, startedAt: 1 }, ...extra };
+  await hub.mutate(state => { state.tasks[id] = task; });
+  return task;
+}
+
+const resolution = (hub, task, extra = {}) => controller(hub, 'codex', 'resolve', {
+  taskId: task.id, revision: task.revision, outcome: 'failed', reason: 'The read-only connectivity invocation exited before returning a result.',
+  requestId: 'resolve-inspected-work', ...extra,
+});
+
+test('controller resolves exited read-only uncertainty durably without replay or losing evidence', async t => {
+  let calls = 0, inspections = 0;
+  const { root, hub } = await setup(t, async () => { calls++; return { text: 'unexpected execution' }; }, {
+    inspectProcessGroup: pid => { inspections++; return { pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }; },
+  });
+  const task = await uncertainFixture(hub, root);
+  const request = resolution(hub, task);
+  const receipt = await hub.dispatch(request);
+  assert.equal(receipt.status, 'failed');
+  const done = await status(hub, task.id);
+  assert.equal(done.error, task.error);
+  assert.deepEqual(done.messages, task.messages);
+  assert.deepEqual(done.lastExecution, task.lastExecution);
+  assert.equal(done.result, null);
+  assert.equal(done.resolution.previousStatus, 'uncertain');
+  assert.equal(done.resolution.previousRevision, 3);
+  assert.equal(done.resolution.inspectedAt, 123);
+  assert.equal((await hub.dispatch(request)).replayed, true);
+  assert.equal(inspections, 1);
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'list', {}))).blockedByUncertainWork, false);
+  await assert.rejects(hub.dispatch(controller(hub, 'codex', 'send', { taskId: task.id, message: 'retry', requestId: 'no-replay' })), /cannot be implicitly restarted/);
+  const persisted = await import('../src/storage.mjs').then(({ readJSON }) => readJSON(join(root, 'work.json')));
+  assert.deepEqual(persisted.tasks[task.id].resolution, done.resolution);
+  await hub.serial;
+  assert.equal(calls, 0);
+});
+
+test('uncertain resolution refuses missing identity, live processes, inspection errors and stale revisions', async t => {
+  for (const scenario of [
+    { name: 'missing pid', extra: { lastExecution: null }, pattern: /identity is missing/ },
+    { name: 'newer interrupted generation without pid', extra: { generation: 2, active: { generation: 2, pid: null } }, pattern: /identity is missing/ },
+    { name: 'stale execution receipt', extra: { generation: 2 }, pattern: /identity is missing/ },
+    { name: 'live leader', proof: { processAbsent: false, groupAbsent: true }, pattern: /both be confirmed absent/ },
+    { name: 'live group', proof: { processAbsent: true, groupAbsent: false }, pattern: /both be confirmed absent/ },
+    { name: 'permission denied', failure: Object.assign(new Error('permission denied'), { code: 'EPERM' }), pattern: /permission denied/ },
+    { name: 'stale revision', params: { revision: 2 }, pattern: /revision changed/ },
+    { name: 'success claim', params: { outcome: 'completed' }, pattern: /explicit failed outcome/ },
+    { name: 'writable uncertainty', extra: { permission: 'workspace-write' }, pattern: /workspace reconciliation/ },
+  ]) await t.test(scenario.name, async t => {
+    const { root, hub } = await setup(t, async () => ({ text: 'unused' }), {
+      inspectProcessGroup: pid => { if (scenario.failure) throw scenario.failure; return { pid, inspectedAt: 123, processAbsent: true, groupAbsent: true, ...scenario.proof }; },
+    });
+    const task = await uncertainFixture(hub, root, scenario.extra);
+    await assert.rejects(hub.dispatch(resolution(hub, task, scenario.params)), scenario.pattern);
+    assert.deepEqual(await status(hub, task.id), task);
+  });
+});
+
+test('uncertain resolution refuses in-memory workers and unfinished descendants', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'unused' }), {
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+  });
+  const task = await uncertainFixture(hub, root);
+  hub.running.set(task.id, { controller: new AbortController(), promise: Promise.resolve() });
+  await assert.rejects(hub.dispatch(resolution(hub, task)), /in-memory native worker/);
+  hub.running.delete(task.id);
+  const child = await uncertainFixture(hub, root, { parentId: task.id, depth: 1 });
+  await assert.rejects(hub.dispatch(resolution(hub, task)), /descendant work first/);
+  assert.equal((await status(hub, child.id)).status, 'uncertain');
+});
+
+test('worker cannot resolve its own uncertain descendant', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'unused' }), {
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+  });
+  const token = 'a'.repeat(64);
+  const parent = await uncertainFixture(hub, root, { status: 'running', active: {
+    generation: 1, tokenHash: createHash('sha256').update(token).digest('hex'), messageCount: 1, pid: 123456, seenChildren: {},
+  } });
+  const child = await uncertainFixture(hub, root, { parentId: parent.id, depth: 1 });
+  await assert.rejects(hub.dispatch({ ...resolution(hub, child), token }), /Only the controller/);
+  await hub.mutate(state => { state.tasks[parent.id].status = 'failed'; state.tasks[parent.id].active = null; });
+});
+
+test('default uncertain resolution probe refuses the current live process', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
+  const task = await uncertainFixture(hub, root, { lastExecution: { generation: 1, pid: process.pid } });
+  await assert.rejects(hub.dispatch(resolution(hub, task)), /both be confirmed absent/);
+});
 
 test('app policy enables task-scoped writes for any project while explicit read-only remains read-only', async t => {
   const { root, hub } = await setup(t, async () => ({ text: 'synthetic done' }), { allowWrite: true, defaultPermission: 'workspace-write' });

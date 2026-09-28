@@ -33,6 +33,14 @@ test('dispatcher failure remains an error and is not retried', async t => {
   assert.equal(calls, 1);
 });
 
+test('operator resolution passes through the private transport without becoming an MCP tool', async t => {
+  const { root } = await fixture(t);
+  const params = { taskId: 'inspected-task', revision: 3, requestId: 'resolve-1', outcome: 'failed', reason: 'Inspected exited read-only work.' };
+  const result = await callCollaboration({ root, peer: 'codex', token: 'controller', method: 'resolve', params });
+  assert.equal(result.method, 'resolve');
+  assert.deepEqual(result.params, params);
+});
+
 test('client rejects public directories and socket aliases', async t => {
   const { root, server } = await fixture(t);
   await chmod(root, 0o755);

@@ -29,13 +29,25 @@ function publicTask(task) {
   return result;
 }
 
+// Signal zero observes existence only. Both the recorded leader and its detached
+// group must be gone; permission failures cannot establish that fact.
+function inspectExitedProcessGroup(pid) {
+  if (!['darwin', 'linux'].includes(process.platform)) throw new Error('Process-group inspection is unsupported on this platform.');
+  const absent = target => {
+    try { process.kill(target, 0); return false; }
+    catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+  };
+  return { pid, processAbsent: absent(pid), groupAbsent: absent(-pid), inspectedAt: Date.now() };
+}
+
 /** A single durable work graph. Delegation adds an edge; handoff changes its owner. */
 export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 3, maxDepth = 2,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
-    timeoutMs = 15 * 60 * 1000 } = {}) {
+    timeoutMs = 15 * 60 * 1000, inspectProcessGroup = inspectExitedProcessGroup } = {}) {
     super();
     if (!isAbsolute(root ?? '') || typeof run !== 'function') throw new Error('Absolute root and native runner are required.');
+    if (typeof inspectProcessGroup !== 'function') throw new Error('Process-group inspector must be a function.');
     if (!['read-only', 'workspace-write'].includes(defaultPermission)
       || defaultPermission === 'workspace-write' && !allowWrite) throw new Error('Default permission exceeds broker authorization.');
     for (const [name, value, max] of [['maxWorkers', maxWorkers, 8], ['maxDepth', maxDepth, 8],
@@ -43,7 +55,7 @@ export class CollaborationHub extends EventEmitter {
       ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024], ['timeoutMs', timeoutMs, 3600000]]) {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
     }
-    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs });
+    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, timeoutMs, inspectProcessGroup });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
   }
 
@@ -168,7 +180,7 @@ export class CollaborationHub extends EventEmitter {
       await this.observeChild(envelope, params.taskId);
       return publicTask(this.state.tasks[params.taskId]);
     }
-    if (!['start', 'send', 'handoff', 'cancel'].includes(method)) throw new Error('Unknown collaboration method.');
+    if (!['start', 'send', 'handoff', 'cancel', 'resolve'].includes(method)) throw new Error('Unknown collaboration method.');
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
@@ -179,7 +191,7 @@ export class CollaborationHub extends EventEmitter {
       if (!(await lstat(cwd)).isDirectory()) throw new Error('cwd must be an existing directory.');
     }
     const fingerprint = digest(JSON.stringify({ method, params }));
-    const result = await this.mutate(state => {
+    const result = await this.mutate(async state => {
       const actor = this.actor(envelope, state);
       const key = digest(`${actor.key}:${params.requestId}`);
       if (state.requests[key]) {
@@ -211,8 +223,36 @@ export class CollaborationHub extends EventEmitter {
         state.tasks[task.id] = task;
       } else {
         task = state.tasks[params.taskId]; this.allowed(actor, task, state);
-        if (method !== 'cancel' && ['failed', 'cancelled', 'uncertain'].includes(task.status)) throw new Error('Failed, cancelled, or uncertain work cannot be implicitly restarted.');
-        if (method === 'send') {
+        if (!['cancel', 'resolve'].includes(method) && ['failed', 'cancelled', 'uncertain'].includes(task.status)) throw new Error('Failed, cancelled, or uncertain work cannot be implicitly restarted.');
+        if (method === 'resolve') {
+          if (actor.task) throw new Error('Only the controller may resolve uncertain execution.');
+          if (task.status !== 'uncertain' || params.outcome !== 'failed') throw new Error('Resolution requires uncertain work and an explicit failed outcome.');
+          if (params.revision !== task.revision) throw new Error('Task revision changed; read status before resolving.');
+          const reason = text(params.reason, 'resolution reason', 2048);
+          if (task.permission !== 'read-only') throw new Error('Writable uncertain execution requires separate workspace reconciliation.');
+          const descendants = Object.values(state.tasks).filter(candidate => {
+            let cursor = candidate;
+            while (cursor) { if (cursor.id === task.id) return true; cursor = state.tasks[cursor.parentId]; }
+            return false;
+          });
+          if (descendants.some(candidate => this.running.has(candidate.id))) throw new Error('An in-memory native worker is still active.');
+          if (descendants.some(candidate => candidate.id !== task.id && !['completed', 'failed', 'cancelled'].includes(candidate.status)))
+            throw new Error('Resolve or finish descendant work first.');
+          // A crash can leave a newer active generation beside an older receipt.
+          // Only the newest invocation's identity can prove that its work stopped.
+          const execution = task.active ?? task.lastExecution;
+          const pid = execution?.pid;
+          if (!Number.isSafeInteger(pid) || pid <= 1 || execution?.generation !== task.generation)
+            throw new Error('Recorded native process identity is missing or ambiguous.');
+          const proof = await this.inspectProcessGroup(pid);
+          if (proof?.pid !== pid || proof.processAbsent !== true || proof.groupAbsent !== true
+            || !Number.isSafeInteger(proof.inspectedAt) || proof.inspectedAt <= 0)
+            throw new Error('Recorded native process and process group must both be confirmed absent.');
+          task.resolution = { outcome: 'failed', reason, previousStatus: task.status, previousError: task.error,
+            previousRevision: task.revision, inspectedAt: proof.inspectedAt, pid,
+            processAbsent: true, groupAbsent: true, resolvedAt: Date.now(), controller: actor.peer };
+          task.status = 'failed';
+        } else if (method === 'send') {
           text(params.message, 'message');
           if (actor.task?.id === task.id) throw new Error('Send follow-ups to a child task, not to your own running turn.');
           if (task.pendingHandoff || task.cancelRequested) throw new Error('Task is already transferring or cancelling.');
@@ -239,6 +279,7 @@ export class CollaborationHub extends EventEmitter {
           mark(task);
         }
         task.revision++; task.updatedAt = Date.now();
+        if (method === 'resolve') this.deliverToParent(state, task);
         if (bytes(task.messages) > 192 * 1024) throw new Error('Task context capacity reached; no messages were truncated.');
       }
       const receipt = { taskId: task.id, revision: task.revision, status: task.status, owner: task.owner,

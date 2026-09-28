@@ -171,7 +171,7 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
                       : "The connection is not ready. Claudex checks again automatically.", operational: work)
     }
     if initialChecking(watcher) {
-        return report("waiting", "Checking conversations", "Native connections and saved histories are being verified. Wait for the latest messages before switching apps.")
+        return report("waiting", "Checking history in background", "Saved histories are being checked in the background; they are not being imported again. New and changed conversations are prioritized. Wait for the latest messages in the conversation you are using before switching apps.")
     }
     return report("ready", "Synchronization ready", "No reported synchronization blocks. Before switching apps, still wait for the current reply and its latest messages to appear.", operational: true)
 }

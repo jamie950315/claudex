@@ -43,7 +43,7 @@ function checkedMcp(mcp) {
 function argv(provider, { prompt, model, permission, mcp }) {
   if (provider === 'codex') {
     const args = [
-      'exec', '--json', '--ephemeral', '--ignore-user-config',
+      'exec', '--json', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check',
       '--sandbox', permission === 'workspace-write' ? 'workspace-write' : 'read-only',
       '-c', 'approval_policy="never"',
     ];
@@ -143,6 +143,8 @@ export function createNativeCollaborationRunner({
       }
       let closed = false;
       let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let startupDiagnostic = '';
       let lineBuffer = '';
       const stdoutDecoder = new StringDecoder('utf8');
       let problem = null;
@@ -213,8 +215,13 @@ export function createNativeCollaborationRunner({
         }
         if (lineBuffer.length > MAX_LINE) stop(failure('Native event exceeded its limit.', { uncertain: true }));
       });
-      // Drain diagnostics without retaining potentially sensitive native output.
-      child.stderr?.resume();
+      // Keep only a bounded in-memory candidate for exact known pre-execution
+      // failures. Never persist arbitrary native stderr, credentials or prompts.
+      child.stderr?.on('data', chunk => {
+        stderrBytes += chunk.length;
+        if (stderrBytes <= 4096) startupDiagnostic += chunk.toString('utf8');
+        else startupDiagnostic = '';
+      });
       child.stdin?.on('error', (cause) => stop(failure('Native input could not be delivered.', { uncertain: true, cause })));
       child.on('error', (cause) => {
         stop(failure('Native collaboration process failed.', { uncertain: Boolean(child.pid), cause }));
@@ -258,6 +265,11 @@ export function createNativeCollaborationRunner({
         }
         if (result.terminal === 'failed') {
           reject(failure(`Native ${provider} execution failed with a terminal receipt.`, { uncertain: false }));
+          return;
+        }
+        if (provider === 'codex' && code === 1 && !processSignal && stdoutBytes === 0 && !result.sessionId
+          && stderrBytes <= 4096 && startupDiagnostic.trim() === 'Not inside a trusted directory and --skip-git-repo-check was not specified.') {
+          reject(failure('Codex refused the selected non-Git project before execution. Update the collaboration launcher; no model work was started.', { uncertain: false }));
           return;
         }
         if (code !== 0 || processSignal || result.terminal !== 'success' || typeof result.text !== 'string' || !result.text) {

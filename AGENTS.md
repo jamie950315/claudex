@@ -143,6 +143,17 @@ own turn rather than forcibly transferring an unrelated native UI conversation.
 Storage, context, concurrency, depth and execution limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
+Controller-only `request resolve` may close an inspected read-only uncertain
+invocation as failed, never successful or replayable. Require exact revision and
+current execution generation, absent recorded PID and process group, no in-memory
+worker or unresolved descendants. Preserve original error and execution evidence
+with the resolution receipt. Writable uncertainty still requires separate
+workspace reconciliation. Queued work may dispatch once the final hold is resolved.
+Codex collaboration supports explicitly selected non-Git directories using
+`--skip-git-repo-check`; native sandbox and approval restrictions remain unchanged.
+Only an exact no-stdout, no-session pre-execution Git refusal with a closed process
+group is a known startup failure; unknown exits retain uncertainty safeguards.
+
 Separately authorized live CLI acceptance verifies Codex-to-Claude and
 Claude-to-Codex child delegation with exact result return, plus two consecutive
 owner transfers under one logical task ID. The tested runtimes are Codex CLI
@@ -292,6 +303,10 @@ interval, so it is not an end-to-end latency guarantee. Never advance semantic
 checkpoints from hints or skip a current managed Claude owner's lifecycle checks.
 Bounded watcher timing fields report discovery gaps and last/slowest syncs,
 without transcript content; they are operation timings, not UI latency promises.
+Ordinary progress diagnostics coalesce at two-second intervals. Initial status,
+changed health/conflict reasons, completion boundaries and final shutdown remain
+visible promptly; the ten-second in-flight heartbeat remains. Durable transaction
+ledgers and expiring Desktop handoff proofs never use this diagnostic throttle.
 Normal discovery scope is unchanged.
 Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep

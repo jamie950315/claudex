@@ -61,6 +61,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   discover = discoverSources, sleep = (ms, options) => delay(ms, undefined, options),
   now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
   blockedRetryMs = 30_000,
+  writeStatus = writeJSON,
   publishFolders = publishClaudeFolderMap,
   maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
@@ -128,7 +129,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       }
       return data;
     } }) : null;
-  const writeProgress = () => writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
+  let lastProgressAt = null, lastProgressHealth = null, publishedFirstOperation = false;
+  const writeProgress = async () => {
+    const timestamp = now();
+    const progress = { mode: 'desktop', running: true, pid: process.pid,
     scheduler: 'activity-interleaved', startedAt, updatedAt: now(),
     versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, initialSweepCompletedAt,
@@ -136,7 +140,26 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
     activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
     synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
-    ...blockingStatus(), ...latestFields });
+    ...blockingStatus(), ...latestFields };
+    const guardHealth = value => value && Object.fromEntries(Object.entries(value)
+      .filter(([key]) => !['since', 'lastAttemptAt', 'retryAt', 'attempts'].includes(key)));
+    const presentationHealth = value => value && { state: value.state, error: value.error, deferred: value.deferred };
+    const health = JSON.stringify({ synchronization: progress.synchronization,
+      blocked: guardHealth(progress.blocked), blockedConversations: progress.blockedConversations.map(guardHealth),
+      waiting: progress.waiting, waitingContexts: progress.waitingContexts,
+      blockedSourceCount: progress.blockedSourceCount, blockedSources: progress.blockedSources,
+      folderProjection: presentationHealth(progress.folderProjection), localHandoff: presentationHealth(progress.localHandoff),
+      foregroundComplete: progress.foregroundCompletedAt !== null, initialSweepComplete: progress.initialSweepCompletedAt !== null });
+    // Progress is disposable diagnostics. Coalesce rapid updates while keeping
+    // every changed conflict/reason visible immediately. The next poll or 10s
+    // native-operation heartbeat publishes current state, never a queued snapshot.
+    const firstOperation = progress.currentOperation && !publishedFirstOperation;
+    if (!firstOperation && lastProgressAt !== null && timestamp >= lastProgressAt && timestamp - lastProgressAt < 2000
+      && health === lastProgressHealth) return;
+    await writeStatus(statusPath, progress);
+    lastProgressAt = timestamp; lastProgressHealth = health;
+    if (progress.currentOperation) publishedFirstOperation = true;
+  };
   const status = async fields => {
     latestFields = fields;
     if (handoffs) {
@@ -438,10 +461,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           catch (error) { if (error.name !== 'AbortError' || !signal?.aborted) throw error; }
         }
       }
-      await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: null,
+      await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: null,
         ...blockingStatus() });
     } catch (error) {
-      await writeJSON(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
+      await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
       // A busy ClaudeOwner must keep its live handle; closing it can interrupt user work.
       throw error;
     }

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
 
-function fakeSpawn(events, exitCode = 0) {
+function fakeSpawn(events, exitCode = 0, stderr = '') {
   const calls = [];
   const spawnImpl = (command, args, options) => {
     const child = new EventEmitter();
@@ -18,6 +18,7 @@ function fakeSpawn(events, exitCode = 0) {
     child.stdin.on('finish', () => {
       calls.push({ command, args, options, input });
       queueMicrotask(() => {
+        if (stderr) child.stderr.write(stderr);
         for (const event of events) child.stdout.write(`${JSON.stringify(event)}\n`);
         child.stdout.end();
         child.emit('close', exitCode, null);
@@ -51,12 +52,33 @@ test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP 
   assert.equal(call.input, 'Review this.');
   assert.ok(call.args.includes('--ephemeral'));
   assert.ok(call.args.includes('--ignore-user-config'));
+  assert.ok(call.args.includes('--skip-git-repo-check'));
+  assert.ok(!call.args.includes('--dangerously-bypass-approvals-and-sandbox'));
   assert.ok(call.args.includes('read-only'));
   assert.ok(call.args.some((arg) => arg.includes('mcp_servers.claudex.required=true')));
   assert.ok(!call.args.join(' ').includes('private'));
   assert.equal(call.options.env.CLAUDEX_WORK_TOKEN, 'private');
   assert.equal(call.options.env.OPENAI_API_KEY, undefined);
   assert.equal(call.options.env.CODEX_API_KEY, undefined);
+});
+
+test('only an exact no-output pre-execution Git refusal is a known startup failure', async () => {
+  const refusal = 'Not inside a trusted directory and --skip-git-repo-check was not specified.\n';
+  for (const [events, stderr, uncertain] of [
+    [[], refusal, false],
+    [[], 'Unknown native failure containing private data', true],
+    [[{ type: 'thread.started', thread_id: 'started-session' }], refusal, true],
+    [[], 'x'.repeat(4097) + refusal, true],
+  ]) {
+    const fake = fakeSpawn(events, 1, stderr);
+    await assert.rejects(runner(fake)({ provider: 'codex', cwd: process.cwd(), prompt: 'Check.' }), error => {
+      assert.equal(error.executionUncertain, uncertain);
+      assert.ok(!error.message.includes('private data'));
+      if (!uncertain) assert.match(error.message, /before execution/);
+      return true;
+    });
+    assert.equal(fake.calls.length, 1);
+  }
 });
 
 test('Claude uses nonpersistent restricted CLI with bounded file tools and explicit MCP', async () => {

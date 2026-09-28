@@ -24,7 +24,8 @@ var initial = ready; initial["mode"] = "desktop"
 initial["checkedConversationCount"] = 3; initial["checkingConversationCount"] = 12
 initial["currentOperation"] = ["conversationId": "known-thread", "title": "Translation task", "startedAt": now - 65000] as [String: Any]
 let checking = health(initial)
-check(checking.state == "waiting" && checking.title == "Checking conversations" && !checking.operational)
+check(checking.state == "waiting" && checking.title == "Checking history in background" && !checking.operational)
+check(checking.detail.contains("they are not being imported again") && checking.detail.contains("New and changed conversations are prioritized."))
 check(checking.detail.contains("Checked 3 of 12 conversations."))
 check(checking.detail.contains("Checking Translation task (65 seconds elapsed)."))
 var invalidProgress = initial; invalidProgress["checkedConversationCount"] = 13
