@@ -5,7 +5,7 @@ import { encodeCodexProjection } from '../src/codex-projection.mjs';
 import { encodeClaude, decodeClaude } from '../src/claude.mjs';
 import { decodeCodex } from '../src/native-drivers.mjs';
 
-const common = blocks => ({ meta: { id: '7b08f0c1-c4bf-4914-a666-0aa960574fea', cwd: '/tmp', timestamp: '2026-09-24T00:00:00Z' }, messages: [
+const common = blocks => ({ meta: { id: '00000000-0000-4000-8000-000000000099', cwd: '/tmp', timestamp: '2026-09-24T00:00:00Z' }, messages: [
   { role: 'user', content: blocks }, { role: 'assistant', content: [{ type: 'text', text: 'Done' }] },
 ] });
 

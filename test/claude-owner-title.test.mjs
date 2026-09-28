@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { ClaudeOwner } from '../src/claude-owner.mjs';
 
 function fixture(actual = '[Claudex] Ping') {
-  const calls = [], sessionId = 'f6d2e13c-fd69-4e7d-8e9f-12b4d90c9f01';
+  const calls = [], sessionId = '00000000-0000-4000-8000-000000000098';
   const owner = Object.assign(Object.create(ClaudeOwner.prototype), {
     state: { sessionId, displayTitle: '[Claudex] Ping' }, nativeState: 'idle', backgroundTasks: [],
     async inspectTranscript() { return { rows: actual === undefined ? [] : [{ type: 'custom-title', sessionId, customTitle: actual }] }; },

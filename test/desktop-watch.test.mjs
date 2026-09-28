@@ -352,7 +352,7 @@ test('conflicting tracked histories stay blocked without stopping owners or choo
 const prefixMismatch = 'Owned Claude history does not match the synchronized prefix; no branch was selected.';
 
 const missingTrackedHistory = () => Object.assign(new Error('Tracked claude history is unavailable at its saved path; synchronization is paused.'), {
-  code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: 'claude', nativeId: '647efc25-8bd3-46fb-8662-6a7832b3cb0e',
+  code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: 'claude', nativeId: '00000000-0000-4000-8000-000000000097',
   savedPath: '/claude/missing/session.jsonl', conversationId: 'new',
 });
 

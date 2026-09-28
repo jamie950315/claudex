@@ -41,7 +41,7 @@ test('compacted sessions are not silently flattened', () => {
 });
 
 test('project paths match Claude project encoding', () => {
-  assert.equal(projectDirectory('/tmp/claude-home', '/Users/jamie/a.b_c'), '/tmp/claude-home/projects/-Users-jamie-a-b-c');
+  assert.equal(projectDirectory('/tmp/claude-home', '/Users/example/a.b_c'), '/tmp/claude-home/projects/-Users-example-a-b-c');
 });
 
 test('missing parents and competing branches are not silently flattened', () => {

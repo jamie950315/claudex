@@ -213,7 +213,7 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
       let result;
       if (request.method === 'initialize') {
         const version = request.params?.protocolVersion;
-        result = { protocolVersion: VERSIONS.has(version) ? version : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'claudex', version: '0.2.0' } };
+        result = { protocolVersion: VERSIONS.has(version) ? version : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'claudex', version: '1.0.0' } };
       } else if (request.method === 'ping') result = {};
       else if (request.method === 'tools/list') result = { tools: toolDefinitions };
       else if (request.method === 'tools/call') {
