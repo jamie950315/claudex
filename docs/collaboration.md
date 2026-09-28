@@ -121,7 +121,8 @@ stable `requestId`. Do this only for user-authorized coordination, such as askin
 another chat to stop creating work and report whether maintenance is safe.
 Managed worker capabilities cannot send to unrelated native chats.
 
-The recipient must have been observed by the installed native hooks. Follow
+Claude recipients must have been observed by the installed native hooks; Codex
+also supports the bounded native metadata discovery described below. Follow
 `nextCursor` for additional bounded `chat_list` pages (default 50, maximum 100). The list
 contains IDs, cwd, last observed phase/event and time, plus native title metadata
 when available. Codex titles come from the newest matching native session-index
@@ -137,7 +138,8 @@ using provider and project/cwd. `exactMatchCount`, `titleMatch`, `titleSource` a
 `unavailableTitleCount` make the search coverage explicit. Pass the selected
 verbatim title as `expectedTitle` when sending: it is rechecked before enqueueing,
 and a rename, unavailable mapping or archived Claude entry fails without sending.
-The session ID remains the only address; a title is not a routing identity.
+Delivery always resolves to an exact native session ID; a title is not a durable
+routing identity.
 For a unique exact title, `chat_send` also accepts `title` directly (optionally
 with `provider`), instead of `sessionId`/`expectedTitle`. It resolves and rechecks
 the native title before enqueueing. Duplicate matches return `needs-selection`
@@ -145,7 +147,7 @@ with candidates; no match returns `not-found`. Neither queues a message.
 The target stays the exact native session: no replacement chat, external writer,
 archival, registry/SQLite mutation or direct transcript append is performed.
 
-Delivery occurs at the recipient's next SessionStart, UserPromptSubmit, or Stop
+Hook delivery occurs at the recipient's next SessionStart, UserPromptSubmit, or Stop
 hook, using native hook context. At Stop, Codex uses its documented continuation
 decision and Claude uses additionalContext, allowing the same chat to reply.
 This can consume the recipient's normal model allowance. It does not change that
@@ -161,7 +163,10 @@ owner refuses before injection and the message stays queued. Claude uses a
 version-pinned renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
 bridge, with exact identity, idle, draft, permission and terminal guards. Setup
 registers that narrow endpoint; loading an upgraded renderer requires an idle
-Claude restart. Bridge unavailability is not delivery and must not be presented
+Claude restart. Claude Desktop must remain open with the bridge loaded, but the
+specific recipient chat does not need to be selected or open. Busy work, drafts
+and permission prompts may delay dispatch. A vendor frontend update can require
+bridge adaptation. Bridge unavailability is not delivery and must not be presented
 as successful wake. Its separately pinned asset starts independently of sidebar
 visibility or folder grouping, with a recoverable private installation journal.
 Lifecycle and wait-reason diagnostics contain no message text. An observed native
@@ -182,8 +187,8 @@ later true completion remains subject to the normal history/lifecycle guards.
 
 Receipts distinguish:
 
-- `queued`: persisted, awaiting a usable native hook; not delivered.
-- `offered`: output prepared for one hook; consumption is not proven. This state
+- `queued`: persisted, awaiting a usable native hook or wake; not delivered.
+- `offered`: claimed for a hook or native wake; consumption is not proven. This state
   never retries automatically, including after a hook crash or lost stdout.
 - `acknowledged`: the same exact recipient's native Stop reported a standalone
   `CLAUDEX_ACK:<messageId>` line. This confirms receipt, **not completion of the
@@ -384,6 +389,7 @@ is silently pruned. Work has no elapsed-time execution timeout; long-running
 native invocations continue until completion, failure or explicit cancellation.
 The bounded wait/socket request timeouts only end the caller's wait, not the work.
 These limits are not a monetary spending guarantee; native account quotas still apply.
+The 64-worker ceiling is not evidence of a 64-worker native load certification.
 
 After a broker crash, in-flight work becomes `uncertain` and blocks new dispatch.
 No native input or pending handoff is replayed. Inspect the last recorded native

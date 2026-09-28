@@ -7,8 +7,9 @@ Claudex provides two independent capabilities:
 
 - **Cross-model collaboration:** agents create child tasks, exchange messages,
   return results, and transfer responsibility through one work protocol.
-  Authorized coordination notes can also reach an existing hooked native chat at
-  its next activity boundary without creating or archiving a replacement chat.
+  Authorized coordination notes can also target an existing native chat by its
+  unique exact title and wake it through supported Desktop integrations, without
+  creating or archiving a replacement chat.
 - **Conversation synchronization:** completed conversation turns become available
   in the other tool, with original history preserved and bounded generated copies.
 
@@ -74,6 +75,7 @@ You can then ask either agent to use the other, for example:
 - “Ask Claude Code to review this change and bring back its findings.”
 - “Delegate this file-editing task to Codex, then verify its result.”
 - “Hand this task to Claude with the progress, constraints, and remaining work.”
+- “Send a message to the chat named Release review asking for its current status.”
 
 Delegation and handoff share the same work graph. A child task records its parent
 and returns a result. A handoff changes the owner of the existing logical task;
@@ -94,10 +96,22 @@ Do not run this as a hot policy change against an already loaded broker. Existin
 installations must be stopped safely before changing their configuration; see
 [permissions and limits](docs/collaboration.md#permissions-and-limits).
 
-Use a dedicated checkout for writable work. Writable child tasks wait for the
-parent to end its native turn; the child runs, then the parent resumes with its
-result. The protocol does not create worktrees or merge changes. Claude workers
-have file-reading and editing tools, not Bash; Codex uses its native sandbox.
+Use a dedicated checkout for writable work. Multiple tasks, including writable
+parents and children, may run in the same directory at once. Assign disjoint files
+and coordinate shared edits: the protocol does not lock workspaces, create
+worktrees, or merge conflicts. Work has no fixed execution timeout; explicit
+cancellation remains available. Claude workers have file-reading and editing
+tools, not Bash; Codex uses its native sandbox.
+
+### Messages to existing chats
+
+Models can send a coordination note using a unique exact chat title; ambiguous
+titles require selection. Claude Desktop must remain open with its supported
+bridge loaded, but you do not need to open the recipient chat. Busy work, drafts
+or permission prompts can delay delivery. Ended chats may queue messages for
+resumption; a queued note is not a delivered note. A recipient ACK confirms receipt,
+not completion of the requested action. Claude's wake bridge is version-pinned
+and may need adaptation after a vendor frontend update.
 
 See the [collaboration guide](docs/collaboration.md) for the MCP tools, follow-ups,
 cancellation, workspace ownership, and failure handling.
