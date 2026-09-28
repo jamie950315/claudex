@@ -37,6 +37,7 @@ async function fixture(t, options = {}) {
   const setup = new AppSetup({ root, home, runtimeDirectory, engineRoot: base, run, platform: 'darwin',
     discover: async () => providers, ensure: async () => { events.push(['ensure-providers']); return providers; },
     collaborationInstall: async (input, _options) => { events.push(['collaboration', input]); },
+    desktopWakeInstall: async input => { events.push(['desktop-wake', input]); },
     desktopInstall: async input => { events.push(['desktop', input]); },
     serviceInstall: async input => { events.push(['service', input]); },
     ownership: async () => ({ allowed: options.ownerAllowed !== false }),
@@ -61,6 +62,7 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.ok(events.some(([kind]) => kind === 'desktop'));
   assert.ok(events.some(([kind]) => kind === 'service'));
   assert.ok(events.some(([kind]) => kind === 'sync-hooks'));
+  assert.ok(events.some(([kind, input]) => kind === 'desktop-wake' && input.args.includes('desktop-wake-mcp')));
   assert.equal(report.version, 1);
   assert.equal(report.allProjects, true);
   assert.equal(report.allowWrite, true);

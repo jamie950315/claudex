@@ -370,10 +370,30 @@ test('native title search preserves ambiguous candidates and rechecks the chosen
   const found = await hub.dispatch(controller(hub, 'codex', 'chat_list', { provider: 'claude', query: 'project REVIEW', match: 'exact' }));
   assert.equal(found.totalCount, 2);
   assert.equal(found.exactMatchCount, 2);
+  const ambiguous = await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    provider: 'claude', title: 'project REVIEW', message: 'Status please', requestId: 'ambiguous-title',
+  }));
+  assert.equal(ambiguous.status, 'needs-selection');
+  assert.equal(ambiguous.queued, false);
+  assert.equal(ambiguous.candidates.length, 2);
   assert.deepEqual(found.chats.map(chat => chat.sessionId), [first, second]);
   assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { query: 'review' }))).totalCount, 3);
   assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { query: 'review', match: 'exact' }))).totalCount, 0);
   titles.set(first, 'Renamed review');
+  await hub.chatMailbox.register({ provider: 'claude', sessionId: first, cwd: hub.root, event: 'SessionEnd' });
+  const byTitle = await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    title: 'renamed REVIEW', message: 'Status please', requestId: 'unique-title',
+  }));
+  assert.equal(byTitle.targetSessionId, first);
+  assert.equal(byTitle.deliveryStatus, 'waiting-for-resume');
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    title: 'renamed REVIEW', message: 'Status please', requestId: 'unique-title',
+  }))).messageId, byTitle.messageId);
+  const missing = await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    title: 'unknown', message: 'Status please', requestId: 'unknown-title',
+  }));
+  assert.equal(missing.status, 'not-found');
+  assert.equal(missing.queued, false);
   const params = { provider: 'claude', sessionId: first, expectedTitle: 'Project review', message: 'Please report status.', requestId: 'named-chat' };
   await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', params)), /title changed/);
   const queued = await hub.dispatch(controller(hub, 'codex', 'chat_send', { ...params, expectedTitle: 'Renamed review' }));
@@ -381,6 +401,40 @@ test('native title search preserves ambiguous candidates and rechecks the chosen
   archived = true;
   await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', { ...params, expectedTitle: 'Renamed review', requestId: 'archived-chat' })), /could not be verified/);
   assert.equal(Object.keys(hub.state.tasks).length, 0, 'search and send never create managed work');
+});
+
+test('native title discovery and wake claim never duplicate a native dispatch', async t => {
+  const sessionId = randomUUID(); let sends = 0;
+  const descriptor = { provider: 'codex', nativeId: sessionId, sessionId, chatId: `codex:${sessionId}`,
+    title: 'Idle project', cwd: '/tmp', registeredByHook: false };
+  const { hub } = await setup(t, async () => { throw new Error('No managed inference'); }, {
+    nativeChatDiscovery: async () => [descriptor],
+    chatWake: async () => ({ status: 'ready', close() {}, dispatch: async () => { sends++; return { status: 'accepted', turnId: 'native-turn' }; } }),
+  });
+  const params = { title: 'Idle project', message: 'Please report status.', requestId: 'wake-exact' };
+  const sent = await hub.dispatch(controller(hub, 'claude', 'chat_send', params));
+  assert.equal(sent.wakeStatus, 'accepted');
+  assert.equal(sent.state, 'offered');
+  assert.equal(sent.deliveryMode, 'native-owner');
+  assert.equal((await hub.chatMailbox.list())[0].registeredByHook, false);
+  await hub.dispatch(controller(hub, 'claude', 'chat_send', params));
+  assert.equal(sends, 1);
+  assert.equal(Object.keys(hub.state.tasks).length, 0);
+});
+
+test('busy native owner defers to hooks while ambiguous dispatch is never replayed', async t => {
+  for (const result of ['busy', 'uncertain']) {
+    const sessionId = randomUUID();
+    const { hub } = await setup(t, async () => ({ text: 'unused' }), {
+      chatWake: async () => ({ status: 'ready', close() {}, dispatch: async () => ({ status: result }) }),
+    });
+    await hub.chatMailbox.register({ provider: 'codex', sessionId, cwd: hub.root, event: 'SessionStart' });
+    const sent = await hub.dispatch(controller(hub, 'claude', 'chat_send', {
+      provider: 'codex', sessionId, message: 'Hello', requestId: result,
+    }));
+    assert.equal(sent.state, result === 'busy' ? 'queued' : 'offered');
+    assert.equal(sent.wake.state, result === 'busy' ? 'deferred' : 'uncertain');
+  }
 });
 
 test('handoff preserves identity in both directions and waits for old turn to finish', async t => {

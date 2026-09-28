@@ -129,15 +129,21 @@ record; Claude titles use the exact Desktop registry CLI-ID mapping. No title is
 inferred from message content, folder names or synchronized copies. Lookups are
 read-only and bounded; missing, conflicting or unsafe metadata produces a title
 error rather than a guessed name. Activity is a hint, not proof a process is alive.
-Search is limited to hook-registered chats, not every conversation in either app.
+Claude search covers hook-registered chats. Codex title queries also inspect
+bounded, unarchived native metadata, so a chat need not have fired a hook first.
+Metadata discovery is explicitly distinguished from hook registration.
 Never guess between duplicate or partial matches. Ask the user to disambiguate
 using provider and project/cwd. `exactMatchCount`, `titleMatch`, `titleSource` and
 `unavailableTitleCount` make the search coverage explicit. Pass the selected
 verbatim title as `expectedTitle` when sending: it is rechecked before enqueueing,
 and a rename, unavailable mapping or archived Claude entry fails without sending.
 The session ID remains the only address; a title is not a routing identity.
-The target stays the exact native session: no new chat, resume process, external
-writer, archival, registry/SQLite mutation, or transcript append is performed.
+For a unique exact title, `chat_send` also accepts `title` directly (optionally
+with `provider`), instead of `sessionId`/`expectedTitle`. It resolves and rechecks
+the native title before enqueueing. Duplicate matches return `needs-selection`
+with candidates; no match returns `not-found`. Neither queues a message.
+The target stays the exact native session: no replacement chat, external writer,
+archival, registry/SQLite mutation or direct transcript append is performed.
 
 Delivery occurs at the recipient's next SessionStart, UserPromptSubmit, or Stop
 hook, using native hook context. At Stop, Codex uses its documented continuation
@@ -147,8 +153,22 @@ chat's model, effort, permissions or human instructions. Coordination content is
 explicitly labeled and quoted as peer-originated text, not as human/system
 authority. It cannot grant new permissions or forcibly interrupt native work.
 
-An entirely idle chat is **not woken**. A running tool is not interrupted; a
+Sending defaults to `wake: true`; this can consume native account allowance.
+`wake: false` only queues for hooks. Codex uses the existing Desktop owner's
+untrusted-app input route, inheriting settings. An unloaded original is opened by
+exact native deep link before owner discovery; no CLI writer is created. A busy
+owner refuses before injection and the message stays queued. Claude uses a
+version-pinned renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
+bridge, with exact identity, idle, draft, permission and terminal guards. Setup
+registers that narrow endpoint; loading an upgraded renderer requires an idle
+Claude restart. Bridge unavailability is not delivery and must not be presented
+as successful wake. A running tool is not interrupted; a
 message can wait until the current turn ends. SessionEnd never consumes messages.
+Known ended chats may still receive queued messages. Their computed
+`deliveryStatus` is `waiting-for-resume`; a genuine SessionStart or UserPromptSubmit
+reactivates the recipient. A late Stop cannot reactivate an ended session.
+Other queued messages report `waiting-for-hook`. These are delivery explanations,
+not successful receipt or an automatic wake claim; normal expiry still applies.
 A Stop already continued by hooks can acknowledge a previous note but cannot
 consume another, avoiding a continuation loop. Ordinary hooks with no queued
 message remain inference-free and produce no additional context. A Stop offering
@@ -165,6 +185,11 @@ Receipts distinguish:
   requested action**. Check actual work/process state before restarting services.
 - `expired`: queued message exceeded its TTL before being offered.
 
+Native wake atomically claims the same queue used by hooks. A generation-bound
+claim is persisted before dispatch; lost/unknown outcomes are never resent.
+`wake.state: accepted` means the native call was accepted, not that the model
+completed the requested work. The recipient's exact hook ACK remains separate.
+
 Messages are capped at 1,500 UTF-8 bytes, with a default 15-minute TTL (up to one
 hour). The private `collaboration/chat-mailbox/state.json` is bounded to 1,024
 chats/messages/receipts and 8 MiB; it preserves receipts rather than silently
@@ -179,7 +204,7 @@ existing source conversation meanwhile. For example, pass this JSON to
 ```json
 {
   "provider": "claude",
-  "sessionId": "EXACT_NATIVE_SESSION_ID_FROM_CHAT_LIST",
+  "title": "Exact recipient title",
   "message": "Please stop creating new tasks and report when your current work is safe to pause.",
   "requestId": "maintenance-note-1"
 }

@@ -80,7 +80,8 @@ function inspectExitedProcessGroup(pid) {
 export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
-    inspectProcessGroup = inspectExitedProcessGroup, chatTitleResolver = enrichChatTitles } = {}) {
+    inspectProcessGroup = inspectExitedProcessGroup, chatTitleResolver = enrichChatTitles,
+    nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -97,6 +98,9 @@ export class CollaborationHub extends EventEmitter {
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
     this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
     this.chatTitleResolver = chatTitleResolver;
+    this.nativeChatDiscovery = nativeChatDiscovery;
+    this.chatWake = chatWake;
+    this.claudeWakeManifest = claudeWakeManifest;
   }
 
   async initialize() {
@@ -202,6 +206,23 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (['desktop_wake_claim', 'desktop_wake_receipt'].includes(method)) {
+      if (actor.task || actor.peer !== 'claude' || !this.claudeWakeManifest) throw new Error('Native Desktop wake endpoint is unavailable.');
+      const message = await this.chatMailbox.status(params.messageId);
+      if (message.targetProvider !== 'claude' || message.targetSessionId !== params.sessionId || message.wakeRequested !== true)
+        throw new Error('Desktop wake identity or authorization mismatch.');
+      if (method === 'desktop_wake_receipt') {
+        if (!['accepted', 'uncertain'].includes(params.status)) throw new Error('Invalid Desktop wake receipt.');
+        const result = await this.chatMailbox.finishWake(params.messageId, { claimId: params.claimId, state: params.status, detail: params.detail });
+        await this.claudeWakeManifest.publish(this.chatMailbox);
+        return result;
+      }
+      if (this.closed) throw new Error('Broker is stopping.');
+      await this.claudeWakeManifest.verify(params.sessionId);
+      const claim = await this.chatMailbox.claimWake(params.messageId);
+      if (!claim) return { claimed: false };
+      return { claimed: true, messageId: claim.messageId, claimId: claim.wake.claimId, context: claim.context };
+    }
     if (['chat_list', 'chat_send', 'chat_status'].includes(method)) {
       if (actor.task) throw new Error('Only an external controller may coordinate native chats.');
       if (method === 'chat_list') {
@@ -214,7 +235,17 @@ export class CollaborationHub extends EventEmitter {
         const normalize = value => value.normalize('NFC').trim().toLowerCase();
         const query = params.query === undefined ? null : normalize(text(params.query, 'title query', 4096));
         const registered = (await this.chatMailbox.list()).filter(chat => params.provider === undefined || chat.provider === params.provider);
-        const titled = await this.chatTitleResolver(registered);
+        let titled = await this.chatTitleResolver(registered);
+        if (query && this.nativeChatDiscovery && params.provider !== 'claude') {
+          const discovered = await this.nativeChatDiscovery({ query });
+          const known = new Map(titled.map(chat => [chat.chatId, chat]));
+          for (const chat of discovered) {
+            const previous = known.get(chat.chatId);
+            known.set(chat.chatId, previous ? { ...chat, phase: previous.phase, lastSeenAt: previous.lastSeenAt,
+              registeredByHook: previous.registeredByHook ?? true } : chat);
+          }
+          titled = [...known.values()];
+        }
         const all = titled.map(chat => ({ ...chat, titleMatch: query && typeof chat.title === 'string'
           ? normalize(chat.title) === query ? 'exact' : normalize(chat.title).includes(query) ? 'contains' : null : null }))
           .filter(chat => query === null || chat.titleMatch === 'exact' || params.match !== 'exact' && chat.titleMatch === 'contains');
@@ -228,23 +259,90 @@ export class CollaborationHub extends EventEmitter {
         return { chats, nextCursor: next < all.length ? String(next) : null, totalCount: all.length,
           unavailableTitleCount: titled.filter(chat => !chat.title || chat.titleError).length,
           exactMatchCount: query === null ? null : all.filter(chat => chat.titleMatch === 'exact').length,
-          deliveryMode: 'next-native-hook', idleWakeSupported: false,
-          scope: 'hook-registered-native-chats', note: 'Titles are metadata, not unique IDs. Confirm the exact candidate when duplicate or partial titles match; send by sessionId with expectedTitle.' };
+          deliveryMode: this.chatWake || this.claudeWakeManifest ? 'native-owner-or-hook' : 'next-native-hook',
+          idleWakeSupported: Boolean(this.chatWake || this.claudeWakeManifest),
+          wakeProviders: { codex: Boolean(this.chatWake), claude: Boolean(this.claudeWakeManifest) },
+          scope: query && this.nativeChatDiscovery ? 'registered-and-native-metadata' : 'hook-registered-native-chats',
+          note: 'Titles are metadata, not unique IDs. Confirm the exact candidate when duplicate or partial titles match; send by sessionId with expectedTitle.' };
       }
       if (method === 'chat_status') return this.chatMailbox.status(params.messageId);
       if (this.closed) throw new Error('Broker is stopping; new messages are refused.');
       requestId(params.requestId);
-      if (params.expectedTitle !== undefined) {
-        text(params.expectedTitle, 'expected title', 4096);
-        const exact = (await this.chatMailbox.list()).filter(chat => chat.provider === params.provider && chat.sessionId === params.sessionId);
-        const [current] = await this.chatTitleResolver(exact);
-        if (!current || current.titleError || current.archived || current.title !== params.expectedTitle)
+      if (params.wake !== undefined && typeof params.wake !== 'boolean') throw new Error('wake must be boolean.');
+      let targetProvider = params.provider, targetSessionId = params.sessionId, expectedTitle = params.expectedTitle;
+      let nativeTarget;
+      if (params.title !== undefined) {
+        if (targetSessionId !== undefined || expectedTitle !== undefined) throw new Error('Use title or sessionId/expectedTitle, not both.');
+        if (targetProvider !== undefined) provider(targetProvider);
+        const normalize = value => value.normalize('NFC').trim().toLowerCase();
+        const title = normalize(text(params.title, 'recipient title', 4096));
+        let titled = await this.chatTitleResolver((await this.chatMailbox.list())
+          .filter(chat => targetProvider === undefined || chat.provider === targetProvider));
+        if (this.nativeChatDiscovery && targetProvider !== 'claude') {
+          const discovered = await this.nativeChatDiscovery({ query: params.title });
+          const known = new Map(titled.map(chat => [chat.chatId, chat]));
+          for (const chat of discovered) known.set(chat.chatId, { ...known.get(chat.chatId), ...chat });
+          titled = [...known.values()];
+        }
+        const candidates = titled
+          .filter(chat => !chat.titleError && !chat.archived && typeof chat.title === 'string' && normalize(chat.title) === title);
+        if (candidates.length !== 1) return { status: candidates.length ? 'needs-selection' : 'not-found', queued: false,
+          candidates: candidates.map(({ provider, sessionId, title, cwd, phase }) => ({ provider, sessionId, title, cwd, phase })),
+          note: candidates.length ? 'Several chats have this title. Confirm the exact recipient; no message was queued.'
+            : 'No registered chat has this exact title. Search chat_list; no message was queued.' };
+        ({ provider: targetProvider, sessionId: targetSessionId, title: expectedTitle } = candidates[0]);
+      }
+      if (this.nativeChatDiscovery && targetProvider === 'codex') {
+        [nativeTarget] = (await this.nativeChatDiscovery({ sessionId: targetSessionId }))
+          .filter(chat => chat.sessionId === targetSessionId);
+        if (!nativeTarget) throw new Error('Exact native chat is unavailable or archived; no message was queued.');
+      }
+      if (expectedTitle !== undefined) {
+        text(expectedTitle, 'expected title', 4096);
+        const exact = (await this.chatMailbox.list()).filter(chat => chat.provider === targetProvider && chat.sessionId === targetSessionId);
+        const [current] = nativeTarget ? [nativeTarget] : await this.chatTitleResolver(exact);
+        if (!current || current.titleError || current.archived || current.title !== expectedTitle)
           throw new Error('Native chat title changed or could not be verified. Search again; no message was queued.');
       }
-      return { ...await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider: params.provider,
-        targetSessionId: params.sessionId, message: params.message, requestId: params.requestId,
-        ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) }),
-        deliveryMode: 'next-native-hook', idleWakeSupported: false,
+      if (nativeTarget) await this.chatMailbox.discover(nativeTarget);
+      let receipt = await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider,
+        targetSessionId, message: params.message, requestId: params.requestId, wakeRequested: params.wake !== false,
+        ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) });
+      let wakeStatus = params.wake === false ? 'disabled' : 'unavailable';
+      if (params.wake !== false && targetProvider === 'claude' && this.claudeWakeManifest && receipt.state === 'queued') {
+        try { await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
+        catch { wakeStatus = 'unavailable'; }
+      }
+      if (params.wake !== false && targetProvider === 'codex' && this.chatWake && receipt.state === 'queued') {
+        let handle;
+        try {
+          handle = await this.chatWake({ sessionId: targetSessionId });
+          wakeStatus = handle.status;
+          if (handle.status === 'ready') {
+            const claim = await this.chatMailbox.claimWake(receipt.messageId);
+            if (claim) {
+              let outcome;
+              try { outcome = await handle.dispatch({ messageId: claim.messageId, text: claim.context }); }
+              catch { outcome = { status: 'uncertain' }; }
+              wakeStatus = outcome.status;
+              receipt = await this.chatMailbox.finishWake(claim.messageId, {
+                claimId: claim.wake.claimId,
+                state: outcome.status === 'accepted' ? 'accepted' : ['busy', 'unavailable'].includes(outcome.status) ? 'deferred' : 'uncertain',
+                detail: outcome.status === 'accepted' ? `Native owner accepted turn ${outcome.turnId}; hook acknowledgement is separate.`
+                  : ['busy', 'unavailable'].includes(outcome.status) ? 'Native owner refused before input dispatch; waiting for a native hook.'
+                    : 'Native dispatch outcome is uncertain; no automatic resend is permitted.',
+              });
+            } else receipt = await this.chatMailbox.status(receipt.messageId);
+          }
+        } catch (error) {
+          // Before a claim this is mere unavailability; after a claim preserve uncertainty.
+          receipt = await this.chatMailbox.status(receipt.messageId);
+          wakeStatus = receipt.wake?.state === 'dispatching' ? 'uncertain' : 'unavailable';
+        } finally { await handle?.close?.(); }
+      }
+      return { ...receipt, wakeStatus,
+        deliveryMode: receipt.wake?.state === 'accepted' ? 'native-owner' : 'next-native-hook',
+        idleWakeSupported: targetProvider === 'codex' ? Boolean(this.chatWake) : Boolean(this.claudeWakeManifest),
         note: 'Queued is not delivered. Offered is not acknowledged. Acknowledgement does not prove requested work stopped; verify work status separately.' };
     }
     if (method === 'models') {

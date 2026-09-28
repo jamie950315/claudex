@@ -145,15 +145,16 @@ function ownsCurrent(manifest, hash) {
     || manifest.phase === 'prepared' && hash === manifest.previousPatchedHash;
 }
 
-async function defaultCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource,
+async function defaultCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource,
   registryRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
   const entry = inspectFolderCache(original);
   const projection = projectionSource ?? await readFile(new URL('./claude-folder-projection.mjs', import.meta.url), 'utf8');
   const runtime = runtimeSource ?? await readFile(new URL('./claude-folder-runtime.mjs', import.meta.url), 'utf8');
   const handoff = handoffSource ?? await readFile(new URL('./claude-desktop-handoff-runtime.mjs', import.meta.url), 'utf8');
+  const wake = wakeSource ?? await readFile(new URL('./claude-chat-wake-runtime.mjs', import.meta.url), 'utf8');
   const anchor = anchorSource ?? await readFile(new URL('./claude-folder-anchor.mjs', import.meta.url), 'utf8');
   return replaceFolderCacheSource(original, buildDynamicFolderSource(entry.source,
-    { root, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, registryRoot }));
+    { root, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, wakeSource: wake, registryRoot }));
 }
 
 async function operate(action, options, dependencies) {

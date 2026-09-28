@@ -4,6 +4,8 @@ import { mkdtemp, readFile, stat, symlink, writeFile, chmod } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatMailbox } from '../src/chat-mailbox.mjs';
+import { withLock } from '../src/storage.mjs';
+import { setTimeout as delay } from 'node:timers/promises';
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'claudex-mailbox-'));
@@ -77,15 +79,50 @@ test('queued messages expire while offered receipts retain uncertainty', async t
   assert.equal((await mailbox.status(second.messageId)).state, 'expired');
 });
 
-test('SessionEnd and ended sessions never consume; sends reject ended targets', async t => {
-  const { mailbox, send, consume, directory } = await fixture(t);
+test('ended sessions queue messages without consuming or replaying until a resume hook', async t => {
+  const { mailbox, send, consume, directory, root } = await fixture(t);
   const sent = await send();
+  assert.equal(sent.deliveryStatus, 'waiting-for-hook');
   assert.equal((await consume({ event: 'SessionEnd' })).message, undefined);
   await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'SessionEnd' });
   assert.equal((await consume()).message, undefined);
   assert.equal((await send()).messageId, sent.messageId);
-  await assert.rejects(send({ requestId: 'new' }), /not registered/);
-  assert.equal((await mailbox.status(sent.messageId)).state, 'queued');
+  const second = await send({ requestId: 'new' });
+  assert.equal(second.state, 'queued');
+  assert.equal(second.deliveryStatus, 'waiting-for-resume');
+  assert.equal((await mailbox.status(sent.messageId)).deliveryStatus, 'waiting-for-resume');
+  const journal = JSON.parse(await readFile(join(root, 'state.json'), 'utf8'));
+  assert.equal(journal.messages.some(item => 'deliveryStatus' in item), false);
+  const restarted = new ChatMailbox({ root });
+  assert.equal((await restarted.status(second.messageId)).deliveryStatus, 'waiting-for-resume');
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'Stop' });
+  assert.equal((await mailbox.list())[0].phase, 'ended');
+  assert.equal((await consume()).message, undefined);
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'UserPromptSubmit' });
+  assert.equal((await mailbox.list())[0].phase, 'active');
+  assert.equal((await mailbox.status(sent.messageId)).deliveryStatus, 'waiting-for-hook');
+  assert.equal((await consume({ event: 'UserPromptSubmit' })).message.messageId, sent.messageId);
+  assert.equal((await mailbox.status(sent.messageId)).deliveryStatus, 'offered');
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'SessionEnd' });
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'SessionStart' });
+  assert.equal((await consume({ event: 'SessionStart' })).message.messageId, second.messageId);
+  assert.equal((await consume()).message, undefined);
+});
+
+test('queued messages for ended sessions still expire and request IDs cannot be retargeted', async t => {
+  const { mailbox, send, consume, root, directory } = await fixture(t);
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'SessionEnd' });
+  const sent = await send();
+  await assert.rejects(send({ targetSessionId: 'other' }), /different payload/);
+  const path = join(root, 'state.json');
+  const journal = JSON.parse(await readFile(path, 'utf8'));
+  journal.messages[0].createdAt -= 3600001;
+  journal.messages[0].expiresAt -= 3600001;
+  await writeFile(path, JSON.stringify(journal), { mode: 0o600 });
+  assert.equal((await mailbox.status(sent.messageId)).deliveryStatus, 'expired');
+  assert.equal((await send()).state, 'expired');
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'SessionStart' });
+  assert.equal((await consume()).message, undefined);
 });
 
 test('reads neither create absent storage nor rewrite unchanged journal', async t => {
@@ -140,4 +177,150 @@ test('request IDs are scoped by sender and oversized or full journals fail close
   await writeFile(path, JSON.stringify(journal));
   await assert.rejects(send({ requestId: 'capacity-overflow' }), /capacity/);
   assert.equal((await mailbox.status(first.messageId)).state, 'queued');
+});
+
+test('metadata discovery is not hook registration and preserves real lifecycle evidence', async t => {
+  const { mailbox, directory } = await fixture(t);
+  const discovered = await mailbox.discover({ provider: 'codex', sessionId: 'native', cwd: directory });
+  assert.equal(discovered.registeredByHook, false);
+  assert.equal(discovered.phase, 'ended');
+  assert.equal(discovered.lastEvent, undefined);
+  const registered = await mailbox.register({ provider: 'codex', sessionId: 'native', cwd: directory, event: 'UserPromptSubmit' });
+  assert.equal(registered.registeredByHook, true);
+  assert.equal(registered.phase, 'active');
+  assert.equal(registered.discoveredAt, discovered.discoveredAt);
+  assert.deepEqual(await mailbox.discover({ provider: 'codex', sessionId: 'native', cwd: directory }), registered);
+});
+
+test('wake claims and hooks serialize to one offer in either race order', async t => {
+  const { mailbox, root, send, consume } = await fixture(t);
+  const other = new ChatMailbox({ root });
+  const first = await send();
+  const [claim, hook] = await Promise.all([other.claimWake(first.messageId), consume()]);
+  assert.equal(claim.messageId, first.messageId);
+  assert.equal(hook.message, undefined);
+  const second = await send({ requestId: 'second' });
+  const [hookFirst, lateClaim] = await Promise.all([consume(), other.claimWake(second.messageId)]);
+  assert.equal(hookFirst.message.messageId, second.messageId);
+  assert.equal(lateClaim, null);
+  assert.equal((await mailbox.status(second.messageId)).wake, undefined);
+});
+
+test('lost wake dispatch survives restart without resend or fabricated receipt', async t => {
+  const { mailbox, root, send, consume } = await fixture(t);
+  const sent = await send();
+  const claim = await mailbox.claimWake(sent.messageId);
+  assert.equal(claim.wake.state, 'dispatching');
+  assert.match(claim.context, /not a grant of permissions/);
+  const restarted = new ChatMailbox({ root });
+  assert.equal(await restarted.claimWake(sent.messageId), null);
+  assert.equal((await consume()).message, undefined);
+  assert.equal((await send()).state, 'offered');
+  assert.equal((await restarted.status(sent.messageId)).acknowledgedAt, undefined);
+  await restarted.finishWake(sent.messageId, { claimId: claim.wake.claimId, state: 'uncertain', detail: 'Native dispatch outcome was lost.' });
+  assert.equal((await consume()).message, undefined);
+  assert.equal(await restarted.claimWake(sent.messageId), null);
+});
+
+test('accepted wake remains offered until the exact recipient acknowledges', async t => {
+  const { mailbox, send, consume } = await fixture(t);
+  const sent = await send();
+  const claim = await mailbox.claimWake(sent.messageId);
+  const accepted = await mailbox.finishWake(sent.messageId, { claimId: claim.wake.claimId, state: 'accepted', detail: 'Native owner accepted the turn.' });
+  assert.equal(accepted.state, 'offered');
+  assert.equal(accepted.acknowledgedAt, undefined);
+  assert.equal((await consume()).message, undefined);
+  assert.deepEqual((await consume({ lastAssistantMessage: `CLAUDEX_ACK:${sent.messageId}` })).acknowledgedIds, [sent.messageId]);
+  assert.equal((await mailbox.status(sent.messageId)).state, 'acknowledged');
+});
+
+test('only proven pre-dispatch deferral restores the queue and cannot undo receipt', async t => {
+  const { mailbox, send, consume } = await fixture(t);
+  const sent = await send();
+  const claim = await mailbox.claimWake(sent.messageId);
+  assert.throws(() => mailbox.finishWake(sent.messageId, { claimId: claim.wake.claimId, state: 'failed', detail: 'Unknown failure.' }), /invalid wake outcome/);
+  const deferred = await mailbox.finishWake(sent.messageId, { claimId: claim.wake.claimId, state: 'deferred', detail: 'Native owner refused before dispatch.' });
+  assert.equal(deferred.state, 'queued');
+  assert.equal(deferred.offeredAt, undefined);
+  await assert.rejects(mailbox.finishWake(sent.messageId, { claimId: claim.wake.claimId, state: 'deferred', detail: 'Duplicate finish.' }), /no longer current/);
+  assert.equal((await consume()).message.messageId, sent.messageId);
+  assert.equal(await mailbox.claimWake(sent.messageId), null);
+  const second = await send({ requestId: 'second' });
+  const secondClaim = await mailbox.claimWake(second.messageId);
+  await consume({ lastAssistantMessage: `CLAUDEX_ACK:${second.messageId}`, stopHookActive: true });
+  const late = await mailbox.finishWake(second.messageId, { claimId: secondClaim.wake.claimId, state: 'accepted', detail: 'Accepted after hook receipt raced ahead.' });
+  assert.equal(late.state, 'acknowledged');
+});
+
+test('malformed discovery and wake evidence cannot reopen a claimed message', async t => {
+  const { mailbox, send, root } = await fixture(t);
+  const sent = await send();
+  await mailbox.claimWake(sent.messageId);
+  const path = join(root, 'state.json');
+  const original = JSON.parse(await readFile(path, 'utf8'));
+  for (const mutate of [
+    state => { state.messages[0].state = 'queued'; },
+    state => { state.messages[0].wake.state = 'invented'; },
+    state => { state.messages[0].wake.at = -1; },
+    state => { delete state.messages[0].wake.claimId; },
+    state => { state.chats[0].registeredByHook = false; },
+    state => { state.chats[0].registeredByHook = 'yes'; },
+  ]) {
+    const invalid = structuredClone(original); mutate(invalid);
+    await writeFile(path, JSON.stringify(invalid), { mode: 0o600 });
+    await assert.rejects(mailbox.status(sent.messageId), /invalid (wake record|chat registration evidence)/);
+  }
+});
+
+test('stale wake completion cannot requeue a newer claimed generation', async t => {
+  const { mailbox, send, consume } = await fixture(t);
+  const sent = await send();
+  const first = await mailbox.claimWake(sent.messageId);
+  await mailbox.finishWake(sent.messageId, { claimId: first.wake.claimId, state: 'deferred', detail: 'Busy before dispatch.' });
+  const second = await mailbox.claimWake(sent.messageId);
+  assert.notEqual(second.wake.claimId, first.wake.claimId);
+  for (const state of ['accepted', 'uncertain', 'deferred']) {
+    await assert.rejects(mailbox.finishWake(sent.messageId, { claimId: first.wake.claimId, state, detail: 'Stale completion.' }), /no longer current/);
+  }
+  assert.equal((await mailbox.status(sent.messageId)).wake.claimId, second.wake.claimId);
+  assert.equal((await mailbox.status(sent.messageId)).state, 'offered');
+  assert.equal((await consume()).message, undefined);
+  await mailbox.finishWake(sent.messageId, { claimId: second.wake.claimId, state: 'accepted', detail: 'Current native dispatch accepted.' });
+  assert.equal((await mailbox.status(sent.messageId)).wake.state, 'accepted');
+});
+
+test('mailbox waits for an independent lock holder before an idempotent replay', async t => {
+  const { mailbox, send, root } = await fixture(t);
+  const sent = await send();
+  let acquired;
+  const ready = new Promise(resolve => { acquired = resolve; });
+  const held = withLock(join(root, 'mailbox.lock'), async () => {
+    acquired();
+    await delay(90);
+  });
+  await ready;
+  assert.deepEqual(await send(), sent);
+  await held;
+  assert.equal((await mailbox.status(sent.messageId)).state, 'queued');
+  assert.equal(JSON.parse(await readFile(join(root, 'state.json'), 'utf8')).messages.length, 1);
+});
+
+test('lock acquisition contention never retries a callback that has already entered', async t => {
+  const { mailbox } = await fixture(t);
+  let calls = 0;
+  await assert.rejects(mailbox.transaction(false, async () => {
+    calls++;
+    throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
+  }), /holds the lock/);
+  assert.equal(calls, 1);
+});
+
+test('malformed lock evidence fails immediately rather than using contention recovery', async t => {
+  const { mailbox, root } = await fixture(t);
+  const lockPath = join(root, 'mailbox.lock');
+  await writeFile(lockPath, '{bad-owner', { mode: 0o600 });
+  let entered = false;
+  await assert.rejects(mailbox.transaction(false, () => { entered = true; }), /Malformed lock owner/);
+  assert.equal(entered, false);
+  assert.equal(await readFile(lockPath, 'utf8'), '{bad-owner');
 });

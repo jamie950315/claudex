@@ -1,5 +1,8 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { prepareCodexChatWake } from '../src/codex-chat-wake.mjs';
+import { discoverCodexChats } from '../src/native-chat-catalog.mjs';
+import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.mjs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -64,6 +67,8 @@ async function serve(root, allowWrite, values) {
   root = await privateDirectory(root);
   return withLock(join(root, 'broker.lock'), async () => {
     const hub = new CollaborationHub({ root, allowWrite, defaultPermission: values['default-permission'] ?? 'read-only',
+      chatWake: prepareCodexChatWake, nativeChatDiscovery: discoverCodexChats,
+      claudeWakeManifest: createClaudeChatWakeManifest({ root }),
       run: createNativeCollaborationRunner({ commands: { codex: values['codex-binary'] ?? 'codex', claude: values['claude-binary'] ?? 'claude' } }),
       mcp: ({ provider, token }) => ({ command: process.execPath,
         args: [cli, 'mcp', '--root', root, '--peer', provider], env: { CLAUDEX_WORK_TOKEN: token } }) });
@@ -112,6 +117,10 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   const token = process.env.CLAUDEX_WORK_TOKEN ?? await controllerToken(root);
   const peer = values.peer ?? 'codex';
   if (command === 'mcp') return runCollaborationMcp({ root, peer, token });
+  if (command === 'desktop-wake-mcp') {
+    if (peer !== 'claude' || process.env.CLAUDEX_WORK_TOKEN) throw new Error('Desktop wake requires the native Claude controller endpoint.');
+    return runCollaborationMcp({ root, peer, token, desktopWakeOnly: true });
+  }
   if (command === 'status') { console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'list' }), null, 2)); return; }
   if (command === 'models') {
     const updating = values['codex-model'] !== undefined || values['claude-model'] !== undefined;

@@ -168,16 +168,30 @@ completed sync hint. stop_hook_active prevents additional Stop continuation loop
 Keep queued/offered/acknowledged distinct; offered may be lost and must never be
 automatically replayed. Only the same native recipient's Stop acknowledgement
 marker counts as receipt, never as proof of task shutdown or new authorization.
-Do not wake idle chats, resolve fuzzy titles, create/archive replacement chats,
+Idle wake requires an explicitly authorized and verified native-owner adapter;
+hook-only delivery must continue to report that it cannot wake idle chats.
+Never resolve fuzzy titles, create/archive replacement chats,
 edit transcripts/registries/SQLite, or use classifierContext as message delivery.
 Messages remain quoted peer text. No new native hook trust bypass is permitted.
 chat_list supports native-title query/provider/match filters for already hook-
-registered sessions. Enrich from bounded stable Codex session_index metadata and
+registered Claude sessions and bounded native Codex metadata discovery. Enrich from bounded stable Codex session_index metadata and
 exact Claude Desktop CLI-ID mappings, never transcript guesses or title-based ID
 substitution. Preserve duplicate candidates and metadata errors; partial/duplicate
 matches require user disambiguation. chat_send expectedTitle rechecks the chosen
 native title before enqueueing, without changing exact-session addressing. This
-does not introduce managed-task-to-origin-chat mapping or unregistered chat discovery.
+also supports direct exact `title` addressing when a single valid native candidate
+exists; duplicates return needs-selection without enqueueing. Known ended chats
+can queue messages waiting-for-resume. Only real SessionStart/UserPromptSubmit
+reactivates them; late Stop events cannot. Receipt deliveryStatus is computed,
+not a new durable state or proof of native receipt. This
+does not introduce managed-task-to-origin-chat mapping. Codex metadata discovery
+does not fabricate hook registrations. Native owner IPC supports untrusted-input
+wake in the original Desktop chat, including deep-link opening of unloaded originals;
+busy/native-owner changes never authorize a second writer. Claude wake uses the
+version-pinned renderer and narrow Desktop MCP claim/receipt endpoint. Shared
+mailbox claims fence hooks and native wake with exact claim IDs before dispatch;
+only proven pre-dispatch refusal may restore queued state. Unknown dispatch is
+never resent. Native acceptance is not hook acknowledgement or work completion.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker
