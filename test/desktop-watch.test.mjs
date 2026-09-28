@@ -348,6 +348,46 @@ test('a global source guard during another sync retains the source identity and 
   assert.equal(pass.blockedConversationCount, 0);
 });
 
+test('relocation guards stay alive and attribute a global hold to the moved conversation', async () => {
+  for (const code of ['CLAUDEX_CLAUDE_RELOCATION_BLOCKED', 'CLAUDE_RELOCATION_BLOCKED']) {
+    const f = await fixture();
+    f.state.conversations.caller = { id: 'caller', title: 'Unrelated conversation' };
+    f.state.conversations.moved = { id: 'moved', title: 'Moved project conversation' };
+    f.bridge.sync = async id => {
+      f.calls.sync.push(id);
+      throw Object.assign(new Error('Claude relocation does not preserve the synchronized history prefix.'),
+        { code, conversationId: 'moved' });
+    };
+    let pass;
+    await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+    assert.equal(pass.running, true);
+    assert.equal(pass.synchronization, 'blocked');
+    assert.equal(pass.blocked.scope, 'coordinator');
+    assert.equal(pass.blocked.conversationId, 'moved');
+    assert.equal(pass.blocked.title, 'Moved project conversation');
+    assert.equal(pass.blockedConversationCount, 0);
+    assert.equal(f.state.pending, null);
+    assert.equal((await f.status()).error, null);
+    assert.deepEqual(f.calls.sync, ['caller']);
+  }
+});
+
+test('in-progress relocation attributes its wait to the moved conversation instead of the caller', async () => {
+  const f = await fixture();
+  f.state.conversations.caller = { id: 'caller', title: 'Unrelated conversation' };
+  f.state.conversations.moved = { id: 'moved', title: 'Moved project conversation' };
+  f.bridge.sync = async () => {
+    throw Object.assign(new Error('Claude relocation has an in-progress turn; wait for a complete assistant turn.'),
+      { conversationId: 'moved' });
+  };
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.blockedConversationCount, 0);
+  assert.ok(pass.waitingContexts.length);
+  assert.ok(pass.waitingContexts.every(item => item.conversationId === 'moved' && item.title === 'Moved project conversation'));
+});
+
 test('dependency anchor validation failures remain paced pending holds without restarting', async () => {
   const f = await fixture(); let clock = 0;
   f.state.pending = { phase: 'promoted', operationId: 'anchor-check', record: { conversationId: 'protected', side: 'codex' } };

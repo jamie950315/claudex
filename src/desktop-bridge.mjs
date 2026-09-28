@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, withLock } from './storage.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
@@ -8,6 +9,7 @@ import { originalArchiveGuard } from './codex-original-archive-tree.mjs';
 const other = side => side === 'codex' ? 'claude' : 'codex';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const anchorGuard = message => Object.assign(new Error(message), { code: 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED' });
+const relocationGuard = message => Object.assign(new Error(message), { code: 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED' });
 const normalize = common => ({ ...common, messages: portableMessages(common.messages).map(({ role, content }) => ({ role, content })) });
 function matches(common, checkpoint) {
   return common.messages.length >= checkpoint.count && fingerprint(common, checkpoint.count) === checkpoint.digest;
@@ -62,6 +64,73 @@ export class DesktopBridge {
     assertComplete(common);
     if (record.cwd && common.meta.cwd !== record.cwd) throw new Error('Source working directory changed; synchronization paused.');
     return { ...data, common, digest: fingerprint(common) };
+  }
+
+  /** Adopt native-owned original relocation metadata, never rewrite its history.
+   * The adapter proves the native move; the coordinator proves that adopting it
+   * cannot select between competing histories or reroute an existing operation.
+   */
+  async reconcileOriginalRelocations(state, conversationId) {
+    const reconcile = this.adapters.claude?.reconcileRelocation;
+    if (!reconcile || state.pending) return;
+    for (const record of state.records.filter(record => record.side === 'claude'
+      && record.status === 'current' && record.managed === false && record.kind === 'original'
+      && (!conversationId || record.conversationId === conversationId))) {
+      try {
+        const proof = await reconcile(record);
+        if (!proof) continue;
+        const conversation = state.conversations[record.conversationId];
+        const validate = candidate => {
+          if (!candidate?.record || !candidate.common || !conversation || !record.verified)
+            throw relocationGuard('Claude relocation proof is incomplete; saved histories were preserved.');
+          const relocated = candidate.record;
+          const invariant = value => Object.fromEntries(Object.entries(value)
+            .filter(([key]) => !['path', 'cwd', 'relocation'].includes(key)));
+          if (!isDeepStrictEqual(invariant(relocated), invariant(record))
+            || candidate.nativeId !== record.nativeId || candidate.path !== relocated.path
+            || typeof relocated.path !== 'string' || typeof relocated.cwd !== 'string'
+            || !relocated.relocation || (relocated.path === record.path && relocated.cwd === record.cwd))
+            throw relocationGuard('Claude relocation changed protected identity or lifecycle fields.');
+          const common = normalize(candidate.common); assertComplete(common);
+          if (common.meta.cwd !== relocated.cwd || !matches(common, conversation.canonical)
+            || !isDeepStrictEqual(record.checkpoint, conversation.canonical))
+            throw relocationGuard('Claude relocation does not preserve the synchronized history prefix.');
+          if (candidate.incompleteTail)
+            throw new Error('Claude relocation has an in-progress turn; wait for a complete assistant turn.');
+          return common;
+        };
+        const common = validate(proof);
+        const target = this.current(state, record.conversationId, 'codex');
+        if (target) {
+          if (!target.managed || target.kind !== 'snapshot' || !target.verified)
+            throw relocationGuard('Claude relocation requires an unchanged managed Codex snapshot.');
+          await this.adapters.codex.assertIdle(target);
+          const destination = await this.inspect(target);
+          if (destination.incompleteTail || destination.common.messages.length !== conversation.canonical.count
+            || destination.digest !== conversation.canonical.digest
+            || !isDeepStrictEqual(target.checkpoint, conversation.canonical))
+            throw relocationGuard('Codex changed during Claude relocation; no branch was selected.');
+        }
+        const latest = await reconcile(record);
+        const latestCommon = validate(latest);
+        if (!isDeepStrictEqual(latest.record, proof.record) || latest.bytes !== proof.bytes
+          || !isDeepStrictEqual(latest.relocationProof, proof.relocationProof)
+          || fingerprint(latestCommon) !== fingerprint(common)
+          || latestCommon.messages.length !== common.messages.length)
+          throw new Error('Source history changed between complete reads; relocation waits for a stable boundary.');
+        // Atomic ledger update retains checkpoint, original native identity, and
+        // every previous snapshot's original cwd. A normal handoff updates Codex.
+        Object.assign(record, latest.record);
+        conversation.cwd = record.cwd;
+        await this.save(state, { event: 'claude-original-relocated', conversationId: record.conversationId,
+          nativeId: record.nativeId });
+      } catch (error) {
+        // Global collection can encounter another conversation's migration.
+        // Preserve its identity so the caller does not blame the current task.
+        error.conversationId ??= record.conversationId;
+        throw error;
+      }
+    }
   }
 
   async assertOriginalsUnchanged(state, conversationId) {
@@ -199,6 +268,7 @@ export class DesktopBridge {
       if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
       const conversation = state.conversations[id];
       if (!conversation) throw new Error('Unknown desktop bridge conversation.');
+      await this.reconcileOriginalRelocations(state, id);
       await this.assertOriginalsUnchanged(state, id);
       const records = ['codex', 'claude'].map(side => this.current(state, id, side)).filter(Boolean);
       const readings = [];
@@ -210,6 +280,15 @@ export class DesktopBridge {
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
       const maintenance = [];
+      const relocatedTarget = readings.find(({ record }) => record.side === 'codex' && record.cwd !== conversation.cwd);
+      if (relocatedTarget) {
+        const relocatedSource = readings.find(({ record }) => record.side === 'claude' && record.cwd === conversation.cwd
+          && record.managed === false && record.relocation);
+        if (!relocatedSource || !relocatedTarget.record.managed || relocatedTarget.record.kind !== 'snapshot'
+          || changed.some(entry => entry.record.side === 'codex') || relocatedTarget.data.incompleteTail)
+          throw Object.assign(relocationGuard('Relocated project requires an unchanged managed Codex destination.'), { conversationId: id });
+        maintenance.push({ side: 'codex', kind: 'relocation' });
+      }
       for (const { record, data } of readings) {
         const kind = await this.adapters[record.side].needsMaintenance?.(record, data);
         if (kind !== undefined && kind !== null && kind !== false && kind !== true && kind !== 'images')
@@ -220,7 +299,8 @@ export class DesktopBridge {
         throw new Error('Only one native context migration may be planned at a time.');
       // Visual repairs are independent, serial native deliveries. Select only
       // one per transaction, with a required cold reset taking precedence.
-      const upkeep = maintenance.find(item => item.kind === 'reset') ?? maintenance[0];
+      const upkeep = maintenance.find(item => item.kind === 'relocation')
+        ?? maintenance.find(item => item.kind === 'reset') ?? maintenance[0];
       if (!changed.length && records.length === 2 && !maintenance.length) return {
         changed: false,
         ...(conversation.discoveryMode === 'cold-import' ? { incompleteTail: readings.some(({ data }) => data.incompleteTail) } : {}),
@@ -250,6 +330,8 @@ export class DesktopBridge {
       // Cleanup precedes allocation; a protected backup cannot create an
       // unlimited stream of replacement generations.
       await this.collectInLock(state);
+      if (source.cwd !== data.common.meta.cwd || conversation.cwd !== data.common.meta.cwd)
+        throw Object.assign(relocationGuard('Source project changed while preparing synchronization; no handoff was allocated.'), { conversationId: id });
       if (side === 'codex' && target?.managed && this.adapters.codex.prepareDependencyAnchor) {
         const proof = await this.adapters.codex.prepareDependencyAnchor(target);
         if (proof) this.assertDependencyCapacity(state, this.dependencyAnchorCandidate(target, proof));
@@ -451,6 +533,7 @@ export class DesktopBridge {
     });
   }
   async collectInLock(state) {
+    await this.reconcileOriginalRelocations(state);
     await this.assertOriginalsUnchanged(state);
     const snapshots = state.records.filter(record => record.managed && record.kind === 'snapshot');
     const retainedConversations = new Set(snapshots.map(record => record.conversationId));

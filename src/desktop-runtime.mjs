@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { join, dirname, basename, resolve, sep, isAbsolute } from 'node:path';
 import { lstat, realpath, readFile, access, readdir, open } from 'node:fs/promises';
 import { createReadStream, constants } from 'node:fs';
@@ -7,6 +8,7 @@ import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock 
 import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude } from './claude.mjs';
+import { inspectClaudeProjectRelocation } from './claude-relocation.mjs';
 import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
@@ -14,7 +16,7 @@ import { createCodexLocalImageResolver } from './native-local-images.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket, hasProjectedImages } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
-import { assertComplete, fingerprint } from './history.mjs';
+import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
@@ -71,7 +73,7 @@ export async function persistentPacketKey(root) {
 
 /** Native adapters with one long-lived SDK owner per logical Claude session. */
 export class DesktopRuntime {
-  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict',
+  constructor({ root, codexHome, claudeHome, desktopHome = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'), claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict',
     nativeHistoryMaxBytes = NATIVE_HISTORY_LIMITS.maxBytes, nativeHistoryPageSize = NATIVE_HISTORY_LIMITS.pageSize, onEvent = () => {} }) {
     if (!['inline', 'archive'].includes(contextMode)) throw new Error('Unsupported Desktop context mode.');
     if (!Number.isSafeInteger(nativeHistoryMaxBytes) || nativeHistoryMaxBytes < 1024 || nativeHistoryMaxBytes > 64 * 1024 * 1024)
@@ -79,6 +81,7 @@ export class DesktopRuntime {
     if (!Number.isSafeInteger(nativeHistoryPageSize) || nativeHistoryPageSize < 1 || nativeHistoryPageSize > 100)
       throw new Error('nativeHistoryPageSize must be an integer from 1 through 100.');
     this.root = resolve(root); this.codexHome = resolve(codexHome); this.claudeHome = resolve(claudeHome);
+    this.desktopHome = resolve(desktopHome);
     this.claudeBinary = claudeBinary; this.clientFactory = clientFactory; this.ownerFactory = ownerFactory;
     this.contextMode = contextMode;
     this.nativeHistoryMaxBytes = nativeHistoryMaxBytes;
@@ -106,6 +109,7 @@ export class DesktopRuntime {
       prepareDependencyAnchor: record => this.prepareDependencyAnchor(record),
       assertDependencyAnchor: record => this.assertDependencyAnchor(record),
     });
+    this.adapters.claude.reconcileRelocation = record => this.reconcileClaudeRelocation(record);
   }
   async initialize() {
     this.root = await privateDirectory(this.root);
@@ -209,6 +213,56 @@ export class DesktopRuntime {
     return bytes;
   }
 
+  async relocatedClaudeHistory(record) {
+    const fail = message => { throw Object.assign(new Error(message), {
+      code: 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED', conversationId: record.conversationId,
+    }); };
+    const saved = record.relocation;
+    if (record.side !== 'claude' || record.managed !== false || record.kind !== 'original'
+      || record.verified !== true || record.importPacket)
+      fail('Claude relocation requires a verified native original without an imported bootstrap.');
+    if (saved && (saved.version !== 1 || !isAbsolute(saved.originPath ?? '') || !isAbsolute(saved.originCwd ?? '')
+      || !Array.isArray(saved.historicalCwds) || saved.historicalCwds.length > 16))
+      fail('Saved Claude relocation evidence is invalid.');
+    const historicalCwds = [...new Set([...(saved?.historicalCwds ?? []), record.cwd])];
+    if (historicalCwds.length > 16) fail('Claude relocation exceeds the verified project history limit.');
+    let evidence;
+    try {
+      evidence = await inspectClaudeProjectRelocation({ claudeHome: this.claudeHome, desktopRegistryRoot: this.desktopHome,
+        record: saved ? { ...record, path: saved.originPath, cwd: saved.originCwd } : record, historicalCwds });
+    } catch (error) {
+      if (error.code === 'CLAUDE_RELOCATION_BLOCKED') error.conversationId = record.conversationId;
+      throw error;
+    }
+    if (!evidence) return null;
+    if (evidence.path !== record.path && await exists(record.path))
+      fail('Claude relocation is ambiguous because the saved current transcript still exists.');
+    const prefix = completedClaudePrefix({ text: evidence.snapshot.text });
+    const common = decodeClaude(prefix.text, { preserveCompactionHistory: true });
+    assertComplete(common);
+    const normalized = { ...common, messages: portableMessages(common.messages) };
+    if (common.meta.id !== record.nativeId || !Number.isSafeInteger(record.checkpoint?.count)
+      || normalized.messages.length < record.checkpoint.count
+      || fingerprint(normalized, record.checkpoint.count) !== record.checkpoint.digest)
+      fail('Relocated Claude history does not preserve the synchronized prefix.');
+    // Native rows retain their historical cwd; only the presentation/next
+    // projection uses the independently verified current native project root.
+    common.meta.cwd = evidence.cwd;
+    const relocation = { version: 1, originPath: saved?.originPath ?? record.path,
+      originCwd: saved?.originCwd ?? record.cwd, historicalCwds };
+    return { record: { ...record, path: evidence.path, cwd: evidence.cwd, relocation },
+      common, incompleteTail: prefix.incompleteTail, nativeId: record.nativeId, path: evidence.path,
+      bytes: evidence.snapshot.bytes, digest: fingerprint(common),
+      relocationProof: { hash: evidence.snapshot.hash, identity: evidence.snapshot.identity, mapping: evidence.mapping } };
+  }
+
+  async reconcileClaudeRelocation(record) {
+    if (record.side !== 'claude' || record.kind !== 'original' || record.managed !== false || !record.verified) return null;
+    if (!record.relocation && await exists(record.path)) return null;
+    const proof = await this.relocatedClaudeHistory(record);
+    return proof && (proof.path !== record.path || proof.record.cwd !== record.cwd) ? proof : null;
+  }
+
   async inspect(record) {
     try { return await this.inspectNative(record); }
     catch (error) {
@@ -230,6 +284,15 @@ export class DesktopRuntime {
   }
 
   async inspectNative(record) {
+    if (record.relocation) {
+      const proof = await this.relocatedClaudeHistory(record);
+      if (!proof || proof.path !== record.path || proof.record.cwd !== record.cwd)
+        throw Object.assign(new Error('Claude project moved again; verified relocation must complete before synchronization.'), {
+          code: 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED', conversationId: record.conversationId,
+        });
+      const { record: ignored, relocationProof: evidence, ...data } = proof;
+      return data;
+    }
     const importPacket = importedClaudeOriginal(record);
     if (record.side === 'codex') {
       let nativeId = record.nativeId;

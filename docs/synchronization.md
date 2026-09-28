@@ -955,3 +955,25 @@ isolated native stores for testing. Runtime data stays outside the repository.
 - [Claude storage and retention](https://code.claude.com/docs/en/claude-directory)
 - [Thinking signatures](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [txcript usage](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
+## Native project relocation
+
+When Claude Desktop moves a tracked Local conversation to another project,
+Claudex can follow its native CLI session identity to the new project. The native
+registry must identify one exact destination, the previous transcript must be
+absent, and the complete previously synchronized history must remain unchanged.
+Claudex preserves historical working-directory fields and original content.
+
+An unchanged managed Codex counterpart is replaced through the normal guarded
+snapshot flow in the new project, including when no new message was added.
+Existing snapshots retain their original working directory and rollback guards.
+An active or independently changed counterpart, ambiguous native mapping,
+modified history, imported bootstrap original, or pending handoff is not forcibly
+redirected. Source changes during verification wait for a stable boundary.
+Moves back to an earlier project root and imported bootstrap originals remain
+guarded rather than guessing which native location is authoritative.
+This does not move project files or rewrite native conversation stores.
+
+A native no-inference relocation check verified a moved Local original, preserved
+all original transcript bytes, and advanced both sides from 258 to 300 canonical
+messages through one new-project Codex snapshot. The pending transaction completed
+normally. This is history-delivery evidence, not a new model-generated reply test.

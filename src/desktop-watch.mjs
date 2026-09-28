@@ -28,6 +28,7 @@ const isUnsupported = error => UNSUPPORTED.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
   || error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
+  || error?.code === 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED' || error?.code === 'CLAUDE_RELOCATION_BLOCKED'
   || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
 function usesActiveHints(state, id) {
@@ -265,13 +266,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               }
               if (isWaiting(error)) {
                 if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
-                wait(error, { scope: 'conversation', ...conversationContext(latest, id) }); return;
+                const waitingId = error.conversationId ?? id;
+                wait(error, { scope: waitingId === id ? 'conversation' : 'coordinator',
+                  ...conversationContext(latest, waitingId) }); return;
               }
               if (isHistoryBlocked(error)) {
                 // An allocation's global original/retention guard can identify
                 // another conversation. Keep that coordinator-wide source hold
                 // attached to its actual identity instead of the caller's title.
-                if (error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
+                if (['CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED',
+                  'CLAUDE_RELOCATION_BLOCKED'].includes(error?.code)
                   && error.conversationId && error.conversationId !== id) throw error;
                 // No durable intent exists, so other conversations may still
                 // be verified. Their normal global quota/original guards are
@@ -414,7 +418,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           else if (isWaiting(error)) {
             blocked = null;
             const state = await bridge.status();
-            wait(error, { scope: 'coordinator', ...conversationContext(state, state.pending?.record?.conversationId) });
+            wait(error, { scope: 'coordinator',
+              ...conversationContext(state, state.pending?.record?.conversationId ?? error.conversationId) });
           }
           else if (isHistoryBlocked(error)) {
             const state = await bridge.status(), pending = state.pending;

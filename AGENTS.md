@@ -159,6 +159,19 @@ execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 
+Claude Desktop may move a current unmanaged Local original to another project.
+Reconcile only an exact, stable native registry mapping of the same CLI identity,
+with the saved transcript absent, canonical owned regular destination bytes,
+and complete authenticated saved canonical prefix. Historical native cwd values
+remain untouched; the ledger's current cwd follows the native project. Recheck
+the source proof after verifying an idle unchanged managed Codex counterpart.
+Never reroute pending work or choose between independently advanced histories.
+Create a normal Codex snapshot in the new cwd even without a new message; retain
+old snapshot cwd and normal retirement guards. Keep at most 16 verified project
+roots. Imported bootstrap originals and ambiguous duplicate paths remain blocked.
+Stable relocated reads revalidate the registry and saved prefix without creating
+a Claude writer or editing any native transcript or registry.
+
 A native transcript file changing between successful handoff inspections is a
 revoked, deferred Desktop archival attempt, not a synchronization failure. Return
 history_changed only after clearing all archive actions and cached proofs; perform
@@ -203,8 +216,9 @@ pause synchronization without exiting the watcher or closing live Claude owners.
 A pending transaction blocks all discovery, new syncs and collection until normal
 verified recovery succeeds; it is never cleared or resent to regain availability.
 Missing tracked transcript paths are explicit history blocks, not repeated
-worker crashes. Preserve the saved native identity/path and pending evidence;
-never search for and adopt a same-ID file under another project automatically.
+worker crashes. Preserve the saved native identity/path and pending evidence.
+Never scan for same-ID substitutes; only the explicit native registry relocation
+protocol above may adopt a verified new project location without pending work.
 Without pending work, affected syncs are held individually, but global original
 and quota guards still apply to other deliveries. Revalidation is paced at 30
 seconds, with explicit bounded blocked status. Unclassified unsafe failures remain
