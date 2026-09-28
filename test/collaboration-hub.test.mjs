@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, chmod, rm } from 'node:fs/promises';
+import { mkdtemp, chmod, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
-import { writeJSON } from '../src/storage.mjs';
+import { readJSON, writeJSON } from '../src/storage.mjs';
 
 const pending = () => {
   let resolve, reject;
@@ -34,6 +34,116 @@ async function until(check) {
 const request = (peer, method, params, token) => ({ peer, token, method, params });
 const controller = (hub, peer, method, params) => request(peer, method, params, hub.controllerToken);
 const status = (hub, id) => hub.dispatch(controller(hub, 'codex', 'status', { taskId: id }));
+
+test('provider model defaults persist, validate atomically and leave existing work unchanged', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
+  hub.schedule = () => {};
+  const settings = params => hub.dispatch(controller(hub, 'codex', 'models', params));
+  assert.deepEqual(await settings({}), { defaultModels: { codex: null, claude: null } });
+  const initial = { defaultModels: { codex: 'codex-default', claude: 'claude-default' } };
+  await settings(initial);
+  const saved = await lstat(join(root, 'work.json'), { bigint: true });
+  await settings({});
+  await settings(initial);
+  const unchanged = await lstat(join(root, 'work.json'), { bigint: true });
+  assert.equal(unchanged.ino, saved.ino);
+  assert.equal(unchanged.mtimeNs, saved.mtimeNs);
+  const start = { provider: 'codex', cwd: root, prompt: 'test', requestId: 'models-start' };
+  const created = await hub.dispatch(controller(hub, 'codex', 'start', start));
+  assert.equal((await status(hub, created.taskId)).model, 'codex-default');
+  await settings({ defaultModels: { codex: 'changed', claude: null } });
+  assert.equal((await status(hub, created.taskId)).model, 'codex-default');
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'start', start))).replayed, true);
+  for (const invalid of [null, [], {}, { codex: null }, { codex: null, claude: null, extra: null },
+    { codex: '', claude: null }, { codex: 'a\nb', claude: null }, { codex: ' model ', claude: null },
+    { codex: '界'.repeat(67), claude: null }, { codex: 42, claude: null }]) {
+    await assert.rejects(settings({ defaultModels: invalid }));
+    assert.deepEqual((await settings({})).defaultModels, { codex: 'changed', claude: null });
+  }
+  const explicit = await hub.dispatch(controller(hub, 'codex', 'start', { ...start, model: null, requestId: 'native-default' }));
+  assert.equal((await status(hub, explicit.taskId)).model, null);
+  const next = await hub.dispatch(controller(hub, 'codex', 'start', { ...start, model: 'explicit', requestId: 'explicit' }));
+  assert.equal((await status(hub, next.taskId)).model, 'explicit');
+  await hub.close();
+  const reopened = await new CollaborationHub({ root, run: async () => ({ text: 'unused' }) }).initialize();
+  t.after(() => reopened.close());
+  assert.deepEqual((await reopened.dispatch(controller(reopened, 'codex', 'models', {}))).defaultModels, { codex: 'changed', claude: null });
+  assert.deepEqual((await reopened.dispatch(controller(reopened, 'codex', 'list', {}))).limits.defaultModels, { codex: 'changed', claude: null });
+});
+
+test('children use destination defaults and workers cannot read or change model settings', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
+  hub.schedule = () => {};
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: 'codex-default', claude: 'claude-default' } }));
+  const token = 'b'.repeat(64);
+  const parent = await uncertainFixture(hub, hub.root, { model: 'parent-override', status: 'running', active: {
+    generation: 1, tokenHash: createHash('sha256').update(token).digest('hex'), messageCount: 1, pid: 123456,
+  } });
+  for (const params of [{}, { defaultModels: { codex: null, claude: null } }])
+    await assert.rejects(hub.dispatch(request('codex', 'models', params, token)), /Only the controller/);
+  const child = await hub.dispatch(request('codex', 'start', { provider: 'claude', cwd: root, prompt: 'child', requestId: 'child-model' }, token));
+  assert.equal((await status(hub, child.taskId)).model, 'claude-default');
+  assert.equal((await status(hub, parent.id)).model, 'parent-override');
+});
+
+test('handoff freezes receiver model at request time and explicit null selects native default', async t => {
+  const first = pending();
+  const invocations = [];
+  const { root, hub } = await setup(t, async args => {
+    invocations.push(args);
+    return invocations.length === 1 ? first.promise : { text: 'done' };
+  });
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: 'c1', claude: 'a1' } }));
+  const created = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root, prompt: 'start', requestId: 'handoff-model' }));
+  await until(() => invocations.length === 1);
+  const running = await status(hub, created.taskId);
+  const transfer = controller(hub, 'codex', 'handoff', { taskId: created.taskId, provider: 'claude', message: 'continue', revision: running.revision, requestId: 'transfer-model' });
+  await hub.dispatch(transfer);
+  assert.deepEqual((await status(hub, created.taskId)).pendingHandoff, { provider: 'claude', model: 'a1' });
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: 'c2', claude: 'a2' } }));
+  assert.equal((await hub.dispatch(transfer)).replayed, true);
+  first.resolve({ text: 'transferred' });
+  await until(async () => (await status(hub, created.taskId)).status === 'completed');
+  assert.deepEqual(invocations.map(item => item.model), ['c1', 'a1']);
+  let finished = await status(hub, created.taskId);
+  await hub.dispatch(controller(hub, 'codex', 'handoff', { taskId: created.taskId, provider: 'codex', model: 'override', message: 'return', revision: finished.revision, requestId: 'return-model' }));
+  await until(async () => (await status(hub, created.taskId)).status === 'completed');
+  assert.equal(invocations[2].model, 'override');
+  finished = await status(hub, created.taskId);
+  await hub.dispatch(controller(hub, 'codex', 'handoff', { taskId: created.taskId, provider: 'claude', model: null, message: 'native', revision: finished.revision, requestId: 'native-model' }));
+  await until(async () => (await status(hub, created.taskId)).status === 'completed');
+  assert.equal(invocations[3].model, undefined);
+});
+
+test('legacy ledgers gain native model defaults and malformed persisted settings fail', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
+  await hub.close();
+  const ledger = await readJSON(join(root, 'work.json'));
+  delete ledger.defaultModels;
+  await writeJSON(join(root, 'work.json'), ledger);
+  const legacy = await new CollaborationHub({ root, run: async () => ({ text: 'unused' }) }).initialize();
+  assert.deepEqual(legacy.state.defaultModels, { codex: null, claude: null });
+  await legacy.close();
+  ledger.defaultModels = { codex: 'bad\nmodel', claude: null };
+  await writeJSON(join(root, 'work.json'), ledger);
+  await assert.rejects(new CollaborationHub({ root, run: async () => ({ text: 'unused' }) }).initialize(), /control characters/);
+});
+
+test('legacy pending handoff without a model retains native default despite new settings', async t => {
+  const completion = pending();
+  const calls = [];
+  const { root, hub } = await setup(t, async args => {
+    calls.push(args);
+    return calls.length === 1 ? completion.promise : { text: 'done' };
+  });
+  const start = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root, prompt: 'start', requestId: 'legacy-pending' }));
+  await until(() => calls.length === 1);
+  await hub.mutate(state => { state.tasks[start.taskId].pendingHandoff = { provider: 'claude' }; });
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: null, claude: 'new-default' } }));
+  completion.resolve({ text: 'handoff' });
+  await until(async () => (await status(hub, start.taskId)).status === 'completed');
+  assert.equal(calls[1].model, undefined);
+});
 
 async function uncertainFixture(hub, root, extra = {}) {
   const id = randomUUID();

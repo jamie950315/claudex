@@ -49,6 +49,18 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var issuePanel: NSStackView!
     private var issueText: NSTextField!
     private var setupHelp: NSTextField!
+    private var codexModelField: NSTextField!
+    private var claudeModelField: NSTextField!
+    private var modelMessage: NSTextField!
+    private var modelSaveButton: NSButton!
+    private var modelReloadButton: NSButton!
+    private var modelBusy = false
+    private var modelSettings: ModelSettings?
+    private var modelMessageKey = ""
+    private var modelErrorDetail: String?
+    private var modelErrorCode: Int32?
+    private var codexModelDraft: String?
+    private var claudeModelDraft: String?
     private var settingsPresentedKey: String { "settingsPresented.v1:" + setupRoot }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -69,6 +81,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         createStatusItem()
         bindHealthView()
         health.start(item: statusItem)
+        loadModels()
         let launch = SetupLaunchPolicy(background: cliArguments.contains("--background"), inspectOnly: inspectOnly,
             hasPresentedSettings: UserDefaults.standard.bool(forKey: settingsPresentedKey),
             hasPriorSetup: FileManager.default.fileExists(atPath: setupRoot + "/app-setup-status.json"))
@@ -114,6 +127,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     @objc private func changeLanguage(_ sender: NSPopUpButton) {
         guard let code = sender.selectedItem?.representedObject as? String else { return }
+        codexModelDraft = codexModelField?.stringValue
+        claudeModelDraft = claudeModelField?.stringValue
         Localization.shared.select(code, persist: !inspectOnly && !uiSmoke)
         let visible = window.isVisible
         let frame = window.frame
@@ -376,6 +391,44 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         stack.addArrangedSubview(footer)
 
         advancedSection = verticalStack()
+        let modelSection = verticalStack(spacing: 8)
+        modelSection.addArrangedSubview(label("Collaboration models", size: 13, weight: .semibold))
+        let modelHelp = wrapping("Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.", size: 11, color: .secondaryLabelColor)
+        modelSection.addArrangedSubview(modelHelp)
+        modelHelp.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
+        for provider in ["Codex", "Claude"] {
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 10
+            let title = label(provider, size: 12, weight: .medium)
+            title.widthAnchor.constraint(equalToConstant: 60).isActive = true
+            row.addArrangedSubview(title)
+            let field = NSTextField(string: provider == "Codex" ? codexModelDraft ?? modelSettings?.defaultModels.codex ?? "" : claudeModelDraft ?? modelSettings?.defaultModels.claude ?? "")
+            field.placeholderString = L("Native CLI default")
+            field.setAccessibilityLabel(LF("%@ default model ID", provider))
+            field.isEnabled = !inspectOnly && !uiSmoke && !modelBusy
+            row.addArrangedSubview(field)
+            field.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            if provider == "Codex" { codexModelField = field } else { claudeModelField = field }
+            modelSection.addArrangedSubview(row)
+            row.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
+        }
+        let modelActions = NSStackView()
+        modelActions.orientation = .horizontal
+        modelActions.spacing = 10
+        modelSaveButton = NSButton(title: L("Save model defaults"), target: self, action: #selector(saveModels(_:)))
+        modelReloadButton = NSButton(title: L("Reload model defaults"), target: self, action: #selector(reloadModels(_:)))
+        for button in [modelSaveButton!, modelReloadButton!] {
+            button.bezelStyle = .rounded
+            modelActions.addArrangedSubview(button)
+        }
+        modelSection.addArrangedSubview(modelActions)
+        modelMessage = wrapping(modelMessageKey, size: 11, color: .secondaryLabelColor)
+        modelSection.addArrangedSubview(modelMessage)
+        modelMessage.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
+        advancedSection.addArrangedSubview(modelSection)
+        modelSection.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
+        updateModelControls()
         healthDetails = verticalStack(spacing: 6)
         healthUpdated = wrapping("", size: 11, color: .secondaryLabelColor)
         healthRecovery = wrapping("", size: 11, color: .secondaryLabelColor)
@@ -625,6 +678,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 && abs((document?.frame.width ?? 0) - self.pageScroll.contentView.bounds.width) < 1
                 && scrollCount(self.window.contentView!) == 1
                 && self.connections.arrangedSubviews.count == 2
+                && self.codexModelField.placeholderString == L("Native CLI default")
+                && self.claudeModelField.placeholderString == L("Native CLI default")
+                && !self.modelSaveButton.isEnabled && !self.modelReloadButton.isEnabled
                 && self.cards.arrangedSubviews.count == (readySample || waitingSample ? 0 : 1)
                 && (!(waitingSample || readySample) || self.setupButton.isHidden)
                 && (!readySample || self.attentionSection.isHidden && (document?.frame.height ?? 0) < self.pageScroll.contentView.bounds.height)
@@ -695,6 +751,67 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
+    private func updateModelControls() {
+        modelSaveButton?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
+        modelReloadButton?.isEnabled = !uiSmoke && !modelBusy
+        codexModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
+        claudeModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
+        modelMessage?.stringValue = L(modelMessageKey)
+        if let detail = modelErrorDetail { modelMessage?.stringValue += "\n" + L("Diagnostic details:") + "\n" + detail }
+        if let code = modelErrorCode {
+            modelMessage?.stringValue = LF("Could not load or save model defaults (exit code %@). Check advanced diagnostics, then reload.", String(code))
+        }
+        scheduleWindowFit()
+    }
+    private func loadModels(codex: String? = nil, claude: String? = nil) {
+        guard !uiSmoke && !modelBusy else { return }
+        let saving = codex != nil
+        guard !saving || !inspectOnly else { return }
+        modelBusy = true
+        modelErrorDetail = nil
+        modelErrorCode = nil
+        modelMessageKey = saving ? "Saving model defaults…" : "Loading model defaults…"
+        updateModelControls()
+        runner.models(codex: codex, claude: claude) { [weak self] result in
+            guard let self else { return }
+            self.modelBusy = false
+            switch result {
+            case .success(let settings):
+                self.modelSettings = settings
+                self.codexModelDraft = nil
+                self.claudeModelDraft = nil
+                self.codexModelField.stringValue = settings.defaultModels.codex ?? ""
+                self.claudeModelField.stringValue = settings.defaultModels.claude ?? ""
+                self.modelMessageKey = saving ? "Model defaults saved. New tasks and handoffs will use these settings." : ""
+            case .failure(let error):
+                switch error {
+                case .unavailable: self.modelMessageKey = "Model settings are unavailable. Check the Claudex installation and reload."
+                case .excessiveOutput, .invalidResponse: self.modelMessageKey = "Model settings returned an invalid response. Reload to try again."
+                case .engineMessage(let detail):
+                    self.modelMessageKey = "Could not load or save model defaults. Resolve the issue below, then reload."
+                    self.modelErrorDetail = detail
+                case .failed(let code):
+                    self.modelMessageKey = ""
+                    self.modelErrorCode = code
+                }
+            }
+            self.updateModelControls()
+        }
+    }
+    @objc private func reloadModels(_ sender: Any?) { loadModels() }
+    @objc private func saveModels(_ sender: Any?) {
+        guard !inspectOnly && !uiSmoke else { return }
+        modelErrorDetail = nil
+        modelErrorCode = nil
+        let codex = codexModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let claude = claudeModelField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard [codex, claude].allSatisfy({ $0.utf8.count <= 200 && !$0.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) }) else {
+            modelMessageKey = "Enter a model ID of at most 200 bytes without control characters."
+            updateModelControls()
+            return
+        }
+        loadModels(codex: codex, claude: claude)
+    }
     @objc private func toggleDetails(_ sender: NSButton) {
         advancedExpanded.toggle()
         advancedSection.isHidden = !advancedExpanded

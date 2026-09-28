@@ -81,6 +81,22 @@ test('only an exact no-output pre-execution Git refusal is a known startup failu
   }
 });
 
+test('selected models reach the native CLI unchanged and native defaults omit the flag', async () => {
+  for (const provider of ['codex', 'claude']) {
+    for (const model of [null, `${provider}-selected-model`]) {
+      const fake = fakeSpawn(provider === 'codex'
+        ? [{ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }, { type: 'turn.completed' }]
+        : [{ type: 'result', is_error: false, result: 'ok' }]);
+      await runner(fake)({ provider, cwd: process.cwd(), prompt: 'Check model routing.', model });
+      const args = fake.calls[0].args;
+      if (model === null) assert.equal(args.includes('--model'), false);
+      else assert.equal(args[args.indexOf('--model') + 1], model);
+      assert.ok(!args.includes('--dangerously-skip-permissions'));
+      assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
+    }
+  }
+});
+
 test('Claude uses nonpersistent restricted CLI with bounded file tools and explicit MCP', async () => {
   const fake = fakeSpawn([
     { type: 'system', subtype: 'init', session_id: 'claude-session' },

@@ -16,6 +16,9 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
   claudex collaboration serve [--allow-write]     Run the broker in the foreground
   claudex collaboration mcp --peer codex|claude   Native stdio MCP endpoint
   claudex collaboration status                   Read the work inventory (no inference)
+  claudex collaboration models                   Read provider model defaults (no inference)
+  claudex collaboration models --codex-model ID --claude-model ID
+                                                Save both defaults; empty ID uses native default
   claudex collaboration request METHOD --peer codex|claude
                                                 Read JSON parameters from stdin
 
@@ -91,6 +94,7 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     root: { type: 'string' }, peer: { type: 'string' }, 'allow-write': { type: 'boolean' }, help: { type: 'boolean' },
     'default-permission': { type: 'string' }, 'codex-binary': { type: 'string' }, 'claude-binary': { type: 'string' },
+    'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
   } });
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { console.log(help); return; }
@@ -106,6 +110,17 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   const peer = values.peer ?? 'codex';
   if (command === 'mcp') return runCollaborationMcp({ root, peer, token });
   if (command === 'status') { console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'list' }), null, 2)); return; }
+  if (command === 'models') {
+    const updating = values['codex-model'] !== undefined || values['claude-model'] !== undefined;
+    if (updating && (values['codex-model'] === undefined || values['claude-model'] === undefined))
+      throw new Error('Both provider model settings are required.');
+    const params = updating ? { defaultModels: {
+      codex: values['codex-model'].trim() || null,
+      claude: values['claude-model'].trim() || null,
+    } } : {};
+    console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'models', params }), null, 2));
+    return;
+  }
   if (command === 'request') {
     let buffer = '';
     for await (const chunk of process.stdin) {

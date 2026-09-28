@@ -34,7 +34,7 @@ The MCP interface exposes:
 | --- | --- |
 | `claudex_start` | Start work with `provider`, `cwd`, `prompt`, and a stable `requestId`; worker calls create children. |
 | `claudex_send` | Queue a follow-up for the next completed boundary of an existing task. |
-| `claudex_handoff` | Transfer the same task to the other provider using its current `revision` and a handoff message. |
+| `claudex_handoff` | Transfer the same task to the other provider using its current `revision`, a handoff message, and an optional destination `model`. |
 | `claudex_status` | Read progress, messages, last native identity and results. |
 | `claudex_wait` | Wait up to 30 seconds for a revision change or terminal result. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
@@ -56,6 +56,37 @@ further mutations with that generation's capability. No handoff occurs after a
 failure or an uncertain outcome. Idempotency keys reject changed request payloads
 and prevent duplicate dispatch; transport errors never cause automatic replay.
 Follow-ups reconstruct the bounded work record in a fresh native invocation.
+
+## Model selection
+
+Claudex stores separate Codex and Claude default model IDs in the private broker
+state. Configure them in the app's advanced settings or through the running broker:
+
+```sh
+node bin/claudex.mjs collaboration models
+node bin/claudex.mjs collaboration models --codex-model MODEL_ID --claude-model MODEL_ID
+```
+
+Supply both options when saving; an empty string resets that provider to its
+native CLI default. Saving settings starts no model work and does not restart
+services. The controller-only `models` request accepts `{}` for a read or
+`{"defaultModels":{"codex":null,"claude":null}}` to reset both providers.
+Worker capabilities cannot change these global defaults.
+
+For `claudex_start` and `claudex_handoff`, an explicit `model` overrides the
+destination provider's saved default. Omission uses that provider's saved default;
+explicit `null` chooses the native CLI default even when a saved default exists.
+Children use their destination provider's default, not their parent's model ID.
+A handoff captures its selected destination model when requested. Later preference
+changes cannot alter pending handoffs, queued tasks, or running invocations.
+Follow-ups retain the task's selected model. Native-default selection remains a
+delegation to the installed CLI, not a pinned model version.
+
+Model IDs are passed directly to the selected vendor CLI. Claudex does not assume
+that a model available in one account is available in another, silently substitute
+models, or change permissions when choosing a model. Invalid or unavailable model
+errors remain visible. Defaults do not inherit the model selected in the Desktop
+chat UI. Existing tasks retain their saved selection when upgrading.
 
 ## Permissions and limits
 
@@ -89,7 +120,7 @@ explicitly. Claude runs nonpersistent print mode with restricted file tools and
 explicit MCP configuration. Its read-only mode has Read/Glob/Grep; its write mode
 also has Edit/Write, **not Bash**. Unattended approval requests are not auto-granted.
 These profiles do not inherit arbitrary hooks, plugins, MCP connections or model
-settings. With no requested model, each native CLI selects its default. Workers
+settings. With no requested or saved provider model, each native CLI selects its default. Workers
 are instructed to read applicable repository guidance. Native account login is
 reused without copying credentials; inherited API-key variables are removed.
 

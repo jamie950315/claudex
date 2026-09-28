@@ -65,6 +65,24 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.equal(report.allowWrite, true);
 });
 
+test('model preferences use authenticated broker requests without running setup', async t => {
+  const { root, setup, events } = await fixture(t);
+  await mkdir(join(root, 'collaboration'), { mode: 0o700 });
+  await writeFile(join(root, 'collaboration', 'controller-key'), 'a'.repeat(64) + '\n', { mode: 0o600 });
+  const requests = [];
+  setup.collaborationCall = async request => {
+    requests.push(request);
+    return { defaultModels: request.params.defaultModels ?? { codex: null, claude: null } };
+  };
+  assert.deepEqual(await setup.models(), { defaultModels: { codex: null, claude: null } });
+  assert.deepEqual(await setup.models({ codex: 'test-codex', claude: 'test-claude' }),
+    { defaultModels: { codex: 'test-codex', claude: 'test-claude' } });
+  assert.ok(requests.every(request => request.method === 'models' && request.token === 'a'.repeat(64)));
+  assert.deepEqual(events, []);
+  setup.collaborationCall = async () => { throw Object.assign(new Error('Broker offline'), { code: 'ECONNREFUSED' }); };
+  await assert.rejects(setup.models(), /Broker offline/);
+});
+
 test('background startup integrates the display without installing providers or services', async t => {
   const { setup, events } = await fixture(t);
   await setup.startup();

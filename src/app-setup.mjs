@@ -101,7 +101,7 @@ export class AppSetup {
     }
   }
 
-  async collaborationStatus() {
+  async collaborationRequest(method, params = {}) {
     const root = join(this.root, 'collaboration');
     try {
       const file = await open(join(root, 'controller-key'), constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -112,11 +112,19 @@ export class AppSetup {
           throw new Error('Invalid collaboration controller key.');
         token = (await file.readFile('utf8')).trim();
       } finally { await file.close(); }
-      return await this.collaborationCall({ root, peer: 'codex', token, method: 'list', timeoutMs: 3000 });
+      return await this.collaborationCall({ root, peer: 'codex', token, method, params, timeoutMs: 3000 });
     } catch (error) {
-      if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) return null;
+      if (method === 'list' && ['ENOENT', 'ECONNREFUSED'].includes(error.code)) return null;
       throw error;
     }
+  }
+
+  async collaborationStatus() {
+    return this.collaborationRequest('list');
+  }
+
+  async models(defaultModels) {
+    return this.collaborationRequest('models', defaultModels === undefined ? {} : { defaultModels });
   }
 
   async inspect({ providers, notes = {} } = {}) {

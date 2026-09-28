@@ -97,6 +97,25 @@ struct SetupReport: Decodable {
 
 enum SetupParseError: Error { case invalid }
 
+struct ModelSettings: Decodable {
+    struct Defaults: Decodable {
+        let codex: String?
+        let claude: String?
+    }
+    let defaultModels: Defaults
+
+    static func parse(_ data: Data) throws -> ModelSettings {
+        let settings = try JSONDecoder().decode(ModelSettings.self, from: data)
+        for model in [settings.defaultModels.codex, settings.defaultModels.claude] {
+            guard model == nil || (!model!.isEmpty && model!.utf8.count <= 200
+                && !model!.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })) else {
+                throw SetupParseError.invalid
+            }
+        }
+        return settings
+    }
+}
+
 enum SetupCommand {
     case inspect
     case startup
@@ -115,6 +134,7 @@ enum SetupCommand {
 
 enum SetupProcessError: Error {
     case unavailable, excessiveOutput, failed(Int32), invalidResponse
+    case engineMessage(String)
 
     var message: String {
         switch self {
@@ -122,6 +142,7 @@ enum SetupProcessError: Error {
         case .excessiveOutput: return "The setup engine returned too much data. Setup status could not be verified."
         case .failed(let code): return "The setup engine exited with code \(code). Check the app installation, then retry."
         case .invalidResponse: return "The setup engine returned an unrecognized status. Setup is not confirmed."
+        case .engineMessage(let detail): return detail
         }
     }
 }
@@ -146,14 +167,34 @@ final class SetupRunner {
         }
     }
 
+    func models(codex: String? = nil, claude: String? = nil,
+                completion: @escaping (Result<ModelSettings, SetupProcessError>) -> Void) {
+        var arguments = ["models"]
+        if let codex, let claude { arguments += ["--codex-model", codex, "--claude-model", claude] }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.executeData(arguments).flatMap { data -> Result<ModelSettings, SetupProcessError> in
+                do { return .success(try ModelSettings.parse(data)) }
+                catch { return .failure(.invalidResponse) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     private func execute(_ command: SetupCommand) -> Result<SetupReport, SetupProcessError> {
+        executeData(command.arguments).flatMap { data in
+            do { return .success(try SetupReport.parse(data)) }
+            catch { return .failure(.invalidResponse) }
+        }
+    }
+
+    private func executeData(_ arguments: [String]) -> Result<Data, SetupProcessError> {
         let files = FileManager.default
         guard files.isExecutableFile(atPath: node.path), files.fileExists(atPath: engine.path) else {
             return .failure(.unavailable)
         }
         let process = Process()
         process.executableURL = node
-        process.arguments = [engine.path] + command.arguments + ["--root", root]
+        process.arguments = [engine.path] + arguments + ["--root", root]
         let output = Pipe(), errors = Pipe()
         process.standardOutput = output
         process.standardError = errors
@@ -199,8 +240,13 @@ final class SetupRunner {
         process.waitUntilExit()
         group.wait()
         if tooLarge { return .failure(.excessiveOutput) }
-        guard process.terminationStatus == 0 else { return .failure(.failed(process.terminationStatus)) }
-        do { return .success(try SetupReport.parse(stdout)) }
-        catch { return .failure(.invalidResponse) }
+        guard process.terminationStatus == 0 else {
+            if arguments.first == "models", let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
+               let detail = response["error"] as? String, !detail.isEmpty, detail.count <= 2_000 {
+                return .failure(.engineMessage(detail))
+            }
+            return .failure(.failed(process.terminationStatus))
+        }
+        return .success(stdout)
     }
 }

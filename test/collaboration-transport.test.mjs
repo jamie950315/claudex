@@ -41,6 +41,32 @@ test('operator resolution passes through the private transport without becoming 
   assert.deepEqual(result.params, params);
 });
 
+test('model defaults use controller transport without exposing a settings MCP tool', async t => {
+  const { root } = await fixture(t);
+  const params = { defaultModels: { codex: 'test-codex', claude: null } };
+  const result = await callCollaboration({ root, peer: 'codex', token: 'controller', method: 'models', params });
+  assert.equal(result.method, 'models');
+  assert.deepEqual(result.params, params);
+});
+
+test('MCP handoff forwards an explicit model or null and refuses malformed overrides', async t => {
+  const seen = [];
+  const { root } = await fixture(t, async request => { seen.push(request); return {}; });
+  const input = new PassThrough(), output = new PassThrough();
+  let content = '';
+  output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', token: 'worker', input, output });
+  const values = ['destination-model', null, '', 'bad\nmodel', '界'.repeat(67), 23];
+  values.forEach((model, index) => input.write(JSON.stringify({ jsonrpc: '2.0', id: index, method: 'tools/call', params: {
+    name: 'claudex_handoff', arguments: { taskId: 'task', provider: 'claude', model, message: 'continue', requestId: `handoff-${index}`, revision: 1 },
+  } }) + '\n'));
+  input.end();
+  await running;
+  assert.deepEqual(seen.map(request => request.params.model), ['destination-model', null]);
+  const rows = content.trim().split('\n').map(JSON.parse);
+  assert.equal(rows.filter(row => row.result.isError).length, 4);
+});
+
 test('client rejects public directories and socket aliases', async t => {
   const { root, server } = await fixture(t);
   await chmod(root, 0o755);

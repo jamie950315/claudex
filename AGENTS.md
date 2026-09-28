@@ -152,8 +152,13 @@ Native execution uses fresh Codex ephemeral exec or Claude nonpersistent print
 sessions with normal account authentication, no copied credentials, no inherited
 API keys, and explicit collaboration MCP configuration. Ordinary sync must not
 enroll this work. These restricted profiles do not inherit arbitrary user tools,
-hooks or model settings. Models default to their native CLI defaults unless
-specified by the caller; prompts instruct workers to read project guidance.
+hooks or model settings. Models use per-provider broker defaults unless overridden
+by the caller; an unset default or explicit null override uses the native CLI
+default. Controller-only `models` requests persist both provider defaults in
+work.json without restarting services. Start and handoff capture the destination
+model at request time; children do not inherit a model ID from another provider,
+and follow-ups retain their task selection. Preference changes never mutate
+existing or pending work. Prompts instruct workers to read project guidance.
 Manual CLI tasks default to read-only. The app enables all projects and task-scoped
 writes by default, using the explicit broker defaultPermission setting. Read-only
 requests and parent restrictions must never elevate. Writes require broker opt-in and task permission;

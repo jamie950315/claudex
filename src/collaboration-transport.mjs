@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path';
 const MAX_FRAME = 1024 * 1024;
 const MAX_CONNECTIONS = 64;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve']);
+const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -149,11 +149,12 @@ const tool = (name, description, properties, required = []) => ({
   inputSchema: { type: 'object', properties, required, additionalProperties: false },
 });
 const str = { type: 'string', minLength: 1 };
+const model = { type: ['string', 'null'], minLength: 1, maxLength: 200, pattern: '^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f]*\\S)?$' };
 const integer = { type: 'integer', minimum: 0 };
 const toolDefinitions = [
-  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId, then status/wait for results. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model: str, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
+  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId, then status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
-  tool('handoff', 'Transfer this same task to the other provider. Read status for the current revision first. Include progress, remaining work and constraints. After acknowledgement stop work and end your turn; do not wait on yourself. Transfer occurs only after successful native completion. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
+  tool('handoff', 'Transfer this same task to the other provider. Optional model overrides the receiving provider default reported by claudex_list; omission uses that default, not the outgoing model. Explicit null uses the native CLI default. Read status for the current revision first. Include progress, remaining work and constraints. After acknowledgement stop work and end your turn; do not wait on yourself. Transfer occurs only after successful native completion. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
   tool('status', 'Read task status without starting a model.', { taskId: str }, ['taskId']),
   tool('wait', 'Wait for a task revision without starting a model.', { taskId: str, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }, ['taskId']),
   tool('cancel', 'Cancel a task.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
@@ -169,6 +170,7 @@ function validateTool(name, args) {
   for (const [key, value] of Object.entries(args)) {
     const field = schema.properties[key];
     if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
+    if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
   }
   if (name === 'claudex_start' && !isAbsolute(args.cwd)) fail('cwd must be absolute');

@@ -57,6 +57,15 @@ it does not resend messages or bypass synchronization guards. The menu has one
 and reopening Claudex inspects the configuration rather than rerunning setup.
 Read-only inspection and synthetic UI checks do not mark onboarding as presented.
 
+Under **Show advanced diagnostics**, **Collaboration models** provides separate
+Codex and Claude default model ID fields. Enter a model ID supported by the
+provider's native CLI, then choose **Save model defaults**. Leave a field blank
+to use that CLI's default model. These settings apply to new work and handoffs;
+an explicitly selected task or handoff model takes precedence. **Reload model
+defaults** reads the saved configuration again. Saving does not rerun setup or
+restart services. Model IDs are entered directly so vendor model updates do not
+depend on a bundled catalog.
+
 All projects are available by default, with task-scoped file editing. Users do
 not enroll directories one at a time. This is not unrestricted access to the
 entire Mac: native sandbox rules, macOS permissions, explicit read-only requests,
