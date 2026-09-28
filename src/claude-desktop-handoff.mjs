@@ -299,7 +299,8 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
         const currentData = await inspect(current);
         assertInspection(current, currentData, conversation.canonical, conversation.cwd);
         if (!equal(await fileIdentity(original.path), originalIdentity) || !equal(await fileIdentity(current.path), currentIdentity))
-          fail('native history changed during handoff verification.');
+          throw Object.assign(new Error('Claude Desktop handoff: native history changed during handoff verification.'),
+            { code: 'CLAUDEX_HANDOFF_HISTORY_CHANGED', conversationId: conversation.id });
         await unchanged(owner);
         const latest = (await readDesktopSessionMappings(desktopHome, [original.nativeId])).get(original.nativeId.toLowerCase());
         if (!equal(latest, mapping) || state.pending != null) fail('native registration or coordinator state changed during verification.');
@@ -352,7 +353,11 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
       // newly observed conflict. Failure to revoke remains explicit as well.
       try {
         const anchors = await retainPresentationAnchors({ root, desktopHome, state, anchors: previousAnchors });
-        await writeManifest(root, [], now(), anchors);
+        const changed = await writeManifest(root, [], now(), anchors);
+        if (error.code === 'CLAUDEX_HANDOFF_HISTORY_CHANGED') return {
+          changed, actions: 0, anchors: anchors.length, acknowledged: [],
+          deferred: 'history_changed', conversationId: error.conversationId,
+        };
       }
       catch (revokeError) { throw new AggregateError([error, revokeError], 'Claude Desktop handoff verification and manifest revocation failed.'); }
       throw error;

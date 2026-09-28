@@ -126,6 +126,13 @@ execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 
+A native transcript file changing between successful handoff inspections is a
+revoked, deferred Desktop archival attempt, not a synchronization failure. Return
+history_changed only after clearing all archive actions and cached proofs; perform
+full verification on the next poll. Canonical history conflicts, registration
+changes and manifest revocation failures remain errors. Surface this narrow race
+as waiting for Desktop handoff, without an attention notification.
+
 Do not emit warnings merely because Codex/Claude versions are outside the
 validated baseline. The existing `warn` policy name is retained for config
 compatibility, but version-only status warnings and events are silent.

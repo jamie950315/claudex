@@ -191,9 +191,28 @@ test('activity, title, registration and file changes during verification cannot 
       else if (change === 'original') await appendFile(pair.original.path, 'changed\n');
       else f.state.pending = {};
     });
-    await assert.rejects(f.publish(), /changed/);
+    if (change === 'original') {
+      const result = await f.publish();
+      assert.equal(result.deferred, 'history_changed');
+      assert.equal(result.actions, 0);
+      assert.equal(result.conversationId, pair.conversationId);
+    } else await assert.rejects(f.publish(), /changed/);
     assert.deepEqual((await f.manifest()).actions, []);
   }
+});
+
+test('a history race revokes authority and requires another full verification before archival', async () => {
+  const f = await fixture(), pair = await f.add();
+  await f.publish();
+  await appendFile(pair.current.path, 'native metadata\n');
+  f.intercept(async record => { if (record.nativeId === pair.current.nativeId) await appendFile(pair.current.path, 'more metadata\n'); });
+  assert.equal((await f.publish()).deferred, 'history_changed');
+  assert.deepEqual((await f.manifest()).actions, []);
+  f.intercept(async () => { throw new Error('Actual canonical history conflict'); });
+  await assert.rejects(f.publish(), /Actual canonical history conflict/);
+  assert.deepEqual((await f.manifest()).actions, []);
+  f.intercept(async () => {});
+  assert.equal((await f.publish()).actions, 1);
 });
 
 test('archival is acknowledged only after another full verification and exact old byte-prefix preservation', async () => {

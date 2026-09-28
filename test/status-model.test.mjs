@@ -37,6 +37,9 @@ changed = ready; changed["waiting"] = "Shared Codex Desktop backend is not ready
 check(health(changed).title == "Waiting for Codex")
 changed = ready; changed["localHandoff"] = ["state": "error", "error": "Native history changed"]
 check(health(changed).attention)
+changed = ready; changed["localHandoff"] = ["state": "waiting", "deferred": "history_changed"]
+check(health(changed).state == "waiting" && !health(changed).attention)
+check(health(changed).title == "Waiting for Desktop handoff")
 let recovering: [String: Any] = ["pid": 42, "state": "backoff", "autoRestart": true, "nextAttemptAt": now + 5000]
 check(health(ready, recovering).state == "recovering" && health(ready, recovering).autoRestart)
 check(health(ready, ["pid": 42, "state": "blocked", "blockerCount": 1,

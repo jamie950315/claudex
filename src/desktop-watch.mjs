@@ -113,7 +113,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     } }) : null;
   const status = async fields => {
     if (handoffs) {
-      try { localHandoff = { state: 'ready', ...await handoffs.publish(await bridge.status()), updatedAt: now() }; }
+      try {
+        const result = await handoffs.publish(await bridge.status());
+        localHandoff = { ...result, state: result.deferred === 'history_changed' ? 'waiting' : 'ready', updatedAt: now() };
+      }
       catch (error) { localHandoff = { state: 'error', error: reason(error), updatedAt: now() }; }
     }
     if (config.folderProjection?.enabled === true) {
