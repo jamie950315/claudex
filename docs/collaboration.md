@@ -189,14 +189,64 @@ projects and sets the default task permission to `workspace-write`; an explicit
 read-only request and a read-only parent's child remain read-only. File editing
 requires a broker installed or started with
 `--allow-write` **and** task `permission: "workspace-write"`. A child cannot elevate
-its parent's permission or change its workspace. Use a dedicated checkout for
+its parent's permission or expand its directory grants. Use a dedicated checkout for
 writable work: the protocol does not create worktrees, merge edits, or prevent an
 unrelated editor from modifying the same files. Within a broker, overlapping
-writable tasks in the same canonical directory are serialized. Writable delegation
+writable tasks with overlapping canonical access roots are serialized, including
+ancestor/descendant directories and a writer overlapping another task's reference
+directory. Disjoint projects can run concurrently. Conflicting writable delegation
 returns `deferredUntilParentExit`: the parent ends its native turn to release the
 workspace, the child runs, then the parent resumes with the child's result. This
 also covers a read-only child of a writable parent. Read-only workers may run
 concurrently. Waiting on a deferred child before releasing its workspace is refused.
+
+### Project and additional directory access
+
+`claudex_start` resolves `cwd` to the nearest enclosing Git checkout root by
+default, including linked worktrees. This uses bounded filesystem metadata, not
+a required Git executable. Non-Git directories retain their supplied `cwd`.
+Optional `projectRoot` explicitly selects a directory containing `cwd` (including
+`projectRoot: cwd` to keep a subdirectory scope). The effective working directory
+and grants are returned in the start receipt and task status.
+
+Optional `readOnlyDirs` and `writableDirs` are arrays of existing absolute paths,
+up to 16 per kind. They are task-specific grants, not global settings. Supply only
+paths authorized for the user's task, never automatically include neighboring
+projects. Read-only tasks cannot request writable directories. Canonical symlink
+targets are resolved at admission and rechecked before dispatch; changed saved
+roots fail rather than being silently retargeted. Read-only reference directories
+must not overlap writable grants. Filesystem-root grants and write access covering
+the entire home directory are rejected.
+
+Children inherit the parent's grants unless explicitly narrowed. They may select
+a contained primary directory but cannot turn a read-only reference into a write
+grant or add a path outside the parent's authorization. Read-only children convert
+inherited additional write grants into read access. Handoff retains the same
+directory grants; expanding scope requires a newly authorized root task. Legacy
+tasks without scope metadata keep their original exact working directory.
+
+Codex uses its native sandbox and `--add-dir` only for additional writable paths;
+references are never passed as writable roots. When reference grants are present,
+implicit `/tmp` and `$TMPDIR` write grants are excluded to preserve read-only
+references there. Codex retains its native read access; these reference declarations
+are not a claim of an OS-level read allowlist. Claude keeps `--restricted` and
+bounded file tools, adds authorized directories, and supplies native absolute
+`Edit` deny rules for references (these also cover Write). Unrepresentable native
+permission patterns fail explicitly. No Bash or permission-bypass flag is added.
+
+Example start parameters:
+
+```json
+{
+  "provider": "claude",
+  "cwd": "/work/app/src",
+  "readOnlyDirs": ["/work/reference-docs"],
+  "writableDirs": ["/work/shared-package"],
+  "permission": "workspace-write",
+  "prompt": "Update the app and shared package using the reference documentation.",
+  "requestId": "app-package-update-1"
+}
+```
 
 Codex runs `exec --ephemeral --json` with an explicit native read-only or workspace-write
 sandbox, user configuration disabled, and the collaboration MCP connection supplied

@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
 
 function fakeSpawn(events, exitCode = 0, stderr = '') {
@@ -33,6 +36,37 @@ function runner(fake) {
   return createNativeCollaborationRunner({ spawnImpl: fake.spawnImpl, groupAliveImpl: () => false,
     signalGroupImpl: () => {} });
 }
+
+test('native directory arguments preserve reference-only and explicit writable grants', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-native-scope-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const [cwd, reference, extra] = ['project', 'reference', 'extra'].map(name => join(root, name));
+  for (const path of [cwd, reference, extra]) await mkdir(path);
+  for (const provider of ['codex', 'claude']) {
+    const fake = fakeSpawn(provider === 'codex'
+      ? [{ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }, { type: 'turn.completed' }]
+      : [{ type: 'result', is_error: false, result: 'ok' }]);
+    await runner(fake)({ provider, cwd, projectRoot: cwd, readOnlyDirs: [reference], writableDirs: [extra],
+      permission: 'workspace-write', prompt: 'Scope test' });
+    const args = fake.calls[0].args;
+    assert.ok(args.includes(extra));
+    if (provider === 'codex') {
+      assert.ok(!args.includes(reference), 'reference must never be passed as an additional writable directory');
+      assert.ok(args.includes('sandbox_workspace_write.exclude_tmpdir_env_var=true'));
+      assert.ok(args.includes('sandbox_workspace_write.exclude_slash_tmp=true'));
+    } else {
+      assert.ok(args.includes(reference));
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+      assert.deepEqual(settings.permissions.deny, [`Edit(/${reference})`, `Edit(/${reference}/**)`]);
+      assert.ok(args.includes('--restricted'));
+      assert.ok(!args.includes('Bash'));
+    }
+  }
+  const fake = fakeSpawn([]);
+  await assert.rejects(runner(fake)({ provider: 'claude', cwd, projectRoot: cwd, readOnlyDirs: [extra], writableDirs: [extra],
+    permission: 'workspace-write', prompt: 'Never launch' }), /overlap/);
+  assert.equal(fake.calls.length, 0);
+});
 
 test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP server', async () => {
   const fake = fakeSpawn([

@@ -125,6 +125,25 @@ test('MCP forwards opt-in summary views and rejects unsupported views', async t 
   assert.equal(JSON.parse(content.trim().split('\n').find(line => JSON.parse(line).id === 3)).result.isError, true);
 });
 
+test('MCP directory grants are explicit bounded absolute paths on start only', async t => {
+  const seen = [];
+  const { root } = await fixture(t, async request => { seen.push(request); return {}; });
+  const input = new PassThrough(), output = new PassThrough();
+  let content = '';
+  output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', token: 'controller', input, output });
+  const base = { provider: 'claude', cwd: root, prompt: 'work', requestId: 'scope' };
+  const cases = [{ projectRoot: root, readOnlyDirs: ['/reference'], writableDirs: ['/extra'] },
+    { projectRoot: 'relative' }, { readOnlyDirs: ['relative'] }, { writableDirs: Array(17).fill('/extra') }, { readOnlyDirs: null }];
+  cases.forEach((params, id) => input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call',
+    params: { name: 'claudex_start', arguments: { ...base, ...params } } }) + '\n'));
+  input.end(); await running;
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].params.readOnlyDirs, ['/reference']);
+  assert.deepEqual(seen[0].params.writableDirs, ['/extra']);
+  assert.equal(content.trim().split('\n').map(JSON.parse).filter(row => row.result.isError).length, 4);
+});
+
 test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC lines', async t => {
   const seen = [];
   const { root } = await fixture(t, async request => { seen.push(request); return { taskId: 'task-1', revision: 1 }; });

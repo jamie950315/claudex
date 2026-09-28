@@ -147,10 +147,14 @@ export async function callCollaboration({ root, peer, token, method, params = {}
 }
 
 const tool = (name, description, properties, required = []) => ({
-  name: `claudex_${name}`, description,
-  inputSchema: { type: 'object', properties: ['start', 'handoff'].includes(name) ? { ...properties, effort } : properties, required, additionalProperties: false },
+  name: `claudex_${name}`, description: description + (name === 'start'
+    ? ' The default workspace is the enclosing Git checkout root, or cwd for non-Git folders. Optional projectRoot explicitly contains cwd; readOnlyDirs grant reference access and writableDirs grant additional writes. Supply only user-authorized directories. Children inherit or narrow parent access; they cannot expand it. Handoffs preserve directory grants.' : ''),
+  inputSchema: { type: 'object', properties: { ...properties,
+    ...(['start', 'handoff'].includes(name) ? { effort } : {}),
+    ...(name === 'start' ? { projectRoot: str, readOnlyDirs: directories, writableDirs: directories } : {}) }, required, additionalProperties: false },
 });
 const str = { type: 'string', minLength: 1 };
+const directories = { type: 'array', maxItems: 16, items: str };
 const model = { type: ['string', 'null'], minLength: 1, maxLength: 200, pattern: '^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f]*\\S)?$' };
 const integer = { type: 'integer', minimum: 0 };
 const effort = { type: ['string', 'null'], enum: [...new Set(Object.values(collaborationEfforts).flat()), null],
@@ -178,8 +182,11 @@ function validateTool(name, args) {
     if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
     if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
+    if (field.type === 'array' && (!Array.isArray(value) || value.length > field.maxItems
+      || value.some(path => typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')))) fail(`Invalid ${key}`);
   }
   if (name === 'claudex_start' && !isAbsolute(args.cwd)) fail('cwd must be absolute');
+  if (name === 'claudex_start' && args.projectRoot !== undefined && !isAbsolute(args.projectRoot)) fail('projectRoot must be absolute');
   return name.slice('claudex_'.length);
 }
 

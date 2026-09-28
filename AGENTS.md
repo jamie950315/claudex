@@ -176,6 +176,17 @@ work.json without restarting services. Start and handoff capture the destination
 model at request time; children do not inherit a model ID from another provider,
 and follow-ups retain their task selection. Preference changes never mutate
 existing or pending work. Prompts instruct workers to read project guidance.
+New root work defaults to the closest Git checkout root (bounded .git metadata,
+including linked worktrees, with no Git executable requirement); non-Git cwd stays
+exact. Explicit projectRoot must contain requested cwd. Per-task readOnlyDirs and
+writableDirs are canonical existing directories, bounded to 16 each, with no
+reference/write overlap. Children inherit or narrow grants without Git promotion;
+handoff preserves them. Legacy records retain exact cwd. Revalidate canonical
+roots before dispatch and refuse replaced symlinks. Codex adds only writable extras
+and excludes implicit temp write grants when references are declared. Claude uses
+restricted file tools plus absolute Edit deny rules for reference roots, covering
+Write too; reject unrepresentable path patterns. Preserve native permission checks,
+not a new claim of an OS read jail. No full-filesystem/home write grant is implied.
 Reasoning effort follows the same destination-provider capture rules. Persist
 defaultEfforts separately from defaultModels; settings may update either full
 provider pair atomically. Optional start/handoff effort=null explicitly requests
@@ -189,11 +200,12 @@ verification merely from argv or task metadata.
 Manual CLI tasks default to read-only. The app enables all projects and task-scoped
 writes by default, using the explicit broker defaultPermission setting. Read-only
 requests and parent restrictions must never elevate. Writes require broker opt-in and task permission;
-children cannot escalate permissions or change cwd. Claude permits bounded file
+children cannot escalate permissions or expand directory grants. Claude permits bounded file
 tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
 with bypass-permission flags. Writable work needs a caller-selected dedicated
 checkout; this protocol does not create or merge worktrees. Concurrent writes
-within one canonical cwd are blocked, including writable parent/child overlap.
+with overlapping canonical access roots are blocked, including ancestor/descendant
+paths, reference readers and writable parent/child overlap.
 Writable delegation defers child dispatch until the parent returns and releases
 its workspace. A waiting parent resumes with durable child results once all its
 children finish; this is explicit new work, not replay of an uncertain invocation.

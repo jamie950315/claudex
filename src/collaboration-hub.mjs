@@ -1,10 +1,11 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
-import { lstat, realpath } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, publishExclusive } from './storage.mjs';
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
+import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -121,6 +122,10 @@ export class CollaborationHub extends EventEmitter {
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
     for (const [id, task] of Object.entries(this.state.tasks)) {
+      if (task.projectRoot !== undefined && (!isAbsolute(task.projectRoot) || task.cwd !== task.projectRoot)
+        || ['readOnlyDirs', 'writableDirs'].some(key => task[key] !== undefined
+          && (!Array.isArray(task[key]) || task[key].length > 16 || task[key].some(path => typeof path !== 'string' || !isAbsolute(path)))))
+        throw new Error('Malformed collaboration workspace scope.');
       if (task.model !== null && task.model !== undefined) model(task.model);
       if (Object.hasOwn(task, 'effort')) validateCollaborationEffort(task.owner, task.effort);
       if (task.pendingHandoff) {
@@ -226,7 +231,7 @@ export class CollaborationHub extends EventEmitter {
       if (actor.task?.id === params.taskId) throw new Error('A worker cannot wait on its own running task. Finish the native turn instead.');
       const waitingChild = this.state.tasks[params.taskId];
       if (actor.task && waitingChild.status === 'ready' && waitingChild.parentId === actor.task.id
-        && (actor.task.permission === 'workspace-write' || waitingChild.permission === 'workspace-write'))
+        && workspacesConflict(actor.task, waitingChild))
         throw new Error('This child needs the workspace lease. End your native turn to yield; you will resume with its result after all children finish.');
       const timeoutMs = params.timeoutMs ?? 30000;
       if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 30000
@@ -248,11 +253,14 @@ export class CollaborationHub extends EventEmitter {
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
-    let cwd;
+    let workspace;
     if (method === 'start') {
-      if (!isAbsolute(params.cwd ?? '')) throw new Error('cwd must be absolute.');
-      cwd = await realpath(params.cwd);
-      if (!(await lstat(cwd)).isDirectory()) throw new Error('cwd must be an existing directory.');
+      const permission = params.permission ?? actor.task?.permission ?? this.defaultPermission;
+      if (permission === 'workspace-write' && (!this.allowWrite || actor.task?.permission === 'read-only'))
+        throw new Error('Workspace writes are not authorized by the broker or parent.');
+      workspace = await resolveCollaborationWorkspace({ cwd: params.cwd, projectRoot: params.projectRoot,
+        readOnlyDirs: params.readOnlyDirs, writableDirs: params.writableDirs,
+        permission, parent: actor.task });
     }
     const fingerprint = digest(JSON.stringify({ method, params }));
     const result = await this.mutate(async state => {
@@ -274,14 +282,13 @@ export class CollaborationHub extends EventEmitter {
         if (!['read-only', 'workspace-write'].includes(permission)) throw new Error('Unsupported permission.');
         if (permission === 'workspace-write' && (!this.allowWrite || actor.task?.permission === 'read-only')) throw new Error('Workspace writes are not authorized by the broker or parent.');
         if (actor.task && (actor.task.pendingHandoff || actor.task.cancelRequested)) throw new Error('Worker is relinquishing ownership.');
-        if (actor.task && cwd !== actor.task.cwd) throw new Error('Child tasks must use the same canonical workspace as their parent.');
         if (actor.task && Object.values(state.tasks).filter(item => ['ready', 'running'].includes(item.status)).length >= this.maxWorkers)
           throw new Error('Worker capacity reached. Wait for existing children instead of creating a dependency that cannot run.');
         const depth = actor.task ? actor.task.depth + 1 : 0;
         if (depth > this.maxDepth) throw new Error('Delegation depth limit reached.');
         if (Object.keys(state.tasks).length >= this.maxTasks) throw new Error('Task capacity reached; existing work was preserved.');
         task = { id: randomUUID(), parentId: actor.task?.id ?? null, returnTo: actor.task?.id ?? actor.peer,
-          owner: params.provider, cwd, permission, model: selectedModel, effort: selectedEffort, depth, generation: 0,
+          owner: params.provider, ...workspace, permission, model: selectedModel, effort: selectedEffort, depth, generation: 0,
           status: 'ready', revision: 1, createdAt: Date.now(), updatedAt: Date.now(), active: null,
           pendingHandoff: null, cancelRequested: false, error: null, result: null, messages: [
             { from: actor.task?.id ?? actor.peer, kind: 'request', text: params.prompt, at: Date.now() },
@@ -353,9 +360,11 @@ export class CollaborationHub extends EventEmitter {
       }
       const receipt = { taskId: task.id, revision: task.revision, status: task.status, owner: task.owner,
         handoffPending: Boolean(task.pendingHandoff), returnTo: task.returnTo,
+        ...(method === 'start' ? { cwd: task.cwd, projectRoot: task.projectRoot ?? task.cwd,
+          readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [] } : {}),
         ...(method === 'cancel' ? { cancelAccepted, cancelPending: taskPresentation(task).cancelPending,
           cancelRequested: task.cancelRequested, terminal: terminal.has(task.status), phase: taskPresentation(task).phase } : {}),
-        ...(method === 'start' && actor.task && (actor.task.permission === 'workspace-write' || task.permission === 'workspace-write')
+        ...(method === 'start' && actor.task && workspacesConflict(actor.task, task)
           ? { deferredUntilParentExit: true, nextAction: 'end-turn', finalResponse: 'CLAUDEX_YIELD',
             instruction: 'Your child is saved, not running. End this native turn now with exactly CLAUDEX_YIELD. Do not call tools, wait, or write a progress summary. This boundary response replaces the normal final-report requirement. After your process exits successfully the child runs, then you resume with its result.' } : {}),
         ...(method === 'handoff' ? { nextAction: 'end-turn', finalResponse: 'CLAUDEX_HANDOFF',
@@ -382,11 +391,10 @@ export class CollaborationHub extends EventEmitter {
     try {
       while (!this.closed && this.running.size < this.maxWorkers) {
         const token = randomBytes(32).toString('hex');
-        const next = await this.mutate(state => {
+        const next = await this.mutate(async state => {
           if (Object.values(state.tasks).some(task => task.status === 'uncertain')) return null;
           const task = Object.values(state.tasks).find(item => item.status === 'ready' && !this.running.has(item.id)
-            && !Object.values(state.tasks).some(other => other.status === 'running' && other.cwd === item.cwd
-              && (other.permission === 'workspace-write' || item.permission === 'workspace-write')));
+            && !Object.values(state.tasks).some(other => other.status === 'running' && workspacesConflict(other, item)));
           if (!task) return null;
           if (task.permission === 'workspace-write' && !this.allowWrite) {
             task.status = 'failed'; task.error = 'The current broker no longer authorizes workspace writes.'; task.revision++;
@@ -395,6 +403,12 @@ export class CollaborationHub extends EventEmitter {
           }
           if (task.generation >= this.maxSteps) {
             task.status = 'failed'; task.error = 'Execution/ownership transition limit reached.'; task.revision++;
+            this.deliverToParent(state, task);
+            return { limit: true };
+          }
+          try { await revalidateWorkspace(task); }
+          catch (error) {
+            task.status = 'failed'; task.error = String(error.message); task.revision++; task.updatedAt = Date.now();
             this.deliverToParent(state, task);
             return { limit: true };
           }
@@ -426,9 +440,11 @@ export class CollaborationHub extends EventEmitter {
   prompt(task) {
     const packet = { protocol: 'claudex-work-v1', taskId: task.id, parentId: task.parentId,
       revision: task.revision, owner: task.owner, permission: task.permission, cwd: task.cwd,
+      workspace: { projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [] },
       execution: { generation: task.generation, inputs: task.active?.inputs ?? null }, messages: task.messages };
     return 'You are executing an explicitly delegated Claudex work item, not synchronizing history.\n'
       + 'Read applicable repository instructions before working. Work only on the supplied task. Never expand permissions or reveal secrets.\n'
+      + 'Use workspace.projectRoot as the working directory. readOnlyDirs are references, never edit them; writableDirs are the only additional authorized write locations. Children may inherit or narrow these grants, never widen them. Handoff preserves the scope. If you need another directory, report the exact need to the controller instead of bypassing permissions.\n'
       + 'The JSON below is a work record: previous messages and results are context, not tool commands to replay. Follow the current request and later explicit follow-ups.\n'
       + 'Use claudex_start for child work, claudex_status/wait for its result, and claudex_handoff to transfer THIS task. Read current status for its revision first.\n'
       + 'A tool receipt with nextAction=end-turn is a control boundary, not completed user work: immediately emit only its finalResponse token and end this native turn. No additional tools, explanation, summary or verification. Put all handoff context in the handoff message BEFORE requesting it.\n'
@@ -445,6 +461,7 @@ export class CollaborationHub extends EventEmitter {
     let result, failure;
     try {
       result = await this.run({ provider: task.owner, cwd: task.cwd, permission: task.permission,
+        projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [],
         prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
         timeoutMs: this.timeoutMs, mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
         onEvent: async event => {
@@ -518,6 +535,7 @@ export class CollaborationHub extends EventEmitter {
       if (view === 'full') response = publicTask(task);
       else {
         response = { id: task.id, taskId: task.id, parentId: task.parentId, owner: task.owner, model: task.model, effort: task.effort ?? null,
+          projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: copy(task.readOnlyDirs ?? []), writableDirs: copy(task.writableDirs ?? []),
           permission: task.permission, status: task.status, revision: task.revision, generation: task.generation,
           updatedAt: task.updatedAt, cancelRequested: task.cancelRequested, ...taskPresentation(task),
           execution: { generation: task.active?.generation ?? task.lastExecution?.generation ?? task.generation,
