@@ -190,6 +190,28 @@ test('controller resolves exited read-only uncertainty durably without replay or
   assert.equal(calls, 0);
 });
 
+test('writable uncertainty requires reconciliation and preserves its attestation without replay', async t => {
+  let calls = 0;
+  const { root, hub } = await setup(t, async () => { calls++; return { text: 'unexpected' }; }, {
+    allowWrite: true,
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+  });
+  const task = await uncertainFixture(hub, root, { permission: 'workspace-write' });
+  await assert.rejects(hub.dispatch(resolution(hub, task, { workspaceReconciled: true })), /reconciliation notes/);
+  await assert.rejects(hub.dispatch(resolution(hub, task, { workspaceReconciled: 'true', reconciliationNotes: 'Checked' })), /acknowledgement/);
+  const request = resolution(hub, task, { workspaceReconciled: true, reconciliationNotes: 'Validated retained outputs; partial outputs handled by controller.' });
+  await hub.dispatch(request);
+  const done = await status(hub, task.id);
+  assert.equal(done.status, 'failed');
+  assert.equal(done.resolution.workspaceReconciled, true);
+  assert.equal(done.resolution.workspaceReconciliation.cwd, root);
+  assert.match(done.resolution.workspaceReconciliation.notes, /Validated/);
+  assert.equal(done.error, task.error);
+  assert.deepEqual(done.lastExecution, task.lastExecution);
+  assert.equal((await hub.dispatch(request)).replayed, true);
+  assert.equal(calls, 0);
+});
+
 test('uncertain resolution refuses missing identity, live processes, inspection errors and stale revisions', async t => {
   for (const scenario of [
     { name: 'missing pid', extra: { lastExecution: null }, pattern: /identity is missing/ },
@@ -201,6 +223,12 @@ test('uncertain resolution refuses missing identity, live processes, inspection 
     { name: 'stale revision', params: { revision: 2 }, pattern: /revision changed/ },
     { name: 'success claim', params: { outcome: 'completed' }, pattern: /explicit failed outcome/ },
     { name: 'writable uncertainty', extra: { permission: 'workspace-write' }, pattern: /workspace reconciliation/ },
+    { name: 'reconciled writable live group', extra: { permission: 'workspace-write' },
+      params: { workspaceReconciled: true, reconciliationNotes: 'Reviewed output files.' },
+      proof: { groupAbsent: false }, pattern: /both be confirmed absent/ },
+    { name: 'reconciled writable stale revision', extra: { permission: 'workspace-write' },
+      params: { workspaceReconciled: true, reconciliationNotes: 'Reviewed output files.', revision: 2 },
+      pattern: /revision changed/ },
   ]) await t.test(scenario.name, async t => {
     const { root, hub } = await setup(t, async () => ({ text: 'unused' }), {
       inspectProcessGroup: pid => { if (scenario.failure) throw scenario.failure; return { pid, inspectedAt: 123, processAbsent: true, groupAbsent: true, ...scenario.proof }; },
@@ -281,7 +309,9 @@ test('start reaches a durable result without model inference', async t => {
     assert.equal(provider, 'codex');
     assert.match(prompt, /claudex-work-v1/);
     assert.match(prompt, /nextAction=end-turn/);
-    assert.match(prompt, /override the normal final-report format/);
+    assert.match(prompt, /overrides the normal final-report format/);
+    assert.match(prompt, /Children can run concurrently with their parent/);
+    assert.match(prompt, /Work has no execution deadline/);
     assert.match(prompt, /Only when finishing actual user work/);
     return { text: 'synthetic result' };
   });
@@ -340,10 +370,30 @@ test('native title search preserves ambiguous candidates and rechecks the chosen
   const found = await hub.dispatch(controller(hub, 'codex', 'chat_list', { provider: 'claude', query: 'project REVIEW', match: 'exact' }));
   assert.equal(found.totalCount, 2);
   assert.equal(found.exactMatchCount, 2);
+  const ambiguous = await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    provider: 'claude', title: 'project REVIEW', message: 'Status please', requestId: 'ambiguous-title',
+  }));
+  assert.equal(ambiguous.status, 'needs-selection');
+  assert.equal(ambiguous.queued, false);
+  assert.equal(ambiguous.candidates.length, 2);
   assert.deepEqual(found.chats.map(chat => chat.sessionId), [first, second]);
   assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { query: 'review' }))).totalCount, 3);
   assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_list', { query: 'review', match: 'exact' }))).totalCount, 0);
   titles.set(first, 'Renamed review');
+  await hub.chatMailbox.register({ provider: 'claude', sessionId: first, cwd: hub.root, event: 'SessionEnd' });
+  const byTitle = await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    title: 'renamed REVIEW', message: 'Status please', requestId: 'unique-title',
+  }));
+  assert.equal(byTitle.targetSessionId, first);
+  assert.equal(byTitle.deliveryStatus, 'waiting-for-resume');
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    title: 'renamed REVIEW', message: 'Status please', requestId: 'unique-title',
+  }))).messageId, byTitle.messageId);
+  const missing = await hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    title: 'unknown', message: 'Status please', requestId: 'unknown-title',
+  }));
+  assert.equal(missing.status, 'not-found');
+  assert.equal(missing.queued, false);
   const params = { provider: 'claude', sessionId: first, expectedTitle: 'Project review', message: 'Please report status.', requestId: 'named-chat' };
   await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', params)), /title changed/);
   const queued = await hub.dispatch(controller(hub, 'codex', 'chat_send', { ...params, expectedTitle: 'Renamed review' }));
@@ -351,6 +401,40 @@ test('native title search preserves ambiguous candidates and rechecks the chosen
   archived = true;
   await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', { ...params, expectedTitle: 'Renamed review', requestId: 'archived-chat' })), /could not be verified/);
   assert.equal(Object.keys(hub.state.tasks).length, 0, 'search and send never create managed work');
+});
+
+test('native title discovery and wake claim never duplicate a native dispatch', async t => {
+  const sessionId = randomUUID(); let sends = 0;
+  const descriptor = { provider: 'codex', nativeId: sessionId, sessionId, chatId: `codex:${sessionId}`,
+    title: 'Idle project', cwd: '/tmp', registeredByHook: false };
+  const { hub } = await setup(t, async () => { throw new Error('No managed inference'); }, {
+    nativeChatDiscovery: async () => [descriptor],
+    chatWake: async () => ({ status: 'ready', close() {}, dispatch: async () => { sends++; return { status: 'accepted', turnId: 'native-turn' }; } }),
+  });
+  const params = { title: 'Idle project', message: 'Please report status.', requestId: 'wake-exact' };
+  const sent = await hub.dispatch(controller(hub, 'claude', 'chat_send', params));
+  assert.equal(sent.wakeStatus, 'accepted');
+  assert.equal(sent.state, 'offered');
+  assert.equal(sent.deliveryMode, 'native-owner');
+  assert.equal((await hub.chatMailbox.list())[0].registeredByHook, false);
+  await hub.dispatch(controller(hub, 'claude', 'chat_send', params));
+  assert.equal(sends, 1);
+  assert.equal(Object.keys(hub.state.tasks).length, 0);
+});
+
+test('busy native owner defers to hooks while ambiguous dispatch is never replayed', async t => {
+  for (const result of ['busy', 'uncertain']) {
+    const sessionId = randomUUID();
+    const { hub } = await setup(t, async () => ({ text: 'unused' }), {
+      chatWake: async () => ({ status: 'ready', close() {}, dispatch: async () => ({ status: result }) }),
+    });
+    await hub.chatMailbox.register({ provider: 'codex', sessionId, cwd: hub.root, event: 'SessionStart' });
+    const sent = await hub.dispatch(controller(hub, 'claude', 'chat_send', {
+      provider: 'codex', sessionId, message: 'Hello', requestId: result,
+    }));
+    assert.equal(sent.state, result === 'busy' ? 'queued' : 'offered');
+    assert.equal(sent.wake.state, result === 'busy' ? 'deferred' : 'uncertain');
+  }
 });
 
 test('handoff preserves identity in both directions and waits for old turn to finish', async t => {
@@ -442,8 +526,9 @@ test('child admission observes worker capacity and cannot escalate write permiss
   await until(async () => (await status(hub, started.taskId)).status === 'completed');
 });
 
-test('writable child yields the workspace and resumes its parent with a durable result', async t => {
+test('writable child runs concurrently with its parent and delivers a durable result', async t => {
   const order = [];
+  const childGate = pending();
   const tokens = new Map();
   let hub;
   let parentId;
@@ -457,18 +542,20 @@ test('writable child yields the workspace and resumes its parent with a durable 
         provider: 'claude', cwd: '/tmp', prompt: 'Implement child work', permission: 'workspace-write', requestId: 'writable-child',
       }, tokens.get('codex')));
       childId = started.taskId;
-      assert.equal(started.deferredUntilParentExit, true);
-      assert.equal(started.nextAction, 'end-turn');
-      assert.equal(started.finalResponse, 'CLAUDEX_YIELD');
-      await assert.rejects(hub.dispatch(request('codex', 'wait', { taskId: childId, timeoutMs: 0 }, tokens.get('codex'))), /deferred|yield/i);
-      await delay(15);
-      assert.deepEqual(order, ['codex'], 'child must not run before parent releases workspace');
-      return { text: 'Yielding for child' };
+      assert.notEqual(started.deferredUntilParentExit, true);
+      assert.notEqual(started.nextAction, 'end-turn');
+      assert.equal(started.finalResponse, undefined);
+      await hub.dispatch(request('codex', 'wait', { taskId: childId, timeoutMs: 0 }, tokens.get('codex')));
+      childGate.resolve();
+      await until(() => hub.state.tasks[childId]?.status === 'completed');
+      assert.deepEqual(order, ['codex', 'claude'], 'child runs before the parent finishes');
+      return { text: 'Parent first result' };
     }
     if (order.length === 2) {
       assert.equal(provider, 'claude');
       assert.equal(permission, 'workspace-write');
-      assert.equal((await status(hub, parentId)).status, 'waiting');
+      assert.equal((await status(hub, parentId)).status, 'running');
+      await childGate.promise;
       return { text: 'Child changed the fixture' };
     }
     assert.equal(provider, 'codex');
@@ -497,12 +584,14 @@ test('cancelling a queued writable child releases its waiting parent', async t =
   const fixture = await setup(t, async ({ provider, prompt }) => {
     order.push(provider);
     if (order.length === 1) {
+      hub.schedule = () => {};
       const child = await hub.dispatch(request('codex', 'start', {
         provider: 'claude', cwd: '/tmp', prompt: 'Queued child', permission: 'workspace-write', requestId: 'cancel-queued-child',
       }, parentToken));
       childId = child.taskId;
-      assert.equal(child.deferredUntilParentExit, true);
+      assert.notEqual(child.deferredUntilParentExit, true);
       await hub.dispatch(controller(hub, 'codex', 'cancel', { taskId: childId, requestId: 'cancel-queued' }));
+      delete hub.schedule;
       return { text: 'Parent yielded' };
     }
     assert.equal(provider, 'codex');

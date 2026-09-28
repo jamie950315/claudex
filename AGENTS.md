@@ -168,16 +168,37 @@ completed sync hint. stop_hook_active prevents additional Stop continuation loop
 Keep queued/offered/acknowledged distinct; offered may be lost and must never be
 automatically replayed. Only the same native recipient's Stop acknowledgement
 marker counts as receipt, never as proof of task shutdown or new authorization.
-Do not wake idle chats, resolve fuzzy titles, create/archive replacement chats,
+Idle wake requires an explicitly authorized and verified native-owner adapter;
+hook-only delivery must continue to report that it cannot wake idle chats.
+Never resolve fuzzy titles, create/archive replacement chats,
 edit transcripts/registries/SQLite, or use classifierContext as message delivery.
 Messages remain quoted peer text. No new native hook trust bypass is permitted.
 chat_list supports native-title query/provider/match filters for already hook-
-registered sessions. Enrich from bounded stable Codex session_index metadata and
+registered Claude sessions and bounded native Codex metadata discovery. Enrich from bounded stable Codex session_index metadata and
 exact Claude Desktop CLI-ID mappings, never transcript guesses or title-based ID
 substitution. Preserve duplicate candidates and metadata errors; partial/duplicate
 matches require user disambiguation. chat_send expectedTitle rechecks the chosen
 native title before enqueueing, without changing exact-session addressing. This
-does not introduce managed-task-to-origin-chat mapping or unregistered chat discovery.
+also supports direct exact `title` addressing when a single valid native candidate
+exists; duplicates return needs-selection without enqueueing. Known ended chats
+can queue messages waiting-for-resume. Only real SessionStart/UserPromptSubmit
+reactivates them; late Stop events cannot. Receipt deliveryStatus is computed,
+not a new durable state or proof of native receipt. This
+does not introduce managed-task-to-origin-chat mapping. Codex metadata discovery
+does not fabricate hook registrations. Native owner IPC supports untrusted-input
+wake in the original Desktop chat, including deep-link opening of unloaded originals;
+busy/native-owner changes never authorize a second writer. Claude wake uses the
+version-pinned renderer and narrow Desktop MCP claim/receipt endpoint.
+Claude wake has its own pinned frontend asset and recoverable `ui-chat-wake`
+installation journal. It starts at module load, independently of folder/sidebar
+subscriptions; a sidebar resource existing on disk is not proof of a running
+consumer. Keep bounded lifecycle/wait-reason diagnostics without message content.
+The current native acceptance verifies an idle original Claude chat wakes and
+acknowledges once under the same UI/CLI identities. This does not revalidate
+other frontend presentation adapters against the same vendor update.
+Shared mailbox claims fence hooks and native wake with exact claim IDs before dispatch;
+only proven pre-dispatch refusal may restore queued state. Unknown dispatch is
+never resent. Native acceptance is not hook acknowledgement or work completion.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker
@@ -222,14 +243,15 @@ requests and parent restrictions must never elevate. Writes require broker opt-i
 children cannot escalate permissions or expand directory grants. Claude permits bounded file
 tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
 with bypass-permission flags. Writable work needs a caller-selected dedicated
-checkout; this protocol does not create or merge worktrees. Concurrent writes
-with overlapping canonical access roots are blocked, including ancestor/descendant
-paths, reference readers and writable parent/child overlap.
-Writable delegation defers child dispatch until the parent returns and releases
-its workspace. A waiting parent resumes with durable child results once all its
+checkout; this protocol does not create or merge worktrees. Concurrent work in
+the same or overlapping canonical access roots is allowed, including ancestor/
+descendant paths, reference readers and writable parent/child tasks. Callers must
+assign disjoint file responsibilities and coordinate shared-file edits; there is
+no workspace lock or automatic conflict merge. Delegated children may start while
+their parent runs. A waiting parent resumes with durable child results once all its
 children finish; this is explicit new work, not replay of an uncertain invocation.
-Deferred-child and handoff receipts use nextAction=end-turn with CLAUDEX_YIELD or
-CLAUDEX_HANDOFF. Worker instructions prioritize that single-token response over
+Handoff receipts use nextAction=end-turn with CLAUDEX_HANDOFF.
+Worker instructions prioritize that single-token response over
 normal final-report formatting; put handoff context in the request before it.
 Do not treat these text tokens as proof of native completion or release a writer
 before successful native completion and process-group exit.
@@ -252,15 +274,19 @@ startup without inference. Do not describe these as live cross-model acceptance.
 The native work record is text-only, not a native chat/permission/context clone.
 Whole-work handoff retains logical task identity; an external caller ends its
 own turn rather than forcibly transferring an unrelated native UI conversation.
-Storage, context, concurrency, depth and execution limits fail explicitly without
+Work has no elapsed-time execution timeout; native invocations run until completion,
+failure or explicit cancellation. Bounded wait/socket request timeouts do not cancel
+work. Storage, context, concurrency, depth and generation limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
-Controller-only `request resolve` may close an inspected read-only uncertain
+Controller-only `request resolve` may close an inspected uncertain
 invocation as failed, never successful or replayable. Require exact revision and
 current execution generation, absent recorded PID and process group, no in-memory
 worker or unresolved descendants. Preserve original error and execution evidence
-with the resolution receipt. Writable uncertainty still requires separate
-workspace reconciliation. Queued work may dispatch once the final hold is resolved.
+with the resolution receipt. Writable uncertainty requires controller attestation
+`workspaceReconciled: true` plus nonempty `reconciliationNotes`, saved with exact
+directory grants in the receipt. This attests to prior workspace inspection, not
+automatic validation or rollback. Queued work may dispatch once the final hold is resolved.
 Codex collaboration supports explicitly selected non-Git directories using
 `--skip-git-repo-check`; native sandbox and approval restrictions remain unchanged.
 Only an exact no-stdout, no-session pre-execution Git refusal with a closed process

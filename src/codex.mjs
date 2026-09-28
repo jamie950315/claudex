@@ -41,7 +41,7 @@ export class CodexClient extends EventEmitter {
       } else this.emit('notification', message);
     });
     const result = await this.request('initialize', {
-      clientInfo: { name: 'claudex', version: '1.0.0' },
+      clientInfo: { name: 'claudex', version: '1.0.1' },
       capabilities: { experimentalApi: true },
     });
     this.child.stdin.write(`${JSON.stringify({ method: 'initialized', params: {} })}\n`);

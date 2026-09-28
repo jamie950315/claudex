@@ -60,8 +60,8 @@ failure or an uncertain outcome. Idempotency keys reject changed request payload
 and prevent duplicate dispatch; transport errors never cause automatic replay.
 Follow-ups reconstruct the bounded work record in a fresh native invocation.
 
-Deferred-child and handoff receipts include `nextAction: "end-turn"` and a short
-`finalResponse` token (`CLAUDEX_YIELD` or `CLAUDEX_HANDOFF`). At that boundary the
+Handoff receipts include `nextAction: "end-turn"` and the short
+`finalResponse` token `CLAUDEX_HANDOFF`. At that boundary the
 worker emits only the token, with no further tools or duplicate progress report.
 The normal changed-files/checks report belongs to actual task completion, not to
 the outgoing boundary. These tokens are instructions, not completion receipts:
@@ -121,7 +121,8 @@ stable `requestId`. Do this only for user-authorized coordination, such as askin
 another chat to stop creating work and report whether maintenance is safe.
 Managed worker capabilities cannot send to unrelated native chats.
 
-The recipient must have been observed by the installed native hooks. Follow
+Claude recipients must have been observed by the installed native hooks; Codex
+also supports the bounded native metadata discovery described below. Follow
 `nextCursor` for additional bounded `chat_list` pages (default 50, maximum 100). The list
 contains IDs, cwd, last observed phase/event and time, plus native title metadata
 when available. Codex titles come from the newest matching native session-index
@@ -129,17 +130,24 @@ record; Claude titles use the exact Desktop registry CLI-ID mapping. No title is
 inferred from message content, folder names or synchronized copies. Lookups are
 read-only and bounded; missing, conflicting or unsafe metadata produces a title
 error rather than a guessed name. Activity is a hint, not proof a process is alive.
-Search is limited to hook-registered chats, not every conversation in either app.
+Claude search covers hook-registered chats. Codex title queries also inspect
+bounded, unarchived native metadata, so a chat need not have fired a hook first.
+Metadata discovery is explicitly distinguished from hook registration.
 Never guess between duplicate or partial matches. Ask the user to disambiguate
 using provider and project/cwd. `exactMatchCount`, `titleMatch`, `titleSource` and
 `unavailableTitleCount` make the search coverage explicit. Pass the selected
 verbatim title as `expectedTitle` when sending: it is rechecked before enqueueing,
 and a rename, unavailable mapping or archived Claude entry fails without sending.
-The session ID remains the only address; a title is not a routing identity.
-The target stays the exact native session: no new chat, resume process, external
-writer, archival, registry/SQLite mutation, or transcript append is performed.
+Delivery always resolves to an exact native session ID; a title is not a durable
+routing identity.
+For a unique exact title, `chat_send` also accepts `title` directly (optionally
+with `provider`), instead of `sessionId`/`expectedTitle`. It resolves and rechecks
+the native title before enqueueing. Duplicate matches return `needs-selection`
+with candidates; no match returns `not-found`. Neither queues a message.
+The target stays the exact native session: no replacement chat, external writer,
+archival, registry/SQLite mutation or direct transcript append is performed.
 
-Delivery occurs at the recipient's next SessionStart, UserPromptSubmit, or Stop
+Hook delivery occurs at the recipient's next SessionStart, UserPromptSubmit, or Stop
 hook, using native hook context. At Stop, Codex uses its documented continuation
 decision and Claude uses additionalContext, allowing the same chat to reply.
 This can consume the recipient's normal model allowance. It does not change that
@@ -147,8 +155,30 @@ chat's model, effort, permissions or human instructions. Coordination content is
 explicitly labeled and quoted as peer-originated text, not as human/system
 authority. It cannot grant new permissions or forcibly interrupt native work.
 
-An entirely idle chat is **not woken**. A running tool is not interrupted; a
+Sending defaults to `wake: true`; this can consume native account allowance.
+`wake: false` only queues for hooks. Codex uses the existing Desktop owner's
+untrusted-app input route, inheriting settings. An unloaded original is opened by
+exact native deep link before owner discovery; no CLI writer is created. A busy
+owner refuses before injection and the message stays queued. Claude uses a
+version-pinned renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
+bridge, with exact identity, idle, draft, permission and terminal guards. Setup
+registers that narrow endpoint; loading an upgraded renderer requires an idle
+Claude restart. Claude Desktop must remain open with the bridge loaded, but the
+specific recipient chat does not need to be selected or open. Busy work, drafts
+and permission prompts may delay dispatch. A vendor frontend update can require
+bridge adaptation. Bridge unavailability is not delivery and must not be presented
+as successful wake. Its separately pinned asset starts independently of sidebar
+visibility or folder grouping, with a recoverable private installation journal.
+Lifecycle and wait-reason diagnostics contain no message text. An observed native
+acceptance verifies one wake, one native input and a matching ACK in the same
+original Claude conversation; synthetic tests alone do not establish this.
+A running tool is not interrupted; a
 message can wait until the current turn ends. SessionEnd never consumes messages.
+Known ended chats may still receive queued messages. Their computed
+`deliveryStatus` is `waiting-for-resume`; a genuine SessionStart or UserPromptSubmit
+reactivates the recipient. A late Stop cannot reactivate an ended session.
+Other queued messages report `waiting-for-hook`. These are delivery explanations,
+not successful receipt or an automatic wake claim; normal expiry still applies.
 A Stop already continued by hooks can acknowledge a previous note but cannot
 consume another, avoiding a continuation loop. Ordinary hooks with no queued
 message remain inference-free and produce no additional context. A Stop offering
@@ -157,13 +187,18 @@ later true completion remains subject to the normal history/lifecycle guards.
 
 Receipts distinguish:
 
-- `queued`: persisted, awaiting a usable native hook; not delivered.
-- `offered`: output prepared for one hook; consumption is not proven. This state
+- `queued`: persisted, awaiting a usable native hook or wake; not delivered.
+- `offered`: claimed for a hook or native wake; consumption is not proven. This state
   never retries automatically, including after a hook crash or lost stdout.
 - `acknowledged`: the same exact recipient's native Stop reported a standalone
   `CLAUDEX_ACK:<messageId>` line. This confirms receipt, **not completion of the
   requested action**. Check actual work/process state before restarting services.
 - `expired`: queued message exceeded its TTL before being offered.
+
+Native wake atomically claims the same queue used by hooks. A generation-bound
+claim is persisted before dispatch; lost/unknown outcomes are never resent.
+`wake.state: accepted` means the native call was accepted, not that the model
+completed the requested work. The recipient's exact hook ACK remains separate.
 
 Messages are capped at 1,500 UTF-8 bytes, with a default 15-minute TTL (up to one
 hour). The private `collaboration/chat-mailbox/state.json` is bounded to 1,024
@@ -179,7 +214,7 @@ existing source conversation meanwhile. For example, pass this JSON to
 ```json
 {
   "provider": "claude",
-  "sessionId": "EXACT_NATIVE_SESSION_ID_FROM_CHAT_LIST",
+  "title": "Exact recipient title",
   "message": "Please stop creating new tasks and report when your current work is safe to pause.",
   "requestId": "maintenance-note-1"
 }
@@ -273,14 +308,13 @@ requires a broker installed or started with
 `--allow-write` **and** task `permission: "workspace-write"`. A child cannot elevate
 its parent's permission or expand its directory grants. Use a dedicated checkout for
 writable work: the protocol does not create worktrees, merge edits, or prevent an
-unrelated editor from modifying the same files. Within a broker, overlapping
-writable tasks with overlapping canonical access roots are serialized, including
-ancestor/descendant directories and a writer overlapping another task's reference
-directory. Disjoint projects can run concurrently. Conflicting writable delegation
-returns `deferredUntilParentExit`: the parent ends its native turn to release the
-workspace, the child runs, then the parent resumes with the child's result. This
-also covers a read-only child of a writable parent. Read-only workers may run
-concurrently. Waiting on a deferred child before releasing its workspace is refused.
+unrelated editor from modifying the same files. Tasks may run concurrently in the
+same or overlapping directories, including writable parent/child tasks and a
+writer overlapping another task's reference directory. The broker does not lock
+workspaces or merge conflicting edits. Assign disjoint file responsibilities and
+coordinate shared-file changes explicitly. Children may start while their parent
+is running; use status/wait to collect their results. A parent that ends its turn
+with outstanding children resumes with their durable results after they finish.
 
 ### Project and additional directory access
 
@@ -351,8 +385,11 @@ is implied by the work protocol.
 Defaults allow up to 64 concurrent workers, delegation depth three, twelve native executions per
 task, 1,000 tasks, 10,000 idempotency receipts and a 32 MiB ledger. Context and native
 output are separately bounded. Capacity errors are explicit; no history or receipt
-is silently pruned. Tasks time out after 15 minutes. These are execution limits,
-not a monetary spending guarantee; native account quotas still apply.
+is silently pruned. Work has no elapsed-time execution timeout; long-running
+native invocations continue until completion, failure or explicit cancellation.
+The bounded wait/socket request timeouts only end the caller's wait, not the work.
+These limits are not a monetary spending guarantee; native account quotas still apply.
+The 64-worker ceiling is not evidence of a 64-worker native load certification.
 
 After a broker crash, in-flight work becomes `uncertain` and blocks new dispatch.
 No native input or pending handoff is replayed. Inspect the last recorded native
@@ -360,19 +397,24 @@ process/session and workspace before operator recovery; do not clear the ledger
 to regain availability. Completed work remains readable. Cancellation targets only
 the invocation's owned process group and does not undo file changes.
 
-A controller can explicitly close an inspected **read-only** uncertain task as
+A controller can explicitly close an inspected uncertain task as
 failed through `claudex collaboration request resolve --peer codex`, supplying
 JSON on stdin with `taskId`, the current `revision`, a stable `requestId`,
 `outcome: "failed"` and a nonempty `reason` of at most 2,048 bytes. This operation
 is not an MCP worker tool. The broker checks that the recorded native PID and its
 process group are both absent, refuses permission or inspection errors, active
-in-memory workers, missing process evidence, writable tasks and unfinished
+in-memory workers, missing process evidence and unfinished
 descendants. The original messages, error, native execution evidence and result
 are preserved together with a durable resolution and inspection timestamp.
 It never claims success or reruns that task. Removing the last uncertainty allows
 other queued work and waiting parents to proceed; inspect or cancel unwanted
-queued work before resolving. Writable uncertainty still requires separate
-workspace reconciliation.
+queued work before resolving. For writable work, first inspect and reconcile all
+affected files, then also supply `workspaceReconciled: true` and nonempty
+`reconciliationNotes` (at most 4,096 bytes) describing retained/validated outputs,
+partial changes and their disposition. This is an explicit controller attestation,
+not an automatic filesystem validation. The receipt preserves these notes and the
+task's exact directory grants. It never deletes files, rolls back edits or bypasses
+the process-absence and revision checks.
 
 ## Verification scope
 

@@ -181,7 +181,8 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   assert.equal(byId.get(1).result.protocolVersion, '2025-06-18');
   assert.equal(byId.get(2).result.tools.length, 10);
   const tools = byId.get(2).result.tools;
-  assert.match(tools.find(tool => tool.name === 'claudex_start').description, /deferredUntilParentExit.*CLAUDEX_YIELD/);
+  assert.match(tools.find(tool => tool.name === 'claudex_start').description, /concurrent/i);
+  assert.doesNotMatch(tools.find(tool => tool.name === 'claudex_start').description, /deferredUntilParentExit|CLAUDEX_YIELD/);
   assert.match(tools.find(tool => tool.name === 'claudex_handoff').description, /CLAUDEX_HANDOFF: no further tools or summary/);
   assert.deepEqual(JSON.parse(byId.get(3).result.content[0].text), { taskId: 'task-1', revision: 1 });
   assert.equal(byId.get(4).result.isError, true);

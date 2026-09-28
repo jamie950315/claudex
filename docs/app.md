@@ -89,6 +89,8 @@ or the user's global Node.js installation.
 ## What setup configures
 
 - An independent collaboration broker and the `claudex-work` MCP connections.
+- The narrow `claudex-desktop-wake` MCP endpoint and supported Claude frontend
+  bridge for authorized messages to existing native chats.
 - All-project Desktop synchronization using the original OpenAI-signed native
   launcher runtime, not Claudex's own Node binary for that protected integration.
 - Native folder presentation and Local predecessor handoff when the existing
@@ -119,6 +121,28 @@ Login startup remains installed. The legacy CLI-only status display is unchanged
 The checklist refreshes through read-only inspection. An observed prerequisite
 or sign-in transition can continue setup automatically; it does not blindly
 repeat a failed model request or overwrite another application's settings.
+
+## Messages to existing chats
+
+Ask a model to send a note to a chat by its exact title. A unique match can be
+addressed directly; duplicate or partial matches require recipient selection.
+This continues the original conversation, not a newly created replacement.
+Sending normally requests a native wake and can consume model account allowance;
+callers may choose hook-only queued delivery with `wake: false`.
+
+Keep Claude Desktop open with the bridge loaded. You do **not** need to select or
+open the specific recipient chat. Busy work, an existing draft or a permission
+prompt can postpone delivery, and a closed app cannot receive an immediate
+frontend wake. Known ended chats can retain queued notes until resumption, subject
+to message expiry. Check the message receipt: queued, native acceptance and the
+recipient's ACK are different states. ACK means receipt, not completion of the
+requested action.
+
+The Claude wake bridge is pinned to a verified frontend resource. Loading an
+upgraded bridge requires a normal idle Claude restart; later vendor updates can
+require adaptation. An unavailable bridge is reported, never treated as delivery.
+See [native-chat messaging](collaboration.md#messages-to-existing-native-chats)
+for supported discovery, delivery and recovery boundaries.
 
 ## Existing work and compatibility
 

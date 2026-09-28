@@ -145,18 +145,20 @@ function ownsCurrent(manifest, hash) {
     || manifest.phase === 'prepared' && hash === manifest.previousPatchedHash;
 }
 
-async function defaultCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource,
+async function defaultCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource,
   registryRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
   const entry = inspectFolderCache(original);
   const projection = projectionSource ?? await readFile(new URL('./claude-folder-projection.mjs', import.meta.url), 'utf8');
   const runtime = runtimeSource ?? await readFile(new URL('./claude-folder-runtime.mjs', import.meta.url), 'utf8');
   const handoff = handoffSource ?? await readFile(new URL('./claude-desktop-handoff-runtime.mjs', import.meta.url), 'utf8');
+  const wake = wakeSource ?? await readFile(new URL('./claude-chat-wake-runtime.mjs', import.meta.url), 'utf8');
   const anchor = anchorSource ?? await readFile(new URL('./claude-folder-anchor.mjs', import.meta.url), 'utf8');
   return replaceFolderCacheSource(original, buildDynamicFolderSource(entry.source,
-    { root, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, registryRoot }));
+    { root, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, wakeSource: wake, registryRoot }));
 }
 
 async function operate(action, options, dependencies) {
+  const inspectCache = bytes => inspectFolderCache(bytes, { targetURL: dependencies.targetURL });
   const { root, cachePath } = options;
   canonicalPath(root); canonicalPath(cachePath);
   const sourceHash = dependencies.sourceHash ?? FOLDER_SOURCE_SHA256;
@@ -181,7 +183,7 @@ async function operate(action, options, dependencies) {
     let manifestSnapshot = await optionalSnapshot(manifestPath, 16 * 1024);
     let manifest = manifestSnapshot ? parseManifest(manifestSnapshot, bindings) : null;
     const current = await snapshot(cachePath);
-    const currentEntry = inspectFolderCache(current.bytes);
+    const currentEntry = inspectCache(current.bytes);
     let original = await optionalSnapshot(backupPath);
     if (manifest) {
       if (!original || original.hash !== manifest.originalHash) fail('original backup is missing or changed');
@@ -191,11 +193,11 @@ async function operate(action, options, dependencies) {
       if (currentEntry.sourceHash !== sourceHash) fail('unvalidated frontend source; nothing was overwritten');
       if (original && original.hash !== current.hash) fail('unjournaled backup does not match the current original');
     }
-    if (original && inspectFolderCache(original.bytes).sourceHash !== sourceHash) fail('original source binding changed');
+    if (original && inspectCache(original.bytes).sourceHash !== sourceHash) fail('original source binding changed');
     let candidate;
     if (action === 'install') {
       candidate = await (dependencies.buildCandidate ?? defaultCandidate)({ ...options, original: Buffer.from(original?.bytes ?? current.bytes) });
-      inspectFolderCache(candidate);
+      inspectCache(candidate);
       if (sha256(candidate) === (original?.hash ?? current.hash)) fail('candidate did not change the original resource');
     } else candidate = original.bytes;
     const candidateHash = sha256(candidate);
@@ -208,7 +210,7 @@ async function operate(action, options, dependencies) {
       const oldStage = await optionalSnapshot(oldStagePath);
       if (oldStage) {
         const expected = manifest.action === 'restore' ? manifest.originalHash : manifest.patchedHash;
-        inspectFolderCache(oldStage.bytes);
+        inspectCache(oldStage.bytes);
         if (oldStage.hash !== expected) fail('prepared staging contents changed; staging was preserved');
         await removeStage(oldStagePath, oldStage);
       }
@@ -242,7 +244,7 @@ async function operate(action, options, dependencies) {
       await rename(candidatePath, cachePath);
       await syncDirectory(cacheParent);
       const published = await snapshot(cachePath);
-      inspectFolderCache(published.bytes);
+      inspectCache(published.bytes);
       if (published.hash !== candidateHash || !sameFile(published.info, staged.info)) fail('cache changed after publication; manifest remains prepared');
       await dependencies.afterReplace?.({ action, cachePath, manifestPath });
       await checkDirectories();

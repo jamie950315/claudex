@@ -7,7 +7,6 @@ import { revalidateWorkspace } from './collaboration-workspace.mjs';
 
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
-const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const MCP_NAME = 'claudex';
 const API_KEY_ENV = new Set(['OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
 
@@ -122,7 +121,7 @@ export function createNativeCollaborationRunner({
   return async function runCollaborationNative({
     provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
     projectRoot, readOnlyDirs = [], writableDirs = [],
-    timeoutMs = DEFAULT_TIMEOUT_MS, signal, onEvent,
+    signal, onEvent,
   } = {}) {
     if (provider !== 'codex' && provider !== 'claude') throw failure('provider must be codex or claude.');
     checkedString(cwd, 'cwd', 4096);
@@ -131,9 +130,6 @@ export function createNativeCollaborationRunner({
     try { validateCollaborationEffort(provider, effort); }
     catch (error) { throw failure(error.message); }
     if (!['read-only', 'workspace-write'].includes(permission)) throw failure('Invalid permission.');
-    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 24 * 60 * 60 * 1000) {
-      throw failure('timeoutMs must be between 1000 ms and 24 hours.');
-    }
     if (onEvent != null && typeof onEvent !== 'function') throw failure('onEvent must be a function.');
     const mcp = checkedMcp(rawMcp);
     const canonicalCwd = await realpath(cwd);
@@ -203,8 +199,6 @@ export function createNativeCollaborationRunner({
         cancelled = true;
         stop(failure('Native execution was cancelled.', { uncertain: true }));
       };
-      const timeout = setTimeout(() => stop(failure('Native execution timed out; its outcome is uncertain.', { uncertain: true })), timeoutMs);
-      timeout.unref?.();
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) abort();
       if (Number.isSafeInteger(child.pid) && child.pid > 0) {
@@ -254,7 +248,6 @@ export function createNativeCollaborationRunner({
       });
       child.on('close', async (code, processSignal) => {
         closed = true;
-        clearTimeout(timeout);
         clearTimeout(killTimer);
         signal?.removeEventListener('abort', abort);
         lineBuffer += stdoutDecoder.end();

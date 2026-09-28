@@ -7,7 +7,7 @@ const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status']);
+const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -161,7 +161,7 @@ const effort = { type: ['string', 'null'], enum: [...new Set(Object.values(colla
   description: 'Provider-native reasoning effort. Omitted uses the destination provider default; null uses the native CLI default. Codex: none, minimal, low, medium, high, xhigh, max, ultra. Claude: low, medium, high, xhigh, max. Model-specific restrictions are enforced by the native CLI; no fallback is applied.' };
 const view = { type: 'string', enum: ['full', 'summary'] };
 const toolDefinitions = [
-  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. If deferredUntilParentExit is true, end your native turn immediately with exactly CLAUDEX_YIELD: no more tools or summary; the child runs after you exit and you resume with its result. Otherwise use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
+  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. Tasks and children may run concurrently in the same workspace: assign disjoint file responsibilities and coordinate shared edits; there is no workspace lock or automatic conflict merge. Work has no execution deadline; explicitly cancel unwanted work. Use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
   tool('handoff', 'Transfer this same task to the other provider. Optional model overrides the receiving provider default reported by claudex_list; omission uses that default, not the outgoing model. Explicit null uses the native CLI default. Read status for the current revision first. Include all progress, remaining work and constraints in the message. After acknowledgement end your native turn immediately with exactly CLAUDEX_HANDOFF: no further tools or summary, and do not wait on yourself. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
   tool('status', 'Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default.', { taskId: str, view }, ['taskId']),
@@ -170,13 +170,23 @@ const toolDefinitions = [
   tool('list', 'List visible tasks.', {}, []),
   tool('chat_list', 'Find hook-registered native chats by title. Optional query searches native title metadata only, provider filters codex/claude, match selects exact or contains (default). Results include title, titleMatch, source and errors, sessionId and cwd; follow nextCursor. Titles are not unique IDs: if multiple or partial matches exist, ask the user to choose, never silently pick the newest. Do not send from errored title metadata. Pass the chosen sessionId and verbatim expectedTitle to chat_send. Does not scan conversation text or register unknown chats.', { limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str,
     query: str, provider: { type: 'string', enum: ['codex', 'claude'] }, match: { type: 'string', enum: ['exact', 'contains'] } }, []),
-  tool('chat_send', 'Queue an explicitly user-authorized peer coordination message for an existing native chat. Controller only. Use the exact provider/sessionId from chat_list. Never creates, resumes a second writer, or archives a chat. Delivery waits for a native hook; idle chats are not woken. Stop delivery can continue the existing chat with model inference. Does not grant permissions or forcibly interrupt work. Use chat_status to distinguish queued, offered and acknowledged; verify task shutdown separately before restarting services.', {
+  tool('chat_send', 'Send an explicitly user-authorized peer message. Controller only. Supply title for automatic unique exact-title lookup, optionally with provider; duplicates return needs-selection without sending. Alternatively use provider/sessionId and expectedTitle from chat_list. Codex wakes the original Desktop chat through its native owner. Claude wakes through the installed Desktop bridge when idle with no draft or pending permission. Wake consumes native model allowance; busy chats defer to hooks. Set wake=false for queue-only delivery. Ended chats accept queued messages waiting for native resumption. Never creates a replacement chat or a second writer. Does not grant permissions or interrupt work. Check chat_status: waiting-for-resume is not delivery, offered is not acknowledged; an uncertain wake is never retried.', {
+    title: { ...str, description: 'Exact recipient title; unique matches send directly, duplicates require selection. Mutually exclusive with sessionId/expectedTitle.' },
     provider: { type: 'string', enum: ['codex', 'claude'] }, sessionId: str, expectedTitle: { ...str, description: 'Verbatim title from the chosen search result; rechecked before enqueueing to catch renames or unavailable metadata.' }, message: { type: 'string', minLength: 1, maxLength: 1500 },
+    wake: { type: 'boolean', description: 'Defaults true: permit native Desktop wake and model inference. Claude requires the loaded Desktop bridge; false queues for the next native hook only.' },
     requestId: str, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 },
-  }, ['provider', 'sessionId', 'message', 'requestId']),
+  }, ['message', 'requestId']),
   tool('chat_status', 'Read a native-chat coordination message receipt. Offered means hook output prepared, not proven read; acknowledged means the exact recipient emitted its acknowledgement marker, not that requested actions succeeded. No resend or inference.', { messageId: str }, ['messageId']),
 ];
-const byName = new Map(toolDefinitions.map(entry => [entry.name, entry]));
+const desktopWakeTools = [
+  tool('desktop_wake_claim', 'Claim one exact pending Claude Desktop peer message. Native renderer bridge only; no arbitrary work execution.', {
+    messageId: str, sessionId: str,
+  }, ['messageId', 'sessionId']),
+  tool('desktop_wake_receipt', 'Record a claimed native dispatch outcome. Acceptance is not recipient acknowledgement. Never replay uncertain dispatch.', {
+    messageId: str, sessionId: str, claimId: str, status: { type: 'string', enum: ['accepted', 'uncertain'] }, detail: str,
+  }, ['messageId', 'sessionId', 'claimId', 'status', 'detail']),
+];
+const byName = new Map([...toolDefinitions, ...desktopWakeTools].map(entry => [entry.name, entry]));
 
 function validateTool(name, args) {
   const definition = byName.get(name);
@@ -198,7 +208,7 @@ function validateTool(name, args) {
 }
 
 /** Minimal newline JSON-RPC MCP facade. It emits protocol data only on output. */
-export async function runCollaborationMcp({ root, peer, token, input = process.stdin, output = process.stdout }) {
+export async function runCollaborationMcp({ root, peer, token, input = process.stdin, output = process.stdout, desktopWakeOnly = false }) {
   if (!['codex', 'claude'].includes(peer)) fail('Invalid MCP peer');
   let active = 0;
   let buffer = Buffer.alloc(0);
@@ -213,12 +223,13 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
       let result;
       if (request.method === 'initialize') {
         const version = request.params?.protocolVersion;
-        result = { protocolVersion: VERSIONS.has(version) ? version : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'claudex', version: '1.0.0' } };
+        result = { protocolVersion: VERSIONS.has(version) ? version : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'claudex', version: '1.0.1' } };
       } else if (request.method === 'ping') result = {};
-      else if (request.method === 'tools/list') result = { tools: toolDefinitions };
+      else if (request.method === 'tools/list') result = { tools: desktopWakeOnly ? desktopWakeTools : toolDefinitions };
       else if (request.method === 'tools/call') {
         const { name, arguments: args = {} } = request.params ?? {};
         try {
+          if (!(desktopWakeOnly ? desktopWakeTools : toolDefinitions).some(tool => tool.name === name)) throw new Error('Unknown tool for this endpoint.');
           const method = validateTool(name, args);
           const params = args;
           const value = await callCollaboration({ root, peer, token, method, params, timeoutMs: method === 'wait' ? Math.min(SOCKET_LIFETIME_MS, (args.timeoutMs ?? 30000) + 5000) : SOCKET_LIFETIME_MS });
