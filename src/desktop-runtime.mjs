@@ -15,7 +15,7 @@ import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket, hasProjectedImages } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
-import { isAllowedCodexVersion, isSupportedCodexVersion } from './codex-versions.mjs';
+import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 import { snapshotOriginalArchiveTree, compareOriginalArchiveTree, originalArchiveGuard } from './codex-original-archive-tree.mjs';
@@ -136,8 +136,7 @@ export class DesktopRuntime {
         throw new Error('Shared Codex Desktop backend is not ready: Desktop is in native-only mode; synchronization awaits version validation.');
       if (manifest.transportMode !== undefined || !isAllowedCodexVersion(manifest.cliVersion, this.versionPolicy) || !manifest.socketPath)
         throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
-      this.codexVersionWarning = isSupportedCodexVersion(manifest.cliVersion) ? null
-        : { component: 'codex', cliVersion: manifest.cliVersion };
+      this.codexVersionWarning = null;
       const socket = await inspectCodexSocket(manifest.socketPath);
       if (socket.socketStat.dev !== manifest.socketIdentity?.dev || socket.socketStat.ino !== manifest.socketIdentity?.ino) throw new Error('Shared Codex socket identity changed.');
       this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath });

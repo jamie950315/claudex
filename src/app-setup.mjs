@@ -157,8 +157,9 @@ export class AppSetup {
       const watcher = await appPrivateJSON(join(this.root, 'watcher-status.json'));
       const live = watcher && processAlive(watcher.pid) && watcher.running === true && Number.isFinite(watcher.updatedAt)
         && watcher.updatedAt <= Date.now() + 5000 && Date.now() - watcher.updatedAt < 90000;
-      const compatible = found?.codex?.version && isAllowedCodexVersion(found.codex.version, normalizeVersionPolicy(config?.versionPolicy));
-      const claudeCompatible = config?.versionPolicy === 'warn' || found?.claude?.version?.split(/\s+/)[0] === '2.1.281';
+      const policy = normalizeVersionPolicy(config?.versionPolicy ?? 'warn');
+      const compatible = found?.codex?.version && isAllowedCodexVersion(found.codex.version, policy);
+      const claudeCompatible = policy === 'warn' || found?.claude?.version?.split(/\s+/)[0] === '2.1.281';
       const configured = config?.mode === 'desktop' && config?.allProjects === true;
       const held = live && (watcher.synchronization === 'blocked' || watcher.synchronization === 'degraded'
         || watcher.blocked || watcher.blockedConversationCount || watcher.blockedSourceCount);
@@ -268,7 +269,7 @@ export class AppSetup {
     await mkdir(join(this.home, '.claude'), { recursive: true, mode: 0o700 });
     config = { version: 1, since: Date.now(), codexHome: join(this.home, '.codex'), claudeHome: join(this.home, '.claude'), ...config,
       mode: 'desktop', allProjects: true, projects: [], contextMode: config?.contextMode ?? 'archive',
-      versionPolicy: normalizeVersionPolicy(config?.versionPolicy), binary: providers.codex.binary, claudeBinary: providers.claude.binary };
+      versionPolicy: normalizeVersionPolicy(config?.versionPolicy ?? 'warn'), binary: providers.codex.binary, claudeBinary: providers.claude.binary };
     await this.desktopInstall({ root: this.root, launcher: join(this.engineRoot, 'bin', 'claudex-codex.mjs'), binary: providers.codex.binary, run: this.nativeRun });
     if (JSON.stringify(await appPrivateJSON(path)) !== original) throw new Error('Synchronization configuration changed during setup; it was preserved.');
     await writeJSON(path, config);

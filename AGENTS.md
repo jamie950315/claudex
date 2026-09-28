@@ -126,6 +126,14 @@ execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 
+Do not emit warnings merely because Codex/Claude versions are outside the
+validated baseline. The existing `warn` policy name is retained for config
+compatibility, but version-only status warnings and events are silent.
+New graphical installations default to this permissive policy; an explicitly
+configured strict policy is preserved.
+Actual protocol, schema, history, ownership and native operation failures still surface
+and keep their safety guards. Do not relabel unknown runtimes as verified.
+
 Owned Claude image-source annotations may use the exact parent timestamp or
 the observed one-millisecond-later timestamp. The latter requires an immediately
 adjacent physical parent, queueTranscriptOnly, identical native version, and all

@@ -158,9 +158,9 @@ test('warn policy permits future Claude CLI and SDK versions without bypassing o
   const owner = await ClaudeOwner.open(config);
   try {
     assert.equal(owner.status().versionPolicy, 'warn');
-    assert.deepEqual(owner.status().versionWarning, { component: 'claude', cliVersion: '2.2.1', sdkVersion: '0.4.1' });
+    assert.equal(owner.status().versionWarning, null);
     await owner.loadRuntime();
-    assert.equal(f.events.filter(event => event.type === 'owner_version_warning').length, 1);
+    assert.equal(f.events.filter(event => event.type === 'owner_version_warning').length, 0);
     await assert.rejects(ClaudeOwner.open(config), /already running/);
     await owner.append({ operationId: 'future-version', content: 'Verified no-query handoff using a future runtime fixture.' });
     assert.equal(f.calls.appends[0].shouldQuery, false);

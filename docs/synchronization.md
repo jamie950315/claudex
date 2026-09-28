@@ -89,8 +89,10 @@ node bin/claudex.mjs version-policy strict
 The first command opts out of version-only blocking for Codex, Claude Code and
 the Claude owner SDK. Unvalidated Codex versions keep shared transport instead
 of entering native-only mode, and Claude owners attempt the existing protocol.
-`status` shows the selected policy and bounded runtime warnings; `doctor` still
-reports unvalidated versions as unverified rather than claiming compatibility.
+The legacy policy name `warn` is retained, but unfamiliar version numbers do not
+emit warnings or warning events. Actual protocol, history, schema and ownership
+failures still surface normally. `doctor` retains verification provenance as
+diagnostic information rather than treating an unvalidated version as a fault.
 The second command restores the strict policy. Existing configuration fields,
 conversation IDs, checkpoints and transcripts are not changed by either command.
 

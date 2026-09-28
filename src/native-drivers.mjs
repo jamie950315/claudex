@@ -68,7 +68,6 @@ export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'cod
       || !runtimeVersionPermitted(claude, knownClaude ? claude : null, versionPolicy)) {
     throw new Error('Native version changed; run compatibility validation before enabling synchronization.');
   }
-  if (!knownCodex || !knownClaude) process.emitWarning('Claudex versionPolicy=warn: attempting unvalidated native runtimes; protocol and history checks remain enabled.');
   const clients = new Set();
   let cachedClient;
   async function codexClient() {

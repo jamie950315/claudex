@@ -102,7 +102,7 @@ async function main() {
     output({ codex, claude, verifiedCodex: isSupportedCodexVersion(codex), verifiedClaude, versionPolicy,
       synchronizationAllowedByVersionPolicy: isAllowedCodexVersion(codex, versionPolicy)
         && runtimeVersionPermitted(claudeVersion, verifiedClaude ? claudeVersion : null, versionPolicy),
-      note: versionPolicy === 'warn' ? 'Unverified runtime versions are attempted with warnings. Protocol, ownership and history checks remain enabled.' : 'Other native versions require compatibility validation.' });
+      note: versionPolicy === 'warn' ? 'Version changes alone do not produce warnings. Protocol, ownership and history failures remain explicit.' : 'Other native versions require compatibility validation.' });
     return;
   }
   if (command === 'recover-lock') {

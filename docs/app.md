@@ -77,9 +77,10 @@ connections. Earlier CLI-managed services whose paths or policy differ can need
 a safe migration before this app can adopt them. The app reports that hold
 instead of force-closing processes or claiming an upgrade succeeded.
 
-Synchronization retains its version policy. Newer native apps can be available
-for collaboration while synchronization remains blocked pending compatibility
-validation. A missing or changed frontend resource prevents the folder patch;
+New graphical installations permit newer native versions without version-only
+warnings. The existing `warn` configuration name is retained; an explicitly
+selected `strict` policy remains available. Actual protocol and history failures
+still pause unsafe operations. A missing or changed frontend resource prevents the folder patch;
 there is no guessed resource or signature bypass. Refer to
 [synchronization](synchronization.md) for the exact boundaries.
 

@@ -70,6 +70,14 @@ test('background startup integrates the display without installing providers or 
   assert.ok(!events.some(([kind]) => ['ensure-providers', 'collaboration', 'desktop', 'service', 'folders'].includes(kind)));
 });
 
+test('new graphical installs default to no version-only blocking or warnings', async t => {
+  const { root, base, setup } = await fixture(t);
+  await setup.setup();
+  assert.equal(JSON.parse(await readFile(join(root, 'config.json'), 'utf8')).versionPolicy, 'warn');
+  const report = await setup.inspect({ providers: readyProviders(base, { codex: 'codex-cli 999.0.0', claude: '999.0.0' }) });
+  assert.doesNotMatch(report.components.find(row => row.id === 'synchronization').detail, /unsupported|unvalidated|unverified|version.*changed/i);
+});
+
 test('display integration failures remain explicit while independent setup stays available', async t => {
   const { setup, events } = await fixture(t);
   setup.interfaceInstall = async () => { throw new Error('Legacy display bundle path differs.'); };
