@@ -1,4 +1,11 @@
 {
+"Native effort default": "原生推理强度默认值",
+"Save model settings": "保存模型设置",
+"Reload model settings": "重新加载模型设置",
+"Model settings saved. New tasks and handoffs will use these settings.": "模型设置已保存。新任务与交接将使用这些设置。",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "推理强度适用于新任务与交接。选择原生 CLI 默认时不指定强度。可用等级取决于所选模型；不同服务的等级并不等价。",
+"%@ reasoning effort": "%@ 推理强度",
+"Reasoning effort": "推理强度",
 "Collaboration models": "协作模型",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "为每个服务指定默认模型 ID。留空时使用原生 CLI 的默认模型。单个任务与交接可另外指定模型。",
 "Native CLI default": "原生 CLI 默认模型",

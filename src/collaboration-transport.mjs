@@ -1,6 +1,7 @@
 import net from 'node:net';
 import { chmod, lstat, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 
 const MAX_FRAME = 1024 * 1024;
 const MAX_CONNECTIONS = 64;
@@ -146,11 +147,13 @@ export async function callCollaboration({ root, peer, token, method, params = {}
 
 const tool = (name, description, properties, required = []) => ({
   name: `claudex_${name}`, description,
-  inputSchema: { type: 'object', properties, required, additionalProperties: false },
+  inputSchema: { type: 'object', properties: ['start', 'handoff'].includes(name) ? { ...properties, effort } : properties, required, additionalProperties: false },
 });
 const str = { type: 'string', minLength: 1 };
 const model = { type: ['string', 'null'], minLength: 1, maxLength: 200, pattern: '^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f]*\\S)?$' };
 const integer = { type: 'integer', minimum: 0 };
+const effort = { type: ['string', 'null'], enum: [...new Set(Object.values(collaborationEfforts).flat()), null],
+  description: 'Provider-native reasoning effort. Omitted uses the destination provider default; null uses the native CLI default. Codex: none, minimal, low, medium, high, xhigh, max, ultra. Claude: low, medium, high, xhigh, max. Model-specific restrictions are enforced by the native CLI; no fallback is applied.' };
 const view = { type: 'string', enum: ['full', 'summary'] };
 const toolDefinitions = [
   tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. If deferredUntilParentExit is true, end your native turn immediately with exactly CLAUDEX_YIELD: no more tools or summary; the child runs after you exit and you resume with its result. Otherwise use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
@@ -170,6 +173,7 @@ function validateTool(name, args) {
   if (schema.required.some(key => !Object.hasOwn(args, key)) || Object.keys(args).some(key => !Object.hasOwn(schema.properties, key))) fail('Invalid tool arguments');
   for (const [key, value] of Object.entries(args)) {
     const field = schema.properties[key];
+    if (key === 'effort') validateCollaborationEffort(args.provider, value);
     if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
     if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);

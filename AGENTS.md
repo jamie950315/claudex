@@ -159,6 +159,16 @@ work.json without restarting services. Start and handoff capture the destination
 model at request time; children do not inherit a model ID from another provider,
 and follow-ups retain their task selection. Preference changes never mutate
 existing or pending work. Prompts instruct workers to read project guidance.
+Reasoning effort follows the same destination-provider capture rules. Persist
+defaultEfforts separately from defaultModels; settings may update either full
+provider pair atomically. Optional start/handoff effort=null explicitly requests
+native defaults; old tasks/pending handoffs without effort must never adopt newly
+configured defaults. Validate provider-native effort tokens without translating
+levels or broadening permissions. Codex uses model_reasoning_effort, Claude uses
+--effort; strip inherited CLAUDE_CODE_EFFORT_LEVEL from isolated Claude workers.
+Expose the requested effort only: native organization caps can affect effective
+effort, including silent Claude stream-json caps. Do not claim effective-budget
+verification merely from argv or task metadata.
 Manual CLI tasks default to read-only. The app enables all projects and task-scoped
 writes by default, using the explicit broker defaultPermission setting. Read-only
 requests and parent restrictions must never elevate. Writes require broker opt-in and task permission;

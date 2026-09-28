@@ -103,6 +103,10 @@ struct ModelSettings: Decodable {
         let claude: String?
     }
     let defaultModels: Defaults
+    let defaultEfforts: Defaults?
+
+    static let codexEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
 
     static func parse(_ data: Data) throws -> ModelSettings {
         let settings = try JSONDecoder().decode(ModelSettings.self, from: data)
@@ -111,6 +115,9 @@ struct ModelSettings: Decodable {
                 && !model!.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })) else {
                 throw SetupParseError.invalid
             }
+        }
+        for (effort, supported) in [(settings.defaultEfforts?.codex, codexEfforts), (settings.defaultEfforts?.claude, claudeEfforts)] {
+            guard effort == nil || supported.contains(effort!) else { throw SetupParseError.invalid }
         }
         return settings
     }
@@ -167,10 +174,11 @@ final class SetupRunner {
         }
     }
 
-    func models(codex: String? = nil, claude: String? = nil,
+    func models(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil,
                 completion: @escaping (Result<ModelSettings, SetupProcessError>) -> Void) {
         var arguments = ["models"]
         if let codex, let claude { arguments += ["--codex-model", codex, "--claude-model", claude] }
+        if let codexEffort, let claudeEffort { arguments += ["--codex-effort", codexEffort, "--claude-effort", claudeEffort] }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<ModelSettings, SetupProcessError> in
                 do { return .success(try ModelSettings.parse(data)) }

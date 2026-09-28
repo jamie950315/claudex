@@ -1,4 +1,11 @@
 {
+"Native effort default": "기본 추론 강도",
+"Save model settings": "모델 설정 저장",
+"Reload model settings": "모델 설정 다시 불러오기",
+"Model settings saved. New tasks and handoffs will use these settings.": "모델 설정이 저장되었습니다. 새 작업과 인계에 이 설정이 적용됩니다.",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "추론 강도는 새 작업과 인계에 적용됩니다. 기본 CLI 설정을 선택하면 강도를 지정하지 않습니다. 사용 가능한 수준은 선택한 모델에 따라 다르며, 제공업체 간 척도는 동일하지 않습니다.",
+"%@ reasoning effort": "%@ 추론 강도",
+"Reasoning effort": "추론 강도",
 "Collaboration models": "협업 모델",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "각 서비스의 기본 모델 ID를 지정하세요. 비워 두면 네이티브 CLI의 기본 모델을 사용합니다. 개별 작업과 인계에서 다른 모델을 지정할 수 있습니다.",
 "Native CLI default": "네이티브 CLI 기본 모델",

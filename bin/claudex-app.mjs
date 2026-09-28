@@ -5,6 +5,7 @@ import { AppSetup } from '../src/app-setup.mjs';
 const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, provider: { type: 'string' }, 'runtime-directory': { type: 'string' },
   'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
+  'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
 } });
 try {
   const app = new AppSetup({ ...(values.root ? { root: values.root } : {}), ...(values['runtime-directory'] ? { runtimeDirectory: values['runtime-directory'] } : {}) });
@@ -18,9 +19,15 @@ try {
     const updating = values['codex-model'] !== undefined || values['claude-model'] !== undefined;
     if (updating && (values['codex-model'] === undefined || values['claude-model'] === undefined))
       throw new Error('Both provider model settings are required.');
+    const updatingEffort = values['codex-effort'] !== undefined || values['claude-effort'] !== undefined;
+    if (updatingEffort && (values['codex-effort'] === undefined || values['claude-effort'] === undefined))
+      throw new Error('Both provider effort settings are required.');
     result = await app.models(updating ? {
       codex: values['codex-model'].trim() || null,
       claude: values['claude-model'].trim() || null,
+    } : undefined, updatingEffort ? {
+      codex: values['codex-effort'].trim() || null,
+      claude: values['claude-effort'].trim() || null,
     } : undefined);
   }
   else throw new Error('Unsupported setup action.');

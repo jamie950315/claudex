@@ -1,4 +1,11 @@
 {
+"Native effort default": "Native effort default",
+"Save model settings": "Save model settings",
+"Reload model settings": "Reload model settings",
+"Model settings saved. New tasks and handoffs will use these settings.": "Model settings saved. New tasks and handoffs will use these settings.",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.",
+"%@ reasoning effort": "%@ reasoning effort",
+"Reasoning effort": "Reasoning effort",
 "Collaboration models": "Collaboration models",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.",
 "Native CLI default": "Native CLI default",

@@ -67,6 +67,31 @@ test('MCP handoff forwards an explicit model or null and refuses malformed overr
   assert.equal(rows.filter(row => row.result.isError).length, 4);
 });
 
+test('MCP start and handoff advertise and enforce provider effort values including null', async t => {
+  const seen = [];
+  const { root } = await fixture(t, async request => { seen.push(request); return {}; });
+  const input = new PassThrough(), output = new PassThrough();
+  let content = '';
+  output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', token: 'worker', input, output });
+  input.write(JSON.stringify({ jsonrpc: '2.0', id: 'list', method: 'tools/list' }) + '\n');
+  for (const name of ['claudex_start', 'claudex_handoff']) {
+    for (const [i, effort] of ['high', null, 'ultra', 'HIGH', 23].entries()) {
+      const args = name === 'claudex_start' ? { cwd: root, prompt: 'test' } : { taskId: 'task', message: 'test', revision: 1 };
+      input.write(JSON.stringify({ jsonrpc: '2.0', id: `${name}-${i}`, method: 'tools/call', params: {
+        name, arguments: { ...args, provider: 'claude', effort, requestId: `${name}-${i}` },
+      } }) + '\n');
+    }
+  }
+  input.end();
+  await running;
+  assert.deepEqual(seen.map(request => request.params.effort), ['high', null, 'high', null]);
+  const rows = content.trim().split('\n').map(JSON.parse);
+  assert.equal(rows.filter(row => row.result.isError).length, 6);
+  for (const definition of rows.find(row => row.id === 'list').result.tools.filter(item => ['claudex_start', 'claudex_handoff'].includes(item.name)))
+    assert.ok(definition.inputSchema.properties.effort.enum.includes(null));
+});
+
 test('client rejects public directories and socket aliases', async t => {
   const { root, server } = await fixture(t);
   await chmod(root, 0o755);

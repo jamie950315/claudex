@@ -1,4 +1,11 @@
 {
+"Native effort default": "Esfuerzo nativo predeterminado",
+"Save model settings": "Guardar ajustes del modelo",
+"Reload model settings": "Recargar ajustes del modelo",
+"Model settings saved. New tasks and handoffs will use these settings.": "Ajustes del modelo guardados. Las tareas nuevas y los traspasos usarán estos ajustes.",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "El esfuerzo de razonamiento se aplica a las tareas nuevas y a los traspasos. El valor predeterminado de la CLI nativa no especifica el esfuerzo. Los niveles disponibles dependen del modelo seleccionado; las escalas de los proveedores no son equivalentes.",
+"%@ reasoning effort": "Esfuerzo de razonamiento de %@",
+"Reasoning effort": "Esfuerzo de razonamiento",
 "Collaboration models": "Modelos de colaboración",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "Define un ID de modelo predeterminado para cada proveedor. Déjalo en blanco para usar el modelo predeterminado de la CLI nativa. Las tareas y los traspasos individuales pueden usar otro modelo.",
 "Native CLI default": "Modelo predeterminado de la CLI nativa",

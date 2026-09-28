@@ -97,6 +97,39 @@ test('selected models reach the native CLI unchanged and native defaults omit th
   }
 });
 
+test('requested effort reaches vendor arguments without changing permissions or inheriting Claude effort', async () => {
+  const saved = process.env.CLAUDE_CODE_EFFORT_LEVEL;
+  process.env.CLAUDE_CODE_EFFORT_LEVEL = 'max';
+  try {
+    for (const provider of ['codex', 'claude']) {
+      for (const effort of [null, 'low', 'high']) {
+        const fake = fakeSpawn(provider === 'codex'
+          ? [{ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }, { type: 'turn.completed' }]
+          : [{ type: 'result', is_error: false, result: 'ok' }]);
+        await runner(fake)({ provider, cwd: process.cwd(), prompt: 'Effort routing only.', effort });
+        const call = fake.calls[0];
+        if (provider === 'codex') {
+          assert.deepEqual(call.args.filter(arg => arg.startsWith('model_reasoning_effort=')),
+            effort === null ? [] : [`model_reasoning_effort=${JSON.stringify(effort)}`]);
+          assert.ok(call.args.includes('read-only'));
+        } else {
+          assert.equal(call.options.env.CLAUDE_CODE_EFFORT_LEVEL, undefined);
+          assert.equal(call.args.includes('--effort'), effort !== null);
+          if (effort) assert.equal(call.args[call.args.indexOf('--effort') + 1], effort);
+          assert.equal(call.args[call.args.indexOf('--tools') + 1], 'Read,Glob,Grep');
+        }
+      }
+    }
+    const fake = fakeSpawn([]);
+    await assert.rejects(runner(fake)({ provider: 'claude', cwd: process.cwd(), prompt: 'Do not launch.', effort: 'ultra' }), /effort/i);
+    await assert.rejects(runner(fake)({ provider: 'codex', cwd: process.cwd(), prompt: 'Do not launch.', effort: 'high\nother' }), /effort/i);
+    assert.equal(fake.calls.length, 0);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    else process.env.CLAUDE_CODE_EFFORT_LEVEL = saved;
+  }
+});
+
 test('Claude uses nonpersistent restricted CLI with bounded file tools and explicit MCP', async () => {
   const fake = fakeSpawn([
     { type: 'system', subtype: 'init', session_id: 'claude-session' },

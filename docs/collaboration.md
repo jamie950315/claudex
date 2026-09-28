@@ -138,6 +138,40 @@ models, or change permissions when choosing a model. Invalid or unavailable mode
 errors remain visible. Defaults do not inherit the model selected in the Desktop
 chat UI. Existing tasks retain their saved selection when upgrading.
 
+### Reasoning effort
+
+The same settings panel provides separate provider-native reasoning effort defaults.
+`models` returns `defaultModels` and `defaultEfforts`; settings requests may update
+either complete provider pair without replacing the other. For example:
+
+```sh
+node bin/claudex.mjs collaboration models --codex-effort high --claude-effort medium
+```
+
+An empty effort resets that provider to its native default. `claudex_start` and
+`claudex_handoff` accept optional `effort`: omission selects the destination
+provider's saved default, while explicit `null` requests the native default.
+Selections are captured with the request, not changed by later preferences.
+Follow-ups retain the task effort; children do not inherit another provider's
+effort. Existing tasks and pending handoffs missing effort retain native defaults.
+
+Codex receives `-c model_reasoning_effort="LEVEL"`; Claude receives `--effort LEVEL`.
+The recognized Codex values are none, minimal, low, medium, high, xhigh, max, ultra;
+Claude values are low, medium, high, xhigh, max. Individual models may support only
+a subset. Unsupported provider values fail explicitly; Claudex does not translate
+effort levels between providers or silently substitute a different value.
+Model-specific support is enforced by the native runtime, not inferred from names.
+These are **requested** levels, not evidence of the model's effective internal
+reasoning budget. Native account/organization policy still applies; Claude may
+cap effort silently in stream-json mode. No guard or policy is bypassed.
+An inherited `CLAUDE_CODE_EFFORT_LEVEL` environment override is removed from the
+isolated worker so it cannot override the task selection. Native default selection
+does not imply inheriting the effort shown in the parent Desktop conversation.
+
+See the [Codex configuration reference](https://developers.openai.com/codex/config-reference)
+and [Claude model configuration](https://code.claude.com/docs/en/model-config)
+for vendor-specific semantics and policy limits.
+
 ## Permissions and limits
 
 For a first-time write-enabled installation, use

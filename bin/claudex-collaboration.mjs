@@ -19,6 +19,8 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
   claudex collaboration models                   Read provider model defaults (no inference)
   claudex collaboration models --codex-model ID --claude-model ID
                                                 Save both defaults; empty ID uses native default
+  claudex collaboration models --codex-effort LEVEL --claude-effort LEVEL
+                                                Save provider efforts; empty uses native default
   claudex collaboration request METHOD --peer codex|claude
                                                 Read JSON parameters from stdin
 
@@ -95,6 +97,7 @@ export async function collaborationMain(args = process.argv.slice(2)) {
     root: { type: 'string' }, peer: { type: 'string' }, 'allow-write': { type: 'boolean' }, help: { type: 'boolean' },
     'default-permission': { type: 'string' }, 'codex-binary': { type: 'string' }, 'claude-binary': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
+    'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
   } });
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { console.log(help); return; }
@@ -118,6 +121,13 @@ export async function collaborationMain(args = process.argv.slice(2)) {
       codex: values['codex-model'].trim() || null,
       claude: values['claude-model'].trim() || null,
     } } : {};
+    const updatingEffort = values['codex-effort'] !== undefined || values['claude-effort'] !== undefined;
+    if (updatingEffort && (values['codex-effort'] === undefined || values['claude-effort'] === undefined))
+      throw new Error('Both provider effort settings are required.');
+    if (updatingEffort) params.defaultEfforts = {
+      codex: values['codex-effort'].trim() || null,
+      claude: values['claude-effort'].trim() || null,
+    };
     console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'models', params }), null, 2));
     return;
   }

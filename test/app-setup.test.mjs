@@ -77,6 +77,10 @@ test('model preferences use authenticated broker requests without running setup'
   assert.deepEqual(await setup.models(), { defaultModels: { codex: null, claude: null } });
   assert.deepEqual(await setup.models({ codex: 'test-codex', claude: 'test-claude' }),
     { defaultModels: { codex: 'test-codex', claude: 'test-claude' } });
+  await setup.models(undefined, { codex: 'high', claude: 'low' });
+  assert.deepEqual(requests.at(-1).params, { defaultEfforts: { codex: 'high', claude: 'low' } });
+  await setup.models({ codex: null, claude: null }, { codex: null, claude: null });
+  assert.deepEqual(requests.at(-1).params, { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null } });
   assert.ok(requests.every(request => request.method === 'models' && request.token === 'a'.repeat(64)));
   assert.deepEqual(events, []);
   setup.collaborationCall = async () => { throw Object.assign(new Error('Broker offline'), { code: 'ECONNREFUSED' }); };

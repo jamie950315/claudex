@@ -1,4 +1,11 @@
 {
+"Native effort default": "Nativer Standard-Denkaufwand",
+"Save model settings": "Modelleinstellungen speichern",
+"Reload model settings": "Modelleinstellungen neu laden",
+"Model settings saved. New tasks and handoffs will use these settings.": "Modelleinstellungen gespeichert. Neue Aufgaben und Übergaben verwenden diese Einstellungen.",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "Der Denkaufwand gilt für neue Aufgaben und Übergaben. Bei der nativen CLI-Standardeinstellung bleibt er unbestimmt. Die verfügbaren Stufen hängen vom gewählten Modell ab; die Skalen der Anbieter sind nicht gleichwertig.",
+"%@ reasoning effort": "Denkaufwand für %@",
+"Reasoning effort": "Denkaufwand",
 "Collaboration models": "Modelle für die Zusammenarbeit",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "Lege für jeden Anbieter eine Standardmodell-ID fest. Ein leeres Feld verwendet das Standardmodell der nativen CLI. Einzelne Aufgaben und Übergaben können ein anderes Modell verwenden.",
 "Native CLI default": "Standardmodell der nativen CLI",

@@ -1,4 +1,11 @@
 {
+"Native effort default": "ネイティブの推論強度設定",
+"Save model settings": "モデル設定を保存",
+"Reload model settings": "モデル設定を再読み込み",
+"Model settings saved. New tasks and handoffs will use these settings.": "モデル設定を保存しました。新しいタスクと引き継ぎに適用されます。",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "推論の強度は新しいタスクと引き継ぎに適用されます。ネイティブ CLI のデフォルトでは強度を指定しません。利用可能なレベルは選択したモデルによって異なり、プロバイダー間で同じ尺度ではありません。",
+"%@ reasoning effort": "%@ の推論の強度",
+"Reasoning effort": "推論の強度",
 "Collaboration models": "共同作業のモデル",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "各サービスの既定のモデル ID を指定します。空欄にするとネイティブ CLI の既定モデルを使用します。個別のタスクや引き継ぎで別のモデルを指定できます。",
 "Native CLI default": "ネイティブ CLI の既定モデル",

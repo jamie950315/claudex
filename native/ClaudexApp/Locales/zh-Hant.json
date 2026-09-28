@@ -1,4 +1,11 @@
 {
+"Native effort default": "原生推理強度預設",
+"Save model settings": "儲存模型設定",
+"Reload model settings": "重新載入模型設定",
+"Model settings saved. New tasks and handoffs will use these settings.": "模型設定已儲存。新工作與交接將使用這些設定。",
+"Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.": "推理強度適用於新工作與交接。選擇原生 CLI 預設時不指定強度。可用等級取決於所選模型；不同服務的等級並不等價。",
+"%@ reasoning effort": "%@ 推理強度",
+"Reasoning effort": "推理強度",
 "Collaboration models": "協作模型",
 "Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.": "為每個服務指定預設模型 ID。留空時使用原生 CLI 的預設模型。個別任務與交接可另外指定模型。",
 "Native CLI default": "原生 CLI 預設模型",

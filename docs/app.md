@@ -59,12 +59,20 @@ Read-only inspection and synthetic UI checks do not mark onboarding as presented
 
 Under **Show advanced diagnostics**, **Collaboration models** provides separate
 Codex and Claude default model ID fields. Enter a model ID supported by the
-provider's native CLI, then choose **Save model defaults**. Leave a field blank
+provider's native CLI, then choose **Save model settings**. Leave a field blank
 to use that CLI's default model. These settings apply to new work and handoffs;
 an explicitly selected task or handoff model takes precedence. **Reload model
-defaults** reads the saved configuration again. Saving does not rerun setup or
+settings** reads the saved configuration again. Saving does not rerun setup or
 restart services. Model IDs are entered directly so vendor model updates do not
 depend on a bundled catalog.
+
+Each provider also has a **Reasoning effort** selector. **Native effort default**
+leaves effort unspecified; otherwise the selected native effort is captured for
+new work and handoffs unless the request explicitly overrides it. Follow-ups keep
+their task's selection. Saving model settings saves both models and efforts.
+Changing a model does not silently change its effort. Levels depend on the selected
+model and are not equivalent across providers; native validation errors remain
+visible rather than silently lowering effort. Existing work is not changed.
 
 All projects are available by default, with task-scoped file editing. Users do
 not enroll directories one at a time. This is not unrestricted access to the

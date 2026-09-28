@@ -4,6 +4,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, publishExclusive } from './storage.mjs';
 import { readFile } from 'node:fs/promises';
+import { validateCollaborationEffort } from './collaboration-effort.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -31,6 +32,12 @@ function defaultModels(value) {
     || Object.keys(value).length !== 2 || !providers.every(name => Object.hasOwn(value, name)))
     throw new Error('defaultModels must specify codex and claude, each as a model or null.');
   return Object.fromEntries(providers.map(name => [name, value[name] === null ? null : model(value[name])]));
+}
+function defaultEfforts(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+    || Object.keys(value).length !== 2 || !providers.every(name => Object.hasOwn(value, name)))
+    throw new Error('defaultEfforts must specify codex and claude, each as an effort or null.');
+  return Object.fromEntries(providers.map(name => [name, validateCollaborationEffort(name, value[name])]));
 }
 function requestId(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new Error('A stable requestId is required.');
@@ -110,11 +117,14 @@ export class CollaborationHub extends EventEmitter {
     if (this.state?.version !== 1 || !this.state.tasks || !this.state.requests
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
+    if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
     for (const [id, task] of Object.entries(this.state.tasks)) {
       if (task.model !== null && task.model !== undefined) model(task.model);
+      if (Object.hasOwn(task, 'effort')) validateCollaborationEffort(task.owner, task.effort);
       if (task.pendingHandoff) {
         provider(task.pendingHandoff.provider);
         if (task.pendingHandoff.model !== null && task.pendingHandoff.model !== undefined) model(task.pendingHandoff.model);
+        if (Object.hasOwn(task.pendingHandoff, 'effort')) validateCollaborationEffort(task.pendingHandoff.provider, task.pendingHandoff.effort);
       }
       if (id !== task.id || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)
         || !providers.includes(task.owner) || !['ready', 'running', 'waiting', ...terminal].includes(task.status)
@@ -129,7 +139,10 @@ export class CollaborationHub extends EventEmitter {
     }
     await this.mutate(state => {
       state.defaultModels ??= { codex: null, claude: null };
+      state.defaultEfforts ??= { codex: null, claude: null };
       for (const task of Object.values(state.tasks)) {
+        task.effort ??= null;
+        if (task.pendingHandoff) task.pendingHandoff.effort ??= null;
         if (task.status === 'running') {
           task.status = 'uncertain'; task.error = 'Broker stopped during native execution. No automatic replay or ownership transfer is allowed.';
           task.revision++; task.updatedAt = Date.now();
@@ -180,14 +193,17 @@ export class CollaborationHub extends EventEmitter {
     const actor = this.actor(envelope);
     if (method === 'models') {
       if (actor.task) throw new Error('Only the controller may manage default models.');
-      if (Object.keys(params).some(key => key !== 'defaultModels')) throw new Error('Invalid model settings parameters.');
+      if (Object.keys(params).some(key => !['defaultModels', 'defaultEfforts'].includes(key))) throw new Error('Invalid model settings parameters.');
       const update = Object.hasOwn(params, 'defaultModels');
       const selected = update ? defaultModels(params.defaultModels) : null;
-      if (update && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
+      const updateEfforts = Object.hasOwn(params, 'defaultEfforts');
+      const selectedEfforts = updateEfforts ? defaultEfforts(params.defaultEfforts) : null;
+      if ((update || updateEfforts) && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
       return this.mutate(state => {
         if (this.actor(envelope, state).task) throw new Error('Only the controller may manage default models.');
         if (update) state.defaultModels = selected;
-        return { defaultModels: copy(state.defaultModels) };
+        if (updateEfforts) state.defaultEfforts = selectedEfforts;
+        return { defaultModels: copy(state.defaultModels), defaultEfforts: copy(state.defaultEfforts) };
       });
     }
     if (method === 'status') {
@@ -199,7 +215,7 @@ export class CollaborationHub extends EventEmitter {
       });
       return { tasks: tasks.map(task => ({ id: task.id, parentId: task.parentId, owner: task.owner, status: task.status,
         revision: task.revision, updatedAt: task.updatedAt, ...taskPresentation(task) })),
-        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.allowWrite, defaultPermission: this.defaultPermission, defaultModels: copy(this.state.defaultModels), allProjects: true },
+        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.allowWrite, defaultPermission: this.defaultPermission, defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
         blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain') };
     }
     if (method === 'wait') {
@@ -251,6 +267,7 @@ export class CollaborationHub extends EventEmitter {
       if (method === 'start') {
         provider(params.provider); text(params.prompt, 'prompt');
         const selectedModel = params.model === undefined ? state.defaultModels[params.provider] : model(params.model);
+        const selectedEffort = params.effort === undefined ? state.defaultEfforts[params.provider] : validateCollaborationEffort(params.provider, params.effort);
         const permission = params.permission ?? actor.task?.permission ?? this.defaultPermission;
         if (!['read-only', 'workspace-write'].includes(permission)) throw new Error('Unsupported permission.');
         if (permission === 'workspace-write' && (!this.allowWrite || actor.task?.permission === 'read-only')) throw new Error('Workspace writes are not authorized by the broker or parent.');
@@ -262,7 +279,7 @@ export class CollaborationHub extends EventEmitter {
         if (depth > this.maxDepth) throw new Error('Delegation depth limit reached.');
         if (Object.keys(state.tasks).length >= this.maxTasks) throw new Error('Task capacity reached; existing work was preserved.');
         task = { id: randomUUID(), parentId: actor.task?.id ?? null, returnTo: actor.task?.id ?? actor.peer,
-          owner: params.provider, cwd, permission, model: selectedModel, depth, generation: 0,
+          owner: params.provider, cwd, permission, model: selectedModel, effort: selectedEffort, depth, generation: 0,
           status: 'ready', revision: 1, createdAt: Date.now(), updatedAt: Date.now(), active: null,
           pendingHandoff: null, cancelRequested: false, error: null, result: null, messages: [
             { from: actor.task?.id ?? actor.peer, kind: 'request', text: params.prompt, at: Date.now() },
@@ -308,12 +325,13 @@ export class CollaborationHub extends EventEmitter {
         } else if (method === 'handoff') {
           provider(params.provider); text(params.message, 'message');
           const selectedModel = params.model === undefined ? state.defaultModels[params.provider] : model(params.model);
+          const selectedEffort = params.effort === undefined ? state.defaultEfforts[params.provider] : validateCollaborationEffort(params.provider, params.effort);
           if (params.revision !== task.revision) throw new Error('Task revision changed; read status before handing off.');
           if (params.provider === task.owner || task.pendingHandoff || task.cancelRequested) throw new Error('Handoff requires a different owner and no pending transition.');
           if (Object.values(state.tasks).some(child => child.parentId === task.id && !terminal.has(child.status))) throw new Error('Finish or cancel active child work before transferring ownership.');
           task.messages.push({ from: actor.task?.id ?? actor.peer, kind: 'handoff', text: params.message, at: Date.now() });
-          if (task.status === 'running') task.pendingHandoff = { provider: params.provider, model: selectedModel };
-          else { task.owner = params.provider; task.model = selectedModel; task.status = 'ready'; }
+          if (task.status === 'running') task.pendingHandoff = { provider: params.provider, model: selectedModel, effort: selectedEffort };
+          else { task.owner = params.provider; task.model = selectedModel; task.effort = selectedEffort; task.status = 'ready'; }
         } else {
           if (task.status === 'uncertain') throw new Error('Uncertain execution requires operator inspection; cancellation cannot prove an unknown writer stopped.');
           const mark = target => {
@@ -425,7 +443,7 @@ export class CollaborationHub extends EventEmitter {
     let result, failure;
     try {
       result = await this.run({ provider: task.owner, cwd: task.cwd, permission: task.permission,
-        prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), signal: controller.signal,
+        prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
         timeoutMs: this.timeoutMs, mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
         onEvent: async event => {
           if (!event || !['spawn', 'session'].includes(event.type)) return;
@@ -456,7 +474,7 @@ export class CollaborationHub extends EventEmitter {
         if (current.cancelRequested) { current.status = 'cancelled'; current.pendingHandoff = null; }
         else if (activeChildren) { current.status = 'waiting'; current.pendingHandoff = null; }
         else if (current.pendingHandoff) {
-          current.owner = current.pendingHandoff.provider; current.model = current.pendingHandoff.model ?? null; current.pendingHandoff = null; current.status = 'ready';
+          current.owner = current.pendingHandoff.provider; current.model = current.pendingHandoff.model ?? null; current.effort = current.pendingHandoff.effort ?? null; current.pendingHandoff = null; current.status = 'ready';
         } else current.status = current.messages.slice(active.messageCount, -1).some(message => message.kind === 'message'
           || message.kind === 'child-result' && active.seenChildren?.[message.from] !== message.sourceRevision) ? 'ready' : 'completed';
         if (bytes(current.messages) > 192 * 1024) { current.status = 'failed'; current.error = 'Task context capacity reached; output preserved but no further execution is allowed.'; }
@@ -497,7 +515,7 @@ export class CollaborationHub extends EventEmitter {
       let response;
       if (view === 'full') response = publicTask(task);
       else {
-        response = { id: task.id, taskId: task.id, parentId: task.parentId, owner: task.owner, model: task.model,
+        response = { id: task.id, taskId: task.id, parentId: task.parentId, owner: task.owner, model: task.model, effort: task.effort ?? null,
           permission: task.permission, status: task.status, revision: task.revision, generation: task.generation,
           updatedAt: task.updatedAt, cancelRequested: task.cancelRequested, ...taskPresentation(task),
           execution: { generation: task.active?.generation ?? task.lastExecution?.generation ?? task.generation,

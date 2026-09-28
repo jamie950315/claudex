@@ -39,7 +39,7 @@ test('provider model defaults persist, validate atomically and leave existing wo
   const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
   hub.schedule = () => {};
   const settings = params => hub.dispatch(controller(hub, 'codex', 'models', params));
-  assert.deepEqual(await settings({}), { defaultModels: { codex: null, claude: null } });
+  assert.deepEqual(await settings({}), { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null } });
   const initial = { defaultModels: { codex: 'codex-default', claude: 'claude-default' } };
   await settings(initial);
   const saved = await lstat(join(root, 'work.json'), { bigint: true });
@@ -74,15 +74,17 @@ test('provider model defaults persist, validate atomically and leave existing wo
 test('children use destination defaults and workers cannot read or change model settings', async t => {
   const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
   hub.schedule = () => {};
-  await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: 'codex-default', claude: 'claude-default' } }));
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: 'codex-default', claude: 'claude-default' }, defaultEfforts: { codex: 'ultra', claude: 'medium' } }));
   const token = 'b'.repeat(64);
-  const parent = await uncertainFixture(hub, hub.root, { model: 'parent-override', status: 'running', active: {
+  const parent = await uncertainFixture(hub, hub.root, { model: 'parent-override', effort: 'low', status: 'running', active: {
     generation: 1, tokenHash: createHash('sha256').update(token).digest('hex'), messageCount: 1, pid: 123456,
   } });
-  for (const params of [{}, { defaultModels: { codex: null, claude: null } }])
+  for (const params of [{}, { defaultModels: { codex: null, claude: null } }, { defaultEfforts: { codex: null, claude: null } }])
     await assert.rejects(hub.dispatch(request('codex', 'models', params, token)), /Only the controller/);
   const child = await hub.dispatch(request('codex', 'start', { provider: 'claude', cwd: root, prompt: 'child', requestId: 'child-model' }, token));
   assert.equal((await status(hub, child.taskId)).model, 'claude-default');
+  assert.equal((await status(hub, child.taskId)).effort, 'medium');
+  assert.equal((await status(hub, parent.id)).effort, 'low');
   assert.equal((await status(hub, parent.id)).model, 'parent-override');
 });
 
@@ -99,7 +101,7 @@ test('handoff freezes receiver model at request time and explicit null selects n
   const running = await status(hub, created.taskId);
   const transfer = controller(hub, 'codex', 'handoff', { taskId: created.taskId, provider: 'claude', message: 'continue', revision: running.revision, requestId: 'transfer-model' });
   await hub.dispatch(transfer);
-  assert.deepEqual((await status(hub, created.taskId)).pendingHandoff, { provider: 'claude', model: 'a1' });
+  assert.deepEqual((await status(hub, created.taskId)).pendingHandoff, { provider: 'claude', model: 'a1', effort: null });
   await hub.dispatch(controller(hub, 'codex', 'models', { defaultModels: { codex: 'c2', claude: 'a2' } }));
   assert.equal((await hub.dispatch(transfer)).replayed, true);
   first.resolve({ text: 'transferred' });

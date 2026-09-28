@@ -51,6 +51,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var setupHelp: NSTextField!
     private var codexModelField: NSTextField!
     private var claudeModelField: NSTextField!
+    private var codexEffortPicker: NSPopUpButton!
+    private var claudeEffortPicker: NSPopUpButton!
+    private var codexEffortDraft: String?
+    private var claudeEffortDraft: String?
     private var modelMessage: NSTextField!
     private var modelSaveButton: NSButton!
     private var modelReloadButton: NSButton!
@@ -129,6 +133,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         guard let code = sender.selectedItem?.representedObject as? String else { return }
         codexModelDraft = codexModelField?.stringValue
         claudeModelDraft = claudeModelField?.stringValue
+        codexEffortDraft = codexEffortPicker?.selectedItem?.representedObject as? String
+        claudeEffortDraft = claudeEffortPicker?.selectedItem?.representedObject as? String
         Localization.shared.select(code, persist: !inspectOnly && !uiSmoke)
         let visible = window.isVisible
         let frame = window.frame
@@ -396,6 +402,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let modelHelp = wrapping("Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.", size: 11, color: .secondaryLabelColor)
         modelSection.addArrangedSubview(modelHelp)
         modelHelp.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
+        let effortHelp = wrapping("Reasoning effort applies to new tasks and handoffs. Native CLI default leaves effort unspecified. Available levels depend on the selected model; providers do not use equivalent scales.", size: 11, color: .secondaryLabelColor)
+        modelSection.addArrangedSubview(effortHelp)
+        effortHelp.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
         for provider in ["Codex", "Claude"] {
             let row = NSStackView()
             row.orientation = .horizontal
@@ -410,14 +419,29 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             row.addArrangedSubview(field)
             field.setContentHuggingPriority(.defaultLow, for: .horizontal)
             if provider == "Codex" { codexModelField = field } else { claudeModelField = field }
+            let picker = NSPopUpButton()
+            let efforts = provider == "Codex" ? ModelSettings.codexEfforts : ModelSettings.claudeEfforts
+            let selected = provider == "Codex" ? codexEffortDraft ?? modelSettings?.defaultEfforts?.codex ?? "" : claudeEffortDraft ?? modelSettings?.defaultEfforts?.claude ?? ""
+            for effort in [""] + efforts {
+                picker.addItem(withTitle: effort.isEmpty ? L("Native effort default") : effort)
+                picker.lastItem?.representedObject = effort
+                if effort == selected { picker.select(picker.lastItem) }
+            }
+            picker.setAccessibilityLabel(LF("%@ reasoning effort", provider))
+            picker.toolTip = LF("%@ reasoning effort", provider)
+            let effortColumn = verticalStack(spacing: 3)
+            effortColumn.addArrangedSubview(label("Reasoning effort", size: 11, weight: .regular, color: .secondaryLabelColor))
+            effortColumn.addArrangedSubview(picker)
+            row.addArrangedSubview(effortColumn)
+            if provider == "Codex" { codexEffortPicker = picker } else { claudeEffortPicker = picker }
             modelSection.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
         }
         let modelActions = NSStackView()
         modelActions.orientation = .horizontal
         modelActions.spacing = 10
-        modelSaveButton = NSButton(title: L("Save model defaults"), target: self, action: #selector(saveModels(_:)))
-        modelReloadButton = NSButton(title: L("Reload model defaults"), target: self, action: #selector(reloadModels(_:)))
+        modelSaveButton = NSButton(title: L("Save model settings"), target: self, action: #selector(saveModels(_:)))
+        modelReloadButton = NSButton(title: L("Reload model settings"), target: self, action: #selector(reloadModels(_:)))
         for button in [modelSaveButton!, modelReloadButton!] {
             button.bezelStyle = .rounded
             modelActions.addArrangedSubview(button)
@@ -640,6 +664,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                                      "allowWrite": true, "components": components, "message": waitingSample ? "No setup changes are required. Claudex will continue automatically." : "Independent features stay available while the remaining requirements are resolved."]
         do {
             report = try SetupReport.parse(JSONSerialization.data(withJSONObject: sample))
+            let legacy = try ModelSettings.parse(Data("{\"defaultModels\":{\"codex\":null,\"claude\":null}}".utf8))
+            let configured = try ModelSettings.parse(Data("{\"defaultModels\":{\"codex\":null,\"claude\":null},\"defaultEfforts\":{\"codex\":\"xhigh\",\"claude\":\"high\"}}".utf8))
+            guard legacy.defaultEfforts == nil, configured.defaultEfforts?.codex == "xhigh",
+                  configured.defaultEfforts?.claude == "high" else { throw SetupParseError.invalid }
+            let invalid = try? ModelSettings.parse(Data("{\"defaultModels\":{\"codex\":null,\"claude\":null},\"defaultEfforts\":{\"codex\":\"high\",\"claude\":\"ultra\"}}".utf8))
+            guard invalid == nil else { throw SetupParseError.invalid }
         } catch {
             fputs("Claudex UI smoke: invalid sample report\n", stderr)
             exit(1)
@@ -681,6 +711,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 && self.codexModelField.placeholderString == L("Native CLI default")
                 && self.claudeModelField.placeholderString == L("Native CLI default")
                 && !self.modelSaveButton.isEnabled && !self.modelReloadButton.isEnabled
+                && !self.codexEffortPicker.isEnabled && !self.claudeEffortPicker.isEnabled
+                && self.codexEffortPicker.numberOfItems == ModelSettings.codexEfforts.count + 1
+                && self.claudeEffortPicker.numberOfItems == ModelSettings.claudeEfforts.count + 1
                 && self.cards.arrangedSubviews.count == (readySample || waitingSample ? 0 : 1)
                 && (!(waitingSample || readySample) || self.setupButton.isHidden)
                 && (!readySample || self.attentionSection.isHidden && (document?.frame.height ?? 0) < self.pageScroll.contentView.bounds.height)
@@ -756,6 +789,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         modelReloadButton?.isEnabled = !uiSmoke && !modelBusy
         codexModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
         claudeModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
+        codexEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
+        claudeEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
         modelMessage?.stringValue = L(modelMessageKey)
         if let detail = modelErrorDetail { modelMessage?.stringValue += "\n" + L("Diagnostic details:") + "\n" + detail }
         if let code = modelErrorCode {
@@ -763,7 +798,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         }
         scheduleWindowFit()
     }
-    private func loadModels(codex: String? = nil, claude: String? = nil) {
+    private func loadModels(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil) {
         guard !uiSmoke && !modelBusy else { return }
         let saving = codex != nil
         guard !saving || !inspectOnly else { return }
@@ -772,7 +807,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         modelErrorCode = nil
         modelMessageKey = saving ? "Saving model defaults…" : "Loading model defaults…"
         updateModelControls()
-        runner.models(codex: codex, claude: claude) { [weak self] result in
+        runner.models(codex: codex, claude: claude, codexEffort: codexEffort, claudeEffort: claudeEffort) { [weak self] result in
             guard let self else { return }
             self.modelBusy = false
             switch result {
@@ -780,9 +815,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 self.modelSettings = settings
                 self.codexModelDraft = nil
                 self.claudeModelDraft = nil
+                self.codexEffortDraft = nil
+                self.claudeEffortDraft = nil
+                self.codexEffortPicker.selectItem(at: ([""] + ModelSettings.codexEfforts).firstIndex(of: settings.defaultEfforts?.codex ?? "") ?? 0)
+                self.claudeEffortPicker.selectItem(at: ([""] + ModelSettings.claudeEfforts).firstIndex(of: settings.defaultEfforts?.claude ?? "") ?? 0)
                 self.codexModelField.stringValue = settings.defaultModels.codex ?? ""
                 self.claudeModelField.stringValue = settings.defaultModels.claude ?? ""
-                self.modelMessageKey = saving ? "Model defaults saved. New tasks and handoffs will use these settings." : ""
+                self.modelMessageKey = saving ? "Model settings saved. New tasks and handoffs will use these settings." : ""
             case .failure(let error):
                 switch error {
                 case .unavailable: self.modelMessageKey = "Model settings are unavailable. Check the Claudex installation and reload."
@@ -810,7 +849,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             updateModelControls()
             return
         }
-        loadModels(codex: codex, claude: claude)
+        loadModels(codex: codex, claude: claude,
+                   codexEffort: codexEffortPicker.selectedItem?.representedObject as? String ?? "",
+                   claudeEffort: claudeEffortPicker.selectedItem?.representedObject as? String ?? "")
     }
     @objc private func toggleDetails(_ sender: NSButton) {
         advancedExpanded.toggle()

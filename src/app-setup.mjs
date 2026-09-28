@@ -123,8 +123,11 @@ export class AppSetup {
     return this.collaborationRequest('list');
   }
 
-  async models(defaultModels) {
-    return this.collaborationRequest('models', defaultModels === undefined ? {} : { defaultModels });
+  async models(defaultModels, defaultEfforts) {
+    return this.collaborationRequest('models', {
+      ...(defaultModels === undefined ? {} : { defaultModels }),
+      ...(defaultEfforts === undefined ? {} : { defaultEfforts }),
+    });
   }
 
   async inspect({ providers, notes = {} } = {}) {
