@@ -204,8 +204,10 @@ test('uncertain resolution refuses missing identity, live processes, inspection 
       inspectProcessGroup: pid => { if (scenario.failure) throw scenario.failure; return { pid, inspectedAt: 123, processAbsent: true, groupAbsent: true, ...scenario.proof }; },
     });
     const task = await uncertainFixture(hub, root, scenario.extra);
+    const before = await status(hub, task.id);
     await assert.rejects(hub.dispatch(resolution(hub, task, scenario.params)), scenario.pattern);
-    assert.deepEqual(await status(hub, task.id), task);
+    assert.deepEqual(await status(hub, task.id), before);
+    assert.deepEqual(hub.state.tasks[task.id], task);
   });
 });
 
@@ -542,6 +544,9 @@ test('restart marks in-flight work uncertain and never replays it', async t => {
   const oldHub = await new CollaborationHub({ root, run: async () => { calls++; return gate.promise; } }).initialize();
   const started = await oldHub.dispatch(controller(oldHub, 'codex', 'start', { provider: 'codex', cwd: '/tmp', prompt: 'Crash', requestId: 'crash' }));
   await until(async () => (await status(oldHub, started.taskId)).status === 'running' && calls === 1);
+  const running = await status(oldHub, started.taskId);
+  await oldHub.dispatch(controller(oldHub, 'codex', 'handoff', { taskId: started.taskId, provider: 'claude',
+    revision: running.revision, message: 'Pending handoff must not hide uncertainty', requestId: 'crash-handoff' }));
   await until(() => !oldHub.pumping);
   oldHub.closed = true; // Simulate process death without cancelling or completing the native turn.
   await oldHub.serial;
@@ -549,6 +554,9 @@ test('restart marks in-flight work uncertain and never replays it', async t => {
   t.after(async () => { await recovered.close(); await rm(root, { recursive: true, force: true }); });
   const value = await status(recovered, started.taskId);
   assert.equal(value.status, 'uncertain');
+  assert.deepEqual(value.active.inputs, { from: 0, to: 1, kinds: ['request'] });
+  assert.equal(value.resultFinal, false);
+  assert.equal(value.phase, 'uncertain');
   await delay(20);
   assert.equal(calls, 1);
   // The unresolved old runner represents a process that disappeared before writing completion.

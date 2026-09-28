@@ -175,6 +175,19 @@ CLAUDEX_HANDOFF. Worker instructions prioritize that single-token response over
 normal final-report formatting; put handoff context in the request before it.
 Do not treat these text tokens as proof of native completion or release a writer
 before successful native completion and process-group exit.
+Status presentation keeps legacy result intact but labels phase, terminal,
+resultRole/resultFinal/resultGeneration and cancelPending. Completed work reopened
+by send is not resultFinal even before its generation advances. Terminal includes
+uncertain and never means success. Cancel receipts distinguish accepted/pending;
+known-terminal no-op cancellation does not bump task revisions. Cancelled child
+notifications use its final revision once, not an intermediate revision.
+Optional status/wait view=summary omits histories and caught-up terminal outcomes,
+but always returns unseen terminal child outcomes to worker callers. Snapshot and
+seenChildren acknowledgement share one serialized mutation; omitted outcomes must
+not be acknowledged. Full output remains default. Persist per-invocation inputs
+{from,to,kinds} for resumption context without replay or permission changes.
+Independent reviews must not concurrently reopen related parent/child tasks unless
+normal child-result propagation is intended; no detached mode is implied.
 
 All automated collaboration tests inject synthetic runners or inspect protocol
 startup without inference. Do not describe these as live cross-model acceptance.

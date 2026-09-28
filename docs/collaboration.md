@@ -65,6 +65,48 @@ the outgoing boundary. These tokens are instructions, not completion receipts:
 the broker still waits for successful native completion and process-group exit.
 Model response and shutdown latency is not an instantaneous-transfer guarantee.
 
+## Reading progress and results
+
+`status`, `wait`, and list entries expose `phase`, `terminal`, `cancelPending`,
+`resultFinal`, `resultRole`, and `resultGeneration` in addition to existing fields.
+`phase` distinguishes queued, waiting-for-children, handoff-pending and cancelling
+from running and terminal states. `terminal` includes uncertain; it never means
+success by itself. Only `resultFinal: true` identifies the completed answer for
+the current task. Legacy `result` remains intact for compatibility and can be an
+older generation, a yield boundary, or output retained during cancellation.
+Sending a follow-up makes an old result non-final even before generation advances.
+
+`cancel` reports `cancelAccepted`, `cancelPending`, `cancelRequested`, and
+`terminal`. Acceptance does not prove native process exit. Wait for settlement;
+an unverified shutdown may remain uncertain. Cancelling an already completed,
+failed or cancelled task does not change its revision; uncertain work still
+requires operator inspection. Request receipts retain their normal idempotency.
+
+`status` and `wait` accept `view: "summary"`; omission keeps the full response.
+Summary responses omit message history and include execution input metadata.
+For incremental waits, supply `afterRevision` from the last response. `changed`
+compares against that revision (or the revision at the start of an uncursored
+wait), and `timedOut` records whether the bounded wait timer expired. A caught-up
+terminal response omits repeated result/error bodies. An unseen terminal child
+outcome is always delivered to its parent worker even when the supplied cursor
+is caught up. A child revision is marked observed only in the same transaction
+that returns that outcome, never for an omitted result. Full status remains
+available for explicit history inspection. The 30-second wait limit is unchanged.
+
+Each new native invocation persists `active.inputs` with a zero-based,
+end-exclusive message range and `kinds` (request, message, child-result, handoff).
+The range begins at the preceding invocation's input boundary, not at its final
+response; multiple triggers may coexist. The prompt exposes this as
+`execution.inputs`, with the generation. Old executions without this metadata
+remain valid and are not backfilled or replayed. Workers must read back edited
+files before reporting success, but never add checks after an end-turn receipt.
+
+For independent retrospectives, finish child reviews while their parent stays
+terminal, then send the parent an explicit summary; alternatively start a separate
+root review with the relevant source task IDs and context. Reopening a child while
+its parent is active intentionally notifies that parent. This is not a detached
+review mode. Parent edges and generation-scoped request IDs are unchanged.
+
 ## Model selection
 
 Claudex stores separate Codex and Claude default model IDs in the private broker

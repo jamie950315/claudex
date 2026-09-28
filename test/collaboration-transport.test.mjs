@@ -77,6 +77,25 @@ test('client rejects public directories and socket aliases', async t => {
   await assert.rejects(callCollaboration({ root, peer: 'codex', method: 'list' }), /owner-private|symlink/);
 });
 
+test('MCP forwards opt-in summary views and rejects unsupported views', async t => {
+  const seen = [];
+  const { root } = await fixture(t, async request => { seen.push(request); return { revision: 3 }; });
+  const input = new PassThrough(), output = new PassThrough();
+  let content = '';
+  output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', token: 'controller', input, output });
+  for (const [id, name, args] of [[1, 'claudex_status', { taskId: 't', view: 'summary' }],
+    [2, 'claudex_wait', { taskId: 't', view: 'summary', afterRevision: 3, timeoutMs: 0 }],
+    [3, 'claudex_wait', { taskId: 't', view: 'unknown' }]]) {
+    input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n');
+  }
+  input.end();
+  await running;
+  assert.equal(seen.length, 2);
+  assert.ok(seen.every(request => request.params.view === 'summary'));
+  assert.equal(JSON.parse(content.trim().split('\n').find(line => JSON.parse(line).id === 3)).result.isError, true);
+});
+
 test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC lines', async t => {
   const seen = [];
   const { root } = await fixture(t, async request => { seen.push(request); return { taskId: 'task-1', revision: 1 }; });
