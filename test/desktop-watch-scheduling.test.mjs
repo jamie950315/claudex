@@ -192,20 +192,20 @@ for (const outcome of ['waiting', 'incomplete', 'racing-append']) {
   });
 }
 
-test('a cold item becoming a managed Claude owner receives every remaining foreground lifecycle check', async () => {
+test('a cold item becoming a managed owner is checked promptly and on the next regular pass', async () => {
   const f = await fixture();
   for (const id of ['first', 'second', 'third', 'fourth']) await f.addCold(id);
   f.onSync = id => {
     f.tick(11);
     if (id === 'second') Object.assign(f.record('first', 'local'), { managed: true, kind: 'owner' });
   };
-  await f.run();
+  await f.run({ maxPasses: 2, sleep: async () => {} });
   assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id),
-    ['first', 'second', 'first', 'third', 'first', 'fourth']);
+    ['first', 'second', 'first', 'third', 'fourth', 'first']);
   assert.equal(f.count('metadata', 'first-source'), 1);
 });
 
-test('foreground heartbeats neither starve a complete cold sweep nor renew absolute verification deadlines', async () => {
+test('cold refreshes do not repeat unchanged active sweeps or renew ephemeral verification deadlines', async () => {
   const f = await fixture();
   for (const id of ['first', 'second', 'third', 'fourth']) await f.addCold(id);
   f.addOrdinary('active');
@@ -215,7 +215,7 @@ test('foreground heartbeats neither starve a complete cold sweep nor renew absol
   assert.deepEqual(coldCalls.map(event => event.id),
     ['first', 'second', 'third', 'fourth', 'first', 'second', 'third', 'fourth']);
   assert.equal(coldCalls[4].at, 44);
-  assert.equal(f.count('sync', 'active'), 8);
+  assert.equal(f.count('sync', 'active'), 2);
   // Each sweep also refreshes discovery at its final operation boundary.
   assert.equal(f.count('discover'), 10);
 });

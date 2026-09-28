@@ -955,6 +955,24 @@ isolated native stores for testing. Runtime data stays outside the repository.
 - [Claude storage and retention](https://code.claude.com/docs/en/claude-directory)
 - [Thinking signatures](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [txcript usage](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
+## Restart verification and unchanged history
+
+An unchanged cold-import pair with two verified unmanaged originals can reuse a
+signed local verification proof after restart. The watcher checks native metadata,
+the exact ledger and transcript identities, and all verified archive file identities
+without re-exporting and decoding the full history. The first run after this feature
+is installed establishes proofs through normal complete verification. Changes to
+history, dependencies, native state, decoder code or relevant configuration require
+full verification again; elapsed time alone does not discard an unchanged proof.
+An inactive original's unchanged unfinished tail remains withheld. Reusing its
+already verified canonical prefix never sends that tail or marks it complete.
+
+Managed owners and pending operations retain their full native lifecycle guards.
+Proofs never authorize writes, history promotion, archival or snapshot collection.
+They contain metadata, not copied messages, and have a 64 MiB aggregate limit.
+During the cold backlog, discovery and changed conversations are refreshed between
+operations instead of repeatedly checking every unchanged active conversation.
+
 ## Native project relocation
 
 When Claude Desktop moves a tracked Local conversation to another project,

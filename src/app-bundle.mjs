@@ -15,7 +15,7 @@ export const ENGINE_SRC = Object.freeze([
   'claude-image-assets.mjs', 'claude-owner.mjs', 'claude-parallel-tools.mjs', 'claude-relocation.mjs', 'claude.mjs',
   'codex-app-layout.mjs', 'codex-delegation.mjs', 'codex-dependencies.mjs', 'codex-original-archive-tree.mjs',
   'codex-projection.mjs', 'codex-versions.mjs', 'codex-websocket.mjs', 'codex.mjs',
-  'cold-import.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
+  'cold-import.mjs', 'cold-verification-cache.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
   'collaboration-native.mjs', 'collaboration-transport.mjs', 'compaction.mjs',
   'context-archive.mjs', 'context-packet-reader.mjs', 'context-packet.mjs',
   'desktop-bridge.mjs', 'desktop-install.mjs', 'desktop-runtime.mjs',
@@ -24,7 +24,7 @@ export const ENGINE_SRC = Object.freeze([
   'native-drivers.mjs', 'native-history.mjs', 'native-local-images.mjs',
   'owned-claude-history.mjs', 'owned-codex-history.mjs', 'retention.mjs',
   'runtime-version-policy.mjs', 'service-supervisor.mjs', 'service.mjs',
-  'status-app-install.mjs', 'storage.mjs',
+  'status-app-install.mjs', 'storage.mjs', 'verification-observations.mjs',
 ]);
 
 export async function runCommand(command, args, options = {}) {

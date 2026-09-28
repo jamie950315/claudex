@@ -123,6 +123,21 @@ export class DesktopRuntime {
     return [...new Map(warnings.map(value => [JSON.stringify(value), value])).values()].slice(-20);
   }
 
+  async verificationCacheContext() {
+    this.verificationCodeHash ??= Promise.all([
+      'history.mjs', 'claude.mjs', 'codex.mjs', 'owned-claude-history.mjs', 'owned-codex-history.mjs',
+      'base64.mjs', 'compaction.mjs', 'claude-parallel-tools.mjs', 'claude-image-assets.mjs',
+      'native-history.mjs', 'native-local-images.mjs', 'context-archive.mjs', 'context-packet.mjs',
+      'context-packet-reader.mjs', 'desktop-runtime.mjs', 'desktop-watch-hints.mjs',
+      'cold-verification-cache.mjs', 'verification-observations.mjs', 'storage.mjs', '../package-lock.json',
+    ].map(async name => [name, await readFile(new URL(name, import.meta.url), 'utf8')]))
+      .then(sources => hash(sources));
+    return { code: await this.verificationCodeHash, root: this.root, codexHome: this.codexHome,
+      claudeHome: this.claudeHome, contextMode: this.contextMode, versionPolicy: this.versionPolicy,
+      codexVersion: this.codexNativeVersion ?? null, nativeHistoryMaxBytes: this.nativeHistoryMaxBytes,
+      nativeHistoryPageSize: this.nativeHistoryPageSize };
+  }
+
   async codex() {
     // A new connection is not a replay: the coordinator rechecks durable
     // operation evidence before deciding whether a native write is required.

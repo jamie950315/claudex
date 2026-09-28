@@ -1,6 +1,7 @@
 import { isAbsolute, join, resolve } from 'node:path';
 import { lstat, realpath } from 'node:fs/promises';
-import { coldImportHint, coldImportInactive } from './desktop-watch-hints.mjs';
+import { coldImportHint, coldImportInactive, persistentColdEligible, persistentColdNativeIdentity } from './desktop-watch-hints.mjs';
+import { ColdVerificationCache, captureVerificationFiles } from './cold-verification-cache.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
 import { withLock, writeJSON } from './storage.mjs';
@@ -62,6 +63,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
   blockedRetryMs = 30_000,
   writeStatus = writeJSON,
+  verificationCache,
   publishFolders = publishClaudeFolderMap,
   maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
@@ -84,8 +86,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     attempts: Math.min(Number.MAX_SAFE_INTEGER, (previous?.attempts ?? 0) + 1) });
   const blockingStatus = () => ({ blocked, blockedConversationCount: blockedConversations.size,
     blockedConversations: [...blockedConversations.values()].slice(0, 20) });
-  // Ephemeral scheduling hints only. Durable checkpoints are never inferred
-  // from file metadata, and every process starts with full verification.
+  // Persistent proofs only reuse fully verified, unchanged original pairs.
+  // Native owners and mutation/collection guards never consume these proofs.
+  const proofCache = verificationCache ?? (runtime.key && runtime.verificationCacheContext
+    ? new ColdVerificationCache({ root, key: runtime.key, now }) : null);
   const coldHints = new Map();
   // Observations only select priority; unlike coldHints, they never authorize
   // skipping verification. Keep unsuccessful dirty work in the foreground.
@@ -114,6 +118,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let currentOperation = null;
   let checkingConversationCount = 0;
   const checkedConversations = new Set();
+  const reusedConversations = new Set();
+  let fullVerificationCount = 0;
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
   let localHandoff = null;
@@ -138,6 +144,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, initialSweepCompletedAt,
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
     currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
+    reusedVerificationCount: reusedConversations.size, fullVerificationCount,
     activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
     synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
     ...blockingStatus(), ...latestFields };
@@ -210,6 +217,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           if (blocked && now() < blocked.retryAt) throw deferredBlock;
           // The transport is a prerequisite. Never enroll a source while it is absent.
           const codex = await runtime.codex();
+          const cacheContext = proofCache ? await runtime.verificationCacheContext() : null;
           const sync = async id => {
             if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt) return;
             try {
@@ -217,7 +225,19 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               const before = await coldImportHint(state, id);
               const previous = coldHints.get(id);
               const observedAt = now();
-              if (before && !coldDirty.has(id) && previous?.signature === before && observedAt >= previous.verifiedAt
+              const persistent = proofCache && before && persistentColdEligible(state, id);
+              let nativeIdentity;
+              if (persistent) {
+                nativeIdentity = await persistentColdNativeIdentity(state, id, codex);
+                const cached = nativeIdentity && await proofCache.load(id, before, { ...cacheContext, nativeIdentity });
+                if (cached && await coldImportHint(await bridge.status(), id) === before) {
+                  coldDirty.delete(id); coldObserved.set(id, before);
+                  checkedConversations.add(id); reusedConversations.add(id);
+                  return;
+                }
+                await proofCache.invalidate(id);
+              }
+              if (!persistent && before && !coldDirty.has(id) && previous?.signature === before && observedAt >= previous.verifiedAt
                 && observedAt - previous.verifiedAt < coldValidationMs) return;
               const activeBefore = usesActiveHints(state, id) ? await activeActivityHint(state, id) : undefined;
               coldHints.delete(id);
@@ -238,8 +258,15 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               })();
               let heartbeatError;
               const heartbeatDone = heartbeat.catch(error => { heartbeatError = error; });
-              let result;
-              try { result = await bridge.sync(id); checkedConversations.add(id); }
+              let result, verificationFiles;
+              try {
+                fullVerificationCount++;
+                if (persistent) {
+                  const captured = await captureVerificationFiles(() => bridge.sync(id));
+                  result = captured.result; verificationFiles = captured.files;
+                } else result = await bridge.sync(id);
+                checkedConversations.add(id);
+              }
               finally {
                 heartbeatStop.abort();
                 await heartbeatDone;
@@ -249,7 +276,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               }
               if (heartbeatError) throw heartbeatError;
               blockedConversations.delete(id);
-              if (before && result?.changed === false && result.incompleteTail === false) {
+              // An inactive original may retain an old unfinished tail. Its
+              // exact unchanged bytes can reuse a verified canonical-prefix
+              // no-op proof; the tail is never delivered or declared complete.
+              if (before && result?.changed === false && (result.incompleteTail === false
+                || persistent && result.incompleteTail === true)) {
                 const latest = await bridge.status();
                 if (await coldImportInactive(latest, id, codex)) {
                   const after = await coldImportHint(latest, id);
@@ -258,6 +289,12 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   if (before === after) {
                     coldHints.set(id, { signature: after, verifiedAt: now() });
                     coldDirty.delete(id);
+                    if (persistent && verificationFiles) {
+                      const latestIdentity = await persistentColdNativeIdentity(latest, id, codex);
+                      if (latestIdentity && JSON.stringify(latestIdentity) === JSON.stringify(nativeIdentity))
+                        await proofCache.store(id, { signature: after, context: { ...cacheContext, nativeIdentity: latestIdentity },
+                          files: verificationFiles, verifiedAt: now() });
+                    }
                   }
                 }
               }
@@ -269,6 +306,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 activeObserved.set(id, activeBefore);
                 if (activeBefore !== null && activeBefore === activeAfter && result?.incompleteTail !== true) {
                   activeDirty.delete(id);
+                  coldDirty.delete(id);
                   activeObserved.set(id, activeAfter);
                 } else if (activeBefore !== activeAfter) activeDirty.add(id);
               }
@@ -278,6 +316,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             }
             catch (error) {
               coldHints.delete(id);
+              if (proofCache) await proofCache.invalidate(id);
               // A native write may have committed before its response failed. Recover
               // its durable intent and verify the native target before proceeding.
               const latest = await bridge.status();
@@ -377,9 +416,15 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               await sync(id);
             }
             const latest = await bridge.status();
-            for (const id of Object.keys(latest.conversations)) await observeActive(latest, id);
+            for (const id of Object.keys(latest.conversations)) {
+              await observeActive(latest, id);
+              const hint = await coldImportHint(latest, id);
+              if (coldObserved.has(id) && hint !== coldObserved.get(id)) coldDirty.add(id);
+              if (hint) coldObserved.set(id, hint);
+              else if (usesActiveHints(latest, id)) coldObserved.delete(id);
+            }
             for (const id of activeDirty) if (!latest.conversations[id]) { activeDirty.delete(id); activeObserved.delete(id); }
-            const nextDirty = [...activeDirty].find(id => id !== nextId && !fresh.includes(id)
+            const nextDirty = [...new Set([...coldDirty, ...activeDirty])].find(id => id !== nextId && !fresh.includes(id)
               && (!blockedConversations.has(id) || now() >= blockedConversations.get(id).retryAt));
             if (nextDirty && !signal?.aborted) {
               activePrioritySyncs++;
@@ -417,14 +462,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             await status({ waiting, waitingContexts, blockedSourceCount, blockedSources });
             return background;
           };
-          // Keep a fair, complete cold sweep, but yield between native operations
-          // for fresh discovery and active/dirty work. Never parallelize writers
-          // or interrupt a verification/transaction. The 60s hint expiry is still
-          // absolute; elapsed background work does not renew it.
+          // Refresh only new/changed work between cold operations, not the whole
+          // active queue again every poll. Every active owner still receives its
+          // regular full lifecycle check once per pass. Never parallelize writers.
           const background = await foreground();
           for (const id of background) {
             if (signal?.aborted) break;
-            if (now() - foregroundCompletedAt >= Math.max(1, pollMs)) await foreground();
+            await refreshNew(id);
             if (signal?.aborted) break;
             await sync(id);
           }

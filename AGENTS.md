@@ -279,13 +279,29 @@ the return from Codex creates a separate managed Remote Control entry with the
 same title. The opt-in native Local handoff archives the verified superseded
 Local entry while preserving its contents; it never reuses the Local writer. Cold imports
 avoid idle SDK workers only until that transition; active owners remain long-lived.
-Only cold-import pairs may use ephemeral watcher hints after stable, complete
-no-change verification. Include all record lifecycle/checkpoint fields and file
-identities before/after sync, including superseded originals. Pending work,
-errors or missing/changed files invalidate hints; full verification becomes due
-after 60 seconds without refreshing that deadline from hints. New and active
+Cold-import hints require stable, complete no-change verification. Pure pairs of
+two verified current unmanaged originals may persist a signed verification proof
+under cold-verification. Bind exact ledger/native file observations, inactive
+Codex identity/path/cwd/update metadata, decoder code/runtime/configuration, and
+all authenticated archive files and their directory with nanosecond identities.
+Reuse survives restart without a timer-driven full export; changes, uncertainty,
+missing files or invalid proof require full verification. This is a no-op scheduling
+optimization, never mutation, archival, collection or checkpoint authorization.
+Exclude managed records, dependency anchors, relocation and retained-image chains.
+An inactive original's byte-identical unfinished tail may remain withheld while
+reusing its verified canonical-prefix no-op proof. This never completes the tail;
+new bytes or native activity require full verification again.
+Proof storage is bounded to 4096 entries, 16 MiB per entry and 64 MiB total, plus
+one bounded temporary file. Save only after full no-change verification and stable
+post-read observations. No native history or credential is copied into the proof.
+Other eligible cold pairs retain ephemeral hints covering all lifecycle/checkpoint
+fields and native file identities, including superseded originals, with a fixed
+60-second full-verification deadline. Pending work suspends proof use until verified
+recovery; errors revoke the affected proof. New and active
 conversations and dirty cold imports run before the fair cold-validation sweep.
-Between complete cold operations, refresh foreground work after two seconds.
+Between complete cold operations, refresh discovery and changed work after two
+seconds, not the entire unchanged foreground queue. Every managed owner retains
+its regular full lifecycle check once per pass; changed owners are prioritized.
 Discovery and new deliveries also refresh between individual foreground syncs,
 using their own clock; a long active-owner sweep must not block new enrollment.
 Stable file/lifecycle observations also prioritize changed existing conversations
