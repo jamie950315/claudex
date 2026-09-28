@@ -26,6 +26,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var advancedSection: NSStackView!
     private var diagnosticCards: NSStackView!
     private var advancedExpanded = false
+    private var fitQueued = false
     private var progress: NSProgressIndicator!
     private var setupButton: NSButton!
     private var refreshButton: NSButton!
@@ -108,6 +109,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         health.issuePanel = issuePanel
         health.issueText = issueText
         health.onOpen = { [weak self] in self?.showSetup(nil) }
+        health.onContentChange = { [weak self] in self?.scheduleWindowFit() }
     }
 
     @objc private func changeLanguage(_ sender: NSPopUpButton) {
@@ -134,6 +136,41 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     func windowWillClose(_ notification: Notification) {
         if !NSApp.windows.contains(where: { $0 != window && $0.isVisible }) {
             NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) { fitWindowToContent() }
+    func windowDidChangeScreen(_ notification: Notification) { scheduleWindowFit() }
+
+    private func scheduleWindowFit() {
+        guard !uiSmoke, !fitQueued else { return }
+        fitQueued = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.fitQueued = false
+            if self.window.isVisible { self.fitWindowToContent() }
+        }
+    }
+
+    private func fitWindowToContent() {
+        guard let window, !window.styleMask.contains(.fullScreen), !window.inLiveResize,
+              let document = pageScroll?.documentView,
+              let screen = window.screen ?? NSScreen.main else { return }
+        window.contentView?.layoutSubtreeIfNeeded()
+        document.layoutSubtreeIfNeeded()
+        // The document constraints already include 24pt top and bottom padding.
+        let naturalHeight = ceil(document.fittingSize.height)
+        guard naturalHeight.isFinite, naturalHeight > 0 else { return }
+        let available = screen.visibleFrame
+        let desired = window.frameRect(forContentRect: NSRect(x: 0, y: 0,
+            width: window.contentLayoutRect.width, height: naturalHeight)).height
+        var frame = window.frame
+        let top = min(frame.maxY, available.maxY)
+        frame.size.height = min(max(desired, window.minSize.height), available.height)
+        frame.origin.y = max(available.minY, top - frame.height)
+        if abs(window.frame.height - frame.height) > 0.5 || abs(window.frame.minY - frame.minY) > 0.5 {
+            window.setFrame(frame, display: true)
+            window.contentView?.layoutSubtreeIfNeeded()
         }
     }
 
@@ -185,7 +222,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 580),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "Claudex"
-        window.minSize = NSSize(width: 560, height: 420)
+        window.minSize = NSSize(width: 560, height: 160)
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
@@ -490,6 +527,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             cards.addArrangedSubview(placeholder)
             placeholder.widthAnchor.constraint(equalTo: cards.widthAnchor).isActive = true
         }
+        scheduleWindowFit()
     }
 
     private func componentRow(_ component: SetupComponent) -> NSView {
@@ -581,7 +619,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             func scrollCount(_ view: NSView) -> Int {
                 (view is NSScrollView ? 1 : 0) + view.subviews.reduce(0) { $0 + scrollCount($1) }
             }
-            let valid = self.diagnosticCards.arrangedSubviews.count == ids.count && document?.isFlipped == true
+            var valid = self.diagnosticCards.arrangedSubviews.count == ids.count && document?.isFlipped == true
                 && (document?.frame.height ?? 0) > 0 && self.connections.frame.width > 0
                 && self.pageScroll.contentView.bounds.height > smallHeight + 300
                 && abs((document?.frame.width ?? 0) - self.pageScroll.contentView.bounds.width) < 1
@@ -590,6 +628,24 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 && self.cards.arrangedSubviews.count == (readySample || waitingSample ? 0 : 1)
                 && (!(waitingSample || readySample) || self.setupButton.isHidden)
                 && (!readySample || self.attentionSection.isHidden && (document?.frame.height ?? 0) < self.pageScroll.contentView.bounds.height)
+            self.advancedExpanded = false
+            self.advancedSection.isHidden = true
+            self.fitWindowToContent()
+            let compact = self.window.frame
+            let compactDocumentHeight = document?.fittingSize.height ?? 0
+            self.toggleDetails(self.detailsButton!)
+            let expanded = self.window.frame
+            self.pageScroll.contentView.scroll(to: NSPoint(x: 0, y: 400))
+            self.toggleDetails(self.detailsButton!)
+            let collapsed = self.window.frame
+            let screen = self.window.screen!.visibleFrame
+            valid = valid && expanded.height > compact.height
+                && abs(collapsed.height - compact.height) < 1
+                && expanded.width == compact.width && collapsed.width == compact.width
+                && expanded.minY >= screen.minY - 1 && expanded.maxY <= screen.maxY + 1
+                && abs(self.pageScroll.contentView.bounds.minY) < 1
+                && abs(self.window.contentLayoutRect.height - compactDocumentHeight) < 1
+            print("Claudex auto-fit: compact=\(compact.height) expanded=\(expanded.height) collapsed=\(collapsed.height)")
             if valid { print("Claudex UI smoke: layout ready") }
             else { fputs("Claudex UI smoke: layout unavailable\n", stderr) }
             exit(valid ? 0 : 1)
@@ -633,6 +689,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     @objc private func showSetup(_ sender: Any?) {
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
+        fitWindowToContent()
         NSApp.activate(ignoringOtherApps: true)
         if !inspectOnly && !uiSmoke { UserDefaults.standard.set(true, forKey: settingsPresentedKey) }
     }
@@ -642,6 +699,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         advancedExpanded.toggle()
         advancedSection.isHidden = !advancedExpanded
         sender.title = L(advancedExpanded ? "Hide advanced diagnostics" : "Show advanced diagnostics")
+        fitWindowToContent()
+        pageScroll.contentView.scroll(to: .zero)
+        pageScroll.reflectScrolledClipView(pageScroll.contentView)
     }
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }

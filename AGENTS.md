@@ -35,6 +35,10 @@ blocked components automatically expose setup actions. The full checklist and
 technical details stay in an explicitly expanded advanced section. A prerequisite
 summary is not proof that messages have synced. Resize smoke checks must verify
 viewport growth, natural content width, a single scroll view, and compact ready mode.
+Fit window height to natural document height (including its padding) when opening,
+changing content or toggling advanced diagnostics. Preserve width and the top edge
+where possible; cap height to the current screen's visible frame and retain the
+outer scroll view for overflow. Do not resize fullscreen or during live dragging.
 Runtime history/ownership blocks offer diagnostics, not setup retries. Show the
 global setup retry only for actionable installation/account requirements or a
 failed setup operation; keep the instructions consistent with available actions.

@@ -16,6 +16,7 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         super.init()
     }
     var onOpen: (() -> Void)?
+    var onContentChange: (() -> Void)?
     var statusIcon: NSImageView?
     var issuePanel: NSView?
     var issueText: NSTextField?
@@ -110,6 +111,7 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
             : permission == .authorized || permission == .provisional
             ? (testNotice.isEmpty ? "Notifications: enabled · repeated alerts are suppressed" : testNotice)
             : "Notifications: not enabled · click Notifications to allow alerts")
+        onContentChange?()
     }
 
     var diagnosticText: String {
