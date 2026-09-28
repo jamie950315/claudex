@@ -3,19 +3,22 @@ import { copyFile, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, s
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 export const APP_IDENTIFIER = 'dev.0ruka.claudex.app';
+export const APP_ICON_FILE = 'Claudex.icns';
+export const APP_LOCALES = Object.freeze(['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']);
 export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
+  'claudex-sync-hook.mjs',
 ]);
 export const ENGINE_SRC = Object.freeze([
-  'app-setup.mjs', 'app-providers.mjs',
-  'base64.mjs', 'bridge.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
+  'app-setup.mjs', 'app-providers.mjs', 'app-login.mjs',
+  'base64.mjs', 'bridge.mjs', 'chat-mailbox.mjs', 'chat-titles.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
   'claude-folder-anchor.mjs', 'claude-folder-cache.mjs', 'claude-folder-install.mjs',
   'claude-folder-map.mjs', 'claude-folder-projection.mjs', 'claude-folder-runtime.mjs',
-  'claude-image-assets.mjs', 'claude-owner.mjs', 'claude-parallel-tools.mjs', 'claude.mjs',
-  'codex-app-layout.mjs', 'codex-delegation.mjs', 'codex-original-archive-tree.mjs',
+  'claude-image-assets.mjs', 'claude-owner.mjs', 'claude-parallel-tools.mjs', 'claude-relocation.mjs', 'claude.mjs',
+  'codex-app-layout.mjs', 'codex-delegation.mjs', 'codex-dependencies.mjs', 'codex-original-archive-tree.mjs',
   'codex-projection.mjs', 'codex-versions.mjs', 'codex-websocket.mjs', 'codex.mjs',
-  'cold-import.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
-  'collaboration-native.mjs', 'collaboration-transport.mjs', 'compaction.mjs',
+  'cold-import.mjs', 'cold-verification-cache.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
+  'collaboration-native.mjs', 'collaboration-transport.mjs', 'collaboration-effort.mjs', 'collaboration-workspace.mjs', 'app-stop-state.mjs', 'compaction.mjs',
   'context-archive.mjs', 'context-packet-reader.mjs', 'context-packet.mjs',
   'desktop-bridge.mjs', 'desktop-install.mjs', 'desktop-runtime.mjs',
   'desktop-shutdown.mjs', 'desktop-watch-hints.mjs', 'desktop-watch.mjs',
@@ -23,7 +26,8 @@ export const ENGINE_SRC = Object.freeze([
   'native-drivers.mjs', 'native-history.mjs', 'native-local-images.mjs',
   'owned-claude-history.mjs', 'owned-codex-history.mjs', 'retention.mjs',
   'runtime-version-policy.mjs', 'service-supervisor.mjs', 'service.mjs',
-  'status-app-install.mjs', 'storage.mjs',
+  'status-app-install.mjs', 'storage.mjs', 'verification-observations.mjs',
+  'sync-events.mjs', 'sync-event-source.mjs', 'sync-hook-install.mjs',
 ]);
 
 export async function runCommand(command, args, options = {}) {
@@ -56,8 +60,26 @@ async function ensureAbsent(path) {
   throw new Error(`Destination already exists: ${path}`);
 }
 
+export async function buildAppIcon(sourceRoot, resources, stageRoot, run = runCommand) {
+  const source = join(sourceRoot, 'native', 'ClaudexApp', 'Assets', 'AppIcon.png');
+  await requireRegular(source);
+  const iconset = join(stageRoot, 'Claudex.iconset');
+  await mkdir(iconset);
+  for (const size of [16, 32, 128, 256, 512]) {
+    for (const scale of [1, 2]) {
+      const pixels = String(size * scale);
+      await run('/usr/bin/sips', ['-z', pixels, pixels, source, '--out',
+        join(iconset, `icon_${size}x${size}${scale === 2 ? '@2x' : ''}.png`)]);
+    }
+  }
+  const destination = join(resources, APP_ICON_FILE);
+  await run('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', destination]);
+  await requireRegular(destination);
+  return destination;
+}
+
 function plist(version) {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key><string>${APP_IDENTIFIER}</string>\n<key>CFBundleExecutable</key><string>ClaudexApp</string>\n<key>CFBundleName</key><string>Claudex</string>\n<key>CFBundleDisplayName</key><string>Claudex</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version)}</string>\n<key>LSMinimumSystemVersion</key><string>13.0</string>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key><string>${APP_IDENTIFIER}</string>\n<key>CFBundleExecutable</key><string>ClaudexApp</string>\n<key>CFBundleName</key><string>Claudex</string>\n<key>CFBundleDisplayName</key><string>Claudex</string>\n<key>CFBundleIconFile</key><string>${APP_ICON_FILE}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version)}</string>\n<key>LSMinimumSystemVersion</key><string>13.0</string>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n`;
 }
 
 async function copyAllowed(sourceRoot, engine) {
@@ -150,6 +172,22 @@ export async function buildClaudexApp({
     await symlink('../lib/node_modules/npm/bin/npm-cli.js', join(runtime, 'bin', 'npm'));
     await copyFile(join(distribution, 'LICENSE'), join(runtime, 'LICENSE'));
     await copyAllowed(source, engine);
+    await buildAppIcon(source, resources, stageRoot, run);
+    await mkdir(join(resources, 'Locales'));
+    const base = JSON.parse(await readFile(join(source, 'native', 'ClaudexApp', 'Locales', 'en.json'), 'utf8'));
+    for (const language of APP_LOCALES) {
+      const catalogPath = join(source, 'native', 'ClaudexApp', 'Locales', `${language}.json`);
+      await requireRegular(catalogPath);
+      const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+      if (JSON.stringify(Object.keys(catalog).sort()) !== JSON.stringify(Object.keys(base).sort())
+        || Object.values(catalog).some(value => typeof value !== 'string' || !value.trim()))
+        throw new Error(`Incomplete UI translation: ${language}`);
+      for (const [key, value] of Object.entries(catalog)) {
+        if ((key.match(/%@/g) ?? []).length !== (value.match(/%@/g) ?? []).length
+          || value.replaceAll('%@', '').includes('%')) throw new Error(`Invalid UI translation placeholder: ${language}`);
+      }
+      await copyFile(catalogPath, join(resources, 'Locales', `${language}.json`));
+    }
     await run(join(runtime, 'bin', 'node'), [join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], {
       cwd: engine,
       env: { ...process.env, PATH: `${join(runtime, 'bin')}:${process.env.PATH || '/usr/bin:/bin'}`, npm_config_cache: join(stageRoot, 'npm-cache') },
@@ -157,9 +195,10 @@ export async function buildClaudexApp({
     await run(join(runtime, 'bin', 'node'), [join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'ls', '--omit=dev', '--depth=0'], { cwd: engine });
     await writeFile(join(contents, 'Info.plist'), plist(manifest.version));
     await writeFile(join(stageRoot, 'node-entitlements.plist'), '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>');
-    const swiftSources = [join(source, 'native', 'ClaudexApp', 'main.swift'), join(source, 'native', 'ClaudexApp', 'SetupModel.swift')];
+    const swiftSources = ['main.swift', 'SetupModel.swift', 'StatusController.swift', 'Localization.swift'].map(name => join(source, 'native', 'ClaudexApp', name));
+    swiftSources.push(join(source, 'native', 'ClaudexStatus', 'StatusModel.swift'));
     for (const swiftSource of swiftSources) await requireRegular(swiftSource);
-    await run('/usr/bin/xcrun', ['swiftc', ...swiftSources, '-framework', 'Cocoa', '-target', `${arch}-apple-macos13.0`, '-o', join(macos, 'ClaudexApp')]);
+    await run('/usr/bin/xcrun', ['swiftc', ...swiftSources, '-framework', 'Cocoa', '-framework', 'UserNotifications', '-target', `${arch}-apple-macos13.0`, '-o', join(macos, 'ClaudexApp')]);
     const binaries = [join(runtime, 'bin', 'node'), ...await nativeObjects(join(runtime, 'lib', 'node_modules', 'npm')), ...await nativeObjects(join(engine, 'node_modules'))];
     for (const binary of binaries.slice(1)) await verifyPortableBinary(binary, arch, run);
     for (const binary of binaries) {

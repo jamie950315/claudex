@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { collaborationDefinition, collaborationMcpRegistration, installCollaboration, registerCollaboration } from '../src/collaboration-install.mjs';
+import { collaborationDefinition, collaborationMcpRegistration, controlCollaboration, installCollaboration, registerCollaboration } from '../src/collaboration-install.mjs';
 import { atomicWrite, publishExclusive, readJSON } from '../src/storage.mjs';
 
 async function fixture() {
@@ -45,6 +45,7 @@ async function fixture() {
         if (failBootstrap) throw new Error('Synthetic bootstrap interruption');
         loaded = true;
       }
+      if (command === 'launchctl' && args[0] === 'bootout') loaded = false;
       return { stdout: '' };
     } } };
 }
@@ -71,6 +72,63 @@ test('definition isolates root, escapes paths, and exposes separate native MCP c
   assert.deepEqual(mcp.claude, ['claude', 'mcp', 'add', '--scope', 'user', 'claudex-work', '--', options.node,
     options.cli, 'mcp', '--root', options.root, '--peer', 'claude']);
   assert.doesNotMatch(definition.plist, /claudex-work|--peer|packet-key/);
+});
+
+test('control preserves installed options and stops only the exact owned label', async () => {
+  const f = await fixture();
+  await installCollaboration({ ...f.options, allowWrite: true, defaultPermission: 'workspace-write',
+    codexBinary: '/private/codex', claudeBinary: '/private/claude', environmentPath: '/private/a&b:/usr/bin' }, f.deps);
+  const definition = collaborationDefinition(f.options);
+  const before = await readFile(definition.path, 'utf8');
+  const status = await controlCollaboration('status', f.options, f.deps);
+  assert.equal(status.running, true);
+  const stopped = await controlCollaboration('stop', f.options, f.deps);
+  assert.equal(stopped.shutdownRequested, true);
+  assert.equal(stopped.stopped, true);
+  assert.deepEqual(f.calls.find(call => call[1] === 'bootout'),
+    ['launchctl', 'bootout', `gui/${process.getuid()}/${definition.label}`]);
+  assert.equal(await readFile(definition.path, 'utf8'), before);
+  assert.equal((await controlCollaboration('start', f.options, f.deps)).running, true);
+});
+
+test('bootout does not claim native groups stopped and restart waits for absence', async () => {
+  const f = await fixture();
+  await installCollaboration(f.options, f.deps);
+  await atomicWrite(join(f.options.root, 'endpoint.json'), JSON.stringify({ version: 1, pid: 12345 }));
+  const deps = { ...f.deps, absent: pid => pid !== -12345 };
+  const stopped = await controlCollaboration('stop', f.options, deps);
+  assert.equal(stopped.loaded, false);
+  assert.equal(stopped.stopped, false);
+  await assert.rejects(controlCollaboration('start', f.options, deps), /has not safely stopped/);
+  assert.equal((await controlCollaboration('start', f.options, { ...f.deps, absent: () => true })).running, true);
+});
+
+test('control rejects changed artifacts, foreign executable identity and unsafe journals', async () => {
+  const f = await fixture();
+  await installCollaboration(f.options, f.deps);
+  await assert.rejects(controlCollaboration('stop', { ...f.options, cli: '/foreign/cli' }, f.deps), /executable or root/);
+  await atomicWrite(collaborationDefinition(f.options).path, 'foreign');
+  await assert.rejects(controlCollaboration('stop', f.options, f.deps), /exact owned installation/);
+  assert.equal(f.calls.some(call => call[1] === 'bootout'), false);
+  const g = await fixture();
+  await installCollaboration(g.options, g.deps);
+  await writeFile(join(g.options.root, 'collaboration-install.json'), '{"version":1}');
+  await assert.rejects(controlCollaboration('stop', g.options, g.deps), /exact owned installation/);
+});
+
+test('restart preserves unresolved native worker evidence and never signals it', async () => {
+  const f = await fixture();
+  await installCollaboration(f.options, f.deps);
+  f.loaded = false;
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
+    tasks: { worker: { status: 'uncertain', active: { pid: 54321 } } } }));
+  await assert.rejects(controlCollaboration('start', f.options,
+    { ...f.deps, absent: pid => pid !== -54321 }), /has not safely stopped/);
+  assert.equal((await controlCollaboration('status', f.options,
+    { ...f.deps, absent: () => true })).stopped, true);
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
+    tasks: { worker: { status: 'running', active: {} } } }));
+  await assert.rejects(controlCollaboration('status', f.options, f.deps), /native process identity is missing/);
 });
 
 test('new installation journals exact artifact and does not bootstrap again', async () => {

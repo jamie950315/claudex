@@ -1,10 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_POLICY, planRetention } from '../src/retention.mjs';
+import { DEFAULT_POLICY, MAX_DEPENDENCY_ANCHORS, planRetention } from '../src/retention.mjs';
 
 const now = 20 * 86400000;
 const record = (id, overrides = {}) => ({ id, conversationId: 'one', side: 'codex', status: 'previous', managed: true, verified: true, bytes: 10, createdAt: now - 100, ...overrides });
 const plan = (records, policy = {}) => planRetention(records, { now, policy });
+const anchor = (id, overrides = {}) => record(id, { status: 'dependency-anchor', kind: 'snapshot', dependencyIds: ['child'], ...overrides });
+
+test('dependency anchors survive count and age limits while counting toward the global byte quota', () => {
+  const records = [anchor('anchor', { createdAt: 0 }), record('old', { createdAt: now - 200 }), record('latest')];
+  const before = structuredClone(records);
+  assert.deepEqual(plan(records), { keep: ['anchor', 'latest'], remove: ['old'], blocked: [], backupBytes: 20 });
+  assert.deepEqual(plan([records[0]], { previousPerSide: 0 }), { keep: ['anchor'], remove: [], blocked: [], backupBytes: 10 });
+  assert.deepEqual(records, before);
+});
+
+test('dependency anchor quota evicts disposable backups first and reports an unresolved protected quota', () => {
+  const records = [anchor('anchor', { bytes: 11 }), record('backup')];
+  assert.deepEqual(plan(records, { maxBackupBytes: 11 }), {
+    keep: ['anchor'], remove: ['backup'], blocked: [], backupBytes: 11,
+  });
+  assert.deepEqual(plan(records, { maxBackupBytes: 10 }), {
+    keep: ['anchor'], remove: ['backup'], blocked: [{ id: 'anchor', reason: 'dependency-anchor-quota' }], backupBytes: 11,
+  });
+});
+
+test('dependency anchors have an explicit global count limit and are never pruned to meet it', () => {
+  const records = Array.from({ length: MAX_DEPENDENCY_ANCHORS }, (_, index) => anchor(`anchor-${index}`));
+  assert.equal(plan(records).blocked.length, 0);
+  records.push(anchor('extra'));
+  const result = plan(records);
+  assert.deepEqual(result.remove, []);
+  assert.deepEqual(result.keep, records.map(record => record.id));
+  assert.equal(result.backupBytes, records.length * 10);
+  assert.deepEqual(result.blocked, records.map(record => ({ id: record.id, reason: 'dependency-anchor-limit' })));
+});
+
+test('dependency anchors reject missing ownership and ambiguous dependency identities', () => {
+  for (const overrides of [{ side: 'claude' }, { kind: 'owner' }, { managed: false }, { verified: false },
+    { dependencyIds: undefined }, { dependencyIds: [] }, { dependencyIds: 'child' },
+    { dependencyIds: [''] }, { dependencyIds: ['child', 'child'] }])
+    assert.throws(() => plan([anchor('bad', overrides)]), TypeError);
+});
 
 test('caps previous versions independently per conversation and side without mutating records', () => {
   const records = [record('old', { createdAt: now - 200 }), record('latest'), record('claude', { side: 'claude' }), record('other', { conversationId: 'two' }), record('current', { status: 'current', bytes: Number.MAX_SAFE_INTEGER })];

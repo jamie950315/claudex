@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +37,26 @@ test('real broker process serves both MCP peers without starting inference or re
   }
   assert.deepEqual(initial?.tasks, []);
   assert.equal(initial.limits.allowWrite, false);
+  assert.equal(initial.limits.maxWorkers, 64);
+  assert.equal(initial.limits.maxDepth, 3);
+  const execute = promisify(execFile);
+  const modelArgs = [cli, 'collaboration', 'models', '--root', root];
+  const readModels = await execute(process.execPath, modelArgs);
+  assert.deepEqual(JSON.parse(readModels.stdout), { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null } });
+  const saved = await execute(process.execPath, [...modelArgs, '--codex-model', 'test-codex', '--claude-model', '']);
+  assert.deepEqual(JSON.parse(saved.stdout), { defaultModels: { codex: 'test-codex', claude: null }, defaultEfforts: { codex: null, claude: null } });
+  const efforts = await execute(process.execPath, [...modelArgs, '--codex-effort', 'high', '--claude-effort', 'low']);
+  assert.deepEqual(JSON.parse(efforts.stdout), { defaultModels: { codex: 'test-codex', claude: null }, defaultEfforts: { codex: 'high', claude: 'low' } });
+  await assert.rejects(execute(process.execPath, [...modelArgs, '--codex-effort', 'high']), /Both provider effort/);
+  await assert.rejects(execute(process.execPath, [...modelArgs, '--codex-effort', 'high', '--claude-effort', 'ultra']), /effort/i);
+  await assert.rejects(execute(process.execPath, [...modelArgs, '--codex-model', 'partial']), /Both provider/);
+  const appCli = fileURLToPath(new URL('../bin/claudex-app.mjs', import.meta.url));
+  // The app takes a sync root and uses its collaboration child directory.
+  const appRoot = await mkdtemp(join(tmpdir(), 'cldx-model-app-'));
+  t.after(() => rm(appRoot, { recursive: true, force: true }));
+  const unavailable = await execute(process.execPath, [appCli, 'models', '--root', appRoot]).catch(error => error);
+  assert.equal(typeof JSON.parse(unavailable.stdout).error, 'string');
+  assert.ok(unavailable.code);
   for (const peer of ['codex', 'claude']) {
     const client = spawn(process.execPath, [cli, 'collaboration', 'mcp', '--root', root, '--peer', peer], {
       stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, CLAUDEX_WORK_TOKEN: token },
@@ -53,7 +74,7 @@ test('real broker process serves both MCP peers without starting inference or re
     const [code] = await closed;
     assert.equal(code, 0, errors);
     const replies = output.trim().split('\n').map(line => JSON.parse(line));
-    assert.equal(replies.find(reply => reply.id === 2).result.tools.length, 7);
+    assert.equal(replies.find(reply => reply.id === 2).result.tools.length, 10);
     assert.deepEqual(JSON.parse(replies.find(reply => reply.id === 3).result.content[0].text).tasks, []);
     assert.equal(output.includes(token), false);
   }

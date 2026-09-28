@@ -85,6 +85,63 @@ test('fresh and active conversations precede a backlog of 300 cold imports', asy
   assert.equal(new Set(synced).size, 302);
 });
 
+test('initial inspection publishes bounded unique progress at the next two-second boundary before the sweep finishes', async () => {
+  const f = await fixture();
+  f.addOrdinary('first'); f.addOrdinary('second');
+  f.state.conversations.first.title = 'First conversation';
+  f.onSync = async id => {
+    const status = await f.status();
+    assert.equal(status.currentOperation?.conversationId ?? null, id === 'first' ? 'first' : null);
+    assert.equal(status.checkingConversationCount, 2);
+    assert.equal(status.checkedConversationCount, id === 'first' ? 0 : 1);
+    assert.equal(status.foregroundCompletedAt, null);
+    if (id === 'first') {
+      assert.equal(status.currentOperation.startedAt, 0);
+      assert.equal(status.currentOperation.title, 'First conversation');
+      f.tick(2000);
+    }
+    else assert.equal(status.lastSync.conversationId, 'first');
+  };
+  await f.run();
+});
+
+test('a long native operation refreshes progress without concurrent inspection or premature completion', async () => {
+  const f = await fixture(); f.addOrdinary('slow');
+  let observed;
+  f.onSync = async () => {
+    f.tick(10_001);
+    await new Promise(resolve => setTimeout(resolve, 10_100));
+    observed = await f.status();
+    assert.equal(f.count('sync'), 1);
+  };
+  await f.run();
+  assert.equal(observed.updatedAt, 10_001);
+  assert.equal(observed.currentOperation.conversationId, 'slow');
+  assert.equal(observed.checkedConversationCount, 0);
+  assert.equal(observed.foregroundCompletedAt, null);
+  assert.equal((await f.status()).running, false);
+});
+
+test('initial sweep completion includes the cold backlog, not only foreground work', async () => {
+  const f = await fixture();
+  f.addOrdinary('active'); await f.addCold('cold');
+  let completed;
+  f.onSync = async id => {
+    if (id !== 'cold') return;
+    const status = await f.status();
+    assert.notEqual(status.foregroundCompletedAt, null);
+    assert.equal(status.initialSweepCompletedAt, null);
+    assert.equal(status.checkedConversationCount, 1);
+    assert.equal(status.checkingConversationCount, 2);
+  };
+  await f.run({ maxPasses: 2, sleep: async () => {
+    completed = await f.status();
+    f.onSync = undefined;
+  } });
+  assert.notEqual(completed.initialSweepCompletedAt, null);
+  assert.equal(completed.checkedConversationCount, 2);
+});
+
 test('a conversation created during a slow cold sweep is discovered and delivered before the next cold item', async () => {
   const f = await fixture();
   for (let index = 0; index < 4; index++) await f.addCold(`cold-${index}`);
@@ -135,20 +192,20 @@ for (const outcome of ['waiting', 'incomplete', 'racing-append']) {
   });
 }
 
-test('a cold item becoming a managed Claude owner receives every remaining foreground lifecycle check', async () => {
+test('a cold item becoming a managed owner is checked promptly and on the next regular pass', async () => {
   const f = await fixture();
   for (const id of ['first', 'second', 'third', 'fourth']) await f.addCold(id);
   f.onSync = id => {
     f.tick(11);
     if (id === 'second') Object.assign(f.record('first', 'local'), { managed: true, kind: 'owner' });
   };
-  await f.run();
+  await f.run({ maxPasses: 2, sleep: async () => {} });
   assert.deepEqual(f.events.filter(event => event.type === 'sync').map(event => event.id),
-    ['first', 'second', 'first', 'third', 'first', 'fourth']);
+    ['first', 'second', 'first', 'third', 'fourth', 'first']);
   assert.equal(f.count('metadata', 'first-source'), 1);
 });
 
-test('foreground heartbeats neither starve a complete cold sweep nor renew absolute verification deadlines', async () => {
+test('cold refreshes do not repeat unchanged active sweeps or renew ephemeral verification deadlines', async () => {
   const f = await fixture();
   for (const id of ['first', 'second', 'third', 'fourth']) await f.addCold(id);
   f.addOrdinary('active');
@@ -158,7 +215,7 @@ test('foreground heartbeats neither starve a complete cold sweep nor renew absol
   assert.deepEqual(coldCalls.map(event => event.id),
     ['first', 'second', 'third', 'fourth', 'first', 'second', 'third', 'fourth']);
   assert.equal(coldCalls[4].at, 44);
-  assert.equal(f.count('sync', 'active'), 8);
+  assert.equal(f.count('sync', 'active'), 2);
   // Each sweep also refreshes discovery at its final operation boundary.
   assert.equal(f.count('discover'), 10);
 });
@@ -294,7 +351,7 @@ for (const side of ['source', 'local']) {
     f.onSync = async id => {
       assert.equal(++inFlight, 1, 'native operations remain serialized');
       try {
-        f.tick(11);
+        f.tick(2100);
         if (id === 'owner-0') await writeFile(f.record('owner-7', side).path, 'original history\nnew completed turn\n');
         if (id === 'owner-1') priorityStatus = await f.status();
       } finally { inFlight--; }

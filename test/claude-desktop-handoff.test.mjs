@@ -24,7 +24,7 @@ async function fixture() {
   const factory = () => createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect, now: () => time });
   const publisher = factory();
   return { root, cwd, desktopHome, claudeHome, state, results, inspections, factory,
-    clock(value) { time = value; }, intercept(value) { interceptor = value; }, publish: () => publisher.publish(state),
+    clock(value) { time = value; }, intercept(value) { interceptor = value; }, publish: options => publisher.publish(state, options),
     manifest: async () => JSON.parse(await readFile(join(root, 'desktop-handoff.json'), 'utf8')),
     async add() {
       const conversationId = randomUUID(), originalId = randomUUID(), currentId = randomUUID(), uiId = `local_${randomUUID()}`;
@@ -85,6 +85,64 @@ test('stable observations reuse proof for enqueue only and full verification is 
   assert.deepEqual((await f.manifest()).actions[0], first);
   f.clock(159_999); await f.publish(); assert.equal(f.inspections.length, 2);
   f.clock(160_000); await f.publish(); assert.equal(f.inspections.length, 4);
+});
+
+test('event-scoped publication inspects only the selected conversation while preserving global anchors', async () => {
+  const f = await fixture(), first = await f.add(), second = await f.add();
+  await f.publish(); await f.publish();
+  const anchors = (await f.manifest()).anchors;
+  assert.equal(anchors.length, 2);
+  f.clock(200_000); f.inspections.length = 0;
+  await f.publish({ conversationIds: [second.conversationId] });
+  assert.deepEqual(f.inspections, [second.original.nativeId, second.current.nativeId]);
+  assert.deepEqual((await f.manifest()).actions.map(action => action.conversationId), [second.conversationId]);
+  assert.deepEqual((await f.manifest()).anchors, anchors);
+  f.inspections.length = 0;
+  await f.publish({ conversationIds: new Set([first.conversationId]) });
+  assert.deepEqual(f.inspections, [first.original.nativeId, first.current.nativeId]);
+});
+
+test('empty or absent conversation selection revokes actions without reading any transcript', async () => {
+  const f = await fixture(), pair = await f.add(); await f.publish();
+  const anchors = (await f.manifest()).anchors;
+  await rename(pair.original.path, `${pair.original.path}.not-readable`);
+  await rename(pair.current.path, `${pair.current.path}.not-readable`);
+  f.clock(200_000); f.inspections.length = 0;
+  for (const conversationIds of [[], [randomUUID()]]) {
+    const status = await f.publish({ conversationIds });
+    assert.equal(status.actions, 0);
+    assert.deepEqual(f.inspections, []);
+    assert.deepEqual((await f.manifest()).anchors, anchors);
+    assert.deepEqual((await f.manifest()).actions, []);
+    assert.equal((await f.manifest()).expiresAt, null);
+  }
+});
+
+test('event scopes retain cached evidence but never revive expired or revoked actions without full verification', async () => {
+  const f = await fixture(), pair = await f.add();
+  await f.publish({ conversationIds: [pair.conversationId] });
+  const first = (await f.manifest()).actions[0].operationId;
+  f.clock(115_000); f.inspections.length = 0;
+  await f.publish({ conversationIds: [pair.conversationId] });
+  assert.equal(f.inspections.length, 2);
+  assert.notEqual((await f.manifest()).actions[0].operationId, first);
+  await f.publish({ conversationIds: [] });
+  f.inspections.length = 0;
+  await f.publish({ conversationIds: [pair.conversationId] });
+  assert.equal(f.inspections.length, 2);
+});
+
+test('unselected owner transitions and invalid ledger identities retain global revocation guards', async () => {
+  const f = await fixture(), first = await f.add(), second = await f.add();
+  await f.publish({ conversationIds: [first.conversationId] });
+  second.owner.pending = { operationId: randomUUID() }; await second.saveOwner();
+  f.inspections.length = 0;
+  assert.equal((await f.publish({ conversationIds: [first.conversationId] })).deferred, 'owner_transition');
+  assert.deepEqual(f.inspections, []);
+  assert.deepEqual((await f.manifest()).actions, []);
+  second.current.cwd = '/different';
+  await assert.rejects(f.publish({ conversationIds: [] }), /ledger identity/);
+  assert.deepEqual((await f.manifest()).actions, []);
 });
 
 test('pending coordinator work revokes commands but retains exact presentation identities without reading transcripts', async () => {
@@ -191,9 +249,29 @@ test('activity, title, registration and file changes during verification cannot 
       else if (change === 'original') await appendFile(pair.original.path, 'changed\n');
       else f.state.pending = {};
     });
-    await assert.rejects(f.publish(), /changed/);
+    if (change === 'original') {
+      const result = await f.publish();
+      assert.equal(result.deferred, 'history_changed');
+      assert.equal(result.actions, 0);
+      assert.equal(result.conversationId, pair.conversationId);
+      assert.equal(result.title, pair.mapping.title);
+    } else await assert.rejects(f.publish(), /changed/);
     assert.deepEqual((await f.manifest()).actions, []);
   }
+});
+
+test('a history race revokes authority and requires another full verification before archival', async () => {
+  const f = await fixture(), pair = await f.add();
+  await f.publish();
+  await appendFile(pair.current.path, 'native metadata\n');
+  f.intercept(async record => { if (record.nativeId === pair.current.nativeId) await appendFile(pair.current.path, 'more metadata\n'); });
+  assert.equal((await f.publish()).deferred, 'history_changed');
+  assert.deepEqual((await f.manifest()).actions, []);
+  f.intercept(async () => { throw new Error('Actual canonical history conflict'); });
+  await assert.rejects(f.publish(), /Actual canonical history conflict/);
+  assert.deepEqual((await f.manifest()).actions, []);
+  f.intercept(async () => {});
+  assert.equal((await f.publish()).actions, 1);
 });
 
 test('archival is acknowledged only after another full verification and exact old byte-prefix preservation', async () => {

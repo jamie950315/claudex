@@ -1,6 +1,13 @@
 import Foundation
 import Darwin
 
+struct HealthIssue: Codable, Equatable {
+    var target: String
+    var identity: String?
+    var reason: String
+    var nextStep: String
+}
+
 struct HealthReport: Codable, Equatable {
     var state: String
     var title: String
@@ -11,10 +18,37 @@ struct HealthReport: Codable, Equatable {
     var retryAt: Double?
     var autoRestart: Bool
     var operational = false
+    var issues: [HealthIssue] = []
     var issueKey: String { attention ? state + ":" + detail : "" }
 }
 
 enum StatusReadError: Error { case unsafe, tooLarge, changing }
+
+func initialChecking(_ watcher: [String: Any]) -> Bool {
+    guard watcher["mode"] as? String == "desktop" else { return false }
+    let completion = watcher["checkingConversationCount"] == nil ? "foregroundCompletedAt" : "initialSweepCompletedAt"
+    return watcher[completion] as? NSNumber == nil
+}
+
+func checkingProgress(_ watcher: [String: Any], now: Double) -> String? {
+    guard initialChecking(watcher),
+          let checked = watcher["checkedConversationCount"] as? Int,
+          let total = watcher["checkingConversationCount"] as? Int,
+          checked >= 0, total >= checked else { return nil }
+    var lines = ["Checked \(checked) of \(total) conversations."]
+    if let operation = watcher["currentOperation"] as? [String: Any],
+       let identity = operation["conversationId"] as? String, !identity.isEmpty,
+       let started = operation["startedAt"] as? NSNumber,
+       started.doubleValue.isFinite, started.doubleValue > 0, started.doubleValue <= now {
+        let elapsed = (now - started.doubleValue) / 1000
+        if elapsed.isFinite && elapsed < Double(Int.max) {
+            let title = (operation["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? identity
+            let display = String(title.prefix(200)).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+            lines.append("Checking \(display) (\(Int(elapsed)) seconds elapsed).")
+        }
+    }
+    return lines.joined(separator: "\n")
+}
 
 func privateJSON(_ root: String, _ name: String) throws -> [String: Any]? {
     var directory = stat()
@@ -46,7 +80,7 @@ func processAlive(_ value: Any?) -> Bool {
     return kill(pid_t(number.int32Value), 0) == 0 || errno == EPERM
 }
 
-func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Double,
+func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: Double,
                     alive: (Any?) -> Bool = processAlive) -> HealthReport {
     let automatic = service?["autoRestart"] as? Bool == true
     let updated = (watcher?["updatedAt"] as? NSNumber)?.doubleValue
@@ -119,6 +153,11 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
             return report("paused", "Desktop integration needs attention", component["error"] as? String ?? "Folder placement or archival could not be verified.", true)
         }
     }
+    if let handoff = watcher["localHandoff"] as? [String: Any],
+       handoff["state"] as? String == "waiting", handoff["deferred"] as? String == "history_changed" {
+        return report("waiting", "Waiting for Desktop handoff",
+                      "A conversation changed while its old Desktop entry was being checked. Archival was postponed and will be rechecked automatically; synchronization is not blocked by this check.")
+    }
     if let waiting = watcher["waiting"] as? String, !waiting.isEmpty {
         if waiting.localizedCaseInsensitiveContains("backend is not ready") {
             return report("waiting", "Waiting for Codex", "Open Codex normally. Synchronization resumes when its shared backend is available.")
@@ -131,10 +170,73 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
                       work ? "A tracked conversation is still replying, changing, or busy. Its next handoff waits for a complete turn and an idle destination; Claudex checks again automatically."
                       : "The connection is not ready. Claudex checks again automatically.", operational: work)
     }
-    if watcher["mode"] as? String == "desktop", watcher["foregroundCompletedAt"] as? NSNumber == nil {
-        return report("waiting", "Checking conversations", "Native connections and saved histories are being verified. Wait for the latest messages before switching apps.")
+    if initialChecking(watcher) {
+        return report("waiting", "Checking history in background", "Saved histories are being checked in the background; they are not being imported again. New and changed conversations are prioritized. Wait for the latest messages in the conversation you are using before switching apps.")
     }
     return report("ready", "Synchronization ready", "No reported synchronization blocks. Before switching apps, still wait for the current reply and its latest messages to appear.", operational: true)
+}
+
+func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Double,
+                    alive: (Any?) -> Bool = processAlive) -> HealthReport {
+    var result = classifyHealthBase(watcher: watcher, service: service, now: now, alive: alive)
+    if result.state == "waiting", let watcher,
+       watcher["running"] as? Bool == true, alive(watcher["pid"]),
+       let updated = watcher["updatedAt"] as? NSNumber,
+       now - updated.doubleValue >= -5000, now - updated.doubleValue < 120000,
+       let progress = checkingProgress(watcher, now: now) {
+        result.detail = String((progress + "\n" + result.detail).prefix(700))
+        result.operational = false
+    }
+    var issues: [HealthIssue] = []
+    func bounded(_ value: Any?, _ fallback: String, _ limit: Int) -> String {
+        guard let text = value as? String, !text.isEmpty else { return fallback }
+        return String(text.prefix(limit))
+    }
+    func append(_ entry: [String: Any], target: String, waiting: Bool, fallback: String) {
+        guard issues.count < 20 else { return }
+        let reason = bounded(entry["reason"], fallback, 1000)
+        let nextStep: String
+        if !waiting { nextStep = "Open diagnostics for the exact conflict. Do not retry setup or resend messages." }
+        else if ["backend is not ready", "sign-in", "permission prompt"].contains(where: reason.localizedCaseInsensitiveContains) {
+            nextStep = "Open Codex or Claude and finish any sign-in or permission prompt."
+        } else if ["still running", "complete assistant", "unfinished", "in-progress", "incomplete", "changed", "active writer", "destination is active", "Claude Code is open", "another bridge operation"].contains(where: reason.localizedCaseInsensitiveContains) {
+            nextStep = "Wait for the reply to finish. No action is required."
+        } else { nextStep = "Waiting for a connection. Claudex will retry automatically; no setup changes are needed." }
+        let id = entry["conversationId"] as? String ?? entry["nativeId"] as? String
+        issues.append(HealthIssue(target: bounded(entry["title"], id ?? target, 200), identity: id.map { String($0.prefix(100)) },
+                                  reason: reason, nextStep: nextStep))
+    }
+    let fresh = watcher?["running"] as? Bool == true && alive(watcher?["pid"])
+        && ((watcher?["updatedAt"] as? NSNumber).map { now - $0.doubleValue >= -5000 && now - $0.doubleValue < 120000 } ?? false)
+    if fresh, let watcher {
+        if let blocked = watcher["blocked"] as? [String: Any] {
+            append(blocked, target: "Synchronization", waiting: false, fallback: result.detail)
+        }
+        for entry in watcher["blockedConversations"] as? [[String: Any]] ?? [] {
+            append(entry, target: "Synchronization", waiting: false, fallback: result.detail)
+        }
+        for entry in watcher["blockedSources"] as? [[String: Any]] ?? [] {
+            append(entry, target: "Synchronization", waiting: false, fallback: result.detail)
+        }
+        for (key, label) in [("folderProjection", "Native project folders"), ("localHandoff", "Desktop handoff")] {
+            if let entry = watcher[key] as? [String: Any], entry["state"] as? String == "error" {
+                var details = entry; details["reason"] = entry["error"]
+                append(details, target: label, waiting: false, fallback: result.detail)
+            }
+        }
+        let contexts = watcher["waitingContexts"] as? [[String: Any]] ?? []
+        for entry in contexts { append(entry, target: "Synchronization", waiting: true, fallback: result.detail) }
+        if contexts.isEmpty, let waiting = watcher["waiting"] as? String, !waiting.isEmpty {
+            append(["reason": waiting], target: "Synchronization", waiting: true, fallback: result.detail)
+        }
+        if let handoff = watcher["localHandoff"] as? [String: Any], handoff["deferred"] as? String == "history_changed" {
+            var details = handoff; details["reason"] = "A conversation changed while its old Desktop entry was being checked. Archival was postponed and will be rechecked automatically; synchronization is not blocked by this check."
+            append(details, target: "Desktop handoff", waiting: true, fallback: result.detail)
+        }
+    }
+    if issues.isEmpty && result.attention { append([:], target: "Synchronization", waiting: false, fallback: result.detail) }
+    result.issues = issues
+    return result
 }
 
 func loadHealth(_ root: String) -> HealthReport {

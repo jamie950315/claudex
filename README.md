@@ -7,6 +7,8 @@ Claudex provides two independent capabilities:
 
 - **Cross-model collaboration:** agents create child tasks, exchange messages,
   return results, and transfer responsibility through one work protocol.
+  Authorized coordination notes can also reach an existing hooked native chat at
+  its next activity boundary without creating or archiving a replacement chat.
 - **Conversation synchronization:** completed conversation turns become available
   in the other tool, with original history preserved and bounded generated copies.
 

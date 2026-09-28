@@ -149,7 +149,7 @@ test('explicit warn policy shares an unvalidated runtime while strict clients st
   try {
     const client = await permissive.codex();
     assert.equal((await client.request('probe')).pid, record.childPid);
-    assert.deepEqual(permissive.versionWarnings(), [{ component: 'codex', cliVersion: 'codex-cli 99.0.0' }]);
+    assert.deepEqual(permissive.versionWarnings(), []);
     await assert.rejects(strict.codex(), /invalid identity/);
   } finally { await permissive.close(); await strict.close(); }
   child.stdin.end();

@@ -1,11 +1,13 @@
 import net from 'node:net';
 import { chmod, lstat, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
+import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 
 const MAX_FRAME = 1024 * 1024;
-const MAX_CONNECTIONS = 64;
+// Leave room for controller/status clients when all 64 workers are waiting.
+const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list']);
+const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -145,19 +147,34 @@ export async function callCollaboration({ root, peer, token, method, params = {}
 }
 
 const tool = (name, description, properties, required = []) => ({
-  name: `claudex_${name}`, description,
-  inputSchema: { type: 'object', properties, required, additionalProperties: false },
+  name: `claudex_${name}`, description: description + (name === 'start'
+    ? ' The default workspace is the enclosing Git checkout root, or cwd for non-Git folders. Optional projectRoot explicitly contains cwd; readOnlyDirs grant reference access and writableDirs grant additional writes. Supply only user-authorized directories. Children inherit or narrow parent access; they cannot expand it. Handoffs preserve directory grants.' : ''),
+  inputSchema: { type: 'object', properties: { ...properties,
+    ...(['start', 'handoff'].includes(name) ? { effort } : {}),
+    ...(name === 'start' ? { projectRoot: str, readOnlyDirs: directories, writableDirs: directories } : {}) }, required, additionalProperties: false },
 });
 const str = { type: 'string', minLength: 1 };
+const directories = { type: 'array', maxItems: 16, items: str };
+const model = { type: ['string', 'null'], minLength: 1, maxLength: 200, pattern: '^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f]*\\S)?$' };
 const integer = { type: 'integer', minimum: 0 };
+const effort = { type: ['string', 'null'], enum: [...new Set(Object.values(collaborationEfforts).flat()), null],
+  description: 'Provider-native reasoning effort. Omitted uses the destination provider default; null uses the native CLI default. Codex: none, minimal, low, medium, high, xhigh, max, ultra. Claude: low, medium, high, xhigh, max. Model-specific restrictions are enforced by the native CLI; no fallback is applied.' };
+const view = { type: 'string', enum: ['full', 'summary'] };
 const toolDefinitions = [
-  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId, then status/wait for results. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model: str, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
+  tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. If deferredUntilParentExit is true, end your native turn immediately with exactly CLAUDEX_YIELD: no more tools or summary; the child runs after you exit and you resume with its result. Otherwise use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
-  tool('handoff', 'Transfer this same task to the other provider. Read status for the current revision first. Include progress, remaining work and constraints. After acknowledgement stop work and end your turn; do not wait on yourself. Transfer occurs only after successful native completion. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
-  tool('status', 'Read task status without starting a model.', { taskId: str }, ['taskId']),
-  tool('wait', 'Wait for a task revision without starting a model.', { taskId: str, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }, ['taskId']),
-  tool('cancel', 'Cancel a task.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
+  tool('handoff', 'Transfer this same task to the other provider. Optional model overrides the receiving provider default reported by claudex_list; omission uses that default, not the outgoing model. Explicit null uses the native CLI default. Read status for the current revision first. Include all progress, remaining work and constraints in the message. After acknowledgement end your native turn immediately with exactly CLAUDEX_HANDOFF: no further tools or summary, and do not wait on yourself. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
+  tool('status', 'Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default.', { taskId: str, view }, ['taskId']),
+  tool('wait', 'Wait up to 30 seconds for a task revision without starting a model. Prefer view=summary with afterRevision to avoid repeated history; changed/timedOut/terminal/resultFinal describe the response. Unseen terminal child outcomes are still delivered and acknowledged. Use view=full for complete history.', { taskId: str, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }, ['taskId']),
+  tool('cancel', 'Request cancellation. Check cancelAccepted, cancelPending and terminal: acceptance is not proof of process exit. Wait for a terminal outcome; an unsafe shutdown may remain uncertain. Completed, failed or cancelled tasks are no-ops; uncertain tasks require operator inspection and reject cancellation.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
   tool('list', 'List visible tasks.', {}, []),
+  tool('chat_list', 'Find hook-registered native chats by title. Optional query searches native title metadata only, provider filters codex/claude, match selects exact or contains (default). Results include title, titleMatch, source and errors, sessionId and cwd; follow nextCursor. Titles are not unique IDs: if multiple or partial matches exist, ask the user to choose, never silently pick the newest. Do not send from errored title metadata. Pass the chosen sessionId and verbatim expectedTitle to chat_send. Does not scan conversation text or register unknown chats.', { limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str,
+    query: str, provider: { type: 'string', enum: ['codex', 'claude'] }, match: { type: 'string', enum: ['exact', 'contains'] } }, []),
+  tool('chat_send', 'Queue an explicitly user-authorized peer coordination message for an existing native chat. Controller only. Use the exact provider/sessionId from chat_list. Never creates, resumes a second writer, or archives a chat. Delivery waits for a native hook; idle chats are not woken. Stop delivery can continue the existing chat with model inference. Does not grant permissions or forcibly interrupt work. Use chat_status to distinguish queued, offered and acknowledged; verify task shutdown separately before restarting services.', {
+    provider: { type: 'string', enum: ['codex', 'claude'] }, sessionId: str, expectedTitle: { ...str, description: 'Verbatim title from the chosen search result; rechecked before enqueueing to catch renames or unavailable metadata.' }, message: { type: 'string', minLength: 1, maxLength: 1500 },
+    requestId: str, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 },
+  }, ['provider', 'sessionId', 'message', 'requestId']),
+  tool('chat_status', 'Read a native-chat coordination message receipt. Offered means hook output prepared, not proven read; acknowledged means the exact recipient emitted its acknowledgement marker, not that requested actions succeeded. No resend or inference.', { messageId: str }, ['messageId']),
 ];
 const byName = new Map(toolDefinitions.map(entry => [entry.name, entry]));
 
@@ -168,10 +185,15 @@ function validateTool(name, args) {
   if (schema.required.some(key => !Object.hasOwn(args, key)) || Object.keys(args).some(key => !Object.hasOwn(schema.properties, key))) fail('Invalid tool arguments');
   for (const [key, value] of Object.entries(args)) {
     const field = schema.properties[key];
+    if (key === 'effort') validateCollaborationEffort(args.provider, value);
     if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
+    if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
+    if (field.type === 'array' && (!Array.isArray(value) || value.length > field.maxItems
+      || value.some(path => typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')))) fail(`Invalid ${key}`);
   }
   if (name === 'claudex_start' && !isAbsolute(args.cwd)) fail('cwd must be absolute');
+  if (name === 'claudex_start' && args.projectRoot !== undefined && !isAbsolute(args.projectRoot)) fail('projectRoot must be absolute');
   return name.slice('claudex_'.length);
 }
 
@@ -191,7 +213,7 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
       let result;
       if (request.method === 'initialize') {
         const version = request.params?.protocolVersion;
-        result = { protocolVersion: VERSIONS.has(version) ? version : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'claudex', version: '0.2.0' } };
+        result = { protocolVersion: VERSIONS.has(version) ? version : '2024-11-05', capabilities: { tools: {} }, serverInfo: { name: 'claudex', version: '1.0.0' } };
       } else if (request.method === 'ping') result = {};
       else if (request.method === 'tools/list') result = { tools: toolDefinitions };
       else if (request.method === 'tools/call') {

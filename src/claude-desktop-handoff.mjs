@@ -232,7 +232,7 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
     fail('canonical roots and a coordinator-owned inspection callback are required.');
   const verified = new Map();
   let running = false, cursor = 0;
-  async function publish(state) {
+  async function publish(state, { conversationIds } = {}) {
     if (running) fail('publication is already in progress.');
     running = true;
     let previousAnchors = [];
@@ -241,6 +241,16 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
       if (!Number.isSafeInteger(timestamp) || timestamp < 0) fail('invalid publication clock.');
       const previousManifest = await stableRead(join(root, 'desktop-handoff.json'), { optional: true });
       previousAnchors = previousManifest?.value?.anchors ?? [];
+      let scope = null;
+      if (conversationIds !== undefined) {
+        if (!(Array.isArray(conversationIds) || conversationIds instanceof Set)) fail('invalid conversation publication scope.');
+        scope = new Set(conversationIds);
+        if (scope.size > MAX_CANDIDATES || [...scope].some(id => typeof id !== 'string' || !UUID.test(id)))
+          fail('invalid conversation publication scope.');
+      }
+      // Validate the complete candidate inventory and owner metadata even when
+      // only one event-selected conversation may authorize new archive work.
+      // Unselected cached entries remain hints, never republished authority.
       const selected = candidates(state), live = new Set(selected.map(item => item.conversation.id));
       for (const id of verified.keys()) if (!live.has(id)) verified.delete(id);
       if (state.pending != null) {
@@ -270,11 +280,16 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
         if (data.pending != null || data.reset != null || data.displayTitleMigration != null) {
           verified.delete(id); ownerTransition = true; continue;
         }
+        if (scope && !scope.has(id)) continue;
         const originalIdentity = await fileIdentity(original.path), currentIdentity = await fileIdentity(current.path);
         const hint = JSON.stringify({ original, current, conversation, mapping, ownerIdentity: owner.identity, originalIdentity, currentIdentity });
         const prior = verified.get(id);
         const item = { ...candidate, mapping, owner, originalIdentity, currentIdentity, hint, prior };
-        if (prior?.hint === hint && timestamp - prior.verifiedAt < REVERIFY_MS && timestamp >= prior.verifiedAt) ready.push(prior);
+        const unexpiredScopedAction = !scope || previousManifest?.value?.expiresAt > timestamp
+          && previousManifest.value.generatedAt <= timestamp
+          && previousManifest.value.actions?.some(action => action.operationId === prior?.action.operationId);
+        if (prior?.hint === hint && timestamp - prior.verifiedAt < REVERIFY_MS && timestamp >= prior.verifiedAt
+          && unexpiredScopedAction) ready.push(prior);
         else dirty.push(item);
       }
       if (ownerTransition) {
@@ -299,7 +314,9 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
         const currentData = await inspect(current);
         assertInspection(current, currentData, conversation.canonical, conversation.cwd);
         if (!equal(await fileIdentity(original.path), originalIdentity) || !equal(await fileIdentity(current.path), currentIdentity))
-          fail('native history changed during handoff verification.');
+          throw Object.assign(new Error('Claude Desktop handoff: native history changed during handoff verification.'),
+            { code: 'CLAUDEX_HANDOFF_HISTORY_CHANGED', conversationId: conversation.id,
+              title: typeof conversation.title === 'string' ? conversation.title.slice(0, 200) : undefined });
         await unchanged(owner);
         const latest = (await readDesktopSessionMappings(desktopHome, [original.nativeId])).get(original.nativeId.toLowerCase());
         if (!equal(latest, mapping) || state.pending != null) fail('native registration or coordinator state changed during verification.');
@@ -352,7 +369,11 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
       // newly observed conflict. Failure to revoke remains explicit as well.
       try {
         const anchors = await retainPresentationAnchors({ root, desktopHome, state, anchors: previousAnchors });
-        await writeManifest(root, [], now(), anchors);
+        const changed = await writeManifest(root, [], now(), anchors);
+        if (error.code === 'CLAUDEX_HANDOFF_HISTORY_CHANGED') return {
+          changed, actions: 0, anchors: anchors.length, acknowledged: [],
+          deferred: 'history_changed', conversationId: error.conversationId, title: error.title,
+        };
       }
       catch (revokeError) { throw new AggregateError([error, revokeError], 'Claude Desktop handoff verification and manifest revocation failed.'); }
       throw error;

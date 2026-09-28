@@ -1,7 +1,19 @@
 import Foundation
 
+struct SetupLaunchPolicy {
+    let showSettings: Bool
+    let startSetup: Bool
+
+    init(background: Bool, inspectOnly: Bool, hasPresentedSettings: Bool, hasPriorSetup: Bool) {
+        let firstLaunch = !hasPresentedSettings && !hasPriorSetup
+        showSettings = !background || (!inspectOnly && firstLaunch)
+        startSetup = !inspectOnly && firstLaunch
+    }
+}
+
 enum SetupPhase: String, Decodable {
     case ready = "ready"
+    case waiting = "waiting"
     case settingUp = "setting-up"
     case needsAction = "needs-action"
     case blocked = "blocked"
@@ -17,6 +29,7 @@ enum ComponentAction: String, Decodable {
     case openCodex = "open-codex"
     case openClaude = "open-claude"
     case retry
+    case diagnostics
 }
 
 struct SetupComponent: Decodable {
@@ -41,6 +54,29 @@ struct SetupReport: Decodable {
     let components: [SetupComponent]
     let message: String?
 
+    var attentionComponents: [SetupComponent] {
+        components.filter { [.blocked, .missing, .loginRequired].contains($0.state) }
+    }
+
+    var needsSetupRetry: Bool {
+        attentionComponents.contains { component in
+            guard let action = component.action else { return false }
+            return action != .diagnostics
+        }
+    }
+
+    var connectionSummaries: [SetupComponent] {
+        [("codex", "Codex", ComponentAction.openCodex), ("claude", "Claude", ComponentAction.openClaude)].map { provider, title, open in
+            let entries = components.filter { ["\(provider)-cli", "\(provider)-login", "\(provider)-desktop"].contains($0.id) }
+            let issue = entries.first { [.blocked, .missing, .loginRequired].contains($0.state) }
+                ?? entries.first { $0.state != .ready }
+            let complete = entries.count == 3 && issue == nil
+            return SetupComponent(id: "\(provider)-connection", label: title, state: complete ? .ready : issue?.state ?? .waiting,
+                                  detail: complete ? "Ready to connect" : issue?.detail ?? "Checking connection…",
+                                  action: complete ? open : nil)
+        }
+    }
+
     static func parse(_ data: Data) throws -> SetupReport {
         let decoder = JSONDecoder()
         let report = try decoder.decode(SetupReport.self, from: data)
@@ -61,14 +97,42 @@ struct SetupReport: Decodable {
 
 enum SetupParseError: Error { case invalid }
 
+struct ModelSettings: Decodable {
+    struct Defaults: Decodable {
+        let codex: String?
+        let claude: String?
+    }
+    let defaultModels: Defaults
+    let defaultEfforts: Defaults?
+
+    static let codexEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
+
+    static func parse(_ data: Data) throws -> ModelSettings {
+        let settings = try JSONDecoder().decode(ModelSettings.self, from: data)
+        for model in [settings.defaultModels.codex, settings.defaultModels.claude] {
+            guard model == nil || (!model!.isEmpty && model!.utf8.count <= 200
+                && !model!.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })) else {
+                throw SetupParseError.invalid
+            }
+        }
+        for (effort, supported) in [(settings.defaultEfforts?.codex, codexEfforts), (settings.defaultEfforts?.claude, claudeEfforts)] {
+            guard effort == nil || supported.contains(effort!) else { throw SetupParseError.invalid }
+        }
+        return settings
+    }
+}
+
 enum SetupCommand {
     case inspect
+    case startup
     case setup
     case login(String)
 
     var arguments: [String] {
         switch self {
         case .inspect: return ["inspect"]
+        case .startup: return ["startup"]
         case .setup: return ["setup"]
         case .login(let provider): return ["login", "--provider", provider]
         }
@@ -77,6 +141,7 @@ enum SetupCommand {
 
 enum SetupProcessError: Error {
     case unavailable, excessiveOutput, failed(Int32), invalidResponse
+    case engineMessage(String)
 
     var message: String {
         switch self {
@@ -84,8 +149,14 @@ enum SetupProcessError: Error {
         case .excessiveOutput: return "The setup engine returned too much data. Setup status could not be verified."
         case .failed(let code): return "The setup engine exited with code \(code). Check the app installation, then retry."
         case .invalidResponse: return "The setup engine returned an unrecognized status. Setup is not confirmed."
+        case .engineMessage(let detail): return detail
         }
     }
+}
+
+struct StopResult: Decodable {
+    let stopped: Bool
+    let detail: String?
 }
 
 final class SetupRunner {
@@ -108,14 +179,45 @@ final class SetupRunner {
         }
     }
 
+    func models(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil,
+                completion: @escaping (Result<ModelSettings, SetupProcessError>) -> Void) {
+        var arguments = ["models"]
+        if let codex, let claude { arguments += ["--codex-model", codex, "--claude-model", claude] }
+        if let codexEffort, let claudeEffort { arguments += ["--codex-effort", codexEffort, "--claude-effort", claudeEffort] }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.executeData(arguments).flatMap { data -> Result<ModelSettings, SetupProcessError> in
+                do { return .success(try ModelSettings.parse(data)) }
+                catch { return .failure(.invalidResponse) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func stop(statusOnly: Bool = false, completion: @escaping (Result<StopResult, SetupProcessError>) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.executeData([statusOnly ? "stop-status" : "stop"]).flatMap { data -> Result<StopResult, SetupProcessError> in
+                do { return .success(try JSONDecoder().decode(StopResult.self, from: data)) }
+                catch { return .failure(.invalidResponse) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
     private func execute(_ command: SetupCommand) -> Result<SetupReport, SetupProcessError> {
+        executeData(command.arguments).flatMap { data in
+            do { return .success(try SetupReport.parse(data)) }
+            catch { return .failure(.invalidResponse) }
+        }
+    }
+
+    private func executeData(_ arguments: [String]) -> Result<Data, SetupProcessError> {
         let files = FileManager.default
         guard files.isExecutableFile(atPath: node.path), files.fileExists(atPath: engine.path) else {
             return .failure(.unavailable)
         }
         let process = Process()
         process.executableURL = node
-        process.arguments = [engine.path] + command.arguments + ["--root", root]
+        process.arguments = [engine.path] + arguments + ["--root", root]
         let output = Pipe(), errors = Pipe()
         process.standardOutput = output
         process.standardError = errors
@@ -161,8 +263,13 @@ final class SetupRunner {
         process.waitUntilExit()
         group.wait()
         if tooLarge { return .failure(.excessiveOutput) }
-        guard process.terminationStatus == 0 else { return .failure(.failed(process.terminationStatus)) }
-        do { return .success(try SetupReport.parse(stdout)) }
-        catch { return .failure(.invalidResponse) }
+        guard process.terminationStatus == 0 else {
+            if ["models", "stop", "stop-status"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
+               let detail = response["error"] as? String, !detail.isEmpty, detail.count <= 2_000 {
+                return .failure(.engineMessage(detail))
+            }
+            return .failure(.failed(process.terminationStatus))
+        }
+        return .success(stdout)
     }
 }

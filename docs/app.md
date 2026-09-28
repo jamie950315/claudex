@@ -13,13 +13,66 @@ do not need Git, a separate Node.js installation, or terminal configuration.
 
 ## First launch
 
+Claudex.app supports English, Traditional Chinese, Simplified Chinese, Japanese,
+Korean, Spanish, German, French and Italian. The **Language** picker follows the
+system by default; a manual choice takes effect immediately and is remembered.
+Switching languages only changes presentation, never services or conversation
+contents. Menus, health summaries, setup guidance and notifications are localized.
+Unrecognized native diagnostic details remain verbatim beneath a localized label
+so troubleshooting evidence is not changed. CLI output remains English.
+
 1. Put Claudex.app in a stable Applications location before opening it. Background
    services reference the bundle; do not move it while those services are running.
-2. Open Claudex. Setup starts automatically and verifies the installed vendor apps.
+2. Open Claudex. On first launch, the main window opens automatically and setup verifies
+   the installed vendor apps, including when first started in background mode.
 3. Complete an official browser sign-in if requested. Desktop sign-in and CLI
    sign-in are not assumed to be interchangeable. Credentials are never copied.
-4. Let the checklist report which integrations are ready and which require an
+4. Review and trust the exact Claudex completion hooks through Codex's native hook
+   review (`/hooks` in Codex CLI). Setup preserves existing hooks and never bypasses
+   native trust. A configured-but-untrusted hook remains an explicit readiness issue.
+5. Let the checklist report which integrations are ready and which require an
    account, compatible runtime, idle native process, or normal app restart.
+
+Conversation synchronization wakes on native completion hooks/events, not a recurring
+two-second history scan. Startup/reconnection reconciliation and a status-only
+heartbeat remain; the heartbeat does not inspect conversations.
+
+The single Claudex window shows live synchronization status and compact Codex and
+Claude connection summaries. Setup actions appear automatically when a component
+is missing, sign-in is required, or a fault needs attention. Healthy operation does
+not show redundant sign-in buttons or Retry setup. **Show advanced diagnostics**
+reveals the complete checklist, versions, signatures, timestamps and notification
+controls. Notification clicks open this same window, not a separate status page.
+The page has one outer scroll area: content wraps with the window width and a
+taller window reveals more content. There are no fixed-height inner checklists
+or diagnostic scrolling panes.
+Waiting and fault details are shown directly beneath the health summary, including
+known conversation names, exact reasons, next steps, and copy/diagnostic actions.
+Normal runtime waits do not request setup changes. Missing components, required
+sign-in and actual faults appear before ready rows in the checklist; ordinary
+waiting does not offer a misleading setup retry button.
+After resolving a missing requirement, use that button to continue configuration;
+it does not resend messages or bypass synchronization guards. The menu has one
+**Open Claudex…** entry, not separate status, settings or retry entries. Later login starts stay quiet,
+and reopening Claudex inspects the configuration rather than rerunning setup.
+Read-only inspection and synthetic UI checks do not mark onboarding as presented.
+
+Under **Show advanced diagnostics**, **Collaboration models** provides separate
+Codex and Claude default model ID fields. Enter a model ID supported by the
+provider's native CLI, then choose **Save model settings**. Leave a field blank
+to use that CLI's default model. These settings apply to new work and handoffs;
+an explicitly selected task or handoff model takes precedence. **Reload model
+settings** reads the saved configuration again. Saving does not rerun setup or
+restart services. Model IDs are entered directly so vendor model updates do not
+depend on a bundled catalog.
+
+Each provider also has a **Reasoning effort** selector. **Native effort default**
+leaves effort unspecified; otherwise the selected native effort is captured for
+new work and handoffs unless the request explicitly overrides it. Follow-ups keep
+their task's selection. Saving model settings saves both models and efforts.
+Changing a model does not silently change its effort. Levels depend on the selected
+model and are not equivalent across providers; native validation errors remain
+visible rather than silently lowering effort. Existing work is not changed.
 
 All projects are available by default, with task-scoped file editing. Users do
 not enroll directories one at a time. This is not unrestricted access to the
@@ -41,10 +94,27 @@ or the user's global Node.js installation.
 - Native folder presentation and Local predecessor handoff when the existing
   frontend resource and lifecycle checks permit them.
 - Background startup through the existing owned, journaled LaunchAgents.
+- One Claudex app and one menu bar item for setup, live synchronization status,
+  diagnostics, and notification controls. Login opens the same app quietly;
+  it does not rerun setup or open another status application.
+
+Graphical setup migrates an owned legacy status-display login item to the unified
+app. It exits only that verified display, preserves its files for recovery, and
+does not stop synchronization, collaboration, or native conversations. Unknown
+or modified login items block migration instead of being overwritten.
 
 Setup itself never sends a model prompt. Collaboration begins only when work is
-requested through the protocol. Closing the setup window or quitting the display
-does not stop the background services.
+requested through the protocol. Closing the window keeps background services
+running. **Quit Claudex** (including Command-Q) stops synchronization and the
+collaboration broker, waits for owned processes/native work to exit safely, then
+closes the app. The app stays visible while shutdown drains; an unverified stop
+shows an error rather than falsely claiming completion. In-flight collaboration
+work receives the broker's normal cancellation; file edits are not rolled back.
+Native user work is never force-killed. Installed hooks remain registered but
+do not record wake events while the app is stopped. No conversations or settings
+are deleted. Opening Claudex again resumes its verified installed services;
+ordinary reopen without a preceding Quit does not restart running services.
+Login startup remains installed. The legacy CLI-only status display is unchanged.
 
 The checklist refreshes through read-only inspection. An observed prerequisite
 or sign-in transition can continue setup automatically; it does not blindly
@@ -58,9 +128,10 @@ connections. Earlier CLI-managed services whose paths or policy differ can need
 a safe migration before this app can adopt them. The app reports that hold
 instead of force-closing processes or claiming an upgrade succeeded.
 
-Synchronization retains its version policy. Newer native apps can be available
-for collaboration while synchronization remains blocked pending compatibility
-validation. A missing or changed frontend resource prevents the folder patch;
+New graphical installations permit newer native versions without version-only
+warnings. The existing `warn` configuration name is retained; an explicitly
+selected `strict` policy remains available. Actual protocol and history failures
+still pause unsafe operations. A missing or changed frontend resource prevents the folder patch;
 there is no guessed resource or signature bypass. Refer to
 [synchronization](synchronization.md) for the exact boundaries.
 
@@ -68,6 +139,9 @@ Developer diagnostics can invoke `bin/claudex-app.mjs inspect` for a read-only
 JSON report. `Claudex.app --inspect-only` exposes that report in the native UI
 without setup or login actions. `--ui-smoke` renders a synthetic checklist and
 tests native layout without invoking the backend; it is not deployment evidence.
+`--diagnose` reads the same bounded health report used by the menu bar.
+`--ui-language <locale>` overrides the language only with `--inspect-only` or
+`--ui-smoke`; these modes do not persist the language preference.
 
 ## Packaging and distribution
 

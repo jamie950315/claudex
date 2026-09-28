@@ -5,6 +5,8 @@ export const DEFAULT_POLICY = Object.freeze({
   maxAuditEntries: 50,
 });
 
+export const MAX_DEPENDENCY_ANCHORS = 64;
+
 function nonnegativeInteger(value, label) {
   if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${label} must be a nonnegative safe integer`);
 }
@@ -37,7 +39,7 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
     ids.add(record.id);
     nonemptyString(record.conversationId, 'conversationId');
     if (!['codex', 'claude'].includes(record.side)) throw new TypeError('Invalid record side');
-    if (!['current', 'previous'].includes(record.status)) throw new TypeError('Invalid record status');
+    if (!['current', 'previous', 'dependency-anchor'].includes(record.status)) throw new TypeError('Invalid record status');
     for (const key of ['managed', 'verified']) {
       if (typeof record[key] !== 'boolean') throw new TypeError(`${key} must be a boolean`);
     }
@@ -49,7 +51,16 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
       record.dependentIds.forEach(id => nonemptyString(id, 'dependentId'));
       if (new Set(record.dependentIds).size !== record.dependentIds.length) throw new TypeError('Duplicate dependent id');
     }
-    if (record.status === 'previous') {
+    if (record.status === 'dependency-anchor') {
+      if (record.side !== 'codex' || record.kind !== 'snapshot' || !record.managed || !record.verified)
+        throw new TypeError('Dependency anchors require verified managed Codex snapshots');
+      if (!Array.isArray(record.dependencyIds) || !record.dependencyIds.length)
+        throw new TypeError('Dependency anchors require saved dependency ids');
+      record.dependencyIds.forEach(id => nonemptyString(id, 'dependencyId'));
+      if (new Set(record.dependencyIds).size !== record.dependencyIds.length)
+        throw new TypeError('Duplicate dependency id');
+    }
+    if (['previous', 'dependency-anchor'].includes(record.status)) {
       backupBytes += record.bytes;
       nonnegativeInteger(backupBytes, 'Total backup bytes');
     }
@@ -69,6 +80,10 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
   }
   const remove = new Set();
   const blocked = new Map();
+  const anchors = records.filter(record => record.status === 'dependency-anchor');
+  if (anchors.length > MAX_DEPENDENCY_ANCHORS) {
+    for (const record of anchors) blocked.set(record.id, { id: record.id, reason: 'dependency-anchor-limit' });
+  }
   function evict(record) {
     const reason = !record.managed ? 'unmanaged' : !record.verified ? 'unverified' : record.busy ? 'busy'
       : record.dependentIds?.length ? 'dependent-records' : null;
@@ -80,6 +95,10 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
   for (const record of previous) {
     if (backupBytes <= limits.maxBackupBytes) break;
     if (!remove.has(record.id)) evict(record);
+  }
+  if (backupBytes > limits.maxBackupBytes) {
+    for (const record of anchors) if (!blocked.has(record.id))
+      blocked.set(record.id, { id: record.id, reason: 'dependency-anchor-quota' });
   }
   return {
     keep: records.filter(record => !remove.has(record.id)).map(record => record.id),

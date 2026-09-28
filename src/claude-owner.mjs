@@ -323,12 +323,9 @@ export class ClaudeOwner {
     if (!runtimeVersionPermitted(this.sdkVersion, CLAUDE_OWNER_SDK_VERSION, this.versionPolicy)
         || !runtimeVersionPermitted(this.claudeVersion, CLAUDE_OWNER_CLI_VERSION, this.versionPolicy))
       throw new Error('Unsupported Claude owner runtime; SDK and native CLI must match the pinned versions or an explicit warn policy.');
-    this.versionWarning = this.sdkVersion !== CLAUDE_OWNER_SDK_VERSION || this.claudeVersion !== CLAUDE_OWNER_CLI_VERSION
-      ? { component: 'claude', cliVersion: this.claudeVersion, sdkVersion: this.sdkVersion } : null;
-    if (this.versionWarning && !this.versionWarningEmitted) {
-      this.versionWarningEmitted = true;
-      await this.emit({ type: 'owner_version_warning', ...this.versionWarning });
-    }
+    // An unfamiliar version is not a compatibility failure. Native protocol,
+    // ownership and history checks remain the source of operational errors.
+    this.versionWarning = null;
   }
 
   async verifyMaintenancePolicy(runtimeEnv) {

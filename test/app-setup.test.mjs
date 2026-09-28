@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { AppSetup, appPrivateJSON } from '../src/app-setup.mjs';
+import { readAppStopState } from '../src/app-stop-state.mjs';
 
 const readyProviders = (base, versions = {}) => ({
   codex: { binary: join(base, 'codex'), app: join(base, 'Codex.app'), version: versions.codex ?? 'codex-cli 0.155.0-alpha.16.4' },
@@ -40,6 +41,8 @@ async function fixture(t, options = {}) {
     serviceInstall: async input => { events.push(['service', input]); },
     ownership: async () => ({ allowed: options.ownerAllowed !== false }),
     foldersInstall: async input => { events.push(['folders', input]); },
+    interfaceInstall: async input => { events.push(['interface', input]); },
+    syncHooksInstall: async input => { events.push(['sync-hooks', input]); return { configured: true }; },
   });
   setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' } });
   return { base, root, home, runtimeDirectory, providers, setup, events };
@@ -57,9 +60,136 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.deepEqual(config.projects, []);
   assert.ok(events.some(([kind]) => kind === 'desktop'));
   assert.ok(events.some(([kind]) => kind === 'service'));
+  assert.ok(events.some(([kind]) => kind === 'sync-hooks'));
   assert.equal(report.version, 1);
   assert.equal(report.allProjects, true);
   assert.equal(report.allowWrite, true);
+});
+
+test('model preferences use authenticated broker requests without running setup', async t => {
+  const { root, setup, events } = await fixture(t);
+  await mkdir(join(root, 'collaboration'), { mode: 0o700 });
+  await writeFile(join(root, 'collaboration', 'controller-key'), 'a'.repeat(64) + '\n', { mode: 0o600 });
+  const requests = [];
+  setup.collaborationCall = async request => {
+    requests.push(request);
+    return { defaultModels: request.params.defaultModels ?? { codex: null, claude: null } };
+  };
+  assert.deepEqual(await setup.models(), { defaultModels: { codex: null, claude: null } });
+  assert.deepEqual(await setup.models({ codex: 'test-codex', claude: 'test-claude' }),
+    { defaultModels: { codex: 'test-codex', claude: 'test-claude' } });
+  await setup.models(undefined, { codex: 'high', claude: 'low' });
+  assert.deepEqual(requests.at(-1).params, { defaultEfforts: { codex: 'high', claude: 'low' } });
+  await setup.models({ codex: null, claude: null }, { codex: null, claude: null });
+  assert.deepEqual(requests.at(-1).params, { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null } });
+  assert.ok(requests.every(request => request.method === 'models' && request.token === 'a'.repeat(64)));
+  assert.deepEqual(events, []);
+  setup.collaborationCall = async () => { throw Object.assign(new Error('Broker offline'), { code: 'ECONNREFUSED' }); };
+  await assert.rejects(setup.models(), /Broker offline/);
+});
+
+test('background startup integrates the display without installing providers or services', async t => {
+  const { setup, events } = await fixture(t);
+  await setup.startup();
+  assert.ok(events.some(([kind]) => kind === 'interface'));
+  assert.ok(!events.some(([kind]) => ['ensure-providers', 'collaboration', 'desktop', 'service', 'folders'].includes(kind)));
+});
+
+test('quit requests both services stop and waits for native ownership before claiming stopped', async t => {
+  const { setup, root } = await fixture(t);
+  const calls = [];
+  let loaded = true, ownerAlive = true;
+  setup.serviceStatus = async action => { calls.push(`sync:${action}`); if (action === 'stop') loaded = false; return { loaded }; };
+  setup.collaborationControl = async action => { calls.push(`work:${action}`); return { installed: true, loaded: false, stopped: true }; };
+  setup.ownership = async () => ({ allowed: !ownerAlive, blockers: ownerAlive ? [{ code: 'live-owner' }] : [] });
+  assert.equal((await setup.stop()).stopped, false);
+  assert.ok(calls.includes('sync:stop'));
+  assert.ok(calls.includes('work:stop'));
+  assert.equal((await readAppStopState(root)).stopped, true);
+  ownerAlive = false;
+  assert.equal((await setup.stopStatus()).stopped, true);
+  assert.equal(calls.filter(call => call === 'work:stop').length, 1, 'status does not send repeated stop signals');
+});
+
+test('quit preserves failure evidence and still attempts the independent service', async t => {
+  const { setup, root } = await fixture(t);
+  let workStops = 0;
+  setup.serviceStatus = async action => { if (action === 'stop') throw new Error('Sync ownership mismatch'); return { loaded: true }; };
+  setup.collaborationControl = async action => { if (action === 'stop') workStops++; return { stopped: true, loaded: false }; };
+  await assert.rejects(setup.stop(), /Sync ownership mismatch/);
+  assert.equal(workStops, 1);
+  assert.equal((await readAppStopState(root)).stopped, true);
+});
+
+test('reopening after Quit resumes only installed owned services and clears hook hold after success', async t => {
+  const { setup, root } = await fixture(t);
+  await writeFile(join(root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), '{}', { mode: 0o600 });
+  const calls = [];
+  setup.serviceStatus = async action => { calls.push(`sync:${action}`); return { loaded: false }; };
+  setup.collaborationControl = async action => { calls.push(`work:${action}`); return { installed: true, loaded: false, stopped: true }; };
+  setup.ownership = async () => ({ allowed: true, blockers: [] });
+  await setup.resumeStoppedServices();
+  assert.ok(calls.includes('sync:start'));
+  assert.ok(calls.includes('work:start'));
+  assert.equal((await readAppStopState(root)).stopped, false);
+  const count = calls.length;
+  await setup.resumeStoppedServices();
+  assert.equal(calls.length, count, 'ordinary startup never restarts running services');
+});
+
+test('partial reopen can resume its journal but draining native work blocks a fresh reopen', async t => {
+  const { setup, root } = await fixture(t);
+  await writeFile(join(root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), '{}', { mode: 0o600 });
+  let loaded = false, draining = true, failStart = true;
+  setup.serviceStatus = async action => { if (action === 'start') loaded = true; return { loaded }; };
+  setup.collaborationControl = async action => { if (action === 'start' && failStart) throw new Error('Temporary startup failure'); return { installed: true, loaded: false, stopped: true }; };
+  setup.ownership = async () => ({ allowed: !draining, blockers: draining ? [{ code: 'live-owner' }] : [] });
+  await assert.rejects(setup.resumeStoppedServices(), /still draining/);
+  assert.equal(loaded, false);
+  draining = false;
+  await assert.rejects(setup.resumeStoppedServices(), /Temporary startup/);
+  assert.equal((await readAppStopState(root)).resuming, true);
+  failStart = false;
+  await setup.resumeStoppedServices();
+  assert.equal((await readAppStopState(root)).stopped, false);
+});
+
+test('stop marker refuses malformed or aliased state without writing', async t => {
+  const { root } = await fixture(t);
+  assert.equal(await readAppStopState(root), null);
+  await writeFile(join(root, 'app-stop.json'), '{}', { mode: 0o600 });
+  await assert.rejects(readAppStopState(root), /Invalid application stop/);
+});
+
+test('login-started verified jobs are reused when reopening after a previous Quit', async t => {
+  const { setup, root } = await fixture(t);
+  await writeFile(join(root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), '{}', { mode: 0o600 });
+  setup.serviceStatus = async () => ({ loaded: true });
+  setup.collaborationControl = async () => ({ installed: true, loaded: true, stopped: false });
+  setup.ownership = async () => ({ allowed: false, blockerCount: 1, blockers: [{ code: 'live-owner' }] });
+  await setup.resumeStoppedServices();
+  assert.equal((await readAppStopState(root)).stopped, false);
+});
+
+test('new graphical installs default to no version-only blocking or warnings', async t => {
+  const { root, base, setup } = await fixture(t);
+  await setup.setup();
+  assert.equal(JSON.parse(await readFile(join(root, 'config.json'), 'utf8')).versionPolicy, 'warn');
+  const report = await setup.inspect({ providers: readyProviders(base, { codex: 'codex-cli 999.0.0', claude: '999.0.0' }) });
+  assert.doesNotMatch(report.components.find(row => row.id === 'synchronization').detail, /unsupported|unvalidated|unverified|version.*changed/i);
+});
+
+test('display integration failures remain explicit while independent setup stays available', async t => {
+  const { setup, events } = await fixture(t);
+  setup.interfaceInstall = async () => { throw new Error('Legacy display bundle path differs.'); };
+  const report = await setup.setup();
+  assert.equal(report.components.find(row => row.id === 'interface').state, 'blocked');
+  assert.equal(report.components.find(row => row.id === 'interface').action, 'retry');
+  assert.equal((await setup.inspect()).components.find(row => row.id === 'interface').state, 'blocked');
+  assert.ok(events.some(([kind]) => kind === 'collaboration'));
 });
 
 test('missing provider login leaves existing synchronization config intact', async t => {
@@ -154,4 +284,53 @@ test('a live watcher pending dependency hold is shown as paused rather than tran
   assert.equal(row.state, 'blocked');
   assert.match(row.detail, /older snapshot has dependent threads/);
   assert.match(row.detail, /pending transaction.*preserved/);
+  assert.equal(row.action, 'diagnostics');
+});
+
+test('ordinary native waiting is not a request for user action and retains the exact reason', async t => {
+  const { root, setup } = await fixture(t);
+  await setup.setup();
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify({ mode: 'desktop', pid: process.pid, running: true,
+    updatedAt: Date.now(), foregroundCompletedAt: Date.now(), synchronization: 'waiting',
+    waiting: 'Codex destination is active.', folderProjection: { state: 'ready' }, localHandoff: { state: 'ready' } }), { mode: 0o600 });
+  const report = await setup.inspect();
+  assert.equal(report.phase, 'waiting');
+  assert.equal(report.message, 'No setup changes are required. Claudex will continue automatically.');
+  assert.equal(report.components.find(item => item.id === 'synchronization').detail, 'Codex destination is active.');
+});
+
+test('initial readiness waits for the full sweep when progress fields are present', async t => {
+  const { root, setup } = await fixture(t); await setup.setup();
+  const status = { mode: 'desktop', pid: process.pid, running: true, updatedAt: Date.now(),
+    foregroundCompletedAt: Date.now(), checkingConversationCount: 2, checkedConversationCount: 1,
+    initialSweepCompletedAt: null, synchronization: 'ready' };
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(status), { mode: 0o600 });
+  assert.equal((await setup.inspect()).components.find(row => row.id === 'synchronization').state, 'waiting');
+  status.initialSweepCompletedAt = Date.now(); status.checkedConversationCount = 2;
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(status), { mode: 0o600 });
+  assert.equal((await setup.inspect()).components.find(row => row.id === 'synchronization').state, 'ready');
+});
+
+test('actual runtime faults expose their exact reasons instead of generic setup messages', async t => {
+  const { root, setup } = await fixture(t);
+  await setup.setup();
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify({ pid: process.pid, running: true, updatedAt: Date.now(),
+    synchronization: 'blocked', blocked: { reason: 'Exact prefix conflict' },
+    folderProjection: { state: 'error', error: 'Exact frontend resource conflict' },
+    localHandoff: { state: 'error', error: 'Exact native identity conflict' } }), { mode: 0o600 });
+  const report = await setup.inspect();
+  assert.equal(report.phase, 'blocked');
+  for (const [id, expected] of [['synchronization', 'Exact prefix conflict'], ['folders', 'Exact frontend resource conflict'], ['handoffs', 'Exact native identity conflict']]) {
+    const row = report.components.find(item => item.id === id);
+    assert.equal(row.detail, expected);
+    assert.equal(row.action, 'diagnostics');
+  }
+});
+
+test('uncertain collaboration work opens diagnostics instead of retrying setup', async t => {
+  const { setup } = await fixture(t);
+  setup.collaborationStatus = async () => ({ blockedByUncertainWork: true });
+  const row = (await setup.inspect()).components.find(item => item.id === 'collaboration');
+  assert.equal(row.state, 'blocked');
+  assert.equal(row.action, 'diagnostics');
 });

@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
+import { validateCollaborationEffort } from './collaboration-effort.mjs';
+import { revalidateWorkspace } from './collaboration-workspace.mjs';
 
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
@@ -40,14 +42,19 @@ function checkedMcp(mcp) {
   return { command, args, env };
 }
 
-function argv(provider, { prompt, model, permission, mcp }) {
+function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs }) {
   if (provider === 'codex') {
     const args = [
-      'exec', '--json', '--ephemeral', '--ignore-user-config',
+      'exec', '--json', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check',
       '--sandbox', permission === 'workspace-write' ? 'workspace-write' : 'read-only',
       '-c', 'approval_policy="never"',
     ];
     if (model) args.push('--model', model);
+    if (effort != null) args.push('-c', `model_reasoning_effort=${JSON.stringify(effort)}`);
+    for (const path of writableDirs) args.push('--add-dir', path);
+    if (permission === 'workspace-write' && readOnlyDirs.length) {
+      args.push('-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true', '-c', 'sandbox_workspace_write.exclude_slash_tmp=true');
+    }
     if (mcp) {
       args.push('-c', `mcp_servers.${MCP_NAME}.command=${JSON.stringify(mcp.command)}`);
       args.push('-c', `mcp_servers.${MCP_NAME}.args=${JSON.stringify(mcp.args)}`);
@@ -67,7 +74,14 @@ function argv(provider, { prompt, model, permission, mcp }) {
     '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
     '--tools', tools, '--allowedTools', mcp ? `${tools},mcp__${MCP_NAME}__*` : tools,
   ];
+  const additional = [...new Set([...readOnlyDirs, ...writableDirs])];
+  if (additional.length) args.push('--add-dir', ...additional);
+  if (permission === 'workspace-write' && readOnlyDirs.length) {
+    args.push('--settings', JSON.stringify({ permissions: { deny: readOnlyDirs.flatMap(path =>
+      [`Edit(/${path})`, `Edit(/${path}/**)`]) } }));
+  }
   if (model) args.push('--model', model);
+  if (effort != null) args.push('--effort', effort);
   if (mcp) args.push('--mcp-config', JSON.stringify({ mcpServers: { [MCP_NAME]: { command: mcp.command, args: mcp.args } } }));
   return args;
 }
@@ -106,13 +120,16 @@ export function createNativeCollaborationRunner({
   },
 } = {}) {
   return async function runCollaborationNative({
-    provider, cwd, prompt, model, mcp: rawMcp, permission = 'read-only',
+    provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
+    projectRoot, readOnlyDirs = [], writableDirs = [],
     timeoutMs = DEFAULT_TIMEOUT_MS, signal, onEvent,
   } = {}) {
     if (provider !== 'codex' && provider !== 'claude') throw failure('provider must be codex or claude.');
     checkedString(cwd, 'cwd', 4096);
     checkedString(prompt, 'prompt', 1024 * 1024);
     if (model != null) checkedString(model, 'model');
+    try { validateCollaborationEffort(provider, effort); }
+    catch (error) { throw failure(error.message); }
     if (!['read-only', 'workspace-write'].includes(permission)) throw failure('Invalid permission.');
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 24 * 60 * 60 * 1000) {
       throw failure('timeoutMs must be between 1000 ms and 24 hours.');
@@ -121,14 +138,23 @@ export function createNativeCollaborationRunner({
     const mcp = checkedMcp(rawMcp);
     const canonicalCwd = await realpath(cwd);
     if (!(await stat(canonicalCwd)).isDirectory()) throw failure('cwd must be a directory.');
+    try {
+      await revalidateWorkspace({ cwd: canonicalCwd, projectRoot: projectRoot ?? canonicalCwd, readOnlyDirs, writableDirs, permission });
+      if (provider === 'claude' && readOnlyDirs.some(path => /[\u0000-\u001f\u007f*?\[\]{}()!\\]/u.test(path)))
+        throw new Error('Claude read-only directory contains characters that cannot be represented safely in native permission rules.');
+    } catch (error) { throw failure(error.message); }
     if (signal?.aborted) throw failure('Native execution was cancelled before launch.');
 
     const command = checkedString(commands[provider], `${provider} command`, 4096);
-    const args = argv(provider, { prompt, model, permission, mcp });
+    const args = argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs });
     const env = { ...process.env, ...mcp?.env };
     for (const key of API_KEY_ENV) delete env[key];
     for (const key of ['CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID']) delete env[key];
-    if (provider === 'claude') delete env.CLAUDE_CONFIG_DIR;
+    if (provider === 'claude') {
+      delete env.CLAUDE_CONFIG_DIR;
+      // A caller's session-level environment must not override task effort selection.
+      delete env.CLAUDE_CODE_EFFORT_LEVEL;
+    }
     const result = { text: '', sessionId: provider === 'claude' ? randomUUID() : null,
       usage: undefined, terminal: null, conflictingReceipt: false };
     if (provider === 'claude') args.push('--session-id', result.sessionId);
@@ -143,6 +169,8 @@ export function createNativeCollaborationRunner({
       }
       let closed = false;
       let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let startupDiagnostic = '';
       let lineBuffer = '';
       const stdoutDecoder = new StringDecoder('utf8');
       let problem = null;
@@ -213,8 +241,13 @@ export function createNativeCollaborationRunner({
         }
         if (lineBuffer.length > MAX_LINE) stop(failure('Native event exceeded its limit.', { uncertain: true }));
       });
-      // Drain diagnostics without retaining potentially sensitive native output.
-      child.stderr?.resume();
+      // Keep only a bounded in-memory candidate for exact known pre-execution
+      // failures. Never persist arbitrary native stderr, credentials or prompts.
+      child.stderr?.on('data', chunk => {
+        stderrBytes += chunk.length;
+        if (stderrBytes <= 4096) startupDiagnostic += chunk.toString('utf8');
+        else startupDiagnostic = '';
+      });
       child.stdin?.on('error', (cause) => stop(failure('Native input could not be delivered.', { uncertain: true, cause })));
       child.on('error', (cause) => {
         stop(failure('Native collaboration process failed.', { uncertain: Boolean(child.pid), cause }));
@@ -258,6 +291,11 @@ export function createNativeCollaborationRunner({
         }
         if (result.terminal === 'failed') {
           reject(failure(`Native ${provider} execution failed with a terminal receipt.`, { uncertain: false }));
+          return;
+        }
+        if (provider === 'codex' && code === 1 && !processSignal && stdoutBytes === 0 && !result.sessionId
+          && stderrBytes <= 4096 && startupDiagnostic.trim() === 'Not inside a trusted directory and --skip-git-repo-check was not specified.') {
+          reject(failure('Codex refused the selected non-Git project before execution. Update the collaboration launcher; no model work was started.', { uncertain: false }));
           return;
         }
         if (code !== 0 || processSignal || result.terminal !== 'success' || typeof result.text !== 'string' || !result.text) {

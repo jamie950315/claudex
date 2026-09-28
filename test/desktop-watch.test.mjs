@@ -67,6 +67,7 @@ test('absent shared transport waits without enrolling sources and later resumes'
     assert.deepEqual(f.calls.track, []);
   } });
   assert.match(first.waiting, /backend is not ready/);
+  assert.deepEqual(first.waitingContexts, [{ scope: 'coordinator', reason: 'Shared Codex Desktop backend is not ready.' }]);
   assert.deepEqual(f.calls.track, ['/new']);
 });
 
@@ -123,6 +124,55 @@ test('tracked and owned identities are not enrolled again on later passes', asyn
   assert.equal(f.calls.codex, 3);
 });
 
+test('rapid progress coalesces within two seconds and publishes the latest state at the next boundary', async () => {
+  const f = await fixture(), publications = []; let clock = 0;
+  f.state.conversations = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`c${i}`, { title: `Conversation ${i}` }]));
+  f.bridge.sync = async id => { f.calls.sync.push(id); clock += 60; };
+  await f.run({ maxPasses: 1, discover: async () => [], now: () => clock,
+    writeStatus: async (_path, value) => publications.push(structuredClone(value)) });
+  const progress = publications.filter(value => value.running && value.foregroundCompletedAt === null);
+  assert.equal(progress.length, 3);
+  assert.equal(progress[0].updatedAt, 0);
+  assert.equal(progress[1].updatedAt, 0);
+  assert.equal(progress[1].currentOperation.conversationId, 'c0');
+  assert.equal(progress[2].updatedAt, 2040);
+  assert.equal(progress[2].checkedConversationCount, 34);
+  assert.equal(progress[2].lastSync.conversationId, 'c33');
+  assert.equal(progress[2].currentOperation, null);
+  assert.equal(publications.at(-2).checkedConversationCount, 40);
+  assert.equal(publications.at(-2).initialSweepCompletedAt, 2400);
+  assert.equal(publications.at(-1).running, false);
+  assert.deepEqual(f.calls.sync, Object.keys(f.state.conversations));
+});
+
+test('different blocked reasons publish immediately during rapid progress', async () => {
+  const f = await fixture(), publications = [];
+  f.state.conversations = { a: { title: 'A' }, b: { title: 'B' }, c: { title: 'C' } };
+  f.bridge.sync = async id => {
+    if (id === 'a') throw new Error('Both sides changed; no history was replaced.');
+    if (id === 'b') throw new Error('Owned projection has dependent threads.');
+    assert.deepEqual(publications.at(-1).blockedConversations.map(item => item.reason),
+      ['Both sides changed; no history was replaced.', 'Owned projection has dependent threads.']);
+  };
+  await f.run({ maxPasses: 1, discover: async () => [],
+    writeStatus: async (_path, value) => publications.push(structuredClone(value)) });
+  const blocked = publications.filter(value => value.running && value.synchronization === 'degraded');
+  assert.ok(blocked.some(value => value.blockedConversationCount === 1));
+  assert.ok(blocked.some(value => value.blockedConversationCount === 2));
+  assert.ok(blocked.every(value => value.updatedAt === 0));
+});
+
+test('fatal diagnostic errors bypass the progress interval', async () => {
+  const f = await fixture(), publications = [];
+  f.bridge.sync = async () => { throw new Error('Unexpected native failure'); };
+  await assert.rejects(f.run({ maxPasses: 1,
+    writeStatus: async (_path, value) => publications.push(structuredClone(value)) }), /Unexpected native failure/);
+  assert.equal(publications[0].running, true);
+  assert.equal(publications.at(-1).running, false);
+  assert.equal(publications.at(-1).stoppedAt, 0);
+  assert.equal(publications.at(-1).error, 'Unexpected native failure');
+});
+
 test('an unenrolled conversation without a complete first turn does not make healthy synchronization globally wait', async () => {
   const f = await fixture(); const track = f.bridge.track;
   f.bridge.track = async source => {
@@ -136,6 +186,7 @@ test('an unenrolled conversation without a complete first turn does not make hea
     sleep: async () => { during = await f.status(); } });
   assert.equal(during.running, true);
   assert.equal(during.waiting, null);
+  assert.deepEqual(during.waitingContexts, []);
   assert.equal(during.synchronization, 'ready');
   assert.equal(during.blockedSourceCount, 0);
   assert.deepEqual(f.calls.sync, ['new', 'new']);
@@ -196,6 +247,61 @@ test('a busy destination waits and retries after it becomes idle', async () => {
   assert.equal(f.calls.sync.length, 2);
 });
 
+test('tracked waits retain conversation identity and the first reason while other conversations continue', async () => {
+  const f = await fixture();
+  f.state.conversations = { busy: { title: 'Waiting conversation' }, healthy: { title: 'Healthy conversation' },
+    active: { title: 'Other active conversation' } };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id === 'busy') throw new Error('Claude turn is still running.');
+    if (id === 'active') throw new Error('Destination is active.');
+  };
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.waiting, 'Claude turn is still running.');
+  assert.deepEqual(pass.waitingContexts, [
+    { scope: 'conversation', conversationId: 'busy', title: 'Waiting conversation', reason: 'Claude turn is still running.' },
+    { scope: 'conversation', conversationId: 'active', title: 'Other active conversation', reason: 'Destination is active.' },
+  ]);
+  assert.ok(f.calls.sync.includes('healthy'));
+});
+
+test('waiting contexts are bounded and reset when the next pass becomes healthy', async () => {
+  const f = await fixture(); let busy = true; const passes = [];
+  f.state.conversations = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`busy${index}`, { title: 't'.repeat(300) }]));
+  f.bridge.sync = async () => { if (busy) throw new Error(`Claude turn is still running. ${'x'.repeat(1500)}`); };
+  await f.run({ maxPasses: 3, discover: async () => [], sleep: async () => {
+    passes.push(await f.status()); busy = false;
+  } });
+  assert.equal(passes[0].waitingContexts.length, 20);
+  assert.equal(passes[0].waitingContexts[0].title.length, 200);
+  assert.equal(passes[0].waitingContexts[0].reason.length, 1000);
+  assert.equal(passes[0].waiting.length, 500);
+  assert.equal(passes[1].waiting, null);
+  assert.deepEqual(passes[1].waitingContexts, []);
+});
+
+test('discovery wait contexts use known source identities without exposing transcript paths', async () => {
+  const f = await fixture({ bridge: { async track() { throw new Error('Transcript changed while being read.'); } } });
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [{ side: 'claude', nativeId: 'native-source', path: '/private/transcript' }],
+    sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(pass.waitingContexts, [{ scope: 'source', side: 'claude', nativeId: 'native-source',
+    reason: 'Transcript changed while being read.' }]);
+});
+
+test('pending recovery waits identify the affected conversation from the coordinator ledger', async () => {
+  const f = await fixture();
+  f.state.conversations.protected = { title: 'Protected conversation' };
+  f.state.pending = { phase: 'prepared', record: { conversationId: 'protected' } };
+  f.bridge.recover = async () => { throw new Error('Destination is active.'); };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(pass.waitingContexts, [{ scope: 'coordinator', conversationId: 'protected',
+    title: 'Protected conversation', reason: 'Destination is active.' }]);
+  assert.deepEqual(f.calls.track, []);
+});
+
 test('an ambiguous native write is recovered from its durable intent before another sync', async () => {
   let first = true;
   const f = await fixture({ bridge: { async sync(id) {
@@ -231,16 +337,124 @@ test('unsupported new histories have a bounded warning count and do not stop oth
 
 test('conflicting tracked histories stay blocked without stopping owners or choosing a branch', async () => {
   const f = await fixture({ bridge: { async sync() { throw new Error('Both sides changed; no history was replaced.'); } } });
+  const track = f.bridge.track;
+  f.bridge.track = async source => { await track(source); f.state.conversations[source.id].title = 'Conflicting conversation'; };
   let pass;
   await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
   assert.equal(pass.running, true);
   assert.equal(pass.synchronization, 'degraded');
   assert.match(pass.blockedConversations[0].reason, /Both sides changed/);
   assert.equal(pass.blockedConversations[0].conversationId, 'new');
+  assert.equal(pass.blockedConversations[0].title, 'Conflicting conversation');
   assert.equal(f.state.pending, null);
 });
 
 const prefixMismatch = 'Owned Claude history does not match the synchronized prefix; no branch was selected.';
+
+const missingTrackedHistory = () => Object.assign(new Error('Tracked claude history is unavailable at its saved path; synchronization is paused.'), {
+  code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: 'claude', nativeId: '00000000-0000-4000-8000-000000000097',
+  savedPath: '/claude/missing/session.jsonl', conversationId: 'new',
+});
+
+test('missing tracked history stays paced per conversation with its saved identity', async () => {
+  const f = await fixture();
+  f.bridge.sync = async id => { f.calls.sync.push(id); throw missingTrackedHistory(); };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true); assert.equal(pass.synchronization, 'degraded');
+  assert.deepEqual(pass.blockedConversations[0].historyUnavailable, {
+    side: 'claude', nativeId: missingTrackedHistory().nativeId,
+    savedPath: '/claude/missing/session.jsonl', conversationId: 'new',
+  });
+  assert.deepEqual(f.calls.sync, ['new']); assert.equal(f.state.pending, null);
+});
+
+test('missing original during global collection holds the coordinator without restarting or clearing state', async () => {
+  const f = await fixture(); let clock = 0, pass;
+  f.bridge.collect = async () => { f.calls.collect++; throw missingTrackedHistory(); };
+  f.bridge.sync = async id => { f.calls.sync.push(id); clock = 60_000; };
+  await f.run({ maxPasses: 2, now: () => clock, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true); assert.equal(pass.synchronization, 'blocked');
+  assert.equal(pass.blocked.scope, 'coordinator'); assert.equal(pass.blocked.conversationId, 'new');
+  assert.equal(pass.blocked.historyUnavailable.savedPath, '/claude/missing/session.jsonl');
+  assert.equal(f.calls.collect, 1); assert.equal(f.calls.recover, 0);
+  assert.equal(f.state.pending, null); assert.equal((await f.status()).error, null);
+});
+
+test('a global source guard during another sync retains the source identity and title', async () => {
+  const f = await fixture();
+  f.state.conversations.caller = { id: 'caller', title: 'Requesting conversation' };
+  f.state.conversations.missing = { id: 'missing', title: 'Missing original source' };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    throw Object.assign(missingTrackedHistory(), { conversationId: 'missing' });
+  };
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.synchronization, 'blocked');
+  assert.equal(pass.blocked.conversationId, 'missing');
+  assert.equal(pass.blocked.title, 'Missing original source');
+  assert.equal(pass.blockedConversationCount, 0);
+});
+
+test('relocation guards stay alive and attribute a global hold to the moved conversation', async () => {
+  for (const code of ['CLAUDEX_CLAUDE_RELOCATION_BLOCKED', 'CLAUDE_RELOCATION_BLOCKED']) {
+    const f = await fixture();
+    f.state.conversations.caller = { id: 'caller', title: 'Unrelated conversation' };
+    f.state.conversations.moved = { id: 'moved', title: 'Moved project conversation' };
+    f.bridge.sync = async id => {
+      f.calls.sync.push(id);
+      throw Object.assign(new Error('Claude relocation does not preserve the synchronized history prefix.'),
+        { code, conversationId: 'moved' });
+    };
+    let pass;
+    await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+    assert.equal(pass.running, true);
+    assert.equal(pass.synchronization, 'blocked');
+    assert.equal(pass.blocked.scope, 'coordinator');
+    assert.equal(pass.blocked.conversationId, 'moved');
+    assert.equal(pass.blocked.title, 'Moved project conversation');
+    assert.equal(pass.blockedConversationCount, 0);
+    assert.equal(f.state.pending, null);
+    assert.equal((await f.status()).error, null);
+    assert.deepEqual(f.calls.sync, ['caller']);
+  }
+});
+
+test('in-progress relocation attributes its wait to the moved conversation instead of the caller', async () => {
+  const f = await fixture();
+  f.state.conversations.caller = { id: 'caller', title: 'Unrelated conversation' };
+  f.state.conversations.moved = { id: 'moved', title: 'Moved project conversation' };
+  f.bridge.sync = async () => {
+    throw Object.assign(new Error('Claude relocation has an in-progress turn; wait for a complete assistant turn.'),
+      { conversationId: 'moved' });
+  };
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.blockedConversationCount, 0);
+  assert.ok(pass.waitingContexts.length);
+  assert.ok(pass.waitingContexts.every(item => item.conversationId === 'moved' && item.title === 'Moved project conversation'));
+});
+
+test('dependency anchor validation failures remain paced pending holds without restarting', async () => {
+  const f = await fixture(); let clock = 0;
+  f.state.pending = { phase: 'promoted', operationId: 'anchor-check', record: { conversationId: 'protected', side: 'codex' } };
+  f.bridge.recover = async () => {
+    f.calls.recover++;
+    throw Object.assign(new Error('Dependency anchor raw history changed.'), { code: 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED' });
+  };
+  await f.run({ maxPasses: 2, now: () => clock, sleep: async ms => {
+    const status = await f.status();
+    assert.equal(status.running, true);
+    assert.equal(status.blocked.scope, 'pending');
+    assert.equal(status.blocked.reason, 'Dependency anchor raw history changed.');
+    clock += ms;
+  } });
+  assert.equal(f.calls.recover, 2);
+  assert.equal(f.calls.collect, 0);
+  assert.equal(f.state.pending.operationId, 'anchor-check');
+});
 
 test('dependent threads hold a promoted pending snapshot without restarting or retiring it', async () => {
   const f = await fixture();

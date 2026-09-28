@@ -1,12 +1,16 @@
-import { randomBytes } from 'node:crypto';
-import { join, dirname, basename, resolve, sep } from 'node:path';
-import { lstat, realpath, readFile, access, readdir } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { randomBytes, createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
+import { join, dirname, basename, resolve, sep, isAbsolute } from 'node:path';
+import { lstat, realpath, readFile, access, readdir, open } from 'node:fs/promises';
+import { createReadStream, constants } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
 import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude } from './claude.mjs';
+import { inspectClaudeProjectRelocation } from './claude-relocation.mjs';
+import { inspectNativeSyncHookTrust } from './sync-hook-install.mjs';
 import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
@@ -14,16 +18,20 @@ import { createCodexLocalImageResolver } from './native-local-images.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket, hasProjectedImages } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
-import { assertComplete, fingerprint } from './history.mjs';
-import { isAllowedCodexVersion, isSupportedCodexVersion } from './codex-versions.mjs';
+import { assertComplete, fingerprint, portableMessages } from './history.mjs';
+import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 import { snapshotOriginalArchiveTree, compareOriginalArchiveTree, originalArchiveGuard } from './codex-original-archive-tree.mjs';
+import { readCodexDependencies, readCodexDependenciesForParents } from './codex-dependencies.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
 async function exists(path) { try { await access(path); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; } }
 function alive(pid) { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } }
+function dependencyAnchorGuard(message) {
+  return Object.assign(new Error(message), { code: 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED' });
+}
 
 function importedClaudeOriginal(record) {
   if (record.importPacket !== true) return false;
@@ -67,7 +75,7 @@ export async function persistentPacketKey(root) {
 
 /** Native adapters with one long-lived SDK owner per logical Claude session. */
 export class DesktopRuntime {
-  constructor({ root, codexHome, claudeHome, claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict',
+  constructor({ root, codexHome, claudeHome, desktopHome = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'), claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict',
     nativeHistoryMaxBytes = NATIVE_HISTORY_LIMITS.maxBytes, nativeHistoryPageSize = NATIVE_HISTORY_LIMITS.pageSize, onEvent = () => {} }) {
     if (!['inline', 'archive'].includes(contextMode)) throw new Error('Unsupported Desktop context mode.');
     if (!Number.isSafeInteger(nativeHistoryMaxBytes) || nativeHistoryMaxBytes < 1024 || nativeHistoryMaxBytes > 64 * 1024 * 1024)
@@ -75,6 +83,7 @@ export class DesktopRuntime {
     if (!Number.isSafeInteger(nativeHistoryPageSize) || nativeHistoryPageSize < 1 || nativeHistoryPageSize > 100)
       throw new Error('nativeHistoryPageSize must be an integer from 1 through 100.');
     this.root = resolve(root); this.codexHome = resolve(codexHome); this.claudeHome = resolve(claudeHome);
+    this.desktopHome = resolve(desktopHome);
     this.claudeBinary = claudeBinary; this.clientFactory = clientFactory; this.ownerFactory = ownerFactory;
     this.contextMode = contextMode;
     this.nativeHistoryMaxBytes = nativeHistoryMaxBytes;
@@ -93,12 +102,16 @@ export class DesktopRuntime {
       completePromotion: record => this.completePromotion(record),
     }]));
     Object.assign(this.adapters.codex, {
+      prepareDependencyAnchors: records => this.prepareDependencyAnchors(records),
       assertCanArchiveOriginal: record => this.assertCanArchiveOriginal(record),
       archiveOriginal: record => this.archiveOriginal(record),
       assertArchiveReplacement: (original, replacement, title) => this.assertArchiveReplacement(original, replacement, title),
       prepareOriginalArchiveTree: record => this.prepareOriginalArchiveTree(record),
       archiveOriginalTree: (record, proof, options) => this.archiveOriginalTree(record, proof, options),
+      prepareDependencyAnchor: record => this.prepareDependencyAnchor(record),
+      assertDependencyAnchor: record => this.assertDependencyAnchor(record),
     });
+    this.adapters.claude.reconcileRelocation = record => this.reconcileClaudeRelocation(record);
   }
   async initialize() {
     this.root = await privateDirectory(this.root);
@@ -110,6 +123,27 @@ export class DesktopRuntime {
   versionWarnings() {
     const warnings = [this.codexVersionWarning, ...[...this.owners.values()].map(entry => entry.owner.status().versionWarning)].filter(Boolean);
     return [...new Map(warnings.map(value => [JSON.stringify(value), value])).values()].slice(-20);
+  }
+
+  async verificationCacheContext() {
+    this.verificationCodeHash ??= Promise.all([
+      'history.mjs', 'claude.mjs', 'codex.mjs', 'owned-claude-history.mjs', 'owned-codex-history.mjs',
+      'base64.mjs', 'compaction.mjs', 'claude-parallel-tools.mjs', 'claude-image-assets.mjs',
+      'native-history.mjs', 'native-local-images.mjs', 'context-archive.mjs', 'context-packet.mjs',
+      'context-packet-reader.mjs', 'desktop-runtime.mjs', 'desktop-watch-hints.mjs',
+      'cold-verification-cache.mjs', 'verification-observations.mjs', 'storage.mjs', '../package-lock.json',
+    ].map(async name => [name, await readFile(new URL(name, import.meta.url), 'utf8')]))
+      .then(sources => hash(sources));
+    return { code: await this.verificationCodeHash, root: this.root, codexHome: this.codexHome,
+      claudeHome: this.claudeHome, contextMode: this.contextMode, versionPolicy: this.versionPolicy,
+      codexVersion: this.codexNativeVersion ?? null, nativeHistoryMaxBytes: this.nativeHistoryMaxBytes,
+      nativeHistoryPageSize: this.nativeHistoryPageSize };
+  }
+
+  async synchronizationHooks() {
+    return inspectNativeSyncHookTrust({ client: await this.codex(), root: this.root,
+      codexHome: this.codexHome, claudeHome: this.claudeHome, nodePath: process.execPath,
+      hookPath: fileURLToPath(new URL('../bin/claudex-sync-hook.mjs', import.meta.url)) });
   }
 
   async codex() {
@@ -130,8 +164,7 @@ export class DesktopRuntime {
         throw new Error('Shared Codex Desktop backend is not ready: Desktop is in native-only mode; synchronization awaits version validation.');
       if (manifest.transportMode !== undefined || !isAllowedCodexVersion(manifest.cliVersion, this.versionPolicy) || !manifest.socketPath)
         throw new Error('Shared Codex Desktop backend is not ready or has an invalid identity.');
-      this.codexVersionWarning = isSupportedCodexVersion(manifest.cliVersion) ? null
-        : { component: 'codex', cliVersion: manifest.cliVersion };
+      this.codexVersionWarning = null;
       const socket = await inspectCodexSocket(manifest.socketPath);
       if (socket.socketStat.dev !== manifest.socketIdentity?.dev || socket.socketStat.ino !== manifest.socketIdentity?.ino) throw new Error('Shared Codex socket identity changed.');
       this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath });
@@ -141,6 +174,7 @@ export class DesktopRuntime {
       this.codexNativeVersion = initialized.userAgent?.match(/^(?:Codex Desktop|codex_cli_rs|claudex)\/(\S+)/)?.[1] ?? null;
       if (initialized.codexHome && await realpath(initialized.codexHome) !== this.codexHome) throw new Error('Shared backend uses a different Codex home.');
       this.client.on?.('notification', event => this.onEvent({ type: 'codex_notification', event }));
+      this.client.on?.('disconnected', () => this.onEvent({ type: 'codex_disconnected' }));
       return this.client;
     } catch (error) { await this.client.close(); this.client = null; throw error; }
   }
@@ -203,7 +237,86 @@ export class DesktopRuntime {
     return bytes;
   }
 
+  async relocatedClaudeHistory(record) {
+    const fail = message => { throw Object.assign(new Error(message), {
+      code: 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED', conversationId: record.conversationId,
+    }); };
+    const saved = record.relocation;
+    if (record.side !== 'claude' || record.managed !== false || record.kind !== 'original'
+      || record.verified !== true || record.importPacket)
+      fail('Claude relocation requires a verified native original without an imported bootstrap.');
+    if (saved && (saved.version !== 1 || !isAbsolute(saved.originPath ?? '') || !isAbsolute(saved.originCwd ?? '')
+      || !Array.isArray(saved.historicalCwds) || saved.historicalCwds.length > 16))
+      fail('Saved Claude relocation evidence is invalid.');
+    const historicalCwds = [...new Set([...(saved?.historicalCwds ?? []), record.cwd])];
+    if (historicalCwds.length > 16) fail('Claude relocation exceeds the verified project history limit.');
+    let evidence;
+    try {
+      evidence = await inspectClaudeProjectRelocation({ claudeHome: this.claudeHome, desktopRegistryRoot: this.desktopHome,
+        record: saved ? { ...record, path: saved.originPath, cwd: saved.originCwd } : record, historicalCwds });
+    } catch (error) {
+      if (error.code === 'CLAUDE_RELOCATION_BLOCKED') error.conversationId = record.conversationId;
+      throw error;
+    }
+    if (!evidence) return null;
+    if (evidence.path !== record.path && await exists(record.path))
+      fail('Claude relocation is ambiguous because the saved current transcript still exists.');
+    const prefix = completedClaudePrefix({ text: evidence.snapshot.text });
+    const common = decodeClaude(prefix.text, { preserveCompactionHistory: true });
+    assertComplete(common);
+    const normalized = { ...common, messages: portableMessages(common.messages) };
+    if (common.meta.id !== record.nativeId || !Number.isSafeInteger(record.checkpoint?.count)
+      || normalized.messages.length < record.checkpoint.count
+      || fingerprint(normalized, record.checkpoint.count) !== record.checkpoint.digest)
+      fail('Relocated Claude history does not preserve the synchronized prefix.');
+    // Native rows retain their historical cwd; only the presentation/next
+    // projection uses the independently verified current native project root.
+    common.meta.cwd = evidence.cwd;
+    const relocation = { version: 1, originPath: saved?.originPath ?? record.path,
+      originCwd: saved?.originCwd ?? record.cwd, historicalCwds };
+    return { record: { ...record, path: evidence.path, cwd: evidence.cwd, relocation },
+      common, incompleteTail: prefix.incompleteTail, nativeId: record.nativeId, path: evidence.path,
+      bytes: evidence.snapshot.bytes, digest: fingerprint(common),
+      relocationProof: { hash: evidence.snapshot.hash, identity: evidence.snapshot.identity, mapping: evidence.mapping } };
+  }
+
+  async reconcileClaudeRelocation(record) {
+    if (record.side !== 'claude' || record.kind !== 'original' || record.managed !== false || !record.verified) return null;
+    if (!record.relocation && await exists(record.path)) return null;
+    const proof = await this.relocatedClaudeHistory(record);
+    return proof && (proof.path !== record.path || proof.record.cwd !== record.cwd) ? proof : null;
+  }
+
   async inspect(record) {
+    try { return await this.inspectNative(record); }
+    catch (error) {
+      // A saved tracked source disappearing requires reconciliation, not a
+      // worker restart or a search for another file with the same identity.
+      // Confirm that exact path is absent so unrelated ENOENT failures retain
+      // their normal transport, asset, credential or implementation severity.
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code) || record.verified !== true || !UUID.test(record.nativeId)
+        || !['codex', 'claude'].includes(record.side) || typeof record.path !== 'string' || !isAbsolute(record.path)) throw error;
+      let missing = false;
+      try { await lstat(record.path); }
+      catch (checkError) { if (['ENOENT', 'ENOTDIR'].includes(checkError.code)) missing = true; else throw checkError; }
+      if (!missing) throw error;
+      throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} is unavailable at its saved path; synchronization is paused.`, { cause: error }), {
+        code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
+        savedPath: record.path, conversationId: record.conversationId,
+      });
+    }
+  }
+
+  async inspectNative(record) {
+    if (record.relocation) {
+      const proof = await this.relocatedClaudeHistory(record);
+      if (!proof || proof.path !== record.path || proof.record.cwd !== record.cwd)
+        throw Object.assign(new Error('Claude project moved again; verified relocation must complete before synchronization.'), {
+          code: 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED', conversationId: record.conversationId,
+        });
+      const { record: ignored, relocationProof: evidence, ...data } = proof;
+      return data;
+    }
     const importPacket = importedClaudeOriginal(record);
     if (record.side === 'codex') {
       let nativeId = record.nativeId;
@@ -465,9 +578,129 @@ export class DesktopRuntime {
     if (record.managed && !thread.path.includes(`${sep}archived_sessions${sep}`)) await client.resumeThread(record.nativeId, { excludeTurns: true });
   }
   async assertOwnedSnapshot(record) {
+    if (record.status === 'dependency-anchor') throw dependencyAnchorGuard('Dependency anchor cannot be retired.');
     if (record.side !== 'codex' || record.kind !== 'snapshot' || !record.managed || !record.verified) throw new Error('Only verified owned Codex snapshots can be retired.');
     await this.inspect(record); // Verifies the signed bootstrap, even after native rollover.
     await this.assertCodexIndependent(record, 'Owned projection');
+  }
+  assertDependencyAnchorRecord(record, { saved = false } = {}) {
+    if (record.side !== 'codex' || record.kind !== 'snapshot' || record.managed !== true || record.verified !== true
+        || !UUID.test(record.nativeId) || typeof record.cwd !== 'string' || !record.cwd
+        || typeof record.path !== 'string' || !record.path
+        || !Number.isSafeInteger(record.checkpoint?.count) || record.checkpoint.count < 1
+        || !/^[a-f0-9]{64}$/.test(record.checkpoint?.digest ?? '')
+        || saved && record.status !== 'dependency-anchor')
+      throw dependencyAnchorGuard('Dependency anchor requires a verified owned Codex snapshot and canonical checkpoint.');
+  }
+  async dependencyAnchorRawProof(path, record) {
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const sameStat = (a, b) => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'uid', 'nlink'].every(key => a[key] === b[key]);
+    try {
+      const before = await file.stat();
+      if (!before.isFile() || before.uid !== process.getuid() || before.nlink !== 1
+          || before.size > 64 * 1024 * 1024) throw dependencyAnchorGuard('Dependency anchor transcript is not a bounded owned regular file.');
+      const digest = createHash('sha256'), chunks = [];
+      let length = 0, headerLength = 0, endedHeader = false, lastByte = null;
+      for await (const chunk of file.createReadStream({ autoClose: false })) {
+        length += chunk.length;
+        if (length > before.size) throw dependencyAnchorGuard('Dependency anchor transcript grew during verification.');
+        digest.update(chunk); lastByte = chunk.at(-1);
+        if (!endedHeader) {
+          const newline = chunk.indexOf(10), part = newline < 0 ? chunk : chunk.subarray(0, newline);
+          headerLength += part.length;
+          if (headerLength > 64 * 1024 * 1024) throw dependencyAnchorGuard('Dependency anchor transcript header exceeds its byte limit.');
+          chunks.push(part); endedHeader = newline >= 0;
+        }
+      }
+      const after = await file.stat(), current = await lstat(path);
+      if (!sameStat(before, after) || !sameStat(after, current) || length !== before.size || lastByte !== 10)
+        throw dependencyAnchorGuard('Dependency anchor transcript changed during verification.');
+      let row;
+      try { row = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { throw dependencyAnchorGuard('Dependency anchor transcript header is malformed.'); }
+      if (row.type !== 'session_meta' || row.payload?.id !== record.nativeId || row.payload?.cwd !== record.cwd)
+        throw dependencyAnchorGuard('Dependency anchor transcript identity or working directory changed.');
+      return { path, hash: digest.digest('hex'), bytes: before.size };
+    } finally { await file.close(); }
+  }
+  async dependencyAnchorSnapshot(record) {
+    const client = await this.codex();
+    const readMetadata = async () => {
+      const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
+      if (thread?.id !== record.nativeId || typeof thread.cwd !== 'string' || typeof thread.path !== 'string'
+          || await realpath(thread.cwd) !== record.cwd)
+        throw dependencyAnchorGuard('Dependency anchor native identity or working directory changed.');
+      if (!['idle', 'notLoaded'].includes(thread.status?.type))
+        throw dependencyAnchorGuard('Dependency anchor parent is active or its idle state is unverified.');
+      return this.safePath(thread.path, this.codexHome);
+    };
+    const path = await readMetadata();
+    if (path !== record.path) throw dependencyAnchorGuard('Dependency anchor native transcript path changed.');
+    const before = await this.dependencyAnchorRawProof(path, record);
+    const data = await this.inspect(record);
+    if (data.nativeId !== record.nativeId || data.path !== path || data.common?.meta?.cwd !== record.cwd
+        || data.incompleteTail !== false || data.common.messages.length !== record.checkpoint.count
+        || data.digest !== record.checkpoint.digest || fingerprint(data.common) !== record.checkpoint.digest
+        || !Number.isSafeInteger(data.bytes) || data.bytes < before.bytes)
+      throw dependencyAnchorGuard('Dependency anchor canonical history changed or has an unfinished turn.');
+    const latestPath = await readMetadata(), after = await this.dependencyAnchorRawProof(latestPath, record);
+    if (JSON.stringify(before) !== JSON.stringify(after)) throw dependencyAnchorGuard('Dependency anchor transcript changed during canonical verification.');
+    return { raw: after, bytes: data.bytes };
+  }
+  async prepareDependencyAnchor(record) {
+    return this.prepareDependencyAnchorFromInventory(record);
+  }
+  async prepareDependencyAnchors(records) {
+    for (const record of records) this.assertDependencyAnchorRecord(record);
+    const dependencies = await readCodexDependenciesForParents(await this.codex(), records.map(record => record.nativeId));
+    const proofs = new Map();
+    for (const record of records) proofs.set(record.id,
+      await this.prepareDependencyAnchorFromInventory(record, dependencies.get(record.nativeId)));
+    return proofs;
+  }
+  async prepareDependencyAnchorFromInventory(record, initialDependencies) {
+    try {
+      this.assertDependencyAnchorRecord(record);
+      const client = await this.codex();
+      const dependencies = initialDependencies ?? await readCodexDependencies(client, record.nativeId);
+      if (!dependencies.length) return null;
+      const proof = await this.dependencyAnchorSnapshot(record);
+      const latest = await readCodexDependencies(client, record.nativeId);
+      if (JSON.stringify(dependencies) !== JSON.stringify(latest)) throw dependencyAnchorGuard('Dependency anchor inventory changed during verification.');
+      const after = await this.dependencyAnchorSnapshot(record);
+      if (JSON.stringify(proof) !== JSON.stringify(after)) throw dependencyAnchorGuard('Dependency anchor parent changed during dependency verification.');
+      return { dependencyIds: dependencies.map(value => value.id),
+        dependencyAnchor: { version: 1, dependencies, raw: after.raw }, bytes: after.bytes };
+    } catch (error) {
+      if (error.message.startsWith('Codex dependency inventory: '))
+        throw dependencyAnchorGuard(`Dependency anchor verification failed: ${error.message}`);
+      throw error;
+    }
+  }
+  async assertDependencyAnchor(record) {
+    try {
+      this.assertDependencyAnchorRecord(record, { saved: true });
+      const anchor = record.dependencyAnchor;
+      if (anchor?.version !== 1 || !Array.isArray(anchor.dependencies) || !anchor.dependencies.length
+          || !Array.isArray(record.dependencyIds) || record.dependencyIds.length !== anchor.dependencies.length
+          || anchor.raw?.path !== record.path || !/^[a-f0-9]{64}$/.test(anchor.raw?.hash ?? '')
+          || !Number.isSafeInteger(anchor.raw?.bytes) || anchor.raw.bytes < 1 || anchor.raw.bytes > 64 * 1024 * 1024)
+        throw dependencyAnchorGuard('Dependency anchor saved proof is malformed.');
+      let previous = '';
+      for (const [index, edge] of anchor.dependencies.entries()) {
+        if (!UUID.test(edge?.id) || edge.id === record.nativeId || edge.parentId !== record.nativeId
+            || !['spawn', 'fork'].includes(edge.kind) || previous && previous.localeCompare(edge.id) >= 0
+            || record.dependencyIds[index] !== edge.id)
+          throw dependencyAnchorGuard('Dependency anchor saved dependency identities are malformed.');
+        previous = edge.id;
+      }
+      const proof = await this.dependencyAnchorSnapshot(record);
+      if (JSON.stringify(anchor.raw) !== JSON.stringify(proof.raw)) throw dependencyAnchorGuard('Dependency anchor saved transcript bytes changed.');
+      if (proof.bytes !== record.bytes) throw dependencyAnchorGuard('Dependency anchor aggregate storage changed.');
+      return { bytes: proof.bytes };
+    } catch (error) {
+      throw error;
+    }
   }
   async assertCodexIndependent(record, label) {
     if (await exists(join(this.codexHome, 'sessions', record.nativeId))) throw new Error(`${label} has auxiliary data; retirement requires dependency verification.`);
@@ -600,6 +833,7 @@ export class DesktopRuntime {
     return { path: confirmed.path, archivedTree: after };
   }
   async hide(record) {
+    if (record.status === 'dependency-anchor') throw dependencyAnchorGuard('Dependency anchor cannot be hidden.');
     await this.assertIdle(record); await this.assertOwnedSnapshot(record);
     const client = await this.codex();
     let { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
@@ -608,6 +842,7 @@ export class DesktopRuntime {
     return { path: thread.path };
   }
   async remove(record) {
+    if (record.status === 'dependency-anchor') throw dependencyAnchorGuard('Dependency anchor cannot be deleted.');
     await this.assertIdle(record); await this.assertOwnedSnapshot(record);
     await (await this.codex()).request('thread/delete', { threadId: record.nativeId });
   }

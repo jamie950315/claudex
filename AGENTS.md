@@ -28,6 +28,75 @@ on top of the sanitized public history; never merge private ancestors into it.
 
 ## macOS app setup
 
+The main window uses one outer scroll view, with a width-constrained natural-height
+document. Never restore fixed-height nested checklist/diagnostic panes. Healthy
+operation shows only Codex/Claude prerequisite summaries; actual missing/login/
+blocked components automatically expose setup actions. The full checklist and
+technical details stay in an explicitly expanded advanced section. A prerequisite
+summary is not proof that messages have synced. Resize smoke checks must verify
+viewport growth, natural content width, a single scroll view, and compact ready mode.
+Fit window height to natural document height (including its padding) when opening,
+changing content or toggling advanced diagnostics. Preserve width and the top edge
+where possible; cap height to the current screen's visible frame and retain the
+outer scroll view for overflow. Do not resize fullscreen or during live dragging.
+Runtime history/ownership blocks offer diagnostics, not setup retries. Show the
+global setup retry only for actionable installation/account requirements or a
+failed setup operation; keep the instructions consistent with available actions.
+Initial verification reports unique checked/total conversations and the known
+current conversation with elapsed seconds. A ten-second status-only heartbeat
+keeps long native operations observable; it must never publish archival intents,
+inspect histories concurrently, advance checkpoints, or imply synchronization
+completion. Stop and drain the heartbeat before leaving the operation.
+Keep initialSweepCompletedAt separate from foregroundCompletedAt: completing the
+foreground queue must not hide initial verification of the cold backlog.
+
+Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
+requirements request user action, while normal runtime waits need no setup retry.
+Keep bounded per-pass waitingContexts with exact known conversation identity,
+title and reason. The main window shows reasons and next steps without opening
+details, and orders non-ready setup rows first. Never infer a missing identity,
+hide a real conflict, or change synchronization semantics for a friendlier status.
+
+Claudex.app localizes presentation using complete English-keyed JSON catalogs
+under native/ClaudexApp/Locales for en, zh-Hant, zh-Hans, ja, ko, es, de, fr and it.
+Keep key and %@ placeholder parity; the builder rejects incomplete catalogs.
+System-language selection distinguishes Chinese scripts and regions. Runtime
+switches rebuild presentation only, never run setup or restart services. Raw
+unknown native diagnostics remain verbatim with a translated diagnostic label.
+Read-only/synthetic modes must not persist language or onboarding preferences.
+
+The graphical app owns the sole menu bar item, a combined setup/health window, and
+notifications. It reuses the bounded native status model and an icon-only,
+square-width menu bar button with the bidirectional-arrow
+template symbol; never restore a visible app name or status suffix. Keep health
+details in the tooltip, accessibility label, menu and window. Its owned login item
+launches the same bundle in background inspection mode, not setup. Migrate only
+the verified legacy status-display login item and native display process; preserve
+its recoverable artifacts and never restart service or native conversation owners.
+CLI-only installations may retain the standalone status display.
+The approved app artwork is native/ClaudexApp/Assets/AppIcon.png. The app builder
+derives standard 1x/2x icon sizes and packages Claudex.icns with CFBundleIconFile;
+keep this raster app icon separate from the monochrome menu bar symbol.
+The combined window contains setup retries and account actions; menus expose Open Claudex,
+not a separate retry action. First launch automatically presents the main window and
+starts setup, including a fresh background launch. Subsequent login starts stay
+quiet; prior setup reports preserve existing-install behavior. Read-only and
+synthetic UI modes must not mark onboarding as presented or run setup.
+Live health appears above setup, with timestamps, recovery, notifications and
+diagnostics under advanced diagnostics. Notification clicks open the same window;
+the status controller must never create a separate window.
+Graphical Quit (menu, Command-Q and native termination) now stops the owned sync
+and collaboration services and exits only after read-only native ownership/process
+checks confirm shutdown. Keep the UI responsive while draining; never kill user
+native work or report a merely unloaded launchd job as fully stopped. Failures
+remain visible in the app. Closing the window still only hides it. Persist the
+private app-stop.json hold before stopping; hooks must not record events while
+held. Reopening resumes only exact installed owned services, using a recoverable
+resuming marker for partial starts, and clears the hold after successful starts.
+Do not delete native data, credentials, or login definitions. Inspect/smoke and
+duplicate-instance exits must never stop services. CLI-only status display Quit
+retains its display-only behavior.
+
 `native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
 who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
 replace those apps. Reuse native CLIs or fill missing CLI components from pinned
@@ -44,6 +113,33 @@ public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
 checks native layout with synthetic data, not installed service acceptance.
 
 ## Adapters
+
+Desktop synchronization is completion-event driven, not a recurring two-second
+history sweep. Native Stop/lifecycle hooks publish bounded identity-only hints to
+the private durable sync-events inbox and wake the owner through a private Unix
+socket. Native SDK/app-server events join the same queue. Configuration events
+only recheck hook readiness; known managed session registration and started events
+never start a sync. Resuming an original reconciles that conversation for offline
+completions. Hook definitions are merged with existing settings and require the
+native Codex trust review; never bypass or forge trust receipts. CLI hooks install
+and hooks status configure/inspect them; graphical setup installs them too.
+Perform one startup/reconnection reconciliation, then sleep until an event.
+Map exact native IDs, including preserved originals, to affected logical work.
+Discovery may return only side/path. In event-filtered discovery, obtain a Claude
+ID from its validated UUID filename and a Codex ID from its native header, then
+pass that explicit nativeId into track so the adapter verifies the actual identity.
+Recover an existing pending transaction first, preserve all write/history guards,
+and acknowledge only the consumed inbox revision. Newer events survive a sync.
+Completion-before-flush gets at most three event-scoped follow-ups at 250/1000/3000
+ms and a completion-armed exact-file notification; started disarms streaming files.
+Never infer completion from a hook alone or resend uncertain native input.
+Socket notifications are primary: macOS fs.watch registration can lose events.
+Use one OS watcher per parent directory with subscriber fanout; filesystem signals
+are hints, never checkpoint or mutation evidence. A 30-second idle status heartbeat
+does no native history reads, discovery or archival proof renewal. Scope Desktop
+handoff history checks to event targets; empty scope revokes commands while keeping
+validated presentation anchors. Test-only dependency injection retains the former
+bounded polling harness, not a production fallback.
 
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
@@ -63,6 +159,25 @@ uncertain native invocation. In-flight work found after restart becomes uncertai
 and blocks dispatch; preserve its process/session evidence and work record.
 
 `bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
+Controller-only chat_list/chat_send/chat_status coordinate exact native sessions
+through the private chat-mailbox, not through managed task IDs or a new writer.
+Native SessionStart/UserPromptSubmit/Stop hooks register metadata and offer at most
+one message; SessionEnd never consumes. Codex Stop uses native decision:block,
+Claude Stop uses additionalContext. A continued Stop publishes started, not a
+completed sync hint. stop_hook_active prevents additional Stop continuation loops.
+Keep queued/offered/acknowledged distinct; offered may be lost and must never be
+automatically replayed. Only the same native recipient's Stop acknowledgement
+marker counts as receipt, never as proof of task shutdown or new authorization.
+Do not wake idle chats, resolve fuzzy titles, create/archive replacement chats,
+edit transcripts/registries/SQLite, or use classifierContext as message delivery.
+Messages remain quoted peer text. No new native hook trust bypass is permitted.
+chat_list supports native-title query/provider/match filters for already hook-
+registered sessions. Enrich from bounded stable Codex session_index metadata and
+exact Claude Desktop CLI-ID mappings, never transcript guesses or title-based ID
+substitution. Preserve duplicate candidates and metadata errors; partial/duplicate
+matches require user disambiguation. chat_send expectedTitle rechecks the chosen
+native title before enqueueing, without changing exact-session addressing. This
+does not introduce managed-task-to-origin-chat mapping or unregistered chat discovery.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker
@@ -73,19 +188,64 @@ Native execution uses fresh Codex ephemeral exec or Claude nonpersistent print
 sessions with normal account authentication, no copied credentials, no inherited
 API keys, and explicit collaboration MCP configuration. Ordinary sync must not
 enroll this work. These restricted profiles do not inherit arbitrary user tools,
-hooks or model settings. Models default to their native CLI defaults unless
-specified by the caller; prompts instruct workers to read project guidance.
+hooks or model settings. Models use per-provider broker defaults unless overridden
+by the caller; an unset default or explicit null override uses the native CLI
+default. Controller-only `models` requests persist both provider defaults in
+work.json without restarting services. Start and handoff capture the destination
+model at request time; children do not inherit a model ID from another provider,
+and follow-ups retain their task selection. Preference changes never mutate
+existing or pending work. Prompts instruct workers to read project guidance.
+New root work defaults to the closest Git checkout root (bounded .git metadata,
+including linked worktrees, with no Git executable requirement); non-Git cwd stays
+exact. Explicit projectRoot must contain requested cwd. Per-task readOnlyDirs and
+writableDirs are canonical existing directories, bounded to 16 each, with no
+reference/write overlap. Children inherit or narrow grants without Git promotion;
+handoff preserves them. Legacy records retain exact cwd. Revalidate canonical
+roots before dispatch and refuse replaced symlinks. Codex adds only writable extras
+and excludes implicit temp write grants when references are declared. Claude uses
+restricted file tools plus absolute Edit deny rules for reference roots, covering
+Write too; reject unrepresentable path patterns. Preserve native permission checks,
+not a new claim of an OS read jail. No full-filesystem/home write grant is implied.
+Reasoning effort follows the same destination-provider capture rules. Persist
+defaultEfforts separately from defaultModels; settings may update either full
+provider pair atomically. Optional start/handoff effort=null explicitly requests
+native defaults; old tasks/pending handoffs without effort must never adopt newly
+configured defaults. Validate provider-native effort tokens without translating
+levels or broadening permissions. Codex uses model_reasoning_effort, Claude uses
+--effort; strip inherited CLAUDE_CODE_EFFORT_LEVEL from isolated Claude workers.
+Expose the requested effort only: native organization caps can affect effective
+effort, including silent Claude stream-json caps. Do not claim effective-budget
+verification merely from argv or task metadata.
 Manual CLI tasks default to read-only. The app enables all projects and task-scoped
 writes by default, using the explicit broker defaultPermission setting. Read-only
 requests and parent restrictions must never elevate. Writes require broker opt-in and task permission;
-children cannot escalate permissions or change cwd. Claude permits bounded file
+children cannot escalate permissions or expand directory grants. Claude permits bounded file
 tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
 with bypass-permission flags. Writable work needs a caller-selected dedicated
 checkout; this protocol does not create or merge worktrees. Concurrent writes
-within one canonical cwd are blocked, including writable parent/child overlap.
+with overlapping canonical access roots are blocked, including ancestor/descendant
+paths, reference readers and writable parent/child overlap.
 Writable delegation defers child dispatch until the parent returns and releases
 its workspace. A waiting parent resumes with durable child results once all its
 children finish; this is explicit new work, not replay of an uncertain invocation.
+Deferred-child and handoff receipts use nextAction=end-turn with CLAUDEX_YIELD or
+CLAUDEX_HANDOFF. Worker instructions prioritize that single-token response over
+normal final-report formatting; put handoff context in the request before it.
+Do not treat these text tokens as proof of native completion or release a writer
+before successful native completion and process-group exit.
+Status presentation keeps legacy result intact but labels phase, terminal,
+resultRole/resultFinal/resultGeneration and cancelPending. Completed work reopened
+by send is not resultFinal even before its generation advances. Terminal includes
+uncertain and never means success. Cancel receipts distinguish accepted/pending;
+known-terminal no-op cancellation does not bump task revisions. Cancelled child
+notifications use its final revision once, not an intermediate revision.
+Optional status/wait view=summary omits histories and caught-up terminal outcomes,
+but always returns unseen terminal child outcomes to worker callers. Snapshot and
+seenChildren acknowledgement share one serialized mutation; omitted outcomes must
+not be acknowledged. Full output remains default. Persist per-invocation inputs
+{from,to,kinds} for resumption context without replay or permission changes.
+Independent reviews must not concurrently reopen related parent/child tasks unless
+normal child-result propagation is intended; no detached mode is implied.
 
 All automated collaboration tests inject synthetic runners or inspect protocol
 startup without inference. Do not describe these as live cross-model acceptance.
@@ -94,6 +254,17 @@ Whole-work handoff retains logical task identity; an external caller ends its
 own turn rather than forcibly transferring an unrelated native UI conversation.
 Storage, context, concurrency, depth and execution limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
+
+Controller-only `request resolve` may close an inspected read-only uncertain
+invocation as failed, never successful or replayable. Require exact revision and
+current execution generation, absent recorded PID and process group, no in-memory
+worker or unresolved descendants. Preserve original error and execution evidence
+with the resolution receipt. Writable uncertainty still requires separate
+workspace reconciliation. Queued work may dispatch once the final hold is resolved.
+Codex collaboration supports explicitly selected non-Git directories using
+`--skip-git-repo-check`; native sandbox and approval restrictions remain unchanged.
+Only an exact no-stdout, no-session pre-execution Git refusal with a closed process
+group is a known startup failure; unknown exits retain uncertainty safeguards.
 
 Separately authorized live CLI acceptance verifies Codex-to-Claude and
 Claude-to-Codex child delegation with exact result return, plus two consecutive
@@ -111,9 +282,54 @@ execution in Claude, or proof of Desktop UI chat transfer.
 
 ## Current boundary
 
+Claude Desktop may move a current unmanaged Local original to another project.
+Reconcile only an exact, stable native registry mapping of the same CLI identity,
+with the saved transcript absent, canonical owned regular destination bytes,
+and complete authenticated saved canonical prefix. Historical native cwd values
+remain untouched; the ledger's current cwd follows the native project. Recheck
+the source proof after verifying an idle unchanged managed Codex counterpart.
+Never reroute pending work or choose between independently advanced histories.
+Create a normal Codex snapshot in the new cwd even without a new message; retain
+old snapshot cwd and normal retirement guards. Keep at most 16 verified project
+roots. Imported bootstrap originals and ambiguous duplicate paths remain blocked.
+Stable relocated reads revalidate the registry and saved prefix without creating
+a Claude writer or editing any native transcript or registry.
+
+A native transcript file changing between successful handoff inspections is a
+revoked, deferred Desktop archival attempt, not a synchronization failure. Return
+history_changed only after clearing all archive actions and cached proofs; perform
+full verification on the next poll. Canonical history conflicts, registration
+changes and manifest revocation failures remain errors. Surface this narrow race
+as waiting for Desktop handoff, without an attention notification.
+
+Do not emit warnings merely because Codex/Claude versions are outside the
+validated baseline. The existing `warn` policy name is retained for config
+compatibility, but version-only status warnings and events are silent.
+New graphical installations default to this permissive policy; an explicitly
+configured strict policy is preserved.
+Actual protocol, schema, history, ownership and native operation failures still surface
+and keep their safety guards. Do not relabel unknown runtimes as verified.
+
+Owned Claude image-source annotations may use the exact parent timestamp or
+the observed one-millisecond-later timestamp. The latter requires an immediately
+adjacent physical parent, queueTranscriptOnly, identical native version, and all
+existing signed packet, prompt, session, cwd, image ID/path and graph checks.
+Apply this predicate consistently to completed tails and later delta decoding;
+never drop arbitrary image-like text or infer a general timestamp tolerance.
+
+Dependency-bearing owned Codex snapshots are preserved as managed
+`dependency-anchor` records, not archived/deleted or relabeled unmanaged.
+Require stable metadata-only native dependency inventories, exact authenticated
+canonical history and raw-byte proofs, and rechecked promoted source/replacement
+prefixes. Finalize only the original verified pending transaction; never resend.
+Anchors are immutable guarded history sources, remain in the global backup byte
+quota, and have a hard global count cap of 64. They are separate from disposable
+previous snapshots' count/age limits. Missing or changed anchors block; never
+auto-demote them, remove children, or skip preallocation capacity checks.
+
 `bin/claudex.mjs` provides explicit initialization with all-project or selected-project scope, discovery,
 watching, synchronization, recovery, collection, and optional macOS LaunchAgent
-installation. Defaults retain one current and one previous copy per side,
+installation. Disposable-copy defaults retain one current and one previous copy per side,
 seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
@@ -122,9 +338,13 @@ bounded diagnostic list. In Desktop mode, recognized tracked-history guards
 pause synchronization without exiting the watcher or closing live Claude owners.
 A pending transaction blocks all discovery, new syncs and collection until normal
 verified recovery succeeds; it is never cleared or resent to regain availability.
+Missing tracked transcript paths are explicit history blocks, not repeated
+worker crashes. Preserve the saved native identity/path and pending evidence.
+Never scan for same-ID substitutes; only the explicit native registry relocation
+protocol above may adopt a verified new project location without pending work.
 Without pending work, affected syncs are held individually, but global original
-and quota guards still apply to other deliveries. Revalidation is paced at 30
-seconds, with explicit bounded blocked status. Unclassified unsafe failures remain
+and quota guards still apply to other deliveries. In event mode a new relevant
+event revalidates a hold; no recurring scan attempts to clear it. Unclassified unsafe failures remain
 fatal to that worker rather than being treated as successful. Discovery starts
 at initialization, not a bulk history import.
 An unenrolled source with no completed first turn does not make the entire
@@ -141,14 +361,15 @@ AbandonProcessGroup retain surviving work until it exits safely. Normal exit
 respects intentional stop, while login startup remains installed. CLI shutdown
 rechecks only the explicit busy-owner refusal until native closure is safe.
 
-`status-app install|status` manages a separately signed macOS menu-bar app in
+For CLI-only installations, `status-app install|status` manages a separately signed macOS menu-bar app in
 the private root, with independent login startup. It only reads bounded private
 status files, distinguishes readiness from liveness/stale data, and reports
 waiting, paused, recovering or offline states. Its status window exposes
 diagnostics and notification permission/test feedback. Persistent issues are
 debounced 15 seconds and deduplicated with a 60-second minimum notice interval;
 recovery generates a notice too. Notifications contain no transcript or paths.
-Quit stops only the display. Signed, journaled upgrades require the old UI to
+Graphical installations use the unified Claudex app instead; standalone display
+installation is blocked after graphical login migration. Quit stops only the display. Signed, journaled upgrades require the old UI to
 exit and preserve one previous artifact. No built bundles belong in Git.
 
 Historical backfill is an explicit module API in `src/cold-import.mjs`, not a public
@@ -170,13 +391,30 @@ the return from Codex creates a separate managed Remote Control entry with the
 same title. The opt-in native Local handoff archives the verified superseded
 Local entry while preserving its contents; it never reuses the Local writer. Cold imports
 avoid idle SDK workers only until that transition; active owners remain long-lived.
-Only cold-import pairs may use ephemeral watcher hints after stable, complete
-no-change verification. Include all record lifecycle/checkpoint fields and file
-identities before/after sync, including superseded originals. Pending work,
-errors or missing/changed files invalidate hints; full verification becomes due
-after 60 seconds without refreshing that deadline from hints. New and active
+Cold-import hints require stable, complete no-change verification. Pure pairs of
+two verified current unmanaged originals may persist a signed verification proof
+under cold-verification. Bind exact ledger/native file observations, inactive
+Codex identity/path/cwd/update metadata, decoder code/runtime/configuration, and
+all authenticated archive files and their directory with nanosecond identities.
+Reuse survives restart without a timer-driven full export; changes, uncertainty,
+missing files or invalid proof require full verification. This is a no-op scheduling
+optimization, never mutation, archival, collection or checkpoint authorization.
+Exclude managed records, dependency anchors, relocation and retained-image chains.
+An inactive original's byte-identical unfinished tail may remain withheld while
+reusing its verified canonical-prefix no-op proof. This never completes the tail;
+new bytes or native activity require full verification again.
+Proof storage is bounded to 4096 entries, 16 MiB per entry and 64 MiB total, plus
+one bounded temporary file. Save only after full no-change verification and stable
+post-read observations. No native history or credential is copied into the proof.
+Other eligible cold pairs retain ephemeral hints covering all lifecycle/checkpoint
+fields and native file identities, including superseded originals, with a fixed
+60-second full-verification deadline. Pending work suspends proof use until verified
+recovery; errors revoke the affected proof. New and active
 conversations and dirty cold imports run before the fair cold-validation sweep.
-Between complete cold operations, refresh foreground work after two seconds.
+During startup/reconnection reconciliation, between complete cold operations,
+refresh discovery and changed work after two
+seconds, not the entire unchanged foreground queue. Every managed owner retains
+its regular full lifecycle check once per pass; changed owners are prioritized.
 Discovery and new deliveries also refresh between individual foreground syncs,
 using their own clock; a long active-owner sweep must not block new enrollment.
 Stable file/lifecycle observations also prioritize changed existing conversations
@@ -194,11 +432,22 @@ interval, so it is not an end-to-end latency guarantee. Never advance semantic
 checkpoints from hints or skip a current managed Claude owner's lifecycle checks.
 Bounded watcher timing fields report discovery gaps and last/slowest syncs,
 without transcript content; they are operation timings, not UI latency promises.
+Ordinary progress diagnostics coalesce at two-second intervals. Initial status,
+changed health/conflict reasons, completion boundaries and final shutdown remain
+visible promptly; the ten-second in-flight heartbeat remains. Durable transaction
+ledgers and expiring Desktop handoff proofs never use this diagnostic throttle.
 Normal discovery scope is unchanged.
 Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep
 the superseded-original guards global, retain every managed snapshot in the
 global quota, and preserve exact previous-snapshot/native retirement checks.
+Within one collection, previous Codex snapshots share one fresh initial global
+metadata dependency inventory; each parent still has its own ancestor queries.
+Actual dependency anchors retain independent fresh inventory, canonical and raw
+proof revalidation. Never reuse this inventory for a later collection or as
+mutation authorization; native hide/remove guards still recheck independently.
+Reuse the verified read returned by assertUnchanged for that snapshot's byte
+count instead of immediately exporting the same history a second time.
 
 Validated native baselines are Codex `0.155.0-alpha.16.3`/`.16.4` and Claude Code
 `2.1.210`/`2.1.281`. versionPolicy defaults to strict; an explicit warn policy
@@ -248,6 +497,11 @@ actual competing branches still block; saved semantic prefixes must still match.
 The observed empty-display successful PreToolUse hook attachment may occur
 between results when its tool, native parent, session and pending-result position
 all match. Its historical command/stdout remain inert and are never executed.
+One response may stream later blocks after a completed parallel-tool wave.
+Require contiguous response block indices, identical response identity, exact
+call/result pairing, and every outstanding result before the next wave begins.
+The next block must parent the last result in physical order. Only virtual result
+parents change; early continuations and competing joins remain blocked.
 
 Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
 Desktop-owned transcripts must not be replaced or pruned, even when archived.
@@ -319,7 +573,7 @@ never authorize archive actions or advance checkpoints; expired commands cannot
 be revived by an anchor. Archived folder anchors use the observed native session
 normalizer and actual git metadata, not invented keys or labels. Keep one fixed
 Local original archive per logical conversation, never a new original per turn.
-Generated predecessors retain the existing one-previous-per-side, seven-day,
+Disposable generated predecessors retain the existing one-previous-per-side, seven-day,
 512 MiB aggregate rollback and 50-audit-entry bounds; originals are not deletable
 quota entries. Native automatic archival UI acceptance is a separate requirement
 from unit tests, manifest publication or service readiness.

@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { privateDirectory, withLock, writeJSON } from './storage.mjs';
 import { discoverProviders, ensureProviders } from './app-providers.mjs';
-import { installCollaboration } from './collaboration-install.mjs';
+import { installCollaboration, controlCollaboration } from './collaboration-install.mjs';
+import { readAppStopState } from './app-stop-state.mjs';
 import { callCollaboration } from './collaboration-transport.mjs';
 import { installDesktopLauncher } from './desktop-install.mjs';
 import { installService, controlService } from './service.mjs';
@@ -15,6 +16,8 @@ import { inspectServiceStart } from './service-supervisor.mjs';
 import { ensureClaudeFolderCache } from './claude-folder-install.mjs';
 import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
+import { installAppLogin } from './app-login.mjs';
+import { installSyncHooks } from './sync-hook-install.mjs';
 
 const execute = promisify(execFile);
 const defaults = Object.freeze({ allProjects: true, allowWrite: true, defaultPermission: 'workspace-write' });
@@ -51,12 +54,14 @@ export class AppSetup {
   constructor({ root = join(homedir(), '.local', 'share', 'claudex'), home = homedir(),
     engineRoot = fileURLToPath(new URL('..', import.meta.url)), runtimeDirectory,
     run = execute, platform = process.platform, discover = discoverProviders, ensure = ensureProviders,
-    collaborationInstall = installCollaboration, desktopInstall = installDesktopLauncher,
+    collaborationInstall = installCollaboration, collaborationControl = controlCollaboration, desktopInstall = installDesktopLauncher,
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
-    foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration } = {}) {
+    foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration,
+    interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
     Object.assign(this, { root: resolve(root), home, engineRoot: resolve(engineRoot), runtimeDirectory: runtimeDirectory ?? resolve(engineRoot, '..', 'runtime'),
-      run, platform, discover, ensure, collaborationInstall, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall });
+      run, platform, discover, ensure, collaborationInstall, collaborationControl, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall,
+      interfaceInstall, syncHooksInstall, appPath: appPath ?? resolve(engineRoot, '../../..') });
     this.cli = join(this.engineRoot, 'bin', 'claudex.mjs');
     this.collaborationCli = join(this.engineRoot, 'bin', 'claudex-collaboration.mjs');
     this.node = join(this.runtimeDirectory, 'bin', 'node');
@@ -97,7 +102,7 @@ export class AppSetup {
     }
   }
 
-  async collaborationStatus() {
+  async collaborationRequest(method, params = {}) {
     const root = join(this.root, 'collaboration');
     try {
       const file = await open(join(root, 'controller-key'), constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -108,15 +113,33 @@ export class AppSetup {
           throw new Error('Invalid collaboration controller key.');
         token = (await file.readFile('utf8')).trim();
       } finally { await file.close(); }
-      return await this.collaborationCall({ root, peer: 'codex', token, method: 'list', timeoutMs: 3000 });
+      return await this.collaborationCall({ root, peer: 'codex', token, method, params, timeoutMs: 3000 });
     } catch (error) {
-      if (['ENOENT', 'ECONNREFUSED'].includes(error.code)) return null;
+      if (method === 'list' && ['ENOENT', 'ECONNREFUSED'].includes(error.code)) return null;
       throw error;
     }
   }
 
+  async collaborationStatus() {
+    return this.collaborationRequest('list');
+  }
+
+  async models(defaultModels, defaultEfforts) {
+    return this.collaborationRequest('models', {
+      ...(defaultModels === undefined ? {} : { defaultModels }),
+      ...(defaultEfforts === undefined ? {} : { defaultEfforts }),
+    });
+  }
+
   async inspect({ providers, notes = {} } = {}) {
     const rows = [component('projects', 'Project access', 'ready', 'All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.')];
+    if (notes.lifecycle) rows.push(component('lifecycle', 'Claudex application', 'blocked', notes.lifecycle, 'diagnostics'));
+    let interfaceError = notes.interface;
+    if (!interfaceError) {
+      try { interfaceError = (await appPrivateJSON(join(this.root, 'app-interface-status.json')))?.error; }
+      catch (error) { interfaceError = safeFailure(error); }
+    }
+    if (interfaceError) rows.push(component('interface', 'Claudex application', 'blocked', interfaceError, 'retry'));
     rows.push(component('runtime', 'Bundled runtime', await this.runtimeReady() ? 'ready' : 'missing',
       await this.runtimeReady() ? 'Node.js and the setup engine are included in this app.' : 'Use the complete Claudex app bundle; no separate Node.js installation is required.', 'retry'));
     let found = providers;
@@ -141,43 +164,51 @@ export class AppSetup {
         : broker.limits?.allowWrite && broker.limits?.defaultPermission === 'workspace-write' ? 'ready' : 'waiting',
       !broker ? 'The background broker and MCP connections will be configured automatically.' : broker.blockedByUncertainWork
         ? 'Uncertain native work needs inspection. No input will be resent.' : broker.limits?.defaultPermission === 'workspace-write'
-          ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.', 'retry'));
+          ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.', broker?.blockedByUncertainWork ? 'diagnostics' : 'retry'));
     } catch (error) { rows.push(component('collaboration', 'Cross-model collaboration', 'blocked', safeFailure(error), 'retry')); }
     try {
       const config = await appPrivateJSON(join(this.root, 'config.json'));
       const watcher = await appPrivateJSON(join(this.root, 'watcher-status.json'));
       const live = watcher && processAlive(watcher.pid) && watcher.running === true && Number.isFinite(watcher.updatedAt)
         && watcher.updatedAt <= Date.now() + 5000 && Date.now() - watcher.updatedAt < 90000;
-      const compatible = found?.codex?.version && isAllowedCodexVersion(found.codex.version, normalizeVersionPolicy(config?.versionPolicy));
-      const claudeCompatible = config?.versionPolicy === 'warn' || found?.claude?.version?.split(/\s+/)[0] === '2.1.281';
+      const policy = normalizeVersionPolicy(config?.versionPolicy ?? 'warn');
+      const compatible = found?.codex?.version && isAllowedCodexVersion(found.codex.version, policy);
+      const claudeCompatible = policy === 'warn' || found?.claude?.version?.split(/\s+/)[0] === '2.1.281';
       const configured = config?.mode === 'desktop' && config?.allProjects === true;
       const held = live && (watcher.synchronization === 'blocked' || watcher.synchronization === 'degraded'
         || watcher.blocked || watcher.blockedConversationCount || watcher.blockedSourceCount);
-      const synchronized = live && Number.isFinite(watcher.foregroundCompletedAt) && watcher.synchronization === 'ready'
+      const initialCheck = watcher && Object.hasOwn(watcher, 'checkingConversationCount')
+        ? watcher.initialSweepCompletedAt : watcher?.foregroundCompletedAt;
+      const synchronized = live && Number.isFinite(initialCheck) && watcher.synchronization === 'ready'
         && !watcher.waiting && !watcher.blocked && !watcher.blockedConversationCount && !watcher.blockedSourceCount;
       rows.push(component('synchronization', 'Conversation synchronization', !config ? 'missing' : !compatible || !claudeCompatible ? 'blocked'
         : held ? 'blocked' : !configured || !synchronized ? 'waiting' : 'ready', !config ? 'All-project synchronization will be configured automatically.'
         : !compatible || !claudeCompatible ? 'This native runtime is outside the synchronization policy. Collaboration can still be set up independently.'
           : held ? (watcher.blocked?.reason === 'Owned projection has dependent threads.'
             ? 'Synchronization is paused: an older snapshot has dependent threads. The pending transaction and all histories are preserved; no input is resent.'
-            : 'The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.')
+            : watcher.blocked?.reason ?? watcher.blockedConversations?.[0]?.reason ?? watcher.blockedSources?.[0]?.reason
+              ?? 'The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.')
           : !configured ? 'Existing synchronization settings are preserved until a safe configuration change is possible.'
-            : synchronized ? 'The watcher reports ready and is running for all projects.' : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', 'retry'));
+            : synchronized ? 'The watcher reports ready and is running for all projects.'
+              : live && watcher.waiting ? watcher.waiting : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', held ? 'diagnostics' : 'retry'));
       rows.push(component('folders', 'Native project folders', watcher?.folderProjection?.state === 'error' ? 'blocked'
         : config?.folderProjection?.enabled && live && watcher.folderProjection?.state === 'ready' ? 'ready' : 'waiting',
-        watcher?.folderProjection?.state === 'error' ? 'The current frontend resource could not be verified. No replacement resource was assumed.'
+        watcher?.folderProjection?.state === 'error' ? watcher.folderProjection.error ?? 'The current frontend resource could not be verified. No replacement resource was assumed.'
           : config?.folderProjection?.enabled ? 'The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required.'
-          : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', 'retry'));
+          : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', watcher?.folderProjection?.state === 'error' ? 'diagnostics' : 'retry'));
       rows.push(component('handoffs', 'Native predecessor archival', watcher?.localHandoff?.state === 'error' ? 'blocked'
         : config?.desktopLocalHandoff?.enabled && live && watcher.localHandoff?.state === 'ready' ? 'ready' : 'waiting',
-        watcher?.localHandoff?.state === 'error' ? 'The native handoff coordinator reports an unresolved guard. Original histories are preserved.'
+        watcher?.localHandoff?.state === 'error' ? watcher.localHandoff.error ?? 'The native handoff coordinator reports an unresolved guard. Original histories are preserved.'
           : config?.desktopLocalHandoff?.enabled ? 'Native handoffs are configured; each archival still requires verified history and native lifecycle checks.'
-          : 'Native handoff integration is waiting for verified folder setup. Original conversations remain preserved.', 'retry'));
+          : 'Native handoff integration is waiting for verified folder setup. Original conversations remain preserved.', watcher?.localHandoff?.state === 'error' ? 'diagnostics' : 'retry'));
     } catch (error) { rows.push(component('synchronization', 'Conversation synchronization', 'blocked', safeFailure(error), 'retry')); }
     for (const row of rows) if (notes[row.id]) { row.state = 'blocked'; row.detail = notes[row.id]; row.action = 'retry'; }
-    const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked' : 'needs-action';
+    const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked'
+      : rows.some(row => ['missing', 'login-required'].includes(row.state)) ? 'needs-action' : 'waiting';
     return { version: 1, phase, allProjects: true, allowWrite: true, components: rows,
-      message: phase === 'ready' ? 'Claudex is configured for all projects.' : 'Independent features stay available while the remaining requirements are resolved.' };
+      message: phase === 'ready' ? 'Claudex is configured for all projects.'
+        : phase === 'waiting' ? 'No setup changes are required. Claudex will continue automatically.'
+          : 'Independent features stay available while the remaining requirements are resolved.' };
   }
 
   async setup() {
@@ -187,11 +218,13 @@ export class AppSetup {
     if (directory.uid !== process.getuid() || (directory.mode & 0o777) !== 0o700) throw new Error('Application state directory must be owner-private.');
     return withLock(join(this.root, 'app-setup.lock'), async () => {
       const notes = {};
-      if (!await this.runtimeReady()) return this.inspect();
+      try { await this.prepareInterface(); }
+      catch (error) { notes.interface = safeFailure(error); }
+      if (!await this.runtimeReady()) return this.inspect({ notes });
       let providers;
       try { providers = await this.providers(true); }
-      catch (error) { return this.inspect({ notes: { providers: safeFailure(error) } }); }
-      if (!providers.codex?.app || !providers.claude?.app) return this.inspect({ providers });
+      catch (error) { return this.inspect({ notes: { ...notes, providers: safeFailure(error) } }); }
+      if (!providers.codex?.app || !providers.claude?.app) return this.inspect({ providers, notes });
       const authenticated = Object.fromEntries(await Promise.all(['codex', 'claude'].map(async name => [name, await this.auth(name, providers[name]?.binary)])));
       const mappedRun = (command, args, options) => this.nativeRun(command === 'codex' ? providers.codex.binary : command === 'claude' ? providers.claude.binary : command, args, options);
       if (authenticated.codex.ready && authenticated.claude.ready) {
@@ -213,6 +246,98 @@ export class AppSetup {
     }, { recoverDead: true });
   }
 
+  async prepareInterface() {
+    try {
+      const result = await this.interfaceInstall({ root: this.root, home: this.home, appPath: this.appPath,
+        run: this.nativeRun, platform: this.platform });
+      await writeJSON(join(this.root, 'app-interface-status.json'), { version: 1, updatedAt: Date.now(), error: null });
+      return result;
+    } catch (error) {
+      await writeJSON(join(this.root, 'app-interface-status.json'), { version: 1, updatedAt: Date.now(), error: safeFailure(error) });
+      throw error;
+    }
+  }
+
+  async startup() {
+    if (this.platform !== 'darwin') throw new Error('The Claudex app requires macOS.');
+    this.root = await privateDirectory(this.root);
+    const notes = {};
+    try { await this.resumeStoppedServices(); }
+    catch (error) { notes.lifecycle = safeFailure(error); }
+    try { await this.prepareInterface(); }
+    catch (error) { notes.interface = safeFailure(error); }
+    return this.inspect({ notes });
+  }
+
+  serviceOptions() {
+    return { root: this.root, cli: this.cli, node: this.node, home: this.home };
+  }
+
+  collaborationOptions() {
+    return { root: join(this.root, 'collaboration'), cli: this.collaborationCli, node: this.node, home: this.home };
+  }
+
+  async stopStatus() {
+    if (this.platform !== 'darwin') throw new Error('Application shutdown requires macOS.');
+    const native = { run: this.nativeRun, platform: this.platform };
+    const sync = await this.serviceStatus('status', this.serviceOptions(), native);
+    const collaboration = await this.collaborationControl('status', this.collaborationOptions(), native);
+    const owners = await this.ownership(this.root, { includeSupervisor: true });
+    const unverified = (owners.blockers ?? []).filter(blocker => !['live-owner', 'live-native-child'].includes(blocker.code));
+    if (unverified.length) throw new Error(`Cannot verify synchronization shutdown: ${unverified.map(item => item.code).join(', ')}. Existing ownership evidence was preserved.`);
+    const stopped = !sync.loaded && collaboration.stopped && owners.allowed;
+    return { stopped, detail: stopped ? 'All Claudex services have stopped.'
+      : 'Waiting for Claudex services and their native work to exit safely.',
+      synchronization: { loaded: sync.loaded, ownerBlockerCount: owners.blockerCount ?? (owners.blockers ?? []).length },
+      collaboration: { loaded: collaboration.loaded, stopped: collaboration.stopped } };
+  }
+
+  async stop() {
+    if (this.platform !== 'darwin') throw new Error('Application shutdown requires macOS.');
+    this.root = await privateDirectory(this.root);
+    // Serialize against setup and startup; status inspection remains read-only.
+    return withLock(join(this.root, 'app-setup.lock'), async () => {
+      const previous = await readAppStopState(this.root);
+      await writeJSON(join(this.root, 'app-stop.json'), { version: 1, stopped: true,
+        requestedAt: previous?.stopped ? previous.requestedAt : Date.now() });
+      const native = { run: this.nativeRun, platform: this.platform };
+      const failures = [];
+      // Attempt both stops even if one fails. Never erase ownership evidence.
+      try {
+        const sync = await this.serviceStatus('status', this.serviceOptions(), native);
+        if (sync.loaded) await this.serviceStatus('stop', this.serviceOptions(), native);
+      } catch (error) { failures.push(safeFailure(error)); }
+      try { await this.collaborationControl('stop', this.collaborationOptions(), native); }
+      catch (error) { failures.push(safeFailure(error)); }
+      if (failures.length) throw new Error(failures.join(' '));
+      return this.stopStatus();
+    }, { recoverDead: true });
+  }
+
+  async resumeStoppedServices() {
+    if (!(await readAppStopState(this.root))?.stopped) return;
+    return withLock(join(this.root, 'app-setup.lock'), async () => {
+      const state = await readAppStopState(this.root);
+      if (!state?.stopped) return;
+      if (!state.resuming) {
+        const status = await this.stopStatus();
+        // Login may already have loaded the verified jobs. Reuse them, but do not
+        // bootstrap over detached work from an unloaded, still-draining service.
+        if ((!status.synchronization.loaded && status.synchronization.ownerBlockerCount > 0)
+          || (!status.collaboration.loaded && !status.collaboration.stopped))
+          throw new Error('Previous shutdown is still draining native work. Wait before reopening Claudex.');
+        await writeJSON(join(this.root, 'app-stop.json'), { ...state, resuming: true });
+      }
+      const native = { run: this.nativeRun, platform: this.platform };
+      // Only restart already-installed, verified services; no setup or model work.
+      if (await appPrivateJSON(join(this.root, 'service-install.json')))
+        await this.serviceStatus('start', this.serviceOptions(), native);
+      const collaboration = await this.collaborationControl('status', this.collaborationOptions(), native);
+      if (collaboration.installed) await this.collaborationControl('start', this.collaborationOptions(), native);
+      await writeJSON(join(this.root, 'app-stop.json'), { version: 1, stopped: false, resumedAt: Date.now() });
+    }, { recoverDead: true });
+  }
+
   async configureSynchronization(providers) {
     const path = join(this.root, 'config.json');
     let config = await appPrivateJSON(path);
@@ -223,6 +348,8 @@ export class AppSetup {
       && config.binary === providers.codex.binary && config.claudeBinary === providers.claude.binary
       && launcher?.launcher === join(this.engineRoot, 'bin', 'claudex-codex.mjs') && service?.cli === this.cli) {
       // Reopening a fully configured app is inspection, not a request to stop live owners.
+      await this.syncHooksInstall({ root: this.root, codexHome: config.codexHome, claudeHome: config.claudeHome,
+        nodePath: this.node, hookPath: join(this.engineRoot, 'bin', 'claudex-sync-hook.mjs') });
       return;
     }
     const lease = await this.ownership(this.root, { includeSupervisor: true });
@@ -236,10 +363,12 @@ export class AppSetup {
     await mkdir(join(this.home, '.claude'), { recursive: true, mode: 0o700 });
     config = { version: 1, since: Date.now(), codexHome: join(this.home, '.codex'), claudeHome: join(this.home, '.claude'), ...config,
       mode: 'desktop', allProjects: true, projects: [], contextMode: config?.contextMode ?? 'archive',
-      versionPolicy: normalizeVersionPolicy(config?.versionPolicy), binary: providers.codex.binary, claudeBinary: providers.claude.binary };
+      versionPolicy: normalizeVersionPolicy(config?.versionPolicy ?? 'warn'), binary: providers.codex.binary, claudeBinary: providers.claude.binary };
     await this.desktopInstall({ root: this.root, launcher: join(this.engineRoot, 'bin', 'claudex-codex.mjs'), binary: providers.codex.binary, run: this.nativeRun });
     if (JSON.stringify(await appPrivateJSON(path)) !== original) throw new Error('Synchronization configuration changed during setup; it was preserved.');
     await writeJSON(path, config);
+    await this.syncHooksInstall({ root: this.root, codexHome: config.codexHome, claudeHome: config.claudeHome,
+      nodePath: this.node, hookPath: join(this.engineRoot, 'bin', 'claudex-sync-hook.mjs') });
     const cachePath = config.folderProjection?.cachePath ?? join(this.home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data', '15bc54146dcdb4ce_0');
     // Presentation is independently guarded. A cache mismatch cannot prevent the base watcher from being installed.
     try {

@@ -20,6 +20,38 @@ func health(_ watcher: [String: Any]? = ready, _ service: [String: Any]? = nil) 
   classifyHealth(watcher: watcher, service: service, now: now, alive: alive)
 }
 check(health().state == "ready")
+var initial = ready; initial["mode"] = "desktop"
+initial["checkedConversationCount"] = 3; initial["checkingConversationCount"] = 12
+initial["currentOperation"] = ["conversationId": "known-thread", "title": "Translation task", "startedAt": now - 65000] as [String: Any]
+let checking = health(initial)
+check(checking.state == "waiting" && checking.title == "Checking history in background" && !checking.operational)
+check(checking.detail.contains("they are not being imported again") && checking.detail.contains("New and changed conversations are prioritized."))
+check(checking.detail.contains("Checked 3 of 12 conversations."))
+check(checking.detail.contains("Checking Translation task (65 seconds elapsed)."))
+var invalidProgress = initial; invalidProgress["checkedConversationCount"] = 13
+check(!health(invalidProgress).detail.contains("Checked "))
+invalidProgress = initial; invalidProgress["currentOperation"] = ["title": "Unknown task", "startedAt": now - 1000] as [String: Any]
+check(!health(invalidProgress).detail.contains("Checking Unknown task"))
+invalidProgress = initial; invalidProgress["currentOperation"] = ["conversationId": "known-thread", "startedAt": now + 1000] as [String: Any]
+check(!health(invalidProgress).detail.contains("seconds elapsed"))
+invalidProgress = initial; invalidProgress["currentOperation"] = ["conversationId": "known-thread", "startedAt": now - 1200] as [String: Any]
+check(health(invalidProgress).detail.contains("Checking known-thread (1 seconds elapsed)."))
+invalidProgress = initial; invalidProgress["foregroundCompletedAt"] = now
+check(health(invalidProgress).state == "waiting" && health(invalidProgress).detail.contains("Checked 3 of 12"))
+invalidProgress["initialSweepCompletedAt"] = now
+check(health(invalidProgress).state == "ready" && !health(invalidProgress).detail.contains("Checked "))
+var legacy = ready; legacy["mode"] = "desktop"
+check(health(legacy).state == "waiting")
+legacy["foregroundCompletedAt"] = now
+check(health(legacy).state == "ready")
+invalidProgress = initial; invalidProgress["blocked"] = ["reason": "Exact history mismatch"]
+check(health(invalidProgress).state == "paused" && health(invalidProgress).detail == "Exact history mismatch")
+invalidProgress = initial; invalidProgress["waiting"] = "Shared Codex Desktop backend is not ready."
+check(health(invalidProgress).title == "Waiting for Codex" && health(invalidProgress).detail.contains("Open Codex normally."))
+invalidProgress = initial; invalidProgress["waiting"] = "Wait for a complete assistant turn or verified synchronized checkpoint."
+check(!health(invalidProgress).operational && health(invalidProgress).title == "Waiting for a conversation to finish")
+invalidProgress = initial; invalidProgress["updatedAt"] = now - 120001
+check(health(invalidProgress).state == "unknown" && !health(invalidProgress).detail.contains("Checked "))
 check(health(nil).state == "offline")
 var changed = ready; changed["pid"] = 99
 check(health(changed).state == "offline")
@@ -37,6 +69,22 @@ changed = ready; changed["waiting"] = "Shared Codex Desktop backend is not ready
 check(health(changed).title == "Waiting for Codex")
 changed = ready; changed["localHandoff"] = ["state": "error", "error": "Native history changed"]
 check(health(changed).attention)
+changed = ready; changed["localHandoff"] = ["state": "waiting", "deferred": "history_changed"]
+check(health(changed).state == "waiting" && !health(changed).attention)
+check(health(changed).title == "Waiting for Desktop handoff")
+changed = ready; changed["waiting"] = "Wait for a complete assistant turn or verified synchronized checkpoint."
+changed["waitingContexts"] = [["scope": "conversation", "conversationId": "thread-123", "title": "Translation task", "reason": "Wait for a complete assistant turn or verified synchronized checkpoint."]]
+check(health(changed).issues.count == 1)
+check(health(changed).issues[0].target == "Translation task")
+check(health(changed).issues[0].identity == "thread-123")
+check(health(changed).issues[0].nextStep == "Wait for the reply to finish. No action is required.")
+check(!health(changed).attention)
+changed = ready; changed["blocked"] = ["title": "Affected work", "conversationId": "thread-456", "reason": "Exact conflicting prefix"]
+check(health(changed).issues[0].target == "Affected work")
+check(health(changed).issues[0].reason == "Exact conflicting prefix")
+check(health(changed).issues[0].nextStep.contains("Do not retry setup"))
+check(health(changed).attention)
+check(health().issues.isEmpty)
 let recovering: [String: Any] = ["pid": 42, "state": "backoff", "autoRestart": true, "nextAttemptAt": now + 5000]
 check(health(ready, recovering).state == "recovering" && health(ready, recovering).autoRestart)
 check(health(ready, ["pid": 42, "state": "blocked", "blockerCount": 1,

@@ -4,7 +4,7 @@ import { buildClaudeFolderProjection, claudeFolderProjectKey, lookupClaudeFolder
   normalizeClaudeRemoteId } from '../src/claude-folder-projection.mjs';
 
 const cwd = '/Users/example/claudex';
-const remoteId = 'cse_exampleRemoteSession';
+const remoteId = 'cse_fixture_session_01';
 const entry = (overrides = {}) => ({ remoteId, canonicalCwd: cwd, verified: true, ...overrides });
 const local = (overrides = {}) => ({ id: 'local_original', type: 'local', cwd,
   repoInfo: { owner: '', name: 'claudex', branch: '' }, ...overrides });
@@ -21,7 +21,7 @@ test('the observed Folder policy distinguishes native folder, repository and Rem
 test('only observed cse and session prefixes normalize to the same exact remote identity', () => {
   assert.equal(normalizeClaudeRemoteId(remoteId), remoteId);
   assert.equal(normalizeClaudeRemoteId(remoteId.replace('cse_', 'session_')), remoteId);
-  for (const id of [null, '', 'cse_', 'local_exampleRemoteSession', `prefix-${remoteId}`, `${remoteId}/path`, `${remoteId} `]) {
+  for (const id of [null, '', 'cse_', 'local_fixture_session_01', `prefix-${remoteId}`, `${remoteId}/path`, `${remoteId} `]) {
     assert.equal(normalizeClaudeRemoteId(id), null);
   }
 });

@@ -2,9 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
 
-function fakeSpawn(events, exitCode = 0) {
+function fakeSpawn(events, exitCode = 0, stderr = '') {
   const calls = [];
   const spawnImpl = (command, args, options) => {
     const child = new EventEmitter();
@@ -18,6 +21,7 @@ function fakeSpawn(events, exitCode = 0) {
     child.stdin.on('finish', () => {
       calls.push({ command, args, options, input });
       queueMicrotask(() => {
+        if (stderr) child.stderr.write(stderr);
         for (const event of events) child.stdout.write(`${JSON.stringify(event)}\n`);
         child.stdout.end();
         child.emit('close', exitCode, null);
@@ -32,6 +36,37 @@ function runner(fake) {
   return createNativeCollaborationRunner({ spawnImpl: fake.spawnImpl, groupAliveImpl: () => false,
     signalGroupImpl: () => {} });
 }
+
+test('native directory arguments preserve reference-only and explicit writable grants', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-native-scope-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const [cwd, reference, extra] = ['project', 'reference', 'extra'].map(name => join(root, name));
+  for (const path of [cwd, reference, extra]) await mkdir(path);
+  for (const provider of ['codex', 'claude']) {
+    const fake = fakeSpawn(provider === 'codex'
+      ? [{ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }, { type: 'turn.completed' }]
+      : [{ type: 'result', is_error: false, result: 'ok' }]);
+    await runner(fake)({ provider, cwd, projectRoot: cwd, readOnlyDirs: [reference], writableDirs: [extra],
+      permission: 'workspace-write', prompt: 'Scope test' });
+    const args = fake.calls[0].args;
+    assert.ok(args.includes(extra));
+    if (provider === 'codex') {
+      assert.ok(!args.includes(reference), 'reference must never be passed as an additional writable directory');
+      assert.ok(args.includes('sandbox_workspace_write.exclude_tmpdir_env_var=true'));
+      assert.ok(args.includes('sandbox_workspace_write.exclude_slash_tmp=true'));
+    } else {
+      assert.ok(args.includes(reference));
+      const settings = JSON.parse(args[args.indexOf('--settings') + 1]);
+      assert.deepEqual(settings.permissions.deny, [`Edit(/${reference})`, `Edit(/${reference}/**)`]);
+      assert.ok(args.includes('--restricted'));
+      assert.ok(!args.includes('Bash'));
+    }
+  }
+  const fake = fakeSpawn([]);
+  await assert.rejects(runner(fake)({ provider: 'claude', cwd, projectRoot: cwd, readOnlyDirs: [extra], writableDirs: [extra],
+    permission: 'workspace-write', prompt: 'Never launch' }), /overlap/);
+  assert.equal(fake.calls.length, 0);
+});
 
 test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP server', async () => {
   const fake = fakeSpawn([
@@ -51,12 +86,82 @@ test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP 
   assert.equal(call.input, 'Review this.');
   assert.ok(call.args.includes('--ephemeral'));
   assert.ok(call.args.includes('--ignore-user-config'));
+  assert.ok(call.args.includes('--skip-git-repo-check'));
+  assert.ok(!call.args.includes('--dangerously-bypass-approvals-and-sandbox'));
   assert.ok(call.args.includes('read-only'));
   assert.ok(call.args.some((arg) => arg.includes('mcp_servers.claudex.required=true')));
   assert.ok(!call.args.join(' ').includes('private'));
   assert.equal(call.options.env.CLAUDEX_WORK_TOKEN, 'private');
   assert.equal(call.options.env.OPENAI_API_KEY, undefined);
   assert.equal(call.options.env.CODEX_API_KEY, undefined);
+});
+
+test('only an exact no-output pre-execution Git refusal is a known startup failure', async () => {
+  const refusal = 'Not inside a trusted directory and --skip-git-repo-check was not specified.\n';
+  for (const [events, stderr, uncertain] of [
+    [[], refusal, false],
+    [[], 'Unknown native failure containing private data', true],
+    [[{ type: 'thread.started', thread_id: 'started-session' }], refusal, true],
+    [[], 'x'.repeat(4097) + refusal, true],
+  ]) {
+    const fake = fakeSpawn(events, 1, stderr);
+    await assert.rejects(runner(fake)({ provider: 'codex', cwd: process.cwd(), prompt: 'Check.' }), error => {
+      assert.equal(error.executionUncertain, uncertain);
+      assert.ok(!error.message.includes('private data'));
+      if (!uncertain) assert.match(error.message, /before execution/);
+      return true;
+    });
+    assert.equal(fake.calls.length, 1);
+  }
+});
+
+test('selected models reach the native CLI unchanged and native defaults omit the flag', async () => {
+  for (const provider of ['codex', 'claude']) {
+    for (const model of [null, `${provider}-selected-model`]) {
+      const fake = fakeSpawn(provider === 'codex'
+        ? [{ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }, { type: 'turn.completed' }]
+        : [{ type: 'result', is_error: false, result: 'ok' }]);
+      await runner(fake)({ provider, cwd: process.cwd(), prompt: 'Check model routing.', model });
+      const args = fake.calls[0].args;
+      if (model === null) assert.equal(args.includes('--model'), false);
+      else assert.equal(args[args.indexOf('--model') + 1], model);
+      assert.ok(!args.includes('--dangerously-skip-permissions'));
+      assert.ok(!args.includes('--dangerously-bypass-approvals-and-sandbox'));
+    }
+  }
+});
+
+test('requested effort reaches vendor arguments without changing permissions or inheriting Claude effort', async () => {
+  const saved = process.env.CLAUDE_CODE_EFFORT_LEVEL;
+  process.env.CLAUDE_CODE_EFFORT_LEVEL = 'max';
+  try {
+    for (const provider of ['codex', 'claude']) {
+      for (const effort of [null, 'low', 'high']) {
+        const fake = fakeSpawn(provider === 'codex'
+          ? [{ type: 'item.completed', item: { type: 'agent_message', text: 'ok' } }, { type: 'turn.completed' }]
+          : [{ type: 'result', is_error: false, result: 'ok' }]);
+        await runner(fake)({ provider, cwd: process.cwd(), prompt: 'Effort routing only.', effort });
+        const call = fake.calls[0];
+        if (provider === 'codex') {
+          assert.deepEqual(call.args.filter(arg => arg.startsWith('model_reasoning_effort=')),
+            effort === null ? [] : [`model_reasoning_effort=${JSON.stringify(effort)}`]);
+          assert.ok(call.args.includes('read-only'));
+        } else {
+          assert.equal(call.options.env.CLAUDE_CODE_EFFORT_LEVEL, undefined);
+          assert.equal(call.args.includes('--effort'), effort !== null);
+          if (effort) assert.equal(call.args[call.args.indexOf('--effort') + 1], effort);
+          assert.equal(call.args[call.args.indexOf('--tools') + 1], 'Read,Glob,Grep');
+        }
+      }
+    }
+    const fake = fakeSpawn([]);
+    await assert.rejects(runner(fake)({ provider: 'claude', cwd: process.cwd(), prompt: 'Do not launch.', effort: 'ultra' }), /effort/i);
+    await assert.rejects(runner(fake)({ provider: 'codex', cwd: process.cwd(), prompt: 'Do not launch.', effort: 'high\nother' }), /effort/i);
+    assert.equal(fake.calls.length, 0);
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    else process.env.CLAUDE_CODE_EFFORT_LEVEL = saved;
+  }
 });
 
 test('Claude uses nonpersistent restricted CLI with bounded file tools and explicit MCP', async () => {

@@ -89,8 +89,10 @@ node bin/claudex.mjs version-policy strict
 The first command opts out of version-only blocking for Codex, Claude Code and
 the Claude owner SDK. Unvalidated Codex versions keep shared transport instead
 of entering native-only mode, and Claude owners attempt the existing protocol.
-`status` shows the selected policy and bounded runtime warnings; `doctor` still
-reports unvalidated versions as unverified rather than claiming compatibility.
+The legacy policy name `warn` is retained, but unfamiliar version numbers do not
+emit warnings or warning events. Actual protocol, history, schema and ownership
+failures still surface normally. `doctor` retains verification provenance as
+diagnostic information rather than treating an unvalidated version as a fault.
 The second command restores the strict policy. Existing configuration fields,
 conversation IDs, checkpoints and transcripts are not changed by either command.
 
@@ -395,7 +397,7 @@ identity and original Local mapping still agree. An anchor never authorizes an
 archive, and expired commands are never made actionable by retained grouping.
 There remains **one fixed Local original archive per logical conversation**, not
 another copy each round. It is not disposable quota data. Generated previous
-copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
+disposable copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
 the audit remains capped at 50 entries.
 
 This path is version-pinned and guarded, not an external writer lease. A manifest
@@ -598,11 +600,24 @@ Per logical conversation, the steady-state managed set is:
 - Previous projections expire seven days after retirement, subject to a global
   512 MiB backup budget. Current conversations are never deleted for a quota.
 
-This means at most four managed complete copies in steady state. A transaction
+Independent snapshots therefore have at most four managed complete copies in steady state. A transaction
 can temporarily add one candidate; an error stops further allocation. The
 original enrolled session is separate and is never counted as disposable data.
 Actual new conversation content naturally grows; this is not a cap on current
 history or on the native applications' own operational logs and caches.
+
+An owned Codex snapshot with native spawned children or forks is not disposable
+rollback data. After verifying its exact authenticated checkpoint, stable raw
+bytes and dependency inventory, Desktop mode preserves it as a
+`dependency-anchor` without archiving, deleting, loading or editing its children.
+The promoted replacement and source prefixes are rechecked before the same
+transaction completes; recovery never resends that handoff. Such anchors remain
+visible native histories and are never automatically demoted or expired, even
+if their children later disappear. They still count toward the same 512 MiB
+backup budget, with a hard maximum of 64 anchors globally. New allocation is
+refused when these bounds cannot be met. The ordinary one-previous-per-side and
+seven-day limits continue to apply to disposable snapshots. Missing or changed
+anchors block synchronization instead of silently selecting a branch.
 
 The state contains one pending transaction, fixed staging slots, and the most
 recent 50 audit entries. It does not accumulate per-turn state snapshots or
@@ -621,7 +636,8 @@ Policy overrides live in `config.json` under `policy`: `previousPerSide`,
 3. Persist a transaction intent before creating a candidate.
 4. Write a complete private staging file, fsync, then publish without overwriting.
 5. Verify portable message content and native visibility before promotion.
-6. Hide the previous owned version, then prune only verified independent backups.
+6. Preserve a verified dependency-bearing Codex version as an anchor, or hide
+   the independent previous version; prune only verified independent backups.
 
 ```sh
 node bin/claudex.mjs status
@@ -939,3 +955,74 @@ isolated native stores for testing. Runtime data stays outside the repository.
 - [Claude storage and retention](https://code.claude.com/docs/en/claude-directory)
 - [Thinking signatures](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [txcript usage](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
+## Completion-driven synchronization
+
+Desktop mode uses completion hooks and native lifecycle events instead of a
+recurring two-second conversation poll. `Stop` wakes only the affected conversation;
+`UserPromptSubmit` disarms the previous completion's late-write observer. Native
+SDK/app-server notifications feed the same durable, identity-only event queue.
+A private Unix socket wakes the worker; events remain stored if the worker is down.
+
+The watcher performs one startup/reconnection reconciliation and otherwise sleeps.
+A completion signal may precede the final transcript write, so it retains normal
+complete-turn and idle-destination checks, with at most three short event-scoped
+follow-ups and exact-file notifications. Hooks never force a write, choose a branch,
+or replay uncertain work. Idle health timestamps are refreshed every 30 seconds
+without inspecting histories. This is not a two-second delivery guarantee.
+
+Graphical setup merges the publisher into existing native settings. For an existing
+Desktop CLI installation, run `claudex hooks install` and inspect with
+`claudex hooks status`. In Codex, review and trust the exact Claudex definitions via
+the native `/hooks` interface; configuration alone is not proof that hooks can run.
+Do not use a hook-trust bypass. Existing user hooks and native credentials remain
+unchanged. The installed command is synchronous, bounded and returns no model
+instructions; it only records session identity and the event type.
+
+Authorized live native-model checks verify Codex-origin and Claude Code-origin
+replies are delivered automatically, including a new Claude conversation created
+while the watcher is idle. A Codex continuation recalled the Claude reply from
+the synchronized history without receiving the token again, and its real reply
+was delivered back to the managed Claude session with equal canonical histories.
+These checks used isolated read-only test projects; they do not claim a separate
+Claude Desktop UI reply was generated.
+
+## Restart verification and unchanged history
+
+An unchanged cold-import pair with two verified unmanaged originals can reuse a
+signed local verification proof after restart. The watcher checks native metadata,
+the exact ledger and transcript identities, and all verified archive file identities
+without re-exporting and decoding the full history. The first run after this feature
+is installed establishes proofs through normal complete verification. Changes to
+history, dependencies, native state, decoder code or relevant configuration require
+full verification again; elapsed time alone does not discard an unchanged proof.
+An inactive original's unchanged unfinished tail remains withheld. Reusing its
+already verified canonical prefix never sends that tail or marks it complete.
+
+Managed owners and pending operations retain their full native lifecycle guards.
+Proofs never authorize writes, history promotion, archival or snapshot collection.
+They contain metadata, not copied messages, and have a 64 MiB aggregate limit.
+During the cold backlog, discovery and changed conversations are refreshed between
+operations instead of repeatedly checking every unchanged active conversation.
+
+## Native project relocation
+
+When Claude Desktop moves a tracked Local conversation to another project,
+Claudex can follow its native CLI session identity to the new project. The native
+registry must identify one exact destination, the previous transcript must be
+absent, and the complete previously synchronized history must remain unchanged.
+Claudex preserves historical working-directory fields and original content.
+
+An unchanged managed Codex counterpart is replaced through the normal guarded
+snapshot flow in the new project, including when no new message was added.
+Existing snapshots retain their original working directory and rollback guards.
+An active or independently changed counterpart, ambiguous native mapping,
+modified history, imported bootstrap original, or pending handoff is not forcibly
+redirected. Source changes during verification wait for a stable boundary.
+Moves back to an earlier project root and imported bootstrap originals remain
+guarded rather than guessing which native location is authoritative.
+This does not move project files or rewrite native conversation stores.
+
+A native no-inference relocation check verified a moved Local original, preserved
+all original transcript bytes, and advanced both sides from 258 to 300 canonical
+messages through one new-project Codex snapshot. The pending transaction completed
+normally. This is history-delivery evidence, not a new model-generated reply test.
