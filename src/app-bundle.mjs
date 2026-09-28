@@ -6,6 +6,7 @@ export const APP_IDENTIFIER = 'dev.0ruka.claudex.app';
 export const APP_LOCALES = Object.freeze(['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']);
 export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
+  'claudex-sync-hook.mjs',
 ]);
 export const ENGINE_SRC = Object.freeze([
   'app-setup.mjs', 'app-providers.mjs', 'app-login.mjs',
@@ -25,6 +26,7 @@ export const ENGINE_SRC = Object.freeze([
   'owned-claude-history.mjs', 'owned-codex-history.mjs', 'retention.mjs',
   'runtime-version-policy.mjs', 'service-supervisor.mjs', 'service.mjs',
   'status-app-install.mjs', 'storage.mjs', 'verification-observations.mjs',
+  'sync-events.mjs', 'sync-event-source.mjs', 'sync-hook-install.mjs',
 ]);
 
 export async function runCommand(command, args, options = {}) {

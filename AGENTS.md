@@ -97,6 +97,30 @@ checks native layout with synthetic data, not installed service acceptance.
 
 ## Adapters
 
+Desktop synchronization is completion-event driven, not a recurring two-second
+history sweep. Native Stop/lifecycle hooks publish bounded identity-only hints to
+the private durable sync-events inbox and wake the owner through a private Unix
+socket. Native SDK/app-server events join the same queue. Configuration events
+only recheck hook readiness; known managed session registration and started events
+never start a sync. Resuming an original reconciles that conversation for offline
+completions. Hook definitions are merged with existing settings and require the
+native Codex trust review; never bypass or forge trust receipts. CLI hooks install
+and hooks status configure/inspect them; graphical setup installs them too.
+Perform one startup/reconnection reconciliation, then sleep until an event.
+Map exact native IDs, including preserved originals, to affected logical work.
+Recover an existing pending transaction first, preserve all write/history guards,
+and acknowledge only the consumed inbox revision. Newer events survive a sync.
+Completion-before-flush gets at most three event-scoped follow-ups at 250/1000/3000
+ms and a completion-armed exact-file notification; started disarms streaming files.
+Never infer completion from a hook alone or resend uncertain native input.
+Socket notifications are primary: macOS fs.watch registration can lose events.
+Use one OS watcher per parent directory with subscriber fanout; filesystem signals
+are hints, never checkpoint or mutation evidence. A 30-second idle status heartbeat
+does no native history reads, discovery or archival proof renewal. Scope Desktop
+handoff history checks to event targets; empty scope revokes commands while keeping
+validated presentation anchors. Test-only dependency injection retains the former
+bounded polling harness, not a production fallback.
+
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
@@ -235,8 +259,8 @@ worker crashes. Preserve the saved native identity/path and pending evidence.
 Never scan for same-ID substitutes; only the explicit native registry relocation
 protocol above may adopt a verified new project location without pending work.
 Without pending work, affected syncs are held individually, but global original
-and quota guards still apply to other deliveries. Revalidation is paced at 30
-seconds, with explicit bounded blocked status. Unclassified unsafe failures remain
+and quota guards still apply to other deliveries. In event mode a new relevant
+event revalidates a hold; no recurring scan attempts to clear it. Unclassified unsafe failures remain
 fatal to that worker rather than being treated as successful. Discovery starts
 at initialization, not a bulk history import.
 An unenrolled source with no completed first turn does not make the entire
@@ -303,7 +327,8 @@ fields and native file identities, including superseded originals, with a fixed
 60-second full-verification deadline. Pending work suspends proof use until verified
 recovery; errors revoke the affected proof. New and active
 conversations and dirty cold imports run before the fair cold-validation sweep.
-Between complete cold operations, refresh discovery and changed work after two
+During startup/reconnection reconciliation, between complete cold operations,
+refresh discovery and changed work after two
 seconds, not the entire unchanged foreground queue. Every managed owner retains
 its regular full lifecycle check once per pass; changed owners are prioritized.
 Discovery and new deliveries also refresh between individual foreground syncs,

@@ -27,8 +27,15 @@ so troubleshooting evidence is not changed. CLI output remains English.
    the installed vendor apps, including when first started in background mode.
 3. Complete an official browser sign-in if requested. Desktop sign-in and CLI
    sign-in are not assumed to be interchangeable. Credentials are never copied.
-4. Let the checklist report which integrations are ready and which require an
+4. Review and trust the exact Claudex completion hooks through Codex's native hook
+   review (`/hooks` in Codex CLI). Setup preserves existing hooks and never bypasses
+   native trust. A configured-but-untrusted hook remains an explicit readiness issue.
+5. Let the checklist report which integrations are ready and which require an
    account, compatible runtime, idle native process, or normal app restart.
+
+Conversation synchronization wakes on native completion hooks/events, not a recurring
+two-second history scan. Startup/reconnection reconciliation and a status-only
+heartbeat remain; the heartbeat does not inspect conversations.
 
 The single Claudex window shows live synchronization status and compact Codex and
 Claude connection summaries. Setup actions appear automatically when a component

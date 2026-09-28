@@ -1,4 +1,10 @@
 {
+  "Conversation completion hooks are not configured. Run Claudex setup to install them.": "Conversation completion hooks are not configured. Run Claudex setup to install them.",
+  "Claude hooks are disabled. Enable hooks in Claude settings to resume event-driven synchronization.": "Claude hooks are disabled. Enable hooks in Claude settings to resume event-driven synchronization.",
+  "Codex reported hook configuration errors. Review the native hooks configuration before synchronizing.": "Codex reported hook configuration errors. Review the native hooks configuration before synchronizing.",
+  "Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.": "Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.",
+  "Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.": "Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.",
+  "Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.": "Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.",
   "Connections": "Connections",
   "Connected": "Connected",
   "Checking connection…": "Checking connection…",

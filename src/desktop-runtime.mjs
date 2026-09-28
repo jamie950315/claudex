@@ -1,5 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { homedir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { join, dirname, basename, resolve, sep, isAbsolute } from 'node:path';
 import { lstat, realpath, readFile, access, readdir, open } from 'node:fs/promises';
 import { createReadStream, constants } from 'node:fs';
@@ -9,6 +10,7 @@ import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs'
 import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude } from './claude.mjs';
 import { inspectClaudeProjectRelocation } from './claude-relocation.mjs';
+import { inspectNativeSyncHookTrust } from './sync-hook-install.mjs';
 import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
@@ -138,6 +140,12 @@ export class DesktopRuntime {
       nativeHistoryPageSize: this.nativeHistoryPageSize };
   }
 
+  async synchronizationHooks() {
+    return inspectNativeSyncHookTrust({ client: await this.codex(), root: this.root,
+      codexHome: this.codexHome, claudeHome: this.claudeHome, nodePath: process.execPath,
+      hookPath: fileURLToPath(new URL('../bin/claudex-sync-hook.mjs', import.meta.url)) });
+  }
+
   async codex() {
     // A new connection is not a replay: the coordinator rechecks durable
     // operation evidence before deciding whether a native write is required.
@@ -166,6 +174,7 @@ export class DesktopRuntime {
       this.codexNativeVersion = initialized.userAgent?.match(/^(?:Codex Desktop|codex_cli_rs|claudex)\/(\S+)/)?.[1] ?? null;
       if (initialized.codexHome && await realpath(initialized.codexHome) !== this.codexHome) throw new Error('Shared backend uses a different Codex home.');
       this.client.on?.('notification', event => this.onEvent({ type: 'codex_notification', event }));
+      this.client.on?.('disconnected', () => this.onEvent({ type: 'codex_disconnected' }));
       return this.client;
     } catch (error) { await this.client.close(); this.client = null; throw error; }
   }

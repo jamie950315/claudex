@@ -16,6 +16,7 @@ import { ensureClaudeFolderCache } from './claude-folder-install.mjs';
 import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { installAppLogin } from './app-login.mjs';
+import { installSyncHooks } from './sync-hook-install.mjs';
 
 const execute = promisify(execFile);
 const defaults = Object.freeze({ allProjects: true, allowWrite: true, defaultPermission: 'workspace-write' });
@@ -55,11 +56,11 @@ export class AppSetup {
     collaborationInstall = installCollaboration, desktopInstall = installDesktopLauncher,
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
     foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration,
-    interfaceInstall = installAppLogin, appPath } = {}) {
+    interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
     Object.assign(this, { root: resolve(root), home, engineRoot: resolve(engineRoot), runtimeDirectory: runtimeDirectory ?? resolve(engineRoot, '..', 'runtime'),
       run, platform, discover, ensure, collaborationInstall, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall,
-      interfaceInstall, appPath: appPath ?? resolve(engineRoot, '../../..') });
+      interfaceInstall, syncHooksInstall, appPath: appPath ?? resolve(engineRoot, '../../..') });
     this.cli = join(this.engineRoot, 'bin', 'claudex.mjs');
     this.collaborationCli = join(this.engineRoot, 'bin', 'claudex-collaboration.mjs');
     this.node = join(this.runtimeDirectory, 'bin', 'node');
@@ -263,6 +264,8 @@ export class AppSetup {
       && config.binary === providers.codex.binary && config.claudeBinary === providers.claude.binary
       && launcher?.launcher === join(this.engineRoot, 'bin', 'claudex-codex.mjs') && service?.cli === this.cli) {
       // Reopening a fully configured app is inspection, not a request to stop live owners.
+      await this.syncHooksInstall({ root: this.root, codexHome: config.codexHome, claudeHome: config.claudeHome,
+        nodePath: this.node, hookPath: join(this.engineRoot, 'bin', 'claudex-sync-hook.mjs') });
       return;
     }
     const lease = await this.ownership(this.root, { includeSupervisor: true });
@@ -280,6 +283,8 @@ export class AppSetup {
     await this.desktopInstall({ root: this.root, launcher: join(this.engineRoot, 'bin', 'claudex-codex.mjs'), binary: providers.codex.binary, run: this.nativeRun });
     if (JSON.stringify(await appPrivateJSON(path)) !== original) throw new Error('Synchronization configuration changed during setup; it was preserved.');
     await writeJSON(path, config);
+    await this.syncHooksInstall({ root: this.root, codexHome: config.codexHome, claudeHome: config.claudeHome,
+      nodePath: this.node, hookPath: join(this.engineRoot, 'bin', 'claudex-sync-hook.mjs') });
     const cachePath = config.folderProjection?.cachePath ?? join(this.home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data', '15bc54146dcdb4ce_0');
     // Presentation is independently guarded. A cache mismatch cannot prevent the base watcher from being installed.
     try {

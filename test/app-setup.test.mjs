@@ -41,6 +41,7 @@ async function fixture(t, options = {}) {
     ownership: async () => ({ allowed: options.ownerAllowed !== false }),
     foldersInstall: async input => { events.push(['folders', input]); },
     interfaceInstall: async input => { events.push(['interface', input]); },
+    syncHooksInstall: async input => { events.push(['sync-hooks', input]); return { configured: true }; },
   });
   setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' } });
   return { base, root, home, runtimeDirectory, providers, setup, events };
@@ -58,6 +59,7 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.deepEqual(config.projects, []);
   assert.ok(events.some(([kind]) => kind === 'desktop'));
   assert.ok(events.some(([kind]) => kind === 'service'));
+  assert.ok(events.some(([kind]) => kind === 'sync-hooks'));
   assert.equal(report.version, 1);
   assert.equal(report.allProjects, true);
   assert.equal(report.allowWrite, true);

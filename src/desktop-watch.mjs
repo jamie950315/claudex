@@ -8,6 +8,7 @@ import { withLock, writeJSON } from './storage.mjs';
 import { publishClaudeFolderMap } from './claude-folder-map.mjs';
 import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mjs';
 import { homedir } from 'node:os';
+import { RECONNECT_ID } from './sync-event-source.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
@@ -64,6 +65,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   blockedRetryMs = 30_000,
   writeStatus = writeJSON,
   verificationCache,
+  events,
   publishFolders = publishClaudeFolderMap,
   maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
@@ -74,6 +76,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   const startedAt = now();
   let lastCollection = startedAt;
   let passes = 0;
+  let eventBatch = null, presentationScope;
+  let eventWakeCount = 0, eventSyncCount = 0, lastEventAt = null, awaitingEvents = false;
+  let hookStatus = null;
+  const deferredEvents = new Map();
+  const eventWaits = new Map();
+  const eventKey = event => `${event.side}:${event.nativeId}`;
+  const deferEvent = (event, attempt = 0) => {
+    const delays = [250, 1000, 3000];
+    if (attempt < delays.length) deferredEvents.set(eventKey(event), { event, attempt: attempt + 1, due: now() + delays[attempt] });
+  };
   let blocked = null;
   const blockedConversations = new Map();
   const deferredBlock = Symbol('deferred history revalidation');
@@ -138,20 +150,22 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let lastProgressAt = null, lastProgressHealth = null, publishedFirstOperation = false;
   const writeProgress = async () => {
     const timestamp = now();
+    const hookBlock = hookStatus && !hookStatus.ready ? { scope: 'hooks', reason: hookStatus.reason } : null;
     const progress = { mode: 'desktop', running: true, pid: process.pid,
-    scheduler: 'activity-interleaved', startedAt, updatedAt: now(),
+    scheduler: events ? 'completion-events' : 'activity-interleaved', startedAt, updatedAt: now(),
+    ...(events ? { eventWakeCount, eventSyncCount, lastEventAt, awaitingEvents, eventSources: events.metrics, hookStatus } : {}),
     versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, initialSweepCompletedAt,
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
     currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
     reusedVerificationCount: reusedConversations.size, fullVerificationCount,
     activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
-    synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
-    ...blockingStatus(), ...latestFields };
+    synchronization: blocked || hookBlock ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
+    ...blockingStatus(), ...latestFields, blocked: blocked ?? hookBlock };
     const guardHealth = value => value && Object.fromEntries(Object.entries(value)
       .filter(([key]) => !['since', 'lastAttemptAt', 'retryAt', 'attempts'].includes(key)));
     const presentationHealth = value => value && { state: value.state, error: value.error, deferred: value.deferred };
-    const health = JSON.stringify({ synchronization: progress.synchronization,
+    const health = JSON.stringify({ synchronization: progress.synchronization, awaitingEvents,
       blocked: guardHealth(progress.blocked), blockedConversations: progress.blockedConversations.map(guardHealth),
       waiting: progress.waiting, waitingContexts: progress.waitingContexts,
       blockedSourceCount: progress.blockedSourceCount, blockedSources: progress.blockedSources,
@@ -171,7 +185,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     latestFields = fields;
     if (handoffs) {
       try {
-        const result = await handoffs.publish(await bridge.status());
+        const result = await handoffs.publish(await bridge.status(), presentationScope === undefined ? {} : { conversationIds: presentationScope });
         localHandoff = { ...result, state: result.deferred === 'history_changed' ? 'waiting' : 'ready', updatedAt: now() };
       }
       catch (error) { localHandoff = { state: 'error', error: reason(error), updatedAt: now() }; }
@@ -201,11 +215,15 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
     try {
       while (!signal?.aborted && passes++ < maxPasses) {
-        let waiting = null;
-        const waitingContexts = [];
+        const broadPass = !events || eventBatch === null || eventBatch.some(event => event.kind === 'reconnect');
+        presentationScope = broadPass ? undefined : [];
+        if (broadPass) eventWaits.clear();
+        let waiting = events ? [...eventWaits.values()][0]?.reason ?? null : null;
+        const waitingContexts = events ? [...eventWaits.values()].slice(0, 20) : [];
         const wait = (error, fields) => {
           waiting ??= reason(error);
           const context = { ...fields, reason: contextReason(error) };
+          if (events && fields.conversationId) eventWaits.set(fields.conversationId, context);
           if (waitingContexts.length < 20 && !waitingContexts.some(item => JSON.stringify(item) === JSON.stringify(context)))
             waitingContexts.push(context);
         };
@@ -214,12 +232,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         try {
           // A pending transaction remains the only allowed native operation.
           // Waiting out this backoff does not clear it or allocate a new target.
-          if (blocked && now() < blocked.retryAt) throw deferredBlock;
+          if (blocked && now() < blocked.retryAt && !events) throw deferredBlock;
           // The transport is a prerequisite. Never enroll a source while it is absent.
           const codex = await runtime.codex();
+          if (events && runtime.synchronizationHooks) hookStatus = await runtime.synchronizationHooks();
           const cacheContext = proofCache ? await runtime.verificationCacheContext() : null;
           const sync = async id => {
-            if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt) return;
+            if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt && !events) return { blocked: true };
             try {
               const state = await bridge.status();
               const before = await coldImportHint(state, id);
@@ -233,7 +252,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 if (cached && await coldImportHint(await bridge.status(), id) === before) {
                   coldDirty.delete(id); coldObserved.set(id, before);
                   checkedConversations.add(id); reusedConversations.add(id);
-                  return;
+                  return { changed: false, reused: true };
                 }
                 await proofCache.invalidate(id);
               }
@@ -313,6 +332,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               // A successful prefix read can still be incomplete or race more
               // native metadata. Unsatisfied priority work must yield too.
               if (activeDirty.delete(id)) activeDirty.add(id);
+              return result ?? { changed: false };
             }
             catch (error) {
               coldHints.delete(id);
@@ -324,13 +344,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 clearHints();
                 // Do not discover or start another sync while recovery waits.
                 await bridge.recover();
-                return;
+                return { recovered: true };
               }
               if (isWaiting(error)) {
                 if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
                 const waitingId = error.conversationId ?? id;
                 wait(error, { scope: waitingId === id ? 'conversation' : 'coordinator',
-                  ...conversationContext(latest, waitingId) }); return;
+                  ...conversationContext(latest, waitingId) }); return { waiting: true };
               }
               if (isHistoryBlocked(error)) {
                 // An allocation's global original/retention guard can identify
@@ -343,12 +363,12 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 // be verified. Their normal global quota/original guards are
                 // unchanged and may independently block a new allocation.
                 blockedConversations.set(id, block(blockedConversations.get(id), error, conversationContext(latest, id)));
-                return;
+                return { blocked: true };
               }
               throw error;
             }
           };
-          const discoverNew = async () => {
+          const discoverNew = async onlyKeys => {
             const beganAt = now();
             let state = await bridge.status();
             if (state.pending) { clearHints(); await bridge.recover(); }
@@ -367,6 +387,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               if (signal?.aborted) break;
               let nativeId = source.nativeId ?? source.id;
               try {
+                if (onlyKeys) {
+                  if (!nativeId && source.side === 'codex') nativeId = await codexSessionId(source.path);
+                  if (!onlyKeys.has(`${source.side}:${String(nativeId).toLowerCase()}`)) continue;
+                }
                 if (source.side === 'codex') {
                   nativeId ??= await codexSessionId(source.path);
                   const metadata = (await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(error => {
@@ -465,16 +489,56 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           // Refresh only new/changed work between cold operations, not the whole
           // active queue again every poll. Every active owner still receives its
           // regular full lifecycle check once per pass. Never parallelize writers.
-          const background = await foreground();
-          for (const id of background) {
-            if (signal?.aborted) break;
-            await refreshNew(id);
-            if (signal?.aborted) break;
-            await sync(id);
+          if (broadPass) {
+            const background = await foreground();
+            for (const id of background) {
+              if (signal?.aborted) break;
+              await refreshNew(id);
+              if (signal?.aborted) break;
+              await sync(id);
+            }
+            await refreshNew();
+          } else {
+            eventBatch = await events.current?.(eventBatch) ?? eventBatch;
+            let state = await bridge.status();
+            if (state.pending) { clearHints(); await bridge.recover(); state = await bridge.status(); }
+            await events.observe(eventBatch, state);
+            const relevant = eventBatch.filter(event => !['started', 'configuration'].includes(event.kind));
+            const keys = new Set(relevant.map(eventKey));
+            const known = new Set(state.records.map(record => `${record.side}:${record.nativeId?.toLowerCase()}`));
+            if ([...keys].some(key => !known.has(key))) await discoverNew(keys);
+            state = await bridge.status();
+            for (const event of relevant) if (event.kind !== 'session'
+              && !state.records.some(record => `${record.side}:${record.nativeId?.toLowerCase()}` === eventKey(event)))
+              deferEvent(event, event.retryAttempt ?? 0);
+            await events.observe(eventBatch, state);
+            const targets = new Map();
+            for (const event of relevant) for (const record of state.records) {
+              if (`${record.side}:${record.nativeId?.toLowerCase()}` !== eventKey(event)) continue;
+              // Session-start notifications also describe our own snapshot registration.
+              if (event.kind === 'session' && known.has(eventKey(event)) && record.managed) continue;
+              if (state.conversations[record.conversationId]) {
+                const list = targets.get(record.conversationId) ?? [];
+                list.push(event); targets.set(record.conversationId, list);
+              }
+            }
+            presentationScope = [...targets.keys()];
+            for (const [id, sourceEvents] of targets) {
+              if (signal?.aborted) break;
+              eventWaits.delete(id);
+              for (let index = waitingContexts.length - 1; index >= 0; index--)
+                if (waitingContexts[index].conversationId === id) waitingContexts.splice(index, 1);
+              waiting = waitingContexts[0]?.reason ?? null;
+              eventSyncCount++;
+              const result = await sync(id);
+              if (result?.waiting || result?.incompleteTail || result?.changed === false) {
+                for (const event of sourceEvents) if (event.kind !== 'session') deferEvent(event, event.retryAttempt ?? 0);
+              }
+            }
+            await events.observe(eventBatch, await bridge.status());
           }
-          await refreshNew();
           if (!signal?.aborted && initialSweepCompletedAt === null) initialSweepCompletedAt = now();
-          if (!signal?.aborted && now() - lastCollection >= 60_000) {
+          if (!signal?.aborted && broadPass && now() - lastCollection >= 60_000) {
             await bridge.collect();
             lastCollection = now();
           }
@@ -487,6 +551,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const state = await bridge.status();
             wait(error, { scope: 'coordinator',
               ...conversationContext(state, state.pending?.record?.conversationId ?? error.conversationId) });
+            if (events) {
+              const retry = eventBatch?.length ? eventBatch : [{ side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' }];
+              for (const event of retry) deferEvent(event, event.retryAttempt ?? 0);
+            }
           }
           else if (isHistoryBlocked(error)) {
             const state = await bridge.status(), pending = state.pending;
@@ -498,6 +566,43 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         }
         await status({ waiting, waitingContexts, blockedSourceCount, blockedSources });
         if (!signal?.aborted && passes < maxPasses) {
+          if (events) {
+            if (eventBatch) await events.acknowledge(eventBatch);
+            awaitingEvents = true;
+            await writeProgress();
+            // Only liveness metadata is refreshed while idle. No history reads,
+            // discovery, archive proof renewal or synchronization runs here.
+            let heartbeatError;
+            const idleStop = new AbortController();
+            const heartbeat = (async () => {
+              while (!idleStop.signal.aborted) {
+                try { await delay(30_000, undefined, { signal: idleStop.signal }); }
+                catch (error) { if (error.name === 'AbortError') return; throw error; }
+                if (!idleStop.signal.aborted) await writeProgress();
+              }
+            })().catch(error => { heartbeatError = error; idleStop.abort(); });
+            const abortIdle = () => idleStop.abort();
+            signal?.addEventListener('abort', abortIdle, { once: true });
+            try {
+              const nextDue = Math.min(...[...deferredEvents.values()].map(value => value.due));
+              eventBatch = await events.wait({ signal: idleStop.signal,
+                ...(Number.isFinite(nextDue) ? { timeoutMs: Math.max(0, nextDue - now()) } : {}) });
+              if (heartbeatError) throw heartbeatError;
+              const freshKeys = new Set(eventBatch.map(eventKey));
+              for (const [key, pending] of deferredEvents) {
+                if (freshKeys.has(key)) deferredEvents.delete(key);
+                else if (pending.due <= now()) {
+                  eventBatch.push({ ...pending.event, retryAttempt: pending.attempt }); deferredEvents.delete(key);
+                }
+              }
+              if (eventBatch.length) { eventWakeCount++; lastEventAt = now(); }
+            } finally {
+              idleStop.abort(); await heartbeat;
+              signal?.removeEventListener('abort', abortIdle);
+              awaitingEvents = false;
+            }
+            continue;
+          }
           // Abortable, bounded sleep prevents a broken persisted history from
           // causing a hot recover loop. Normal healthy polling stays unchanged.
           const pauseMs = blocked ? Math.max(pollMs, Math.min(60_000, blocked.retryAt - now())) : pollMs;

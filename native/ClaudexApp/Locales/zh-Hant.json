@@ -1,4 +1,10 @@
 {
+  "Conversation completion hooks are not configured. Run Claudex setup to install them.": "尚未設定對話完成 Hooks。請執行 Claudex 設定以安裝。",
+  "Claude hooks are disabled. Enable hooks in Claude settings to resume event-driven synchronization.": "Claude Hooks 已停用。請在 Claude 設定中啟用 Hooks，以恢復事件驅動的同步。",
+  "Codex reported hook configuration errors. Review the native hooks configuration before synchronizing.": "Codex 回報 Hook 設定錯誤。請先檢查原生 Hooks 設定，再進行同步。",
+  "Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.": "Codex 尚未載入所有 Claudex 對話完成 Hooks。請在 Codex 開啟 /hooks，檢查已設定的 Hooks。",
+  "Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.": "Codex 中的 Claudex 對話完成 Hooks 已停用。請開啟 /hooks，檢查並啟用。",
+  "Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.": "Claudex 對話完成 Hooks 需要原生 Codex 核准。請開啟 /hooks，核對並信任 Claudex 的 Hook 定義。",
   "Connections": "連線",
   "Connected": "已連線",
   "Checking connection…": "正在檢查連線…",

@@ -955,6 +955,29 @@ isolated native stores for testing. Runtime data stays outside the repository.
 - [Claude storage and retention](https://code.claude.com/docs/en/claude-directory)
 - [Thinking signatures](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [txcript usage](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
+## Completion-driven synchronization
+
+Desktop mode uses completion hooks and native lifecycle events instead of a
+recurring two-second conversation poll. `Stop` wakes only the affected conversation;
+`UserPromptSubmit` disarms the previous completion's late-write observer. Native
+SDK/app-server notifications feed the same durable, identity-only event queue.
+A private Unix socket wakes the worker; events remain stored if the worker is down.
+
+The watcher performs one startup/reconnection reconciliation and otherwise sleeps.
+A completion signal may precede the final transcript write, so it retains normal
+complete-turn and idle-destination checks, with at most three short event-scoped
+follow-ups and exact-file notifications. Hooks never force a write, choose a branch,
+or replay uncertain work. Idle health timestamps are refreshed every 30 seconds
+without inspecting histories. This is not a two-second delivery guarantee.
+
+Graphical setup merges the publisher into existing native settings. For an existing
+Desktop CLI installation, run `claudex hooks install` and inspect with
+`claudex hooks status`. In Codex, review and trust the exact Claudex definitions via
+the native `/hooks` interface; configuration alone is not proof that hooks can run.
+Do not use a hook-trust bypass. Existing user hooks and native credentials remain
+unchanged. The installed command is synchronous, bounded and returns no model
+instructions; it only records session identity and the event type.
+
 ## Restart verification and unchanged history
 
 An unchanged cold-import pair with two verified unmanaged originals can reuse a

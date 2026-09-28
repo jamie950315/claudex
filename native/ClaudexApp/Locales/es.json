@@ -1,4 +1,10 @@
 {
+  "Conversation completion hooks are not configured. Run Claudex setup to install them.": "Los hooks de finalización de conversación no están configurados. Ejecuta la configuración de Claudex para instalarlos.",
+  "Claude hooks are disabled. Enable hooks in Claude settings to resume event-driven synchronization.": "Los hooks de Claude están desactivados. Actívalos en la configuración de Claude para reanudar la sincronización por eventos.",
+  "Codex reported hook configuration errors. Review the native hooks configuration before synchronizing.": "Codex informó de errores en la configuración de hooks. Revisa la configuración nativa de hooks antes de sincronizar.",
+  "Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.": "Codex no ha cargado todos los hooks de finalización de conversación de Claudex. Abre /hooks en Codex y revisa los hooks configurados.",
+  "Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.": "Los hooks de finalización de conversación de Claudex están desactivados en Codex. Abre /hooks para revisarlos y activarlos.",
+  "Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.": "Los hooks de finalización de conversación de Claudex requieren la aprobación nativa de Codex. Abre /hooks y verifica y autoriza las definiciones exactas de los hooks de Claudex.",
   "Connections": "Conexiones",
   "Connected": "Conectado",
   "Checking connection…": "Comprobando conexión…",

@@ -1,4 +1,10 @@
 {
+  "Conversation completion hooks are not configured. Run Claudex setup to install them.": "대화 완료 훅이 설정되지 않았습니다. Claudex 설정을 실행하여 설치하세요.",
+  "Claude hooks are disabled. Enable hooks in Claude settings to resume event-driven synchronization.": "Claude 훅이 비활성화되어 있습니다. Claude 설정에서 훅을 활성화하여 이벤트 기반 동기화를 재개하세요.",
+  "Codex reported hook configuration errors. Review the native hooks configuration before synchronizing.": "Codex가 훅 설정 오류를 보고했습니다. 동기화하기 전에 네이티브 훅 설정을 확인하세요.",
+  "Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.": "Codex가 모든 Claudex 대화 완료 훅을 로드하지 않았습니다. Codex에서 /hooks를 열어 설정된 훅을 확인하세요.",
+  "Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.": "Codex에서 Claudex 대화 완료 훅이 비활성화되어 있습니다. /hooks를 열어 확인하고 활성화하세요.",
+  "Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.": "Claudex 대화 완료 훅은 네이티브 Codex의 승인이 필요합니다. /hooks를 열어 Claudex 훅 정의가 정확한지 확인하고 신뢰하도록 승인하세요.",
   "Connections": "연결",
   "Connected": "연결됨",
   "Checking connection…": "연결 확인 중…",

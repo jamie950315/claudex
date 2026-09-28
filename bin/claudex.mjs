@@ -15,6 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { DesktopBridge } from '../src/desktop-bridge.mjs';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
+import { SyncEventInbox } from '../src/sync-events.mjs';
+import { createSyncEventSource } from '../src/sync-event-source.mjs';
+import { installSyncHooks, inspectSyncHooks } from '../src/sync-hook-install.mjs';
 import { installDesktopLauncher, applyDesktopEnvironment, uninstallDesktopLauncher } from '../src/desktop-install.mjs';
 import { isAllowedCodexVersion, isSupportedCodexVersion } from '../src/codex-versions.mjs';
 import { normalizeVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
@@ -38,6 +41,7 @@ const help = `Claudex: bounded conversation synchronization and opt-in model col
   claudex track --from codex --id THREAD_ID
   claudex sync CONVERSATION_ID --from codex|claude
   claudex watch                    Watch tracked conversations and opted-in projects
+  claudex hooks install|status     Configure or inspect completion hooks (no inference)
   claudex status                  Show current native IDs without transcript content
   claudex gc                      Apply owned-backup retention
   claudex recover                 Resume one interrupted transaction
@@ -85,6 +89,13 @@ async function main() {
   const config = await readJSON(configPath, null);
   if (!config) throw new Error('Run claudex init first.');
   if (config.version !== 1) throw new Error('Unsupported configuration version.');
+  if (command === 'hooks') {
+    if (!['install', 'status'].includes(positionals[1])) throw new Error('Use hooks install or hooks status.');
+    const settings = { root, codexHome: config.codexHome, claudeHome: config.claudeHome,
+      nodePath: process.execPath, hookPath: fileURLToPath(new URL('./claudex-sync-hook.mjs', import.meta.url)) };
+    output(await (positionals[1] === 'install' ? installSyncHooks(settings) : inspectSyncHooks(settings)));
+    return;
+  }
   const versionPolicy = normalizeVersionPolicy(config.versionPolicy);
   if (command === 'version-policy') {
     if (positionals.length > 2) throw new Error('Use version-policy strict or version-policy warn.');
@@ -219,10 +230,13 @@ async function main() {
     const controller = new AbortController();
     const stop = () => controller.abort();
     if (command === 'watch') { process.on('SIGINT', stop); process.on('SIGTERM', stop); }
+    let events;
     try {
       if (command === 'watch') {
         await applyDesktopEnvironment({ root });
-        await runDesktopWatch({ root, bridge, runtime, config, signal: controller.signal });
+        const inbox = await new SyncEventInbox({ root }).initialize();
+        events = await createSyncEventSource({ root, runtime, config, inbox });
+        await runDesktopWatch({ root, bridge, runtime, config, events, signal: controller.signal });
       } else await withLock(join(root, 'watch.lock'), async () => {
         if (command === 'track') {
           if (!['codex', 'claude'].includes(values.from)) throw new Error('--from must be codex or claude.');
@@ -239,7 +253,7 @@ async function main() {
     } finally {
       // Keep signal handlers until every owner can exit safely. A second stop
       // signal must not become the default immediate termination of user work.
-      try { await closeDesktopSafely(runtime, { onWaiting: async error => {
+      try { await events?.close(); await closeDesktopSafely(runtime, { onWaiting: async error => {
         const path = join(root, 'watcher-status.json');
         const status = await readJSON(path, null);
         if (status?.pid === process.pid) await writeJSON(path, { ...status, running: false, updatedAt: Date.now(),
