@@ -74,6 +74,9 @@ launches the same bundle in background inspection mode, not setup. Migrate only
 the verified legacy status-display login item and native display process; preserve
 its recoverable artifacts and never restart service or native conversation owners.
 CLI-only installations may retain the standalone status display.
+The approved app artwork is native/ClaudexApp/Assets/AppIcon.png. The app builder
+derives standard 1x/2x icon sizes and packages Claudex.icns with CFBundleIconFile;
+keep this raster app icon separate from the monochrome menu bar symbol.
 The combined window contains setup retries and account actions; menus expose Open Claudex,
 not a separate retry action. First launch automatically presents the main window and
 starts setup, including a fresh background launch. Subsequent login starts stay

@@ -3,6 +3,7 @@ import { copyFile, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, s
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 export const APP_IDENTIFIER = 'dev.0ruka.claudex.app';
+export const APP_ICON_FILE = 'Claudex.icns';
 export const APP_LOCALES = Object.freeze(['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']);
 export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
@@ -59,8 +60,26 @@ async function ensureAbsent(path) {
   throw new Error(`Destination already exists: ${path}`);
 }
 
+export async function buildAppIcon(sourceRoot, resources, stageRoot, run = runCommand) {
+  const source = join(sourceRoot, 'native', 'ClaudexApp', 'Assets', 'AppIcon.png');
+  await requireRegular(source);
+  const iconset = join(stageRoot, 'Claudex.iconset');
+  await mkdir(iconset);
+  for (const size of [16, 32, 128, 256, 512]) {
+    for (const scale of [1, 2]) {
+      const pixels = String(size * scale);
+      await run('/usr/bin/sips', ['-z', pixels, pixels, source, '--out',
+        join(iconset, `icon_${size}x${size}${scale === 2 ? '@2x' : ''}.png`)]);
+    }
+  }
+  const destination = join(resources, APP_ICON_FILE);
+  await run('/usr/bin/iconutil', ['-c', 'icns', iconset, '-o', destination]);
+  await requireRegular(destination);
+  return destination;
+}
+
 function plist(version) {
-  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key><string>${APP_IDENTIFIER}</string>\n<key>CFBundleExecutable</key><string>ClaudexApp</string>\n<key>CFBundleName</key><string>Claudex</string>\n<key>CFBundleDisplayName</key><string>Claudex</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version)}</string>\n<key>LSMinimumSystemVersion</key><string>13.0</string>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n`;
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key><string>${APP_IDENTIFIER}</string>\n<key>CFBundleExecutable</key><string>ClaudexApp</string>\n<key>CFBundleName</key><string>Claudex</string>\n<key>CFBundleDisplayName</key><string>Claudex</string>\n<key>CFBundleIconFile</key><string>${APP_ICON_FILE}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version)}</string>\n<key>LSMinimumSystemVersion</key><string>13.0</string>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n`;
 }
 
 async function copyAllowed(sourceRoot, engine) {
@@ -153,6 +172,7 @@ export async function buildClaudexApp({
     await symlink('../lib/node_modules/npm/bin/npm-cli.js', join(runtime, 'bin', 'npm'));
     await copyFile(join(distribution, 'LICENSE'), join(runtime, 'LICENSE'));
     await copyAllowed(source, engine);
+    await buildAppIcon(source, resources, stageRoot, run);
     await mkdir(join(resources, 'Locales'));
     const base = JSON.parse(await readFile(join(source, 'native', 'ClaudexApp', 'Locales', 'en.json'), 'utf8'));
     for (const language of APP_LOCALES) {
