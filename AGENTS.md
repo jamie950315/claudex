@@ -202,6 +202,9 @@ bounded diagnostic list. In Desktop mode, recognized tracked-history guards
 pause synchronization without exiting the watcher or closing live Claude owners.
 A pending transaction blocks all discovery, new syncs and collection until normal
 verified recovery succeeds; it is never cleared or resent to regain availability.
+Missing tracked transcript paths are explicit history blocks, not repeated
+worker crashes. Preserve the saved native identity/path and pending evidence;
+never search for and adopt a same-ID file under another project automatically.
 Without pending work, affected syncs are held individually, but global original
 and quota guards still apply to other deliveries. Revalidation is paced at 30
 seconds, with explicit bounded blocked status. Unclassified unsafe failures remain

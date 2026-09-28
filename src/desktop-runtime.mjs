@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
-import { join, dirname, basename, resolve, sep } from 'node:path';
+import { join, dirname, basename, resolve, sep, isAbsolute } from 'node:path';
 import { lstat, realpath, readFile, access, readdir, open } from 'node:fs/promises';
 import { createReadStream, constants } from 'node:fs';
 import { createInterface } from 'node:readline';
@@ -210,6 +210,26 @@ export class DesktopRuntime {
   }
 
   async inspect(record) {
+    try { return await this.inspectNative(record); }
+    catch (error) {
+      // A saved tracked source disappearing requires reconciliation, not a
+      // worker restart or a search for another file with the same identity.
+      // Confirm that exact path is absent so unrelated ENOENT failures retain
+      // their normal transport, asset, credential or implementation severity.
+      if (!['ENOENT', 'ENOTDIR'].includes(error.code) || record.verified !== true || !UUID.test(record.nativeId)
+        || !['codex', 'claude'].includes(record.side) || typeof record.path !== 'string' || !isAbsolute(record.path)) throw error;
+      let missing = false;
+      try { await lstat(record.path); }
+      catch (checkError) { if (['ENOENT', 'ENOTDIR'].includes(checkError.code)) missing = true; else throw checkError; }
+      if (!missing) throw error;
+      throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} is unavailable at its saved path; synchronization is paused.`, { cause: error }), {
+        code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
+        savedPath: record.path, conversationId: record.conversationId,
+      });
+    }
+  }
+
+  async inspectNative(record) {
     const importPacket = importedClaudeOriginal(record);
     if (record.side === 'codex') {
       let nativeId = record.nativeId;

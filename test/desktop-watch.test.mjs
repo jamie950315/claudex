@@ -302,6 +302,52 @@ test('conflicting tracked histories stay blocked without stopping owners or choo
 
 const prefixMismatch = 'Owned Claude history does not match the synchronized prefix; no branch was selected.';
 
+const missingTrackedHistory = () => Object.assign(new Error('Tracked claude history is unavailable at its saved path; synchronization is paused.'), {
+  code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: 'claude', nativeId: '647efc25-8bd3-46fb-8662-6a7832b3cb0e',
+  savedPath: '/claude/missing/session.jsonl', conversationId: 'new',
+});
+
+test('missing tracked history stays paced per conversation with its saved identity', async () => {
+  const f = await fixture();
+  f.bridge.sync = async id => { f.calls.sync.push(id); throw missingTrackedHistory(); };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true); assert.equal(pass.synchronization, 'degraded');
+  assert.deepEqual(pass.blockedConversations[0].historyUnavailable, {
+    side: 'claude', nativeId: missingTrackedHistory().nativeId,
+    savedPath: '/claude/missing/session.jsonl', conversationId: 'new',
+  });
+  assert.deepEqual(f.calls.sync, ['new']); assert.equal(f.state.pending, null);
+});
+
+test('missing original during global collection holds the coordinator without restarting or clearing state', async () => {
+  const f = await fixture(); let clock = 0, pass;
+  f.bridge.collect = async () => { f.calls.collect++; throw missingTrackedHistory(); };
+  f.bridge.sync = async id => { f.calls.sync.push(id); clock = 60_000; };
+  await f.run({ maxPasses: 2, now: () => clock, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true); assert.equal(pass.synchronization, 'blocked');
+  assert.equal(pass.blocked.scope, 'coordinator'); assert.equal(pass.blocked.conversationId, 'new');
+  assert.equal(pass.blocked.historyUnavailable.savedPath, '/claude/missing/session.jsonl');
+  assert.equal(f.calls.collect, 1); assert.equal(f.calls.recover, 0);
+  assert.equal(f.state.pending, null); assert.equal((await f.status()).error, null);
+});
+
+test('a global source guard during another sync retains the source identity and title', async () => {
+  const f = await fixture();
+  f.state.conversations.caller = { id: 'caller', title: 'Requesting conversation' };
+  f.state.conversations.missing = { id: 'missing', title: 'Missing original source' };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    throw Object.assign(missingTrackedHistory(), { conversationId: 'missing' });
+  };
+  let pass;
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.synchronization, 'blocked');
+  assert.equal(pass.blocked.conversationId, 'missing');
+  assert.equal(pass.blocked.title, 'Missing original source');
+  assert.equal(pass.blockedConversationCount, 0);
+});
+
 test('dependency anchor validation failures remain paced pending holds without restarting', async () => {
   const f = await fixture(); let clock = 0;
   f.state.pending = { phase: 'promoted', operationId: 'anchor-check', record: { conversationId: 'protected', side: 'codex' } };

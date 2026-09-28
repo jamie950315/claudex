@@ -59,6 +59,32 @@ test('cold imported originals expand the full authenticated archive without acti
   } finally { await f.runtime.close(); }
 });
 
+test('missing exact tracked history pauses explicitly without searching or adopting another path', async () => {
+  const f = await fixture();
+  try {
+    const before = await readFile(f.record.path, 'utf8');
+    for (const path of [join(dirname(f.record.path), 'missing', 'session.jsonl'), join(f.record.path, 'session.jsonl')]) {
+      const record = { ...f.record, path };
+      await assert.rejects(f.runtime.inspect(record), error => {
+        assert.equal(error.code, 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE');
+        assert.equal(error.side, 'claude'); assert.equal(error.nativeId, record.nativeId);
+        assert.equal(error.savedPath, path); assert.equal(error.conversationId, record.conversationId);
+        assert.ok(['ENOENT', 'ENOTDIR'].includes(error.cause.code));
+        return true;
+      });
+      await assert.rejects(f.runtime.inspect({ ...record, verified: false }), error => ['ENOENT', 'ENOTDIR'].includes(error.code));
+    }
+    assert.equal(await readFile(f.record.path, 'utf8'), before);
+    assert.deepEqual(f.calls, { owner: 0, codex: 0 });
+    const unrelated = Object.assign(new Error('Unrelated native component is unavailable'), { code: 'ENOENT' });
+    f.runtime.inspectNative = async () => { throw unrelated; };
+    await assert.rejects(f.runtime.inspect(f.record), error => error === unrelated);
+    const permission = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
+    f.runtime.inspectNative = async () => { throw permission; };
+    await assert.rejects(f.runtime.inspect({ ...f.record, path: join(dirname(f.record.path), 'missing.jsonl') }), error => error === permission);
+  } finally { await f.runtime.close(); }
+});
+
 test('cold imports retain later authored turns and withhold an unfinished Desktop tail', async () => {
   const f = await fixture(), authored = turn('authored in Desktop');
   try {

@@ -27,6 +27,7 @@ const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verif
 const isUnsupported = error => UNSUPPORTED.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
+  || error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
   || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
 function usesActiveHints(state, id) {
@@ -73,6 +74,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   const blockedConversations = new Map();
   const deferredBlock = Symbol('deferred history revalidation');
   const block = (previous, error, fields) => ({ ...fields, reason: reason(error),
+    ...(error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE' ? { historyUnavailable: {
+      side: error.side, nativeId: error.nativeId, savedPath: String(error.savedPath).slice(0, 4096),
+      conversationId: error.conversationId ?? null,
+    } } : {}),
     since: previous?.since ?? now(), lastAttemptAt: now(), retryAt: now() + blockedRetryMs,
     attempts: Math.min(Number.MAX_SAFE_INTEGER, (previous?.attempts ?? 0) + 1) });
   const blockingStatus = () => ({ blocked, blockedConversationCount: blockedConversations.size,
@@ -263,6 +268,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 wait(error, { scope: 'conversation', ...conversationContext(latest, id) }); return;
               }
               if (isHistoryBlocked(error)) {
+                // An allocation's global original/retention guard can identify
+                // another conversation. Keep that coordinator-wide source hold
+                // attached to its actual identity instead of the caller's title.
+                if (error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
+                  && error.conversationId && error.conversationId !== id) throw error;
                 // No durable intent exists, so other conversations may still
                 // be verified. Their normal global quota/original guards are
                 // unchanged and may independently block a new allocation.
@@ -408,8 +418,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           }
           else if (isHistoryBlocked(error)) {
             const state = await bridge.status(), pending = state.pending;
+            const conversationId = pending?.record?.conversationId ?? error.conversationId ?? null;
             blocked = block(blocked, error, { scope: pending ? 'pending' : 'coordinator',
-              conversationId: pending?.record?.conversationId ?? null, ...conversationContext(state, pending?.record?.conversationId),
+              conversationId, ...conversationContext(state, conversationId),
               operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
           } else throw error;
         }
