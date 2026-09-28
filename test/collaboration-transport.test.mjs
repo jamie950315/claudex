@@ -85,7 +85,11 @@ test('MCP start and handoff advertise and enforce provider effort values includi
   }
   input.end();
   await running;
-  assert.deepEqual(seen.map(request => request.params.effort), ['high', null, 'high', null]);
+  // Concurrent MCP requests may reach independent sockets in either order.
+  assert.deepEqual(Object.fromEntries(seen.map(request => [request.params.requestId, request.params.effort])), {
+    'claudex_start-0': 'high', 'claudex_start-1': null,
+    'claudex_handoff-0': 'high', 'claudex_handoff-1': null,
+  });
   const rows = content.trim().split('\n').map(JSON.parse);
   assert.equal(rows.filter(row => row.result.isError).length, 6);
   for (const definition of rows.find(row => row.id === 'list').result.tools.filter(item => ['claudex_start', 'claudex_handoff'].includes(item.name)))
