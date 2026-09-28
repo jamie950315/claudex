@@ -150,6 +150,44 @@ test('dependent old snapshots complete promoted recovery without replay, retirem
   assert.ok((await f.bridge.collect()).backupBytes >= state.records.find(r => r.id === old.id).bytes);
 });
 
+test('collection batch keeps each independent candidate verification and its exact byte count', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1); await f.bridge.sync(f.conversationId);
+  const before = await f.bridge.status(), old = before.records.find(record => record.status === 'previous');
+  let inspections = 0, batches = 0;
+  const inspect = f.bridge.adapters.codex.inspect;
+  f.bridge.adapters.codex.inspect = async record => {
+    if (record.id === old.id) inspections++;
+    return inspect(record);
+  };
+  f.bridge.adapters.codex.prepareDependencyAnchor = async () => { throw new Error('Unexpected per-record inventory'); };
+  f.bridge.adapters.codex.prepareDependencyAnchors = async records => {
+    batches++; assert.deepEqual(records.map(record => record.id), [old.id]);
+    return new Map([[old.id, null]]);
+  };
+  await f.bridge.collect();
+  assert.equal(batches, 1); assert.equal(inspections, 1);
+  const after = await f.bridge.status();
+  assert.equal(after.records.find(record => record.id === old.id).bytes,
+    JSON.stringify(f.files.get(old.path).common).length);
+  f.files.get(old.path).common.messages.push(...turn('edited'));
+  await assert.rejects(f.bridge.collect(), /retained snapshot was edited/);
+  assert.deepEqual(f.calls.remove, []);
+});
+
+test('collection refuses missing or malformed batch results before preserving a candidate', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1); await f.bridge.sync(f.conversationId);
+  const before = await f.bridge.status(), old = before.records.find(record => record.status === 'previous');
+  for (const result of [undefined, new Map(), new Map([[old.id, undefined]]), new Map([[old.id, false]]), { [old.id]: null }]) {
+    f.bridge.adapters.codex.prepareDependencyAnchors = async () => result;
+    await assert.rejects(f.bridge.collect(), /dependency batch is incomplete/);
+    assert.deepEqual(await f.bridge.status(), before);
+  }
+});
+
 test('durable anchor survives a crash before pending completion without another native write', async () => {
   const f = await fixture(); enableDependencyAnchors(f);
   await f.bridge.sync(f.conversationId);

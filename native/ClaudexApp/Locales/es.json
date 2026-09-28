@@ -120,6 +120,8 @@
   "A tracked conversation is still replying, changing, or busy. Its next handoff waits for a complete turn and an idle destination; Claudex checks again automatically.": "Una conversación supervisada aún está respondiendo, cambiando o en uso. El siguiente traspaso espera un turno completo y un destino inactivo; Claudex vuelve a comprobarlo automáticamente.",
   "The connection is not ready. Claudex checks again automatically.": "La conexión no está lista. Claudex vuelve a comprobarla automáticamente.",
   "Checking conversations": "Comprobando conversaciones",
+  "Checked %@ of %@ conversations.": "Se han comprobado %@ de %@ conversaciones.",
+  "Checking %@ (%@ seconds elapsed).": "Comprobando %@ (%@ segundos transcurridos).",
   "Native connections and saved histories are being verified. Wait for the latest messages before switching apps.": "Se están verificando las conexiones nativas y los historiales guardados. Espera a que aparezcan los últimos mensajes antes de cambiar de app.",
   "Synchronization ready": "Sincronización lista",
   "No reported synchronization blocks. Before switching apps, still wait for the current reply and its latest messages to appear.": "No se han notificado bloqueos de sincronización. Antes de cambiar de app, espera a que aparezcan la respuesta actual y sus últimos mensajes.",

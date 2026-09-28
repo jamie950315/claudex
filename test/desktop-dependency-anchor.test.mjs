@@ -70,6 +70,28 @@ test('independent snapshots return null and retain standard retirement eligibili
   assert.equal(record.status, 'current');
 });
 
+test('collection batch uses one fresh global inventory for independent candidates', async t => {
+  const { runtime, record, state } = await fixture(t);
+  state.dependencies = false;
+  const first = { ...record, id: randomUUID() }, second = { ...record, id: randomUUID(), nativeId: randomUUID() };
+  assert.deepEqual(await runtime.adapters.codex.prepareDependencyAnchors([first, second]),
+    new Map([[first.id, null], [second.id, null]]));
+  assert.equal(state.calls.filter(call => call.method === 'thread/loaded/list').length, 1);
+  assert.equal(state.calls.filter(call => call.method === 'thread/list' && !call.params.ancestorThreadId).length, 2);
+  assert.equal(state.calls.filter(call => call.method === 'thread/list' && call.params.ancestorThreadId).length, 4);
+});
+
+test('batch dependent candidate retains fresh second inventory and raw parent proofs', async t => {
+  const { runtime, record, state } = await fixture(t);
+  const candidate = { ...record, id: randomUUID() };
+  const proof = (await runtime.adapters.codex.prepareDependencyAnchors([candidate])).get(candidate.id);
+  assert.deepEqual(proof.dependencyIds, [state.child.id]);
+  assert.equal(state.calls.filter(call => call.method === 'thread/loaded/list').length, 2);
+  let lists = 0;
+  state.hook = async method => { if (method === 'thread/loaded/list' && ++lists === 2) state.dependencies = false; };
+  await assert.rejects(runtime.adapters.codex.prepareDependencyAnchors([candidate]), blocked);
+});
+
 test('parent source identity, idle state, checkpoint and completed history must match', async t => {
   const { runtime, record, state, root } = await fixture(t);
   for (const patch of [{ id: randomUUID() }, { cwd: root }, { status: { type: 'active' } }, { status: { type: 'unknown' } }]) {

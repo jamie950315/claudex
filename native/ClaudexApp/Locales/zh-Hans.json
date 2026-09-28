@@ -120,6 +120,8 @@
   "A tracked conversation is still replying, changing, or busy. Its next handoff waits for a complete turn and an idle destination; Claudex checks again automatically.": "跟踪中的对话仍在回复、变化或正忙。下一次交接需等待完整轮次与空闲的目标端；Claudex 会自动再次检查。",
   "The connection is not ready. Claudex checks again automatically.": "连接尚未就绪。Claudex 会自动再次检查。",
   "Checking conversations": "正在检查对话",
+  "Checked %@ of %@ conversations.": "已检查 %@ / %@ 个对话。",
+  "Checking %@ (%@ seconds elapsed).": "正在检查 %@（已用 %@ 秒）。",
   "Native connections and saved histories are being verified. Wait for the latest messages before switching apps.": "正在验证原生连接与已保存的历史。切换应用前，请等待最新消息出现。",
   "Synchronization ready": "同步已就绪",
   "No reported synchronization blocks. Before switching apps, still wait for the current reply and its latest messages to appear.": "目前没有报告同步阻塞。切换应用前，仍请等待当前回复与最新消息出现。",

@@ -114,10 +114,10 @@ export class DesktopBridge {
     }
   }
 
-  async preserveDependentSnapshot(state, record, pending) {
+  async preserveDependentSnapshot(state, record, pending, preparedProof) {
     const prepare = this.adapters[record.side].prepareDependencyAnchor;
     if (!prepare) return false;
-    const proof = await prepare(record);
+    const proof = preparedProof === undefined ? await prepare(record) : preparedProof;
     if (!proof) return false;
     const candidate = this.dependencyAnchorCandidate(record, proof);
     this.assertDependencyCapacity(state, candidate);
@@ -441,6 +441,7 @@ export class DesktopBridge {
     const data = await this.inspect(record);
     if (data.incompleteTail || data.common.messages.length !== record.checkpoint.count
       || data.digest !== record.checkpoint.digest) throw new Error('A retained snapshot was edited; it was not retired.');
+    return data;
   }
 
   async collect() {
@@ -462,14 +463,29 @@ export class DesktopBridge {
       const data = await this.inspect(current);
       if (!matches(data.common, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
     }
+    const previous = [];
     for (const record of snapshots.filter(record => record.status === 'previous')) {
       if (!await this.adapters[record.side].exists(record)) {
         state.records = state.records.filter(value => value.id !== record.id);
         continue;
       }
-      if (!await this.preserveDependentSnapshot(state, record)) {
-        await this.assertUnchanged(record);
-        record.bytes = (await this.inspect(record)).bytes ?? record.bytes;
+      previous.push(record);
+    }
+    const codexPrevious = previous.filter(record => record.side === 'codex');
+    const batchPrepare = this.adapters.codex?.prepareDependencyAnchors;
+    let prepared;
+    if (batchPrepare && codexPrevious.length) {
+      prepared = await batchPrepare(codexPrevious);
+      if (!(prepared instanceof Map) || prepared.size !== codexPrevious.length
+        || codexPrevious.some(record => !prepared.has(record.id)
+          || prepared.get(record.id) !== null && (!prepared.get(record.id)
+            || typeof prepared.get(record.id) !== 'object' || Array.isArray(prepared.get(record.id)))))
+        throw new Error('Snapshot dependency batch is incomplete; prior snapshots were preserved.');
+    }
+    for (const record of previous) {
+      if (!await this.preserveDependentSnapshot(state, record, undefined, prepared?.get(record.id))) {
+        const data = await this.assertUnchanged(record);
+        record.bytes = data.bytes ?? record.bytes;
       }
     }
     const plan = planRetention(state.records.filter(record => record.managed && record.kind === 'snapshot')

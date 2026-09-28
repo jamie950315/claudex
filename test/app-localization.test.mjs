@@ -50,6 +50,10 @@ for (language, _) in Localization.languages {
   precondition(!localization.format(" · next check in %@s", ["18"]).contains("%@"))
   precondition(localization.text("3 conversation(s) need attention. raw-proof-ABC").contains("raw-proof-ABC"))
   precondition(localization.text("raw-proof-ABC") == "raw-proof-ABC")
+  let progress = localization.detail("Checked 3 of 12 conversations.\\nChecking Translation task (65 seconds elapsed).\\nNative connections and saved histories are being verified. Wait for the latest messages before switching apps.")
+  precondition(progress.contains("3") && progress.contains("12") && progress.contains("65") && progress.contains("Translation task"))
+  precondition(!progress.contains("%@") && !progress.hasPrefix(localization.text("Diagnostic details:")))
+  precondition(language == "en" || !progress.hasPrefix("Checked "))
 }
 localization.select("system", persist: false)
 precondition(localization.language == "ja")

@@ -80,7 +80,8 @@ test('collection skips 150 cold pairs without snapshots but validates both curre
   assert.ok(f.calls.inspect.includes(paired.id));
   assert.ok(f.calls.inspect.every(id => !id.startsWith('cold-')));
   assert.equal((await f.bridge.status()).records.filter(record => record.conversationId.startsWith('cold-')).length, 300);
-  assert.equal(f.calls.inspect.filter(id => id === previous.id).length, 3);
+  // Reuse the first verified read for bytes, then independently recheck before removal.
+  assert.equal(f.calls.inspect.filter(id => id === previous.id).length, 2);
   assert.deepEqual(f.calls.idle, [previous.id, previous.id]);
 });
 

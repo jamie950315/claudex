@@ -195,6 +195,18 @@ test('ordinary native waiting is not a request for user action and retains the e
   assert.equal(report.components.find(item => item.id === 'synchronization').detail, 'Codex destination is active.');
 });
 
+test('initial readiness waits for the full sweep when progress fields are present', async t => {
+  const { root, setup } = await fixture(t); await setup.setup();
+  const status = { mode: 'desktop', pid: process.pid, running: true, updatedAt: Date.now(),
+    foregroundCompletedAt: Date.now(), checkingConversationCount: 2, checkedConversationCount: 1,
+    initialSweepCompletedAt: null, synchronization: 'ready' };
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(status), { mode: 0o600 });
+  assert.equal((await setup.inspect()).components.find(row => row.id === 'synchronization').state, 'waiting');
+  status.initialSweepCompletedAt = Date.now(); status.checkedConversationCount = 2;
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(status), { mode: 0o600 });
+  assert.equal((await setup.inspect()).components.find(row => row.id === 'synchronization').state, 'ready');
+});
+
 test('actual runtime faults expose their exact reasons instead of generic setup messages', async t => {
   const { root, setup } = await fixture(t);
   await setup.setup();

@@ -19,7 +19,7 @@ import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 import { snapshotOriginalArchiveTree, compareOriginalArchiveTree, originalArchiveGuard } from './codex-original-archive-tree.mjs';
-import { readCodexDependencies } from './codex-dependencies.mjs';
+import { readCodexDependencies, readCodexDependenciesForParents } from './codex-dependencies.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -97,6 +97,7 @@ export class DesktopRuntime {
       completePromotion: record => this.completePromotion(record),
     }]));
     Object.assign(this.adapters.codex, {
+      prepareDependencyAnchors: records => this.prepareDependencyAnchors(records),
       assertCanArchiveOriginal: record => this.assertCanArchiveOriginal(record),
       archiveOriginal: record => this.archiveOriginal(record),
       assertArchiveReplacement: (original, replacement, title) => this.assertArchiveReplacement(original, replacement, title),
@@ -540,10 +541,21 @@ export class DesktopRuntime {
     return { raw: after, bytes: data.bytes };
   }
   async prepareDependencyAnchor(record) {
+    return this.prepareDependencyAnchorFromInventory(record);
+  }
+  async prepareDependencyAnchors(records) {
+    for (const record of records) this.assertDependencyAnchorRecord(record);
+    const dependencies = await readCodexDependenciesForParents(await this.codex(), records.map(record => record.nativeId));
+    const proofs = new Map();
+    for (const record of records) proofs.set(record.id,
+      await this.prepareDependencyAnchorFromInventory(record, dependencies.get(record.nativeId)));
+    return proofs;
+  }
+  async prepareDependencyAnchorFromInventory(record, initialDependencies) {
     try {
       this.assertDependencyAnchorRecord(record);
       const client = await this.codex();
-      const dependencies = await readCodexDependencies(client, record.nativeId);
+      const dependencies = initialDependencies ?? await readCodexDependencies(client, record.nativeId);
       if (!dependencies.length) return null;
       const proof = await this.dependencyAnchorSnapshot(record);
       const latest = await readCodexDependencies(client, record.nativeId);

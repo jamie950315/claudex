@@ -20,6 +20,37 @@ func health(_ watcher: [String: Any]? = ready, _ service: [String: Any]? = nil) 
   classifyHealth(watcher: watcher, service: service, now: now, alive: alive)
 }
 check(health().state == "ready")
+var initial = ready; initial["mode"] = "desktop"
+initial["checkedConversationCount"] = 3; initial["checkingConversationCount"] = 12
+initial["currentOperation"] = ["conversationId": "known-thread", "title": "Translation task", "startedAt": now - 65000] as [String: Any]
+let checking = health(initial)
+check(checking.state == "waiting" && checking.title == "Checking conversations" && !checking.operational)
+check(checking.detail.contains("Checked 3 of 12 conversations."))
+check(checking.detail.contains("Checking Translation task (65 seconds elapsed)."))
+var invalidProgress = initial; invalidProgress["checkedConversationCount"] = 13
+check(!health(invalidProgress).detail.contains("Checked "))
+invalidProgress = initial; invalidProgress["currentOperation"] = ["title": "Unknown task", "startedAt": now - 1000] as [String: Any]
+check(!health(invalidProgress).detail.contains("Checking Unknown task"))
+invalidProgress = initial; invalidProgress["currentOperation"] = ["conversationId": "known-thread", "startedAt": now + 1000] as [String: Any]
+check(!health(invalidProgress).detail.contains("seconds elapsed"))
+invalidProgress = initial; invalidProgress["currentOperation"] = ["conversationId": "known-thread", "startedAt": now - 1200] as [String: Any]
+check(health(invalidProgress).detail.contains("Checking known-thread (1 seconds elapsed)."))
+invalidProgress = initial; invalidProgress["foregroundCompletedAt"] = now
+check(health(invalidProgress).state == "waiting" && health(invalidProgress).detail.contains("Checked 3 of 12"))
+invalidProgress["initialSweepCompletedAt"] = now
+check(health(invalidProgress).state == "ready" && !health(invalidProgress).detail.contains("Checked "))
+var legacy = ready; legacy["mode"] = "desktop"
+check(health(legacy).state == "waiting")
+legacy["foregroundCompletedAt"] = now
+check(health(legacy).state == "ready")
+invalidProgress = initial; invalidProgress["blocked"] = ["reason": "Exact history mismatch"]
+check(health(invalidProgress).state == "paused" && health(invalidProgress).detail == "Exact history mismatch")
+invalidProgress = initial; invalidProgress["waiting"] = "Shared Codex Desktop backend is not ready."
+check(health(invalidProgress).title == "Waiting for Codex" && health(invalidProgress).detail.contains("Open Codex normally."))
+invalidProgress = initial; invalidProgress["waiting"] = "Wait for a complete assistant turn or verified synchronized checkpoint."
+check(!health(invalidProgress).operational && health(invalidProgress).title == "Waiting for a conversation to finish")
+invalidProgress = initial; invalidProgress["updatedAt"] = now - 120001
+check(health(invalidProgress).state == "unknown" && !health(invalidProgress).detail.contains("Checked "))
 check(health(nil).state == "offline")
 var changed = ready; changed["pid"] = 99
 check(health(changed).state == "offline")

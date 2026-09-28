@@ -163,7 +163,9 @@ export class AppSetup {
       const configured = config?.mode === 'desktop' && config?.allProjects === true;
       const held = live && (watcher.synchronization === 'blocked' || watcher.synchronization === 'degraded'
         || watcher.blocked || watcher.blockedConversationCount || watcher.blockedSourceCount);
-      const synchronized = live && Number.isFinite(watcher.foregroundCompletedAt) && watcher.synchronization === 'ready'
+      const initialCheck = watcher && Object.hasOwn(watcher, 'checkingConversationCount')
+        ? watcher.initialSweepCompletedAt : watcher?.foregroundCompletedAt;
+      const synchronized = live && Number.isFinite(initialCheck) && watcher.synchronization === 'ready'
         && !watcher.waiting && !watcher.blocked && !watcher.blockedConversationCount && !watcher.blockedSourceCount;
       rows.push(component('synchronization', 'Conversation synchronization', !config ? 'missing' : !compatible || !claudeCompatible ? 'blocked'
         : held ? 'blocked' : !configured || !synchronized ? 'waiting' : 'ready', !config ? 'All-project synchronization will be configured automatically.'

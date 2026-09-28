@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readCodexDependencies } from '../src/codex-dependencies.mjs';
+import { readCodexDependencies, readCodexDependenciesForParents } from '../src/codex-dependencies.mjs';
 
 const parent = '00000000-0000-4000-8000-000000000001';
 const child = '00000000-0000-4000-8000-000000000002';
@@ -56,6 +56,31 @@ test('validates nested ancestor chains and returns only direct edges', async () 
 test('returns an empty inventory for unrelated general rows', async () => {
   const client = clientFor({ general: [{ id: unrelated }], archived: [{ id: child }], threads: { [child]: spawn(child, unrelated) } });
   assert.deepEqual(await readCodexDependencies(client, parent), []);
+});
+
+test('batch inventory shares global reads while authenticating each parent ancestry', async () => {
+  const client = clientFor({ loaded: [child], general: [{ id: child }, { id: nested }],
+    threads: { [child]: { id: child, forkedFromId: parent }, [nested]: spawn(nested, unrelated) },
+    pageHook(method, params) {
+      if (method === 'thread/list' && params.ancestorThreadId && !params.archived)
+        return { data: [{ id: params.ancestorThreadId === parent ? child : nested }], nextCursor: null };
+    },
+  });
+  const result = await readCodexDependenciesForParents(client, [parent, unrelated]);
+  assert.deepEqual(result.get(parent), [{ id: child, parentId: parent, kind: 'fork' }]);
+  assert.deepEqual(result.get(unrelated), [{ id: nested, parentId: unrelated, kind: 'spawn' }]);
+  assert.equal(client.calls.filter(call => call.method === 'thread/loaded/list').length, 1);
+  assert.equal(client.calls.filter(call => call.method === 'thread/list' && !call.params.ancestorThreadId).length, 2);
+  assert.equal(client.calls.filter(call => call.method === 'thread/list' && call.params.ancestorThreadId).length, 4);
+  assert.equal(client.calls.filter(call => call.method === 'thread/read').length, 2);
+  client.calls.length = 0;
+  await readCodexDependenciesForParents(client, [parent, unrelated]);
+  assert.equal(client.calls.filter(call => call.method === 'thread/read').length, 2);
+});
+
+test('batch rejects an ancestor result belonging to another requested parent', async () => {
+  const client = clientFor({ ancestor: [{ id: child }], threads: { [child]: spawn(child, parent) } });
+  await assert.rejects(readCodexDependenciesForParents(client, [parent, unrelated]), /unrelated native identity/);
 });
 
 test('reads paginated archived rows and deduplicates identities', async () => {

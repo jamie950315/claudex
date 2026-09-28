@@ -21,10 +21,20 @@ function relationship(thread) {
 // Metadata only. A dependency preserves a snapshot as an anchor; this inventory
 // does not authorize native archival, retirement, loading or transcript writes.
 export async function readCodexDependencies(client, parentId) {
-  if (!validId(parentId)) fail('parent identity is malformed.');
-  const ids = new Set(), ancestorIds = new Set(), listed = new Map();
+  return (await readCodexDependenciesForParents(client, [parentId])).get(parentId);
+}
+
+// One fresh collection inventory classifies multiple retirement candidates.
+// Global witnesses are read once; each parent's ancestor query and chain still
+// receive independent validation. Nothing survives this invocation.
+export async function readCodexDependenciesForParents(client, parentIds) {
+  if (!Array.isArray(parentIds) || parentIds.length > MAX_IDS || parentIds.some(id => !validId(id)))
+    fail('parent identity is malformed.');
+  const parents = [...new Set(parentIds)];
+  if (!parents.length) return new Map();
+  const ids = new Set(), ancestorIds = new Map(parents.map(id => [id, new Set()])), listed = new Map();
   for (const mode of [{ loaded: true }, { archived: false }, { archived: true },
-    { archived: false, ancestorThreadId: parentId }, { archived: true, ancestorThreadId: parentId }]) {
+    ...parents.flatMap(parentId => [{ archived: false, ancestorThreadId: parentId }, { archived: true, ancestorThreadId: parentId }])]) {
     let cursor; const cursors = new Set(); let pages = 0;
     do {
       if (++pages > MAX_PAGES) fail('page limit exceeded.');
@@ -37,7 +47,7 @@ export async function readCodexDependencies(client, parentId) {
         if (!validId(id)) fail('native identity is malformed.');
         ids.add(id);
         if (ids.size > MAX_IDS) fail('identity limit exceeded.');
-        if (mode.ancestorThreadId) ancestorIds.add(id);
+        if (mode.ancestorThreadId) ancestorIds.get(mode.ancestorThreadId).add(id);
         if (!mode.loaded) {
           if (!row || typeof row !== 'object' || Array.isArray(row)) fail('metadata is malformed.');
           // Native lists may omit relationship fields. Any fields they expose
@@ -73,7 +83,7 @@ export async function readCodexDependencies(client, parentId) {
   for (const id of [...ids].sort()) await read(id);
   // Ancestor queries can include nested agents. Authenticate their parent chain
   // rather than treating a query result as proof of a direct relationship.
-  for (const id of ancestorIds) {
+  for (const [parentId, descendants] of ancestorIds) for (const id of descendants) {
     const seen = new Set([parentId]); let current = id;
     while (current !== parentId) {
       if (seen.has(current)) fail('ancestry cycle detected.');
@@ -84,6 +94,7 @@ export async function readCodexDependencies(client, parentId) {
       current = edge.parentId;
     }
   }
-  return [...metadata].filter(([id, edge]) => id !== parentId && edge?.parentId === parentId)
-    .map(([id, edge]) => ({ id, ...edge })).sort((a, b) => a.id.localeCompare(b.id));
+  return new Map(parents.map(parentId => [parentId,
+    [...metadata].filter(([id, edge]) => id !== parentId && edge?.parentId === parentId)
+      .map(([id, edge]) => ({ id, ...edge })).sort((a, b) => a.id.localeCompare(b.id))]));
 }

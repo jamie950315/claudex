@@ -98,11 +98,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   };
   let foregroundCompletedAt = null;
   let foregroundDurationMs = null;
+  let initialSweepCompletedAt = null;
   let discoveryCompletedAt = null;
   let discoveryDurationMs = null;
   let maxDiscoveryGapMs = 0;
   let lastSync = null;
   let slowestSync = null;
+  let currentOperation = null;
+  let checkingConversationCount = 0;
+  const checkedConversations = new Set();
+  let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
   let localHandoff = null;
   const handoffs = config.desktopLocalHandoff?.enabled === true ? createClaudeDesktopHandoffPublisher({ root,
@@ -117,7 +122,17 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       }
       return data;
     } }) : null;
+  const writeProgress = () => writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
+    scheduler: 'activity-interleaved', startedAt, updatedAt: now(),
+    versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
+    versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, initialSweepCompletedAt,
+    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
+    currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
+    synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
+    ...blockingStatus(), ...latestFields });
   const status = async fields => {
+    latestFields = fields;
     if (handoffs) {
       try {
         const result = await handoffs.publish(await bridge.status());
@@ -144,14 +159,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
       }
     }
-    return writeJSON(statusPath, { mode: 'desktop', running: true, pid: process.pid,
-    scheduler: 'activity-interleaved',
-    startedAt, updatedAt: now(), versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
-    versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs,
-    discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
-    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
-    synchronization: blocked ? 'blocked' : blockedConversations.size ? 'degraded' : fields.waiting ? 'waiting' : 'ready',
-    ...blockingStatus(), ...fields });
+    return writeProgress();
   };
   return withLock(join(root, 'watch.lock'), async () => {
     await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
@@ -186,12 +194,31 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               coldHints.delete(id);
               if (before) coldDirty.add(id);
               const beganAt = now();
+              currentOperation = { ...conversationContext(state, id), startedAt: beganAt };
+              latestFields = { waiting, waitingContexts, blockedSourceCount, blockedSources };
+              await writeProgress();
+              // Status-only heartbeat: it never reads histories, publishes archive
+              // intents, advances a checkpoint, or starts a second native operation.
+              const heartbeatStop = new AbortController();
+              const heartbeat = (async () => {
+                while (!heartbeatStop.signal.aborted) {
+                  try { await delay(10_000, undefined, { signal: heartbeatStop.signal }); }
+                  catch (error) { if (error.name === 'AbortError') return; throw error; }
+                  if (!heartbeatStop.signal.aborted) await writeProgress();
+                }
+              })();
+              let heartbeatError;
+              const heartbeatDone = heartbeat.catch(error => { heartbeatError = error; });
               let result;
-              try { result = await bridge.sync(id); }
+              try { result = await bridge.sync(id); checkedConversations.add(id); }
               finally {
+                heartbeatStop.abort();
+                await heartbeatDone;
+                currentOperation = null;
                 lastSync = { conversationId: id, durationMs: now() - beganAt };
                 if (!slowestSync || lastSync.durationMs > slowestSync.durationMs) slowestSync = lastSync;
               }
+              if (heartbeatError) throw heartbeatError;
               blockedConversations.delete(id);
               if (before && result?.changed === false && result.incompleteTail === false) {
                 const latest = await bridge.status();
@@ -250,6 +277,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             let state = await bridge.status();
             if (state.pending) { clearHints(); await bridge.recover(); }
             state = await bridge.status();
+            checkingConversationCount = Object.keys(state.conversations).length;
+            for (const id of checkedConversations) if (!state.conversations[id]) checkedConversations.delete(id);
             const existing = new Set(Object.keys(state.conversations));
             const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
             for (const id of await runtime.ownedNativeIds()) known.add(id);
@@ -290,6 +319,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               }
             }
             state = await bridge.status();
+            checkingConversationCount = Object.keys(state.conversations).length;
             const completedAt = now();
             if (discoveryCompletedAt !== null) maxDiscoveryGapMs = Math.max(maxDiscoveryGapMs, completedAt - discoveryCompletedAt);
             discoveryCompletedAt = completedAt;
@@ -362,6 +392,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             await sync(id);
           }
           await refreshNew();
+          if (!signal?.aborted && initialSweepCompletedAt === null) initialSweepCompletedAt = now();
           if (!signal?.aborted && now() - lastCollection >= 60_000) {
             await bridge.collect();
             lastCollection = now();

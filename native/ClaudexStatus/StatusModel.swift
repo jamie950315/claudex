@@ -24,6 +24,32 @@ struct HealthReport: Codable, Equatable {
 
 enum StatusReadError: Error { case unsafe, tooLarge, changing }
 
+func initialChecking(_ watcher: [String: Any]) -> Bool {
+    guard watcher["mode"] as? String == "desktop" else { return false }
+    let completion = watcher["checkingConversationCount"] == nil ? "foregroundCompletedAt" : "initialSweepCompletedAt"
+    return watcher[completion] as? NSNumber == nil
+}
+
+func checkingProgress(_ watcher: [String: Any], now: Double) -> String? {
+    guard initialChecking(watcher),
+          let checked = watcher["checkedConversationCount"] as? Int,
+          let total = watcher["checkingConversationCount"] as? Int,
+          checked >= 0, total >= checked else { return nil }
+    var lines = ["Checked \(checked) of \(total) conversations."]
+    if let operation = watcher["currentOperation"] as? [String: Any],
+       let identity = operation["conversationId"] as? String, !identity.isEmpty,
+       let started = operation["startedAt"] as? NSNumber,
+       started.doubleValue.isFinite, started.doubleValue > 0, started.doubleValue <= now {
+        let elapsed = (now - started.doubleValue) / 1000
+        if elapsed.isFinite && elapsed < Double(Int.max) {
+            let title = (operation["title"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? identity
+            let display = String(title.prefix(200)).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+            lines.append("Checking \(display) (\(Int(elapsed)) seconds elapsed).")
+        }
+    }
+    return lines.joined(separator: "\n")
+}
+
 func privateJSON(_ root: String, _ name: String) throws -> [String: Any]? {
     var directory = stat()
     guard root.hasPrefix("/"), URL(fileURLWithPath: root).resolvingSymlinksInPath().path == root,
@@ -144,7 +170,7 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
                       work ? "A tracked conversation is still replying, changing, or busy. Its next handoff waits for a complete turn and an idle destination; Claudex checks again automatically."
                       : "The connection is not ready. Claudex checks again automatically.", operational: work)
     }
-    if watcher["mode"] as? String == "desktop", watcher["foregroundCompletedAt"] as? NSNumber == nil {
+    if initialChecking(watcher) {
         return report("waiting", "Checking conversations", "Native connections and saved histories are being verified. Wait for the latest messages before switching apps.")
     }
     return report("ready", "Synchronization ready", "No reported synchronization blocks. Before switching apps, still wait for the current reply and its latest messages to appear.", operational: true)
@@ -153,6 +179,14 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
 func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Double,
                     alive: (Any?) -> Bool = processAlive) -> HealthReport {
     var result = classifyHealthBase(watcher: watcher, service: service, now: now, alive: alive)
+    if result.state == "waiting", let watcher,
+       watcher["running"] as? Bool == true, alive(watcher["pid"]),
+       let updated = watcher["updatedAt"] as? NSNumber,
+       now - updated.doubleValue >= -5000, now - updated.doubleValue < 120000,
+       let progress = checkingProgress(watcher, now: now) {
+        result.detail = String((progress + "\n" + result.detail).prefix(700))
+        result.operational = false
+    }
     var issues: [HealthIssue] = []
     func bounded(_ value: Any?, _ fallback: String, _ limit: Int) -> String {
         guard let text = value as? String, !text.isEmpty else { return fallback }

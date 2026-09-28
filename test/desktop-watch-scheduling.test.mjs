@@ -85,6 +85,59 @@ test('fresh and active conversations precede a backlog of 300 cold imports', asy
   assert.equal(new Set(synced).size, 302);
 });
 
+test('initial inspection publishes bounded current work and unique completion progress before the sweep finishes', async () => {
+  const f = await fixture();
+  f.addOrdinary('first'); f.addOrdinary('second');
+  f.state.conversations.first.title = 'First conversation';
+  f.onSync = async id => {
+    const status = await f.status();
+    assert.equal(status.currentOperation.conversationId, id);
+    assert.equal(status.currentOperation.startedAt, 0);
+    assert.equal(status.checkingConversationCount, 2);
+    assert.equal(status.checkedConversationCount, id === 'first' ? 0 : 1);
+    assert.equal(status.foregroundCompletedAt, null);
+    if (id === 'first') assert.equal(status.currentOperation.title, 'First conversation');
+  };
+  await f.run();
+});
+
+test('a long native operation refreshes progress without concurrent inspection or premature completion', async () => {
+  const f = await fixture(); f.addOrdinary('slow');
+  let observed;
+  f.onSync = async () => {
+    f.tick(10_001);
+    await new Promise(resolve => setTimeout(resolve, 10_100));
+    observed = await f.status();
+    assert.equal(f.count('sync'), 1);
+  };
+  await f.run();
+  assert.equal(observed.updatedAt, 10_001);
+  assert.equal(observed.currentOperation.conversationId, 'slow');
+  assert.equal(observed.checkedConversationCount, 0);
+  assert.equal(observed.foregroundCompletedAt, null);
+  assert.equal((await f.status()).running, false);
+});
+
+test('initial sweep completion includes the cold backlog, not only foreground work', async () => {
+  const f = await fixture();
+  f.addOrdinary('active'); await f.addCold('cold');
+  let completed;
+  f.onSync = async id => {
+    if (id !== 'cold') return;
+    const status = await f.status();
+    assert.notEqual(status.foregroundCompletedAt, null);
+    assert.equal(status.initialSweepCompletedAt, null);
+    assert.equal(status.checkedConversationCount, 1);
+    assert.equal(status.checkingConversationCount, 2);
+  };
+  await f.run({ maxPasses: 2, sleep: async () => {
+    completed = await f.status();
+    f.onSync = undefined;
+  } });
+  assert.notEqual(completed.initialSweepCompletedAt, null);
+  assert.equal(completed.checkedConversationCount, 2);
+});
+
 test('a conversation created during a slow cold sweep is discovered and delivered before the next cold item', async () => {
   const f = await fixture();
   for (let index = 0; index < 4; index++) await f.addCold(`cold-${index}`);

@@ -38,6 +38,13 @@ viewport growth, natural content width, a single scroll view, and compact ready 
 Runtime history/ownership blocks offer diagnostics, not setup retries. Show the
 global setup retry only for actionable installation/account requirements or a
 failed setup operation; keep the instructions consistent with available actions.
+Initial verification reports unique checked/total conversations and the known
+current conversation with elapsed seconds. A ten-second status-only heartbeat
+keeps long native operations observable; it must never publish archival intents,
+inspect histories concurrently, advance checkpoints, or imply synchronization
+completion. Stop and drain the heartbeat before leaving the operation.
+Keep initialSweepCompletedAt separate from foregroundCompletedAt: completing the
+foreground queue must not hide initial verification of the cold backlog.
 
 Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
 requirements request user action, while normal runtime waits need no setup retry.
@@ -273,6 +280,13 @@ Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep
 the superseded-original guards global, retain every managed snapshot in the
 global quota, and preserve exact previous-snapshot/native retirement checks.
+Within one collection, previous Codex snapshots share one fresh initial global
+metadata dependency inventory; each parent still has its own ancestor queries.
+Actual dependency anchors retain independent fresh inventory, canonical and raw
+proof revalidation. Never reuse this inventory for a later collection or as
+mutation authorization; native hide/remove guards still recheck independently.
+Reuse the verified read returned by assertUnchanged for that snapshot's byte
+count instead of immediately exporting the same history a second time.
 
 Validated native baselines are Codex `0.155.0-alpha.16.3`/`.16.4` and Claude Code
 `2.1.210`/`2.1.281`. versionPolicy defaults to strict; an explicit warn policy

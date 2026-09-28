@@ -69,6 +69,24 @@ final class Localization {
     func text(_ original: String) -> String {
         lock.lock(); defer { lock.unlock() }
         if let translated = catalog[original] { return translated }
+        if original.hasPrefix("Checked "), let end = original.range(of: " conversations.") {
+            let count = String(original[original.index(original.startIndex, offsetBy: 8)..<end.lowerBound]).components(separatedBy: " of ")
+            if count.count == 2, count.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }) {
+                let tail = String(original[end.upperBound...])
+                return format("Checked %@ of %@ conversations.", [count[0], count[1]])
+                    + (tail.hasPrefix("\n") ? "\n" + text(String(tail.dropFirst())) : tail)
+            }
+        }
+        if original.hasPrefix("Checking "), let end = original.range(of: " seconds elapsed)."),
+           let separator = original[..<end.lowerBound].range(of: " (", options: .backwards) {
+            let seconds = String(original[separator.upperBound..<end.lowerBound])
+            if !seconds.isEmpty && seconds.allSatisfy(\.isNumber) {
+                let title = String(original[original.index(original.startIndex, offsetBy: 9)..<separator.lowerBound])
+                let tail = String(original[end.upperBound...])
+                return format("Checking %@ (%@ seconds elapsed).", [title, seconds])
+                    + (tail.hasPrefix("\n") ? "\n" + text(String(tail.dropFirst())) : tail)
+            }
+        }
         // Explicit presentation templates only. Native diagnostics, paths,
         // account data and conversation text are never interpreted as keys.
         for (prefix, suffix, key) in [
