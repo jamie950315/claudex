@@ -3,6 +3,7 @@ import { copyFile, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, s
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
 export const APP_IDENTIFIER = 'dev.0ruka.claudex.app';
+export const APP_LOCALES = Object.freeze(['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']);
 export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
 ]);
@@ -150,6 +151,21 @@ export async function buildClaudexApp({
     await symlink('../lib/node_modules/npm/bin/npm-cli.js', join(runtime, 'bin', 'npm'));
     await copyFile(join(distribution, 'LICENSE'), join(runtime, 'LICENSE'));
     await copyAllowed(source, engine);
+    await mkdir(join(resources, 'Locales'));
+    const base = JSON.parse(await readFile(join(source, 'native', 'ClaudexApp', 'Locales', 'en.json'), 'utf8'));
+    for (const language of APP_LOCALES) {
+      const catalogPath = join(source, 'native', 'ClaudexApp', 'Locales', `${language}.json`);
+      await requireRegular(catalogPath);
+      const catalog = JSON.parse(await readFile(catalogPath, 'utf8'));
+      if (JSON.stringify(Object.keys(catalog).sort()) !== JSON.stringify(Object.keys(base).sort())
+        || Object.values(catalog).some(value => typeof value !== 'string' || !value.trim()))
+        throw new Error(`Incomplete UI translation: ${language}`);
+      for (const [key, value] of Object.entries(catalog)) {
+        if ((key.match(/%@/g) ?? []).length !== (value.match(/%@/g) ?? []).length
+          || value.replaceAll('%@', '').includes('%')) throw new Error(`Invalid UI translation placeholder: ${language}`);
+      }
+      await copyFile(catalogPath, join(resources, 'Locales', `${language}.json`));
+    }
     await run(join(runtime, 'bin', 'node'), [join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--no-fund'], {
       cwd: engine,
       env: { ...process.env, PATH: `${join(runtime, 'bin')}:${process.env.PATH || '/usr/bin:/bin'}`, npm_config_cache: join(stageRoot, 'npm-cache') },
@@ -157,7 +173,7 @@ export async function buildClaudexApp({
     await run(join(runtime, 'bin', 'node'), [join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'ls', '--omit=dev', '--depth=0'], { cwd: engine });
     await writeFile(join(contents, 'Info.plist'), plist(manifest.version));
     await writeFile(join(stageRoot, 'node-entitlements.plist'), '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>');
-    const swiftSources = ['main.swift', 'SetupModel.swift', 'StatusController.swift'].map(name => join(source, 'native', 'ClaudexApp', name));
+    const swiftSources = ['main.swift', 'SetupModel.swift', 'StatusController.swift', 'Localization.swift'].map(name => join(source, 'native', 'ClaudexApp', name));
     swiftSources.push(join(source, 'native', 'ClaudexStatus', 'StatusModel.swift'));
     for (const swiftSource of swiftSources) await requireRegular(swiftSource);
     await run('/usr/bin/xcrun', ['swiftc', ...swiftSources, '-framework', 'Cocoa', '-framework', 'UserNotifications', '-target', `${arch}-apple-macos13.0`, '-o', join(macos, 'ClaudexApp')]);

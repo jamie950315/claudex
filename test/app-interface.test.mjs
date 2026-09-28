@@ -32,7 +32,7 @@ print("Settings launch policy passed")
 test('settings owns retry setup; menus only expose the settings entry', async () => {
   const source = await readFile(new URL('../native/ClaudexApp/main.swift', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /addMenu\(menu, "Retry setup"|"Open setup…"/);
-  assert.match(source, /NSButton\(title: "Retry setup", target: self, action: #selector\(retrySetup\(_:\)\)\)/);
+  assert.match(source, /NSButton\(title: L\("Retry setup"\), target: self, action: #selector\(retrySetup\(_:\)\)\)/);
   assert.match(source, /if !inspectOnly && !uiSmoke \{ UserDefaults.standard.set\(true, forKey: settingsPresentedKey\) \}/);
   assert.match(source, /if launch.showSettings \{ showSetup\(nil\) \}/);
 });

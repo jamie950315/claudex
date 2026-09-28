@@ -28,6 +28,14 @@ on top of the sanitized public history; never merge private ancestors into it.
 
 ## macOS app setup
 
+Claudex.app localizes presentation using complete English-keyed JSON catalogs
+under native/ClaudexApp/Locales for en, zh-Hant, zh-Hans, ja, ko, es, de, fr and it.
+Keep key and %@ placeholder parity; the builder rejects incomplete catalogs.
+System-language selection distinguishes Chinese scripts and regions. Runtime
+switches rebuild presentation only, never run setup or restart services. Raw
+unknown native diagnostics remain verbatim with a translated diagnostic label.
+Read-only/synthetic modes must not persist language or onboarding preferences.
+
 The graphical app owns the sole menu bar item, a combined setup/health window, and
 notifications. It reuses the bounded native status model. Its owned login item
 launches the same bundle in background inspection mode, not setup. Migrate only

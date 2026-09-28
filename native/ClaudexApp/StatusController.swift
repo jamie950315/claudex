@@ -50,11 +50,11 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         let labels = ["ready": "Ready", "waiting": "Waiting", "recovering": "Recovering", "paused": "Paused",
                       "offline": "Offline", "unknown": "Check", "stopping": "Stopping", "stopped": "Stopped"]
         if let button = item?.button {
-            button.title = " Claudex · " + (labels[report.state] ?? "Check")
-            button.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: report.title)
+            button.title = " Claudex · " + L(labels[report.state] ?? "Check")
+            button.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: L(report.title))
             button.image?.isTemplate = true
-            button.toolTip = report.title + "\n" + report.detail
-            button.setAccessibilityLabel("Claudex: " + report.title)
+            button.toolTip = L(report.title) + "\n" + LD(report.detail)
+            button.setAccessibilityLabel("Claudex: " + L(report.title))
         }
         updateWindow()
         guard !readOnly else { return }
@@ -62,9 +62,9 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         if let event = gate.event(for: report, now: now) {
             if permission == .authorized || permission == .provisional {
                 let content = UNMutableNotificationContent()
-                content.title = event == "recovered" ? "Claudex synchronization restored" : "Claudex needs attention"
-                content.body = event == "recovered" ? "The service is running without reported synchronization blocks."
-                    : "Synchronization or recovery needs attention. Open Claudex in the menu bar for details. Your histories are preserved."
+                content.title = L(event == "recovered" ? "Claudex synchronization restored" : "Claudex needs attention")
+                content.body = L(event == "recovered" ? "The service is running without reported synchronization blocks."
+                    : "Synchronization or recovery needs attention. Open Claudex in the menu bar for details. Your histories are preserved.")
                 // Generic notices never include transcript text, titles, paths, or credentials.
                 let sentIssue = gate.lastIssue, sentAt = gate.lastNoticeAt
                 center.add(UNNotificationRequest(identifier: "claudex-health", content: content, trigger: nil)) { error in
@@ -89,21 +89,21 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func updateWindow() {
-        statusIcon?.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: report.title)
+        statusIcon?.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: L(report.title))
         statusIcon?.contentTintColor = report.attention ? .systemOrange : report.operational ? .systemGreen : .secondaryLabelColor
-        headline?.stringValue = report.title
-        descriptionText?.stringValue = report.detail
+        headline?.stringValue = L(report.title)
+        descriptionText?.stringValue = LD(report.detail)
         if let update = report.updatedAt {
             let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
-            updatedText?.stringValue = "Last status update: " + formatter.string(from: Date(timeIntervalSince1970: update / 1000))
-        } else { updatedText?.stringValue = "No verified status update yet" }
-        var recovery = report.autoRestart ? "Automatic service recovery: enabled" : "Automatic service recovery: not confirmed"
-        if let retry = report.retryAt { recovery += " · next check in \(max(0, Int(ceil((retry - Date().timeIntervalSince1970 * 1000) / 1000))))s" }
+            updatedText?.stringValue = LF("Last status update: %@", formatter.string(from: Date(timeIntervalSince1970: update / 1000)))
+        } else { updatedText?.stringValue = L("No verified status update yet") }
+        var recovery = L(report.autoRestart ? "Automatic service recovery: enabled" : "Automatic service recovery: not confirmed")
+        if let retry = report.retryAt { recovery += LF(" · next check in %@s", String(max(0, Int(ceil((retry - Date().timeIntervalSince1970 * 1000) / 1000))))) }
         recoveryText?.stringValue = recovery
-        permissionText?.stringValue = deliveryFailed ? "Notification delivery failed · another attempt is scheduled"
+        permissionText?.stringValue = L(deliveryFailed ? "Notification delivery failed · another attempt is scheduled"
             : permission == .authorized || permission == .provisional
             ? (testNotice.isEmpty ? "Notifications: enabled · repeated alerts are suppressed" : testNotice)
-            : "Notifications: not enabled · click Notifications to allow alerts"
+            : "Notifications: not enabled · click Notifications to allow alerts")
     }
 
     @objc func showDiagnostics(_ sender: Any?) {
@@ -115,8 +115,8 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
             if settings.authorizationStatus == .notDetermined {
                 self.center.requestAuthorization(options: [.alert, .sound]) { _, _ in self.refreshPermission() }
             } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                let content = UNMutableNotificationContent(); content.title = "Claudex notification test"
-                content.body = "Alerts are working. No conversation or synchronization state was changed."
+                let content = UNMutableNotificationContent(); content.title = L("Claudex notification test")
+                content.body = L("Alerts are working. No conversation or synchronization state was changed.")
                 self.center.add(UNNotificationRequest(identifier: "claudex-test", content: content, trigger: nil)) { error in
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                         if error != nil {
@@ -135,8 +135,8 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
                 }
             } else {
                 DispatchQueue.main.async {
-                    let alert = NSAlert(); alert.messageText = "Notifications are disabled"
-                    alert.informativeText = "Allow Claudex in System Settings > Notifications. The menu bar status remains available."
+                    let alert = NSAlert(); alert.messageText = L("Notifications are disabled")
+                    alert.informativeText = L("Allow Claudex in System Settings > Notifications. The menu bar status remains available.")
                     alert.runModal()
                 }
             }

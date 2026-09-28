@@ -13,6 +13,14 @@ do not need Git, a separate Node.js installation, or terminal configuration.
 
 ## First launch
 
+Claudex.app supports English, Traditional Chinese, Simplified Chinese, Japanese,
+Korean, Spanish, German, French and Italian. The **Language** picker follows the
+system by default; a manual choice takes effect immediately and is remembered.
+Switching languages only changes presentation, never services or conversation
+contents. Menus, health summaries, setup guidance and notifications are localized.
+Unrecognized native diagnostic details remain verbatim beneath a localized label
+so troubleshooting evidence is not changed. CLI output remains English.
+
 1. Put Claudex.app in a stable Applications location before opening it. Background
    services reference the bundle; do not move it while those services are running.
 2. Open Claudex. On first launch, the main window opens automatically and setup verifies
@@ -89,6 +97,8 @@ JSON report. `Claudex.app --inspect-only` exposes that report in the native UI
 without setup or login actions. `--ui-smoke` renders a synthetic checklist and
 tests native layout without invoking the backend; it is not deployment evidence.
 `--diagnose` reads the same bounded health report used by the menu bar.
+`--ui-language <locale>` overrides the language only with `--inspect-only` or
+`--ui-smoke`; these modes do not persist the language preference.
 
 ## Packaging and distribution
 

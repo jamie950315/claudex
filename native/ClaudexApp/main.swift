@@ -38,6 +38,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var healthRecovery: NSTextField!
     private var healthPermission: NSTextField!
     private var healthDetails: NSStackView!
+    private var languagePicker: NSPopUpButton!
+    private var detailsButton: NSButton?
     private var settingsPresentedKey: String { "settingsPresented.v1:" + setupRoot }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -49,34 +51,14 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             return
         }
         NSApp.setActivationPolicy(.regular)
-        let mainMenu = NSMenu()
-        let applicationItem = NSMenuItem()
-        let applicationMenu = NSMenu(title: "Claudex")
-        for (title, action) in [("Open Claudex…", #selector(showSetup(_:)))] {
-            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
-            entry.target = self
-            applicationMenu.addItem(entry)
-        }
-        applicationMenu.addItem(.separator())
-        let quitItem = NSMenuItem(title: "Quit Claudex", action: #selector(quit(_:)), keyEquivalent: "q")
-        quitItem.target = self
-        applicationMenu.addItem(quitItem)
-        applicationItem.submenu = applicationMenu
-        mainMenu.addItem(applicationItem)
-        NSApp.mainMenu = mainMenu
+        buildMainMenu()
         createWindow()
         if uiSmoke {
             runUISmoke()
             return
         }
         createStatusItem()
-        health.headline = healthTitle
-        health.descriptionText = healthDetail
-        health.statusIcon = healthIcon
-        health.updatedText = healthUpdated
-        health.recoveryText = healthRecovery
-        health.permissionText = healthPermission
-        health.onOpen = { [weak self] in self?.showSetup(nil) }
+        bindHealthView()
         health.start(item: statusItem)
         let launch = SetupLaunchPolicy(background: cliArguments.contains("--background"), inspectOnly: inspectOnly,
             hasPresentedSettings: UserDefaults.standard.bool(forKey: settingsPresentedKey),
@@ -88,6 +70,49 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             self.run(.inspect)
         }
         RunLoop.main.add(refreshTimer!, forMode: .common)
+    }
+
+    private func buildMainMenu() {
+        let mainMenu = NSMenu()
+        let applicationItem = NSMenuItem()
+        let applicationMenu = NSMenu(title: "Claudex")
+        for (title, action) in [("Open Claudex…", #selector(showSetup(_:)))] {
+            let entry = NSMenuItem(title: L(title), action: action, keyEquivalent: "")
+            entry.target = self
+            applicationMenu.addItem(entry)
+        }
+        applicationMenu.addItem(.separator())
+        let quitItem = NSMenuItem(title: L("Quit Claudex"), action: #selector(quit(_:)), keyEquivalent: "q")
+        quitItem.target = self
+        applicationMenu.addItem(quitItem)
+        applicationItem.submenu = applicationMenu
+        mainMenu.addItem(applicationItem)
+        NSApp.mainMenu = mainMenu
+    }
+
+    private func bindHealthView() {
+        health.headline = healthTitle
+        health.descriptionText = healthDetail
+        health.statusIcon = healthIcon
+        health.updatedText = healthUpdated
+        health.recoveryText = healthRecovery
+        health.permissionText = healthPermission
+        health.onOpen = { [weak self] in self?.showSetup(nil) }
+    }
+
+    @objc private func changeLanguage(_ sender: NSPopUpButton) {
+        guard let code = sender.selectedItem?.representedObject as? String else { return }
+        Localization.shared.select(code, persist: !inspectOnly && !uiSmoke)
+        let visible = window.isVisible
+        let expanded = !healthDetails.isHidden
+        window.delegate = nil
+        window.close()
+        createWindow()
+        healthDetails.isHidden = !expanded
+        if let button = detailsButton { button.title = L(expanded ? "Hide details & support" : "Show details & support") }
+        buildMainMenu()
+        if !uiSmoke { bindHealthView(); health.refresh(); health.refreshPermission() }
+        if visible { showSetup(nil) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -115,7 +140,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let heading = NSMenuItem(title: health.report.title, action: nil, keyEquivalent: "")
+        let heading = NSMenuItem(title: L(health.report.title), action: nil, keyEquivalent: "")
         heading.isEnabled = false
         menu.addItem(heading)
         addMenu(menu, "Open Claudex…", #selector(showSetup(_:)))
@@ -130,7 +155,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func addMenu(_ menu: NSMenu, _ title: String, _ action: Selector) {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
+        let item = NSMenuItem(title: L(title), action: action, keyEquivalent: "")
         item.target = self
         let inspectionAction = action == #selector(openCodex(_:)) || action == #selector(openClaude(_:))
         item.isEnabled = (!busy || action == #selector(showSetup(_:))
@@ -164,7 +189,26 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         ])
 
         let brand = label("CLAUDEX", size: 11, weight: .bold, color: .secondaryLabelColor)
-        stack.addArrangedSubview(brand)
+        let topRow = NSStackView()
+        topRow.orientation = .horizontal
+        topRow.spacing = 10
+        topRow.addArrangedSubview(brand)
+        let spacer = NSView()
+        spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        topRow.addArrangedSubview(spacer)
+        topRow.addArrangedSubview(label("Language", size: 11, weight: .regular, color: .secondaryLabelColor))
+        languagePicker = NSPopUpButton(frame: .zero, pullsDown: false)
+        languagePicker.target = self
+        languagePicker.action = #selector(changeLanguage(_:))
+        for (code, name) in [("system", L("System default"))] + Localization.languages {
+            languagePicker.addItem(withTitle: name)
+            languagePicker.lastItem?.representedObject = code
+            if code == Localization.shared.preference { languagePicker.select(languagePicker.lastItem) }
+        }
+        languagePicker.setAccessibilityLabel(L("Language"))
+        topRow.addArrangedSubview(languagePicker)
+        stack.addArrangedSubview(topRow)
+        topRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         let healthRow = NSStackView()
         healthRow.orientation = .horizontal
         healthRow.spacing = 12
@@ -179,8 +223,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         stack.addArrangedSubview(healthDetail)
         healthDetail.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
-        let disclosure = NSButton(title: "Show details & support", target: self, action: #selector(toggleDetails(_:)))
+        let disclosure = NSButton(title: L("Show details & support"), target: self, action: #selector(toggleDetails(_:)))
         disclosure.bezelStyle = .inline
+        detailsButton = disclosure
         stack.addArrangedSubview(disclosure)
         healthDetails = NSStackView()
         healthDetails.orientation = .vertical
@@ -197,7 +242,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         support.orientation = .horizontal
         support.spacing = 10
         for (title, action) in [("Diagnostics", #selector(showDiagnostics(_:))), ("Notifications…", #selector(notifications(_:)))] {
-            let button = NSButton(title: title, target: self, action: action)
+            let button = NSButton(title: L(title), target: self, action: action)
             button.bezelStyle = .rounded
             button.isEnabled = !inspectOnly && !uiSmoke
             support.addArrangedSubview(button)
@@ -279,10 +324,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         progress.controlSize = .small
         progress.isIndeterminate = true
         footer.addArrangedSubview(progress)
-        setupButton = NSButton(title: "Retry setup", target: self, action: #selector(retrySetup(_:)))
+        setupButton = NSButton(title: L("Retry setup"), target: self, action: #selector(retrySetup(_:)))
         setupButton.bezelStyle = .rounded
         footer.addArrangedSubview(setupButton)
-        refreshButton = NSButton(title: "Refresh status", target: self, action: #selector(refreshStatus(_:)))
+        refreshButton = NSButton(title: L("Refresh status"), target: self, action: #selector(refreshStatus(_:)))
         refreshButton.bezelStyle = .rounded
         footer.addArrangedSubview(refreshButton)
         stack.addArrangedSubview(footer)
@@ -292,14 +337,14 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func label(_ text: String, size: CGFloat, weight: NSFont.Weight, color: NSColor = .labelColor) -> NSTextField {
-        let field = NSTextField(labelWithString: text)
+        let field = NSTextField(labelWithString: L(text))
         field.font = .systemFont(ofSize: size, weight: weight)
         field.textColor = color
         return field
     }
 
     private func wrapping(_ text: String, size: CGFloat, color: NSColor = .labelColor) -> NSTextField {
-        let field = NSTextField(wrappingLabelWithString: text)
+        let field = NSTextField(wrappingLabelWithString: L(text))
         field.font = .systemFont(ofSize: size)
         field.textColor = color
         field.maximumNumberOfLines = 0
@@ -358,9 +403,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case nil: title = "Checking setup…"; symbol = "clock"; color = .secondaryLabelColor
             }
         }
-        statusTitle.stringValue = title
-        statusDetail.stringValue = failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report.")
-        statusIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
+        statusTitle.stringValue = L(title)
+        statusDetail.stringValue = LD(failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report."))
+        statusIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: L(title))
         statusIcon.contentTintColor = color
         progress.isHidden = !busy
         if busy { progress.startAnimation(nil) } else { progress.stopAnimation(nil) }
@@ -395,7 +440,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .loginRequired: symbol = "person.crop.circle.badge.exclamationmark"; image.contentTintColor = .systemOrange
         case .missing, .blocked: symbol = "exclamationmark.circle"; image.contentTintColor = .systemOrange
         }
-        image.image = NSImage(systemSymbolName: symbol, accessibilityDescription: component.state.rawValue)
+        image.image = NSImage(systemSymbolName: symbol, accessibilityDescription: L(component.state.rawValue))
         image.translatesAutoresizingMaskIntoConstraints = false
         image.widthAnchor.constraint(equalToConstant: 22).isActive = true
         row.addArrangedSubview(image)
@@ -404,12 +449,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         textStack.alignment = .leading
         textStack.spacing = 3
         textStack.addArrangedSubview(label(component.label, size: 13, weight: .medium))
-        let detail = wrapping(component.detail, size: 11, color: .secondaryLabelColor)
+        let detail = wrapping(LD(component.detail), size: 11, color: .secondaryLabelColor)
         textStack.addArrangedSubview(detail)
         row.addArrangedSubview(textStack)
         row.setContentHuggingPriority(.defaultLow, for: .horizontal)
         if let action = component.action, !(action == .retry && component.state == .ready) {
-            let button = NSButton(title: actionTitle(action), target: self, action: #selector(componentAction(_:)))
+            let button = NSButton(title: L(actionTitle(action)), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
             button.isEnabled = !busy && !inspectOnly
@@ -422,14 +467,16 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private func runUISmoke() {
         let ids = ["projects", "runtime", "codex-cli", "codex-login", "codex-desktop", "claude-cli",
                    "claude-login", "claude-desktop", "collaboration", "synchronization", "folders", "handoffs"]
-        let components = ids.map { id in
-            ["id": id, "label": id.replacingOccurrences(of: "-", with: " ").capitalized,
+        let labels = ["Project access", "Bundled runtime", "Codex", "ChatGPT sign-in", "Codex Desktop integration", "Claude Code",
+                      "Claude sign-in", "Claude Desktop integration", "Cross-model collaboration", "Conversation synchronization", "Native project folders", "Native predecessor archival"]
+        let components = zip(ids, labels).map { id, title in
+            ["id": id, "label": title,
              "state": id == "claude-login" ? "login-required" : "ready",
-             "detail": "Synthetic layout check for a native setup component. No account, service, or history is accessed.",
+             "detail": "All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.",
              "action": id == "claude-login" ? "login-claude" : "retry"]
         }
         let sample: [String: Any] = ["version": 1, "phase": "needs-action", "allProjects": true,
-                                     "allowWrite": true, "components": components, "message": "Synthetic UI layout check"]
+                                     "allowWrite": true, "components": components, "message": "Independent features stay available while the remaining requirements are resolved."]
         do {
             report = try SetupReport.parse(JSONSerialization.data(withJSONObject: sample))
         } catch {
@@ -437,6 +484,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             exit(1)
         }
         render()
+        healthTitle.stringValue = L("Synchronization ready")
+        healthDetail.stringValue = L("No reported synchronization blocks. Before switching apps, still wait for the current reply and its latest messages to appear.")
+        healthUpdated.stringValue = LF("Last status update: %@", "12:34:56")
+        healthRecovery.stringValue = L("Automatic service recovery: enabled")
+        healthPermission.stringValue = L("Notifications: enabled · repeated alerts are suppressed")
+        healthDetails.isHidden = false
         showSetup(nil)
         DispatchQueue.main.async {
             self.window.contentView?.layoutSubtreeIfNeeded()
@@ -449,6 +502,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             let valid = rows.count == ids.count && document?.isFlipped == true
                 && (document?.frame.height ?? 0) > 0 && self.cards.frame.width > 0
                 && self.checklistScroll.contentView.bounds.origin.y == 0
+                && self.setupButton.convert(self.setupButton.bounds, to: self.window.contentView).maxY <= self.window.contentView!.bounds.maxY
             if valid { print("Claudex UI smoke: layout ready") }
             else { fputs("Claudex UI smoke: layout unavailable\n", stderr) }
             exit(valid ? 0 : 1)
@@ -496,7 +550,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
     @objc private func toggleDetails(_ sender: NSButton) {
         healthDetails.isHidden.toggle()
-        sender.title = healthDetails.isHidden ? "Show details & support" : "Hide details & support"
+        sender.title = L(healthDetails.isHidden ? "Show details & support" : "Hide details & support")
     }
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }
@@ -510,9 +564,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         }
         let name = identifier == "com.openai.codex" ? "ChatGPT/Codex" : "Claude"
         let alert = NSAlert()
-        alert.messageText = "\(name) desktop app is required"
-        alert.informativeText = "Install and sign in to the official \(name) desktop app, then return to Claudex. Setup status refreshes automatically."
-        alert.addButton(withTitle: "OK")
+        alert.messageText = LF("%@ desktop app is required", name)
+        alert.informativeText = LF("Install and sign in to the official %@ desktop app, then return to Claudex. Setup status refreshes automatically.", name)
+        alert.addButton(withTitle: L("OK"))
         showSetup(nil)
         alert.beginSheetModal(for: window)
     }
