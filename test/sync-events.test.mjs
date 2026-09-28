@@ -162,6 +162,18 @@ async function hook(inbox, payload) {
   });
 }
 
+test('Quit suppresses hook writes until explicit application resume', async t => {
+  const inbox = await fixture(t);
+  const path = join(inbox.root, 'app-stop.json');
+  await writeFile(path, JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  const payload = { hook_event_name: 'Stop', session_id: randomUUID() };
+  assert.deepEqual(await hook(inbox, payload), { code: 0, stdout: '', stderr: '' });
+  assert.equal((await inbox.list()).length, 0);
+  await writeFile(path, JSON.stringify({ version: 1, stopped: false }), { mode: 0o600 });
+  assert.equal((await hook(inbox, payload)).code, 0);
+  assert.equal((await inbox.list()).length, 1);
+});
+
 test('concurrent hook processes preserve every distinct wake event', async t => {
   const inbox = await fixture(t);
   const results = await Promise.all(Array.from({ length: 24 }, () => hook(inbox, { hook_event_name: 'Stop', session_id: randomUUID() })));

@@ -15,6 +15,8 @@ try {
   else if (action === 'startup') result = await app.startup();
   else if (action === 'setup') result = await app.setup();
   else if (action === 'login') result = await app.login(values.provider);
+  else if (action === 'stop') result = await app.stop();
+  else if (action === 'stop-status') result = await app.stopStatus();
   else if (action === 'models') {
     const updating = values['codex-model'] !== undefined || values['claude-model'] !== undefined;
     if (updating && (values['codex-model'] === undefined || values['claude-model'] === undefined))
@@ -33,7 +35,7 @@ try {
   else throw new Error('Unsupported setup action.');
   console.log(JSON.stringify(result));
 } catch (error) {
-  if (positionals[0] === 'models') {
+  if (['models', 'stop', 'stop-status'].includes(positionals[0])) {
     console.log(JSON.stringify({ error: error.message }));
     process.exitCode = 1;
   } else {

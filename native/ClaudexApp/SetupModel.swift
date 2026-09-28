@@ -154,6 +154,11 @@ enum SetupProcessError: Error {
     }
 }
 
+struct StopResult: Decodable {
+    let stopped: Bool
+    let detail: String?
+}
+
 final class SetupRunner {
     private let root: String
     private let node: URL
@@ -182,6 +187,16 @@ final class SetupRunner {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<ModelSettings, SetupProcessError> in
                 do { return .success(try ModelSettings.parse(data)) }
+                catch { return .failure(.invalidResponse) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func stop(statusOnly: Bool = false, completion: @escaping (Result<StopResult, SetupProcessError>) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.executeData([statusOnly ? "stop-status" : "stop"]).flatMap { data -> Result<StopResult, SetupProcessError> in
+                do { return .success(try JSONDecoder().decode(StopResult.self, from: data)) }
                 catch { return .failure(.invalidResponse) }
             }
             DispatchQueue.main.async { completion(result) }
@@ -249,7 +264,7 @@ final class SetupRunner {
         group.wait()
         if tooLarge { return .failure(.excessiveOutput) }
         guard process.terminationStatus == 0 else {
-            if arguments.first == "models", let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
+            if ["models", "stop", "stop-status"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
                let detail = response["error"] as? String, !detail.isEmpty, detail.count <= 2_000 {
                 return .failure(.engineMessage(detail))
             }

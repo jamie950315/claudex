@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { AppSetup, appPrivateJSON } from '../src/app-setup.mjs';
+import { readAppStopState } from '../src/app-stop-state.mjs';
 
 const readyProviders = (base, versions = {}) => ({
   codex: { binary: join(base, 'codex'), app: join(base, 'Codex.app'), version: versions.codex ?? 'codex-cli 0.155.0-alpha.16.4' },
@@ -92,6 +93,85 @@ test('background startup integrates the display without installing providers or 
   await setup.startup();
   assert.ok(events.some(([kind]) => kind === 'interface'));
   assert.ok(!events.some(([kind]) => ['ensure-providers', 'collaboration', 'desktop', 'service', 'folders'].includes(kind)));
+});
+
+test('quit requests both services stop and waits for native ownership before claiming stopped', async t => {
+  const { setup, root } = await fixture(t);
+  const calls = [];
+  let loaded = true, ownerAlive = true;
+  setup.serviceStatus = async action => { calls.push(`sync:${action}`); if (action === 'stop') loaded = false; return { loaded }; };
+  setup.collaborationControl = async action => { calls.push(`work:${action}`); return { installed: true, loaded: false, stopped: true }; };
+  setup.ownership = async () => ({ allowed: !ownerAlive, blockers: ownerAlive ? [{ code: 'live-owner' }] : [] });
+  assert.equal((await setup.stop()).stopped, false);
+  assert.ok(calls.includes('sync:stop'));
+  assert.ok(calls.includes('work:stop'));
+  assert.equal((await readAppStopState(root)).stopped, true);
+  ownerAlive = false;
+  assert.equal((await setup.stopStatus()).stopped, true);
+  assert.equal(calls.filter(call => call === 'work:stop').length, 1, 'status does not send repeated stop signals');
+});
+
+test('quit preserves failure evidence and still attempts the independent service', async t => {
+  const { setup, root } = await fixture(t);
+  let workStops = 0;
+  setup.serviceStatus = async action => { if (action === 'stop') throw new Error('Sync ownership mismatch'); return { loaded: true }; };
+  setup.collaborationControl = async action => { if (action === 'stop') workStops++; return { stopped: true, loaded: false }; };
+  await assert.rejects(setup.stop(), /Sync ownership mismatch/);
+  assert.equal(workStops, 1);
+  assert.equal((await readAppStopState(root)).stopped, true);
+});
+
+test('reopening after Quit resumes only installed owned services and clears hook hold after success', async t => {
+  const { setup, root } = await fixture(t);
+  await writeFile(join(root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), '{}', { mode: 0o600 });
+  const calls = [];
+  setup.serviceStatus = async action => { calls.push(`sync:${action}`); return { loaded: false }; };
+  setup.collaborationControl = async action => { calls.push(`work:${action}`); return { installed: true, loaded: false, stopped: true }; };
+  setup.ownership = async () => ({ allowed: true, blockers: [] });
+  await setup.resumeStoppedServices();
+  assert.ok(calls.includes('sync:start'));
+  assert.ok(calls.includes('work:start'));
+  assert.equal((await readAppStopState(root)).stopped, false);
+  const count = calls.length;
+  await setup.resumeStoppedServices();
+  assert.equal(calls.length, count, 'ordinary startup never restarts running services');
+});
+
+test('partial reopen can resume its journal but draining native work blocks a fresh reopen', async t => {
+  const { setup, root } = await fixture(t);
+  await writeFile(join(root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), '{}', { mode: 0o600 });
+  let loaded = false, draining = true, failStart = true;
+  setup.serviceStatus = async action => { if (action === 'start') loaded = true; return { loaded }; };
+  setup.collaborationControl = async action => { if (action === 'start' && failStart) throw new Error('Temporary startup failure'); return { installed: true, loaded: false, stopped: true }; };
+  setup.ownership = async () => ({ allowed: !draining, blockers: draining ? [{ code: 'live-owner' }] : [] });
+  await assert.rejects(setup.resumeStoppedServices(), /still draining/);
+  assert.equal(loaded, false);
+  draining = false;
+  await assert.rejects(setup.resumeStoppedServices(), /Temporary startup/);
+  assert.equal((await readAppStopState(root)).resuming, true);
+  failStart = false;
+  await setup.resumeStoppedServices();
+  assert.equal((await readAppStopState(root)).stopped, false);
+});
+
+test('stop marker refuses malformed or aliased state without writing', async t => {
+  const { root } = await fixture(t);
+  assert.equal(await readAppStopState(root), null);
+  await writeFile(join(root, 'app-stop.json'), '{}', { mode: 0o600 });
+  await assert.rejects(readAppStopState(root), /Invalid application stop/);
+});
+
+test('login-started verified jobs are reused when reopening after a previous Quit', async t => {
+  const { setup, root } = await fixture(t);
+  await writeFile(join(root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), '{}', { mode: 0o600 });
+  setup.serviceStatus = async () => ({ loaded: true });
+  setup.collaborationControl = async () => ({ installed: true, loaded: true, stopped: false });
+  setup.ownership = async () => ({ allowed: false, blockerCount: 1, blockers: [{ code: 'live-owner' }] });
+  await setup.resumeStoppedServices();
+  assert.equal((await readAppStopState(root)).stopped, false);
 });
 
 test('new graphical installs default to no version-only blocking or warnings', async t => {

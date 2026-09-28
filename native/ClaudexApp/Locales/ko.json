@@ -1,4 +1,11 @@
 {
+  "Waiting for Claudex services and their native work to exit safely.": "Claudex 서비스와 해당 네이티브 작업이 안전하게 종료되기를 기다리고 있습니다.",
+  "All Claudex services have stopped.": "모든 Claudex 서비스가 중지되었습니다.",
+  "Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window keeps services running. Quit Claudex stops the app and its background services.": "메시지가 표시되면 기존 서비스 계정에 로그인하세요. macOS 권한 요청은 직접 승인해야 하며 Claudex는 이를 우회할 수 없습니다. 이 창을 닫아도 서비스는 계속 실행됩니다. Claudex 종료를 선택하면 앱과 백그라운드 서비스가 중지됩니다.",
+  "Stopping Claudex…": "Claudex 종료 중…",
+  "Stopping synchronization and collaboration safely. Waiting for active work to release its resources; do not force quit.": "동기화와 협업을 안전하게 중지하고 있습니다. 실행 중인 작업이 리소스를 해제할 때까지 기다립니다. 강제 종료하지 마세요.",
+  "Claudex has not quit": "Claudex가 아직 종료되지 않았습니다",
+  "Background services have not been confirmed stopped. Resolve the issue, then choose Quit Claudex again.": "백그라운드 서비스가 중지되었는지 확인되지 않았습니다. 문제를 해결한 후 Claudex 종료를 다시 선택하세요.",
 "Native effort default": "기본 추론 강도",
 "Save model settings": "모델 설정 저장",
 "Reload model settings": "모델 설정 다시 불러오기",

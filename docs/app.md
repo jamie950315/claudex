@@ -104,8 +104,17 @@ does not stop synchronization, collaboration, or native conversations. Unknown
 or modified login items block migration instead of being overwritten.
 
 Setup itself never sends a model prompt. Collaboration begins only when work is
-requested through the protocol. Closing the setup window or quitting the display
-does not stop the background services.
+requested through the protocol. Closing the window keeps background services
+running. **Quit Claudex** (including Command-Q) stops synchronization and the
+collaboration broker, waits for owned processes/native work to exit safely, then
+closes the app. The app stays visible while shutdown drains; an unverified stop
+shows an error rather than falsely claiming completion. In-flight collaboration
+work receives the broker's normal cancellation; file edits are not rolled back.
+Native user work is never force-killed. Installed hooks remain registered but
+do not record wake events while the app is stopped. No conversations or settings
+are deleted. Opening Claudex again resumes its verified installed services;
+ordinary reopen without a preceding Quit does not restart running services.
+Login startup remains installed. The legacy CLI-only status display is unchanged.
 
 The checklist refreshes through read-only inspection. An observed prerequisite
 or sign-in transition can continue setup automatically; it does not blindly

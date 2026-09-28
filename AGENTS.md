@@ -79,6 +79,17 @@ synthetic UI modes must not mark onboarding as presented or run setup.
 Live health appears above setup, with timestamps, recovery, notifications and
 diagnostics under advanced diagnostics. Notification clicks open the same window;
 the status controller must never create a separate window.
+Graphical Quit (menu, Command-Q and native termination) now stops the owned sync
+and collaboration services and exits only after read-only native ownership/process
+checks confirm shutdown. Keep the UI responsive while draining; never kill user
+native work or report a merely unloaded launchd job as fully stopped. Failures
+remain visible in the app. Closing the window still only hides it. Persist the
+private app-stop.json hold before stopping; hooks must not record events while
+held. Reopening resumes only exact installed owned services, using a recoverable
+resuming marker for partial starts, and clears the hold after successful starts.
+Do not delete native data, credentials, or login definitions. Inspect/smoke and
+duplicate-instance exits must never stop services. CLI-only status display Quit
+retains its display-only behavior.
 
 `native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
 who already have signed ChatGPT/Codex and Claude desktop apps. Never download or

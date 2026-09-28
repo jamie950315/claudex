@@ -1,4 +1,11 @@
 {
+  "Waiting for Claudex services and their native work to exit safely.": "In attesa che i servizi Claudex e le relative attività native terminino in modo sicuro.",
+  "All Claudex services have stopped.": "Tutti i servizi Claudex sono stati arrestati.",
+  "Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window keeps services running. Quit Claudex stops the app and its background services.": "Quando richiesto, accedi ai tuoi account esistenti. Devi approvare personalmente le richieste di autorizzazione di macOS; Claudex non può aggirarle. Chiudere questa finestra lascia i servizi attivi. Esci da Claudex arresta l’app e i suoi servizi in background.",
+  "Stopping Claudex…": "Arresto di Claudex…",
+  "Stopping synchronization and collaboration safely. Waiting for active work to release its resources; do not force quit.": "Arresto sicuro della sincronizzazione e della collaborazione. In attesa che le attività in corso rilascino le risorse; non forzare l’uscita.",
+  "Claudex has not quit": "Claudex non è stato chiuso",
+  "Background services have not been confirmed stopped. Resolve the issue, then choose Quit Claudex again.": "L’arresto dei servizi in background non è stato confermato. Risolvi il problema, quindi scegli di nuovo Esci da Claudex.",
 "Native effort default": "Sforzo nativo predefinito",
 "Save model settings": "Salva impostazioni dei modelli",
 "Reload model settings": "Ricarica impostazioni dei modelli",

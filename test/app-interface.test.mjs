@@ -65,6 +65,16 @@ test('settings owns retry setup; menus only expose the settings entry', async ()
   assert.match(source, /if launch.showSettings \{ showSetup\(nil\) \}/);
 });
 
+test('graphical Quit waits for verified service shutdown and read-only exits bypass it', async () => {
+  const source = await readFile(new URL('../native/ClaudexApp/main.swift', import.meta.url), 'utf8');
+  assert.match(source, /func applicationShouldTerminate/);
+  assert.match(source, /allowTermination \|\| inspectOnly \|\| uiSmoke/);
+  assert.match(source, /runner.stop\(statusOnly: statusOnly\)/);
+  assert.match(source, /if result.stopped/);
+  assert.match(source, /checkStop\(statusOnly: true\)/);
+  assert.doesNotMatch(source, /Quit Claudex \(service keeps running\)/);
+});
+
 test('graphical app owns one status item and integrates the bounded health controller', async () => {
   const source = await readFile(new URL('../native/ClaudexApp/main.swift', import.meta.url), 'utf8');
   const controller = await readFile(new URL('../native/ClaudexApp/StatusController.swift', import.meta.url), 'utf8');

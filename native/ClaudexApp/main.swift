@@ -31,6 +31,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var setupButton: NSButton!
     private var refreshButton: NSButton!
     private var busy = false
+    private var stopping = false
+    private var allowTermination = false
     private var report: SetupReport?
     private var lastVerifiedReport: SetupReport?
     private var failure: String?
@@ -72,6 +74,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
            let existing = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
                .first(where: { $0.processIdentifier != getpid() }) {
             if !cliArguments.contains("--background") { existing.activate(options: [.activateAllWindows]) }
+            allowTermination = true
             NSApp.terminate(nil)
             return
         }
@@ -85,14 +88,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         createStatusItem()
         bindHealthView()
         health.start(item: statusItem)
-        loadModels()
         let launch = SetupLaunchPolicy(background: cliArguments.contains("--background"), inspectOnly: inspectOnly,
             hasPresentedSettings: UserDefaults.standard.bool(forKey: settingsPresentedKey),
             hasPriorSetup: FileManager.default.fileExists(atPath: setupRoot + "/app-setup-status.json"))
         if launch.showSettings { showSetup(nil) } else { NSApp.setActivationPolicy(.accessory) }
         run(inspectOnly ? .inspect : launch.startSetup ? .setup : .startup)
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            guard let self, !self.busy else { return }
+            guard let self, !self.busy, !self.stopping else { return }
             self.run(.inspect)
         }
         RunLoop.main.add(refreshTimer!, forMode: .common)
@@ -130,6 +132,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     @objc private func changeLanguage(_ sender: NSPopUpButton) {
+        guard !stopping else { return }
         guard let code = sender.selectedItem?.representedObject as? String else { return }
         codexModelDraft = codexModelField?.stringValue
         claudeModelDraft = claudeModelField?.stringValue
@@ -153,6 +156,73 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if allowTermination || inspectOnly || uiSmoke { return .terminateNow }
+        guard !stopping else { showSetup(nil); return .terminateCancel }
+        stopping = true
+        health.headline = nil
+        health.descriptionText = nil
+        health.statusIcon = nil
+        healthTitle.stringValue = L("Stopping Claudex…")
+        healthDetail.stringValue = L("Stopping synchronization and collaboration safely. Waiting for active work to release its resources; do not force quit.")
+        healthIcon.image = NSImage(systemSymbolName: "clock", accessibilityDescription: L("Stopping Claudex…"))
+        render()
+        updateModelControls()
+        languagePicker.isEnabled = false
+        showSetup(nil)
+        checkStop(statusOnly: false)
+        return .terminateCancel
+    }
+
+    private func checkStop(statusOnly: Bool) {
+        // Drain any already-started setup/settings request before stopping services.
+        // Their completion handlers cannot launch follow-up operations while stopping.
+        if busy || modelBusy {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                guard let self, self.stopping else { return }
+                self.checkStop(statusOnly: statusOnly)
+            }
+            return
+        }
+        runner.stop(statusOnly: statusOnly) { [weak self] result in
+            guard let self, self.stopping else { return }
+            switch result {
+            case .success(let result):
+                if result.stopped {
+                    self.allowTermination = true
+                    NSApp.terminate(nil)
+                } else {
+                    self.healthDetail.stringValue = L("Stopping synchronization and collaboration safely. Waiting for active work to release its resources; do not force quit.")
+                    if let detail = result.detail, !detail.isEmpty {
+                        self.healthDetail.stringValue += "\n\n" + LD(detail)
+                    }
+                    self.scheduleWindowFit()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        guard let self, self.stopping else { return }
+                        self.checkStop(statusOnly: true)
+                    }
+                }
+            case .failure(let error):
+                self.stopping = false
+                self.languagePicker.isEnabled = true
+                self.bindHealthView()
+                self.health.refresh()
+                self.render()
+                self.updateModelControls()
+                self.showQuitError(error.message)
+            }
+        }
+    }
+
+    private func showQuitError(_ detail: String) {
+        let alert = NSAlert()
+        alert.messageText = L("Claudex has not quit")
+        alert.informativeText = L("Background services have not been confirmed stopped. Resolve the issue, then choose Quit Claudex again.") + "\n\n" + LD(detail)
+        alert.addButton(withTitle: L("OK"))
+        showSetup(nil)
+        alert.beginSheetModal(for: window)
+    }
 
     func windowWillClose(_ notification: Notification) {
         if !NSApp.windows.contains(where: { $0 != window && $0.isVisible }) {
@@ -207,7 +277,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let heading = NSMenuItem(title: L(health.report.title), action: nil, keyEquivalent: "")
+        let heading = NSMenuItem(title: L(stopping ? "Stopping Claudex…" : health.report.title), action: nil, keyEquivalent: "")
         heading.isEnabled = false
         menu.addItem(heading)
         addMenu(menu, "Open Claudex…", #selector(showSetup(_:)))
@@ -218,7 +288,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         addMenu(menu, "Show diagnostic files", #selector(showDiagnostics(_:)))
         if !inspectOnly { addMenu(menu, "Notifications…", #selector(notifications(_:))) }
         menu.addItem(.separator())
-        addMenu(menu, "Quit Claudex (service keeps running)", #selector(quit(_:)))
+        addMenu(menu, "Quit Claudex", #selector(quit(_:)))
     }
 
     private func addMenu(_ menu: NSMenu, _ title: String, _ action: Selector) {
@@ -228,6 +298,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         item.isEnabled = (!busy || action == #selector(showSetup(_:))
             || action == #selector(showDiagnostics(_:)) || action == #selector(notifications(_:)) || action == #selector(quit(_:)))
             && (!inspectOnly || !inspectionAction)
+            && (!stopping || action == #selector(showSetup(_:)) || action == #selector(showDiagnostics(_:)))
         menu.addItem(item)
     }
 
@@ -477,7 +548,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         diagnosticCards = verticalStack(spacing: 0)
         advancedSection.addArrangedSubview(diagnosticCards)
         diagnosticCards.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
-        let explanation = wrapping("Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window or quitting the app leaves the service running.", size: 11, color: .secondaryLabelColor)
+        let explanation = wrapping("Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window keeps services running. Quit Claudex stops the app and its background services.", size: 11, color: .secondaryLabelColor)
         advancedSection.addArrangedSubview(explanation)
         explanation.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
         stack.addArrangedSubview(advancedSection)
@@ -503,7 +574,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func run(_ command: SetupCommand) {
-        guard !busy else { return }
+        guard !busy && !stopping else { return }
         switch command {
         case .setup, .login: setupFlowActive = true; checkingOnly = false
         case .inspect, .startup: checkingOnly = true
@@ -520,10 +591,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .failure(let error): self.report = nil; self.failure = error.message
             }
             self.render()
-            if case .inspect = command, !inspectOnly, self.setupFlowActive, let current = self.report,
+            if case .inspect = command, !inspectOnly, !self.stopping, self.setupFlowActive, let current = self.report,
                Self.providerBecameReady(from: previousReport, to: current) {
                 self.run(.setup)
             }
+            // Startup may be resuming the broker after Quit; read preferences only after it finishes.
+            if !self.stopping && !self.busy && self.modelSettings == nil { self.loadModels() }
         }
     }
 
@@ -568,8 +641,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         attentionSection.isHidden = attention.isEmpty && failure == nil && !(busy && !checkingOnly)
         setupButton.isHidden = inspectOnly || (failure == nil && report?.needsSetupRetry != true)
         setupHelp.isHidden = setupButton.isHidden
-        setupButton.isEnabled = !busy && !uiSmoke
-        refreshButton.isEnabled = !busy
+        setupButton.isEnabled = !busy && !uiSmoke && !stopping
+        refreshButton.isEnabled = !busy && !stopping
         for container in [cards!, connections!, diagnosticCards!] {
             for view in container.arrangedSubviews { container.removeArrangedSubview(view); view.removeFromSuperview() }
         }
@@ -640,7 +713,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             let button = NSButton(title: L(actionTitle(action)), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
-            button.isEnabled = !busy && (!inspectOnly || action == .diagnostics) && !uiSmoke
+            button.isEnabled = !busy && !stopping && (!inspectOnly || action == .diagnostics) && !uiSmoke
             row.addArrangedSubview(button)
         }
         detail.widthAnchor.constraint(lessThanOrEqualTo: textStack.widthAnchor).isActive = true
@@ -764,7 +837,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     @objc private func componentAction(_ sender: NSButton) {
         if sender.tag == 6 { showDiagnostics(sender); return }
-        guard !inspectOnly else { return }
+        guard !inspectOnly && !stopping else { return }
         switch sender.tag {
         case 1: run(.login("codex"))
         case 2: run(.login("claude"))
@@ -785,12 +858,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
     private func updateModelControls() {
-        modelSaveButton?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
-        modelReloadButton?.isEnabled = !uiSmoke && !modelBusy
-        codexModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
-        claudeModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
-        codexEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
-        claudeEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && modelSettings != nil
+        modelSaveButton?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
+        modelReloadButton?.isEnabled = !uiSmoke && !modelBusy && !stopping
+        codexModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
+        claudeModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
+        codexEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
+        claudeEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
         modelMessage?.stringValue = L(modelMessageKey)
         if let detail = modelErrorDetail { modelMessage?.stringValue += "\n" + L("Diagnostic details:") + "\n" + detail }
         if let code = modelErrorCode {
@@ -799,7 +872,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         scheduleWindowFit()
     }
     private func loadModels(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil) {
-        guard !uiSmoke && !modelBusy else { return }
+        guard !uiSmoke && !modelBusy && !stopping else { return }
         let saving = codex != nil
         guard !saving || !inspectOnly else { return }
         modelBusy = true
@@ -864,7 +937,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }
     @objc private func copyDiagnostics(_ sender: Any?) { health.copyDiagnostics(sender) }
-    @objc private func refreshStatus(_ sender: Any?) { health.refresh(); health.refreshPermission(); run(.inspect) }
+    @objc private func refreshStatus(_ sender: Any?) { guard !stopping else { return }; health.refresh(); health.refreshPermission(); run(.inspect) }
     @objc private func openCodex(_ sender: Any?) { openApplication("com.openai.codex") }
     @objc private func openClaude(_ sender: Any?) { openApplication("com.anthropic.claudefordesktop") }
     private func openApplication(_ identifier: String) {

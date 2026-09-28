@@ -1,4 +1,11 @@
 {
+  "Waiting for Claudex services and their native work to exit safely.": "正在等待 Claudex 服务及其原生任务安全退出。",
+  "All Claudex services have stopped.": "所有 Claudex 服务已停止。",
+  "Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window keeps services running. Quit Claudex stops the app and its background services.": "出现提示时，请登录现有的服务账号。macOS 权限提示需由您亲自批准；Claudex 无法跳过。关闭此窗口后，服务仍继续运行。“退出 Claudex”会停止应用与后台服务。",
+  "Stopping Claudex…": "正在退出 Claudex…",
+  "Stopping synchronization and collaboration safely. Waiting for active work to release its resources; do not force quit.": "正在安全停止同步与协作。等待运行中的任务释放资源，请勿强制退出。",
+  "Claudex has not quit": "Claudex 尚未退出",
+  "Background services have not been confirmed stopped. Resolve the issue, then choose Quit Claudex again.": "尚未确认后台服务已停止。请解决问题后，再选择“退出 Claudex”。",
 "Native effort default": "原生推理强度默认值",
 "Save model settings": "保存模型设置",
 "Reload model settings": "重新加载模型设置",
