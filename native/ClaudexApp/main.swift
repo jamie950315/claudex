@@ -29,6 +29,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var lastVerifiedReport: SetupReport?
     private var failure: String?
     private var refreshTimer: Timer?
+    private var setupFlowActive = false
+    private var checkingOnly = true
+    private var settingsPresentedKey: String { "settingsPresented.v1:" + setupRoot }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if !uiSmoke, let identifier = Bundle.main.bundleIdentifier,
@@ -42,7 +45,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "Claudex")
-        for (title, action) in [("Open status…", #selector(showHealth(_:))), ("Open setup…", #selector(showSetup(_:)))] {
+        for (title, action) in [("Open status…", #selector(showHealth(_:))), ("Settings…", #selector(showSetup(_:)))] {
             let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
             entry.target = self
             applicationMenu.addItem(entry)
@@ -61,13 +64,11 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         }
         createStatusItem()
         health.start(item: statusItem)
-        if cliArguments.contains("--background") {
-            NSApp.setActivationPolicy(.accessory)
-            run(inspectOnly ? .inspect : .startup)
-        } else {
-            showSetup(nil)
-            run(inspectOnly ? .inspect : .setup)
-        }
+        let launch = SetupLaunchPolicy(background: cliArguments.contains("--background"), inspectOnly: inspectOnly,
+            hasPresentedSettings: UserDefaults.standard.bool(forKey: settingsPresentedKey),
+            hasPriorSetup: FileManager.default.fileExists(atPath: setupRoot + "/app-setup-status.json"))
+        if launch.showSettings { showSetup(nil) } else { NSApp.setActivationPolicy(.accessory) }
+        run(inspectOnly ? .inspect : launch.startSetup ? .setup : .startup)
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             guard let self, !self.busy else { return }
             self.run(.inspect)
@@ -104,8 +105,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         heading.isEnabled = false
         menu.addItem(heading)
         addMenu(menu, "Open status…", #selector(showHealth(_:)))
-        addMenu(menu, "Open setup…", #selector(showSetup(_:)))
-        if !inspectOnly { addMenu(menu, "Retry setup", #selector(retrySetup(_:))) }
+        addMenu(menu, "Settings…", #selector(showSetup(_:)))
         addMenu(menu, "Refresh status", #selector(refreshStatus(_:)))
         menu.addItem(.separator())
         addMenu(menu, "Open Codex", #selector(openCodex(_:)))
@@ -127,9 +127,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func createWindow() {
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 660),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 690, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "Claudex Setup"
+        window.title = "Claudex Settings"
         window.isReleasedWhenClosed = false
         window.delegate = self
         window.center()
@@ -152,9 +152,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
         let brand = label("CLAUDEX", size: 11, weight: .bold, color: .secondaryLabelColor)
         stack.addArrangedSubview(brand)
-        let title = label("Connect your conversations", size: 28, weight: .semibold)
+        let title = label("Setup & connections", size: 28, weight: .semibold)
         stack.addArrangedSubview(title)
-        let intro = wrapping("Claudex uses your installed ChatGPT/Codex and Claude desktop apps, adds the required CLIs, and connects their conversations. No terminal setup is needed.", size: 13)
+        let intro = wrapping("Claudex checks and configures your connections automatically on first launch. Complete any sign-in or required action below. No terminal setup is needed.", size: 13)
         stack.addArrangedSubview(intro)
         intro.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
 
@@ -252,6 +252,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         refreshButton.bezelStyle = .rounded
         footer.addArrangedSubview(refreshButton)
         stack.addArrangedSubview(footer)
+        stack.addArrangedSubview(wrapping("After resolving a missing requirement, use Retry setup to continue configuration. It does not resend messages or force a paused synchronization to continue.", size: 11, color: .secondaryLabelColor))
         stack.addArrangedSubview(wrapping("Sign in to your existing vendor accounts when prompted. Approve any macOS permission prompts yourself; Claudex cannot bypass them. Closing this window or quitting the app leaves the service running.", size: 11, color: .secondaryLabelColor))
         render()
     }
@@ -273,6 +274,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     private func run(_ command: SetupCommand) {
         guard !busy else { return }
+        switch command {
+        case .setup, .login: setupFlowActive = true; checkingOnly = false
+        case .inspect, .startup: checkingOnly = true
+        }
         let previousReport = lastVerifiedReport
         busy = true
         failure = nil
@@ -285,7 +290,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .failure(let error): self.report = nil; self.failure = error.message
             }
             self.render()
-            if case .inspect = command, !inspectOnly, !cliArguments.contains("--background"), let current = self.report,
+            if case .inspect = command, !inspectOnly, self.setupFlowActive, let current = self.report,
                Self.providerBecameReady(from: previousReport, to: current) {
                 self.run(.setup)
             }
@@ -308,7 +313,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let title: String
         let symbol: String
         let color: NSColor
-        if busy { title = inspectOnly ? "Checking Claudex…" : "Setting up Claudex…"; symbol = "arrow.triangle.2.circlepath"; color = .controlAccentColor }
+        if busy { title = checkingOnly ? "Checking Claudex…" : "Setting up Claudex…"; symbol = "arrow.triangle.2.circlepath"; color = .controlAccentColor }
         else if failure != nil { title = "Setup status unavailable"; symbol = "exclamationmark.triangle"; color = .systemOrange }
         else {
             switch phase {
@@ -369,7 +374,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         textStack.addArrangedSubview(detail)
         row.addArrangedSubview(textStack)
         row.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        if let action = component.action {
+        if let action = component.action, !(action == .retry && component.state == .ready) {
             let button = NSButton(title: actionTitle(action), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
@@ -451,6 +456,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         NSApp.setActivationPolicy(.regular)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if !inspectOnly && !uiSmoke { UserDefaults.standard.set(true, forKey: settingsPresentedKey) }
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }

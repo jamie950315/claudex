@@ -1,5 +1,16 @@
 import Foundation
 
+struct SetupLaunchPolicy {
+    let showSettings: Bool
+    let startSetup: Bool
+
+    init(background: Bool, inspectOnly: Bool, hasPresentedSettings: Bool, hasPriorSetup: Bool) {
+        let firstLaunch = !hasPresentedSettings && !hasPriorSetup
+        showSettings = !background || (!inspectOnly && firstLaunch)
+        startSetup = !inspectOnly && firstLaunch
+    }
+}
+
 enum SetupPhase: String, Decodable {
     case ready = "ready"
     case settingUp = "setting-up"

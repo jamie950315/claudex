@@ -34,6 +34,11 @@ launches the same bundle in background inspection mode, not setup. Migrate only
 the verified legacy status-display login item and native display process; preserve
 its recoverable artifacts and never restart service or native conversation owners.
 CLI-only installations may retain the standalone status display.
+Settings contains setup retries and account actions; menus expose only Settings,
+not a separate retry action. First launch automatically presents Settings and
+starts setup, including a fresh background launch. Subsequent login starts stay
+quiet; prior setup reports preserve existing-install behavior. Read-only and
+synthetic UI modes must not mark onboarding as presented or run setup.
 
 `native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
 who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
