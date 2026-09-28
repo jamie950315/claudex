@@ -75,15 +75,17 @@ function inspectExitedProcessGroup(pid) {
 
 /** A single durable work graph. Delegation adds an edge; handoff changes its owner. */
 export class CollaborationHub extends EventEmitter {
-  constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 3, maxDepth = 2,
+  constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     timeoutMs = 15 * 60 * 1000, inspectProcessGroup = inspectExitedProcessGroup } = {}) {
     super();
+    // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
+    this.setMaxListeners(136);
     if (!isAbsolute(root ?? '') || typeof run !== 'function') throw new Error('Absolute root and native runner are required.');
     if (typeof inspectProcessGroup !== 'function') throw new Error('Process-group inspector must be a function.');
     if (!['read-only', 'workspace-write'].includes(defaultPermission)
       || defaultPermission === 'workspace-write' && !allowWrite) throw new Error('Default permission exceeds broker authorization.');
-    for (const [name, value, max] of [['maxWorkers', maxWorkers, 8], ['maxDepth', maxDepth, 8],
+    for (const [name, value, max] of [['maxWorkers', maxWorkers, 64], ['maxDepth', maxDepth, 8],
       ['maxSteps', maxSteps, 100], ['maxTasks', maxTasks, 10000], ['maxRequests', maxRequests, 100000],
       ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024], ['timeoutMs', timeoutMs, 3600000]]) {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);

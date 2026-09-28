@@ -216,7 +216,7 @@ sessions do not become synchronization sources. No Desktop renderer integration,
 image transfer, exact native-context migration, or automatic source-chat archival
 is implied by the work protocol.
 
-Defaults allow three workers, delegation depth two, twelve native executions per
+Defaults allow up to 64 concurrent workers, delegation depth three, twelve native executions per
 task, 1,000 tasks, 10,000 idempotency receipts and a 32 MiB ledger. Context and native
 output are separately bounded. Capacity errors are explicit; no history or receipt
 is silently pruned. Tasks time out after 15 minutes. These are execution limits,

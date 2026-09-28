@@ -37,6 +37,8 @@ test('real broker process serves both MCP peers without starting inference or re
   }
   assert.deepEqual(initial?.tasks, []);
   assert.equal(initial.limits.allowWrite, false);
+  assert.equal(initial.limits.maxWorkers, 64);
+  assert.equal(initial.limits.maxDepth, 3);
   const execute = promisify(execFile);
   const modelArgs = [cli, 'collaboration', 'models', '--root', root];
   const readModels = await execute(process.execPath, modelArgs);

@@ -4,7 +4,8 @@ import { isAbsolute, join } from 'node:path';
 import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 
 const MAX_FRAME = 1024 * 1024;
-const MAX_CONNECTIONS = 64;
+// Leave room for controller/status clients when all 64 workers are waiting.
+const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
 const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
