@@ -13,7 +13,7 @@ const fail = message => { throw new Error(`Claude folder resource: ${message}`);
 /** Strict reader for the observed Chromium simple-cache v5 static JS entry.
  * No HTTP metadata, source code, credentials, or session data is executed.
  */
-export function inspectFolderCache(bytes) {
+export function inspectFolderCache(bytes, { targetURL = TARGET_URL } = {}) {
   if (typeof crc32 !== 'function' || typeof zstdCompressSync !== 'function' || typeof zstdDecompressSync !== 'function')
     fail('this optional adapter requires Node with Zstandard and CRC32 support');
   if (!Buffer.isBuffer(bytes) || bytes.length < 128 || bytes.length > 2 * 1024 * 1024)
@@ -23,7 +23,7 @@ export function inspectFolderCache(bytes) {
   const keyLength = bytes.readUInt32LE(12), start = 24 + keyLength;
   if (keyLength < 1 || keyLength > 4096 || start >= bytes.length) fail('invalid cache key');
   const key = bytes.subarray(24, start);
-  if (key.toString() !== `1/0/${TARGET_URL}`) fail('unexpected resource URL');
+  if (key.toString() !== `1/0/${targetURL}`) fail('unexpected resource URL');
   const eof0 = bytes.length - 24;
   if (bytes.readBigUInt64LE(eof0) !== FOOTER_MAGIC || bytes.readUInt32LE(eof0 + 8) !== 3)
     fail('unsupported metadata footer');
@@ -43,8 +43,8 @@ export function inspectFolderCache(bytes) {
 /** Rebuild the observed cache streams, retaining the key and all unrelated
  * metadata. The two length headers retain their serialized field widths.
  */
-export function replaceFolderCacheSource(original, source) {
-  const entry = inspectFolderCache(original), encoded = Buffer.from(source);
+export function replaceFolderCacheSource(original, source, options = {}) {
+  const entry = inspectFolderCache(original, options), encoded = Buffer.from(source);
   if (encoded.length > 2 * 1024 * 1024) fail('patched source exceeds its bound');
   const compressed = zstdCompressSync(encoded, { params: { [constants.ZSTD_c_compressionLevel]: 19 } });
   if (!zstdDecompressSync(compressed, { maxOutputLength: 2 * 1024 * 1024 }).equals(encoded))
@@ -65,7 +65,7 @@ export function replaceFolderCacheSource(original, source) {
   footer0.writeUInt32LE(crc32(metadata), 12);
   const candidate = Buffer.concat([original.subarray(0, entry.start), compressed, footer1,
     metadata, original.subarray(eof0 - 32, eof0), footer0]);
-  if (inspectFolderCache(candidate).source !== source) fail('candidate verification failed');
+  if (inspectFolderCache(candidate, options).source !== source) fail('candidate verification failed');
   return candidate;
 }
 
@@ -113,7 +113,7 @@ export function buildDynamicFolderSource(source, { root, projectionSource, runti
   if (begin < 0 || end < begin) fail('project-key function changed');
   const original = source.slice(begin, end).replace('function UP(', 'function __cldxNativeProjectKey(');
   const lifecycle = handoff ? `,createHandoff:o=>createClaudeDesktopHandoffRuntime({...o,registryRoot:${JSON.stringify(registryRoot)},readManifest:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"desktop-handoff.json"):null,native:pe,normalizeAnchor:typeof normalizeClaudeLocalFolderAnchor==="function"?normalizeClaudeLocalFolderAnchor:undefined,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex native handoff] "+e)})` : '';
-  const wakeLifecycle = wake ? `,createWake:()=>createClaudeChatWakeRuntime({registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>pe.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),native:pe,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e)})` : '';
+  const wakeLifecycle = wake ? `,createWake:()=>createClaudeChatWakeRuntime({registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>pe.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),native:pe,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake status] "+e)})` : '';
   const bootstrap = `const __cldx=(()=>{${projection}\n${anchor}\n${handoff}\n${wake}\n${runtime}\nreturn createClaudeFolderRuntime({readMap:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)${lifecycle}${wakeLifecycle}})})();`;
   let result = source.slice(0, begin) + bootstrap + original
     + 'function UP(e){return __cldx.lookup(e)?.projectKey??__cldxNativeProjectKey(e)}' + source.slice(end);

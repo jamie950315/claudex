@@ -9,6 +9,7 @@ import { privateDirectory, withLock, writeJSON } from './storage.mjs';
 import { discoverProviders, ensureProviders } from './app-providers.mjs';
 import { installCollaboration, controlCollaboration } from './collaboration-install.mjs';
 import { installClaudeDesktopWake } from './claude-desktop-wake-install.mjs';
+import { ensureClaudeChatWakeCache } from './claude-chat-wake-cache.mjs';
 import { readAppStopState } from './app-stop-state.mjs';
 import { callCollaboration } from './collaboration-transport.mjs';
 import { installDesktopLauncher } from './desktop-install.mjs';
@@ -58,10 +59,11 @@ export class AppSetup {
     collaborationInstall = installCollaboration, collaborationControl = controlCollaboration, desktopInstall = installDesktopLauncher,
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
     foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration, desktopWakeInstall = installClaudeDesktopWake,
+    desktopWakeCacheInstall = ensureClaudeChatWakeCache,
     interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
     Object.assign(this, { root: resolve(root), home, engineRoot: resolve(engineRoot), runtimeDirectory: runtimeDirectory ?? resolve(engineRoot, '..', 'runtime'),
-      run, platform, discover, ensure, collaborationInstall, collaborationControl, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall, desktopWakeInstall,
+      run, platform, discover, ensure, collaborationInstall, collaborationControl, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall, desktopWakeInstall, desktopWakeCacheInstall,
       interfaceInstall, syncHooksInstall, appPath: appPath ?? resolve(engineRoot, '../../..') });
     this.cli = join(this.engineRoot, 'bin', 'claudex.mjs');
     this.collaborationCli = join(this.engineRoot, 'bin', 'claudex-collaboration.mjs');
@@ -238,6 +240,7 @@ export class AppSetup {
             configPath: join(this.home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
             command: this.node,
             args: [this.collaborationCli, 'desktop-wake-mcp', '--root', join(this.root, 'collaboration'), '--peer', 'claude'] });
+          await this.desktopWakeCacheInstall({ root: this.root, home: this.home });
         } catch (error) { notes.collaboration = safeFailure(error); }
       }
       // Native writer ownership gates only synchronization configuration, not independent collaboration.

@@ -6,8 +6,11 @@ const wakeText = value => typeof value === 'string' && value.length > 0 && value
  */
 export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot,
   hasDraft = () => true, now = () => Date.now(), setTimer = setTimeout,
-  clearTimer = clearTimeout, intervalMs = 2000, onError = () => {} } = {}) {
+  clearTimer = clearTimeout, intervalMs = 2000, onError = () => {}, onStatus = () => {} } = {}) {
   let running = false, timer, inFlight = false, generation = 0;
+  let lastStatus;
+  const report = reason => { if (reason !== lastStatus) { lastStatus = reason; onStatus(reason); } };
+  report('loaded');
   const attempted = new Set();
   function decode(result, limit) {
     if (!result || typeof result.contents !== 'string' || result.isTail || result.contents.length > limit)
@@ -48,12 +51,14 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
     const cut = message.registryPath.lastIndexOf('/');
     const mapped = decode(await native.readFileAtCwd(message.registryPath.slice(0, cut), message.registryPath.slice(cut + 1)), 8 * 1024 * 1024);
     if (mapped.sessionId !== message.localSessionId || mapped.cliSessionId !== message.sessionId
-      || mapped.cwd !== message.cwd || mapped.title !== message.title || mapped.isArchived !== false) return null;
+      || mapped.cwd !== message.cwd || mapped.title !== message.title || mapped.isArchived !== false) { report('waiting: registry identity'); return null; }
     const session = await native.getSession(message.localSessionId);
-    if (!idle(session, message) || session.lastActivityAt !== mapped.lastActivityAt || hasDraft(message.localSessionId)) return null;
+    if (!idle(session, message)) { report('waiting: native idle or identity guard'); return null; }
+    if (session.lastActivityAt !== mapped.lastActivityAt) { report('waiting: activity changed'); return null; }
+    if (hasDraft(message.localSessionId)) { report('waiting: draft'); return null; }
     const busy = await native.getBusyShellPtyKeys(message.localSessionId, false);
     if (busy?.probed !== true || !Array.isArray(busy.busy) || busy.busy.length
-      || !Array.isArray(busy.unknown) || busy.unknown.length) return null;
+      || !Array.isArray(busy.unknown) || busy.unknown.length) { report('waiting: terminal'); return null; }
     return session;
   }
   async function call(message, name, args) {
@@ -102,7 +107,7 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
     finally { inFlight = false; if (running) timer = setTimer(poll, intervalMs); }
   }
   return {
-    start() { if (!running) { running = true; generation++; void poll(); } },
+    start() { if (!running) { running = true; generation++; report('started'); void poll(); } },
     stop() { running = false; generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; },
     poll,
   };

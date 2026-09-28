@@ -13,7 +13,7 @@ function fixture(change = {}) {
   const session = { sessionId: localSessionId, cwd: '/project', title: 'Example',
     isArchived: false, isRunning: false, turnRunning: false, lastActivityAt: 100, ...change.session };
   const registry = { ...session, cliSessionId: sessionId, ...change.registry };
-  const sends = [], receipts = [], errors = [], claims = [];
+  const sends = [], receipts = [], errors = [], claims = [], statuses = [];
   const result = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   const native = {
     readFileAtCwd: async () => ({ contents: JSON.stringify(registry) }),
@@ -32,9 +32,17 @@ function fixture(change = {}) {
   };
   const runtime = createClaudeChatWakeRuntime({ native, registryRoot: '/registry', now: () => 1000,
     readManifest: async () => ({ contents: JSON.stringify({ version: 1, messages: [message] }) }),
-    hasDraft: () => change.draft ?? false, setTimer: () => 1, clearTimer() {}, onError: error => errors.push(error) });
-  return { runtime, sends, receipts, errors, claims };
+    hasDraft: () => change.draft ?? false, setTimer: () => 1, clearTimer() {}, onError: error => errors.push(error),
+    onStatus: status => statuses.push(status) });
+  return { runtime, sends, receipts, errors, claims, statuses };
 }
+
+test('lifecycle and waiting diagnostics are distinct and repeated reasons are coalesced', async () => {
+  const f = fixture({ draft: true });
+  f.runtime.start(); await flush(); await f.runtime.poll(); f.runtime.stop();
+  assert.deepEqual(f.statuses, ['loaded', 'started', 'waiting: draft']);
+  assert.equal(f.claims.length, 0);
+});
 
 test('idle exact native identity is claimed once, sent through existing session and receipted without claiming acknowledgement', async () => {
   const f = fixture(); f.runtime.start(); await flush(); await f.runtime.poll(); f.runtime.stop();

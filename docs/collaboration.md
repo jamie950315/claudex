@@ -162,7 +162,12 @@ version-pinned renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
 bridge, with exact identity, idle, draft, permission and terminal guards. Setup
 registers that narrow endpoint; loading an upgraded renderer requires an idle
 Claude restart. Bridge unavailability is not delivery and must not be presented
-as successful wake. A running tool is not interrupted; a
+as successful wake. Its separately pinned asset starts independently of sidebar
+visibility or folder grouping, with a recoverable private installation journal.
+Lifecycle and wait-reason diagnostics contain no message text. An observed native
+acceptance verifies one wake, one native input and a matching ACK in the same
+original Claude conversation; synthetic tests alone do not establish this.
+A running tool is not interrupted; a
 message can wait until the current turn ends. SessionEnd never consumes messages.
 Known ended chats may still receive queued messages. Their computed
 `deliveryStatus` is `waiting-for-resume`; a genuine SessionStart or UserPromptSubmit

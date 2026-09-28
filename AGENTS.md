@@ -188,8 +188,15 @@ does not introduce managed-task-to-origin-chat mapping. Codex metadata discovery
 does not fabricate hook registrations. Native owner IPC supports untrusted-input
 wake in the original Desktop chat, including deep-link opening of unloaded originals;
 busy/native-owner changes never authorize a second writer. Claude wake uses the
-version-pinned renderer and narrow Desktop MCP claim/receipt endpoint. Shared
-mailbox claims fence hooks and native wake with exact claim IDs before dispatch;
+version-pinned renderer and narrow Desktop MCP claim/receipt endpoint.
+Claude wake has its own pinned frontend asset and recoverable `ui-chat-wake`
+installation journal. It starts at module load, independently of folder/sidebar
+subscriptions; a sidebar resource existing on disk is not proof of a running
+consumer. Keep bounded lifecycle/wait-reason diagnostics without message content.
+The current native acceptance verifies an idle original Claude chat wakes and
+acknowledges once under the same UI/CLI identities. This does not revalidate
+other frontend presentation adapters against the same vendor update.
+Shared mailbox claims fence hooks and native wake with exact claim IDs before dispatch;
 only proven pre-dispatch refusal may restore queued state. Unknown dispatch is
 never resent. Native acceptance is not hook acknowledgement or work completion.
 Its root is separate from sync state. Installation uses a separately journaled
