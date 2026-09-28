@@ -7,7 +7,7 @@ export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
 ]);
 export const ENGINE_SRC = Object.freeze([
-  'app-setup.mjs', 'app-providers.mjs',
+  'app-setup.mjs', 'app-providers.mjs', 'app-login.mjs',
   'base64.mjs', 'bridge.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
   'claude-folder-anchor.mjs', 'claude-folder-cache.mjs', 'claude-folder-install.mjs',
   'claude-folder-map.mjs', 'claude-folder-projection.mjs', 'claude-folder-runtime.mjs',
@@ -157,9 +157,10 @@ export async function buildClaudexApp({
     await run(join(runtime, 'bin', 'node'), [join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'ls', '--omit=dev', '--depth=0'], { cwd: engine });
     await writeFile(join(contents, 'Info.plist'), plist(manifest.version));
     await writeFile(join(stageRoot, 'node-entitlements.plist'), '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>');
-    const swiftSources = [join(source, 'native', 'ClaudexApp', 'main.swift'), join(source, 'native', 'ClaudexApp', 'SetupModel.swift')];
+    const swiftSources = ['main.swift', 'SetupModel.swift', 'StatusController.swift'].map(name => join(source, 'native', 'ClaudexApp', name));
+    swiftSources.push(join(source, 'native', 'ClaudexStatus', 'StatusModel.swift'));
     for (const swiftSource of swiftSources) await requireRegular(swiftSource);
-    await run('/usr/bin/xcrun', ['swiftc', ...swiftSources, '-framework', 'Cocoa', '-target', `${arch}-apple-macos13.0`, '-o', join(macos, 'ClaudexApp')]);
+    await run('/usr/bin/xcrun', ['swiftc', ...swiftSources, '-framework', 'Cocoa', '-framework', 'UserNotifications', '-target', `${arch}-apple-macos13.0`, '-o', join(macos, 'ClaudexApp')]);
     const binaries = [join(runtime, 'bin', 'node'), ...await nativeObjects(join(runtime, 'lib', 'node_modules', 'npm')), ...await nativeObjects(join(engine, 'node_modules'))];
     for (const binary of binaries.slice(1)) await verifyPortableBinary(binary, arch, run);
     for (const binary of binaries) {

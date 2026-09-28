@@ -10,6 +10,7 @@ try {
   const action = positionals[0] ?? 'inspect';
   let result;
   if (action === 'inspect') result = await app.inspect();
+  else if (action === 'startup') result = await app.startup();
   else if (action === 'setup') result = await app.setup();
   else if (action === 'login') result = await app.login(values.provider);
   else throw new Error('Unsupported setup action.');

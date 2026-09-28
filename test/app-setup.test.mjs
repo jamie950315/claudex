@@ -40,6 +40,7 @@ async function fixture(t, options = {}) {
     serviceInstall: async input => { events.push(['service', input]); },
     ownership: async () => ({ allowed: options.ownerAllowed !== false }),
     foldersInstall: async input => { events.push(['folders', input]); },
+    interfaceInstall: async input => { events.push(['interface', input]); },
   });
   setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' } });
   return { base, root, home, runtimeDirectory, providers, setup, events };
@@ -60,6 +61,22 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.equal(report.version, 1);
   assert.equal(report.allProjects, true);
   assert.equal(report.allowWrite, true);
+});
+
+test('background startup integrates the display without installing providers or services', async t => {
+  const { setup, events } = await fixture(t);
+  await setup.startup();
+  assert.ok(events.some(([kind]) => kind === 'interface'));
+  assert.ok(!events.some(([kind]) => ['ensure-providers', 'collaboration', 'desktop', 'service', 'folders'].includes(kind)));
+});
+
+test('display integration failures remain explicit while independent setup stays available', async t => {
+  const { setup, events } = await fixture(t);
+  setup.interfaceInstall = async () => { throw new Error('Legacy display bundle path differs.'); };
+  const report = await setup.setup();
+  assert.equal(report.components.find(row => row.id === 'interface').state, 'blocked');
+  assert.equal((await setup.inspect()).components.find(row => row.id === 'interface').state, 'blocked');
+  assert.ok(events.some(([kind]) => kind === 'collaboration'));
 });
 
 test('missing provider login leaves existing synchronization config intact', async t => {

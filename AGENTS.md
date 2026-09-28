@@ -28,6 +28,13 @@ on top of the sanitized public history; never merge private ancestors into it.
 
 ## macOS app setup
 
+The graphical app owns the sole menu bar item, setup and health windows, and
+notifications. It reuses the bounded native status model. Its owned login item
+launches the same bundle in background inspection mode, not setup. Migrate only
+the verified legacy status-display login item and native display process; preserve
+its recoverable artifacts and never restart service or native conversation owners.
+CLI-only installations may retain the standalone status display.
+
 `native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
 who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
 replace those apps. Reuse native CLIs or fill missing CLI components from pinned
@@ -141,14 +148,15 @@ AbandonProcessGroup retain surviving work until it exits safely. Normal exit
 respects intentional stop, while login startup remains installed. CLI shutdown
 rechecks only the explicit busy-owner refusal until native closure is safe.
 
-`status-app install|status` manages a separately signed macOS menu-bar app in
+For CLI-only installations, `status-app install|status` manages a separately signed macOS menu-bar app in
 the private root, with independent login startup. It only reads bounded private
 status files, distinguishes readiness from liveness/stale data, and reports
 waiting, paused, recovering or offline states. Its status window exposes
 diagnostics and notification permission/test feedback. Persistent issues are
 debounced 15 seconds and deduplicated with a 60-second minimum notice interval;
 recovery generates a notice too. Notifications contain no transcript or paths.
-Quit stops only the display. Signed, journaled upgrades require the old UI to
+Graphical installations use the unified Claudex app instead; standalone display
+installation is blocked after graphical login migration. Quit stops only the display. Signed, journaled upgrades require the old UI to
 exit and preserve one previous artifact. No built bundles belong in Git.
 
 Historical backfill is an explicit module API in `src/cold-import.mjs`, not a public

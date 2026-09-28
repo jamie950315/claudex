@@ -63,12 +63,14 @@ enum SetupParseError: Error { case invalid }
 
 enum SetupCommand {
     case inspect
+    case startup
     case setup
     case login(String)
 
     var arguments: [String] {
         switch self {
         case .inspect: return ["inspect"]
+        case .startup: return ["startup"]
         case .setup: return ["setup"]
         case .login(let provider): return ["login", "--provider", provider]
         }

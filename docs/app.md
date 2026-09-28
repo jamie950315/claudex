@@ -41,6 +41,14 @@ or the user's global Node.js installation.
 - Native folder presentation and Local predecessor handoff when the existing
   frontend resource and lifecycle checks permit them.
 - Background startup through the existing owned, journaled LaunchAgents.
+- One Claudex app and one menu bar item for setup, live synchronization status,
+  diagnostics, and notification controls. Login opens the same app quietly;
+  it does not rerun setup or open another status application.
+
+Graphical setup migrates an owned legacy status-display login item to the unified
+app. It exits only that verified display, preserves its files for recovery, and
+does not stop synchronization, collaboration, or native conversations. Unknown
+or modified login items block migration instead of being overwritten.
 
 Setup itself never sends a model prompt. Collaboration begins only when work is
 requested through the protocol. Closing the setup window or quitting the display
@@ -68,6 +76,7 @@ Developer diagnostics can invoke `bin/claudex-app.mjs inspect` for a read-only
 JSON report. `Claudex.app --inspect-only` exposes that report in the native UI
 without setup or login actions. `--ui-smoke` renders a synthetic checklist and
 tests native layout without invoking the backend; it is not deployment evidence.
+`--diagnose` reads the same bounded health report used by the menu bar.
 
 ## Packaging and distribution
 

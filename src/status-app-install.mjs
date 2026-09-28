@@ -285,10 +285,13 @@ async function discardFailedBuild(stageRoot) {
 }
 
 /** Installs only the independent read-only menu app, never the sync worker. */
-export async function installStatusApp({ root, identity, run = execute, sourcesPath = sourceDirectory,
+async function installLegacyStatusApp({ root, identity, run = execute, sourcesPath = sourceDirectory,
   home = homedir(), start = true, platform = process.platform } = {}) {
   if (platform !== 'darwin') throw new Error('The status application requires macOS.');
   root = await canonicalRoot(root, true);
+  const unified = await readState(join(root, 'app-login.json'));
+  if (unified?.version === 1 && unified.root === root && unified.loginStart === true)
+    throw new Error('The unified Claudex app already provides status and login startup. Open Claudex to manage it.');
   const paths = statusAppPaths(root, home), definition = statusLaunchDefinition({ root, home });
   await directory(paths.directory, true); await directory(paths.artifacts, true);
   const installed = await withLock(paths.lock, async () => {
@@ -337,6 +340,14 @@ export async function installStatusApp({ root, identity, run = execute, sourcesP
     else if (!live.running) await run('/bin/launchctl', ['kickstart', `gui/${process.getuid()}/${paths.label}`]);
   }
   return { ...installed, ...(await job(paths, run)), synchronizationRestarted: false };
+}
+
+export async function installStatusApp(options = {}) {
+  if ((options.platform ?? process.platform) !== 'darwin') throw new Error('The status application requires macOS.');
+  const root = await canonicalRoot(options.root, true);
+  // Share the integration lock through the final launch, so a concurrent CLI
+  // installer cannot recreate the retired login entry or display process.
+  return withLock(join(root, 'app-login.lock'), () => installLegacyStatusApp({ ...options, root }), { recoverDead: true });
 }
 
 async function readStateText(path) {

@@ -12,6 +12,7 @@ private final class TopAlignedDocumentView: NSView {
 }
 
 final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
+    private lazy var health = StatusController(root: setupRoot, readOnly: inspectOnly)
     private let runner = SetupRunner(root: setupRoot, resources: Bundle.main.resourceURL)
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
@@ -30,10 +31,23 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var refreshTimer: Timer?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if !uiSmoke, let identifier = Bundle.main.bundleIdentifier,
+           let existing = NSRunningApplication.runningApplications(withBundleIdentifier: identifier)
+               .first(where: { $0.processIdentifier != getpid() }) {
+            if !cliArguments.contains("--background") { existing.activate(options: [.activateAllWindows]) }
+            NSApp.terminate(nil)
+            return
+        }
         NSApp.setActivationPolicy(.regular)
         let mainMenu = NSMenu()
         let applicationItem = NSMenuItem()
         let applicationMenu = NSMenu(title: "Claudex")
+        for (title, action) in [("Open status…", #selector(showHealth(_:))), ("Open setup…", #selector(showSetup(_:)))] {
+            let entry = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            entry.target = self
+            applicationMenu.addItem(entry)
+        }
+        applicationMenu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Quit Claudex", action: #selector(quit(_:)), keyEquivalent: "q")
         quitItem.target = self
         applicationMenu.addItem(quitItem)
@@ -46,8 +60,14 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             return
         }
         createStatusItem()
-        showSetup(nil)
-        run(inspectOnly ? .inspect : .setup)
+        health.start(item: statusItem)
+        if cliArguments.contains("--background") {
+            NSApp.setActivationPolicy(.accessory)
+            run(inspectOnly ? .inspect : .startup)
+        } else {
+            showSetup(nil)
+            run(inspectOnly ? .inspect : .setup)
+        }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             guard let self, !self.busy else { return }
             self.run(.inspect)
@@ -63,7 +83,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func windowWillClose(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        if !NSApp.windows.contains(where: { $0 != window && $0.isVisible }) {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 
     private func createStatusItem() {
@@ -78,12 +100,18 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        let heading = NSMenuItem(title: health.report.title, action: nil, keyEquivalent: "")
+        heading.isEnabled = false
+        menu.addItem(heading)
+        addMenu(menu, "Open status…", #selector(showHealth(_:)))
         addMenu(menu, "Open setup…", #selector(showSetup(_:)))
         if !inspectOnly { addMenu(menu, "Retry setup", #selector(retrySetup(_:))) }
         addMenu(menu, "Refresh status", #selector(refreshStatus(_:)))
         menu.addItem(.separator())
         addMenu(menu, "Open Codex", #selector(openCodex(_:)))
         addMenu(menu, "Open Claude", #selector(openClaude(_:)))
+        addMenu(menu, "Show diagnostic files", #selector(showDiagnostics(_:)))
+        if !inspectOnly { addMenu(menu, "Notifications…", #selector(notifications(_:))) }
         menu.addItem(.separator())
         addMenu(menu, "Quit Claudex (service keeps running)", #selector(quit(_:)))
     }
@@ -92,7 +120,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         let inspectionAction = action == #selector(openCodex(_:)) || action == #selector(openClaude(_:))
-        item.isEnabled = (!busy || action == #selector(showSetup(_:)) || action == #selector(quit(_:)))
+        item.isEnabled = (!busy || action == #selector(showSetup(_:)) || action == #selector(showHealth(_:))
+            || action == #selector(showDiagnostics(_:)) || action == #selector(notifications(_:)) || action == #selector(quit(_:)))
             && (!inspectOnly || !inspectionAction)
         menu.addItem(item)
     }
@@ -256,7 +285,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .failure(let error): self.report = nil; self.failure = error.message
             }
             self.render()
-            if case .inspect = command, !inspectOnly, let current = self.report,
+            if case .inspect = command, !inspectOnly, !cliArguments.contains("--background"), let current = self.report,
                Self.providerBecameReady(from: previousReport, to: current) {
                 self.run(.setup)
             }
@@ -299,7 +328,6 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         setupButton.isHidden = inspectOnly
         setupButton.isEnabled = !busy
         refreshButton.isEnabled = !busy
-        statusItem?.button?.toolTip = title
         for view in cards.arrangedSubviews { cards.removeArrangedSubview(view); view.removeFromSuperview() }
         if let components = report?.components, !components.isEmpty {
             for component in components {
@@ -426,7 +454,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
-    @objc private func refreshStatus(_ sender: Any?) { run(.inspect) }
+    @objc private func showHealth(_ sender: Any?) { health.showStatus(sender) }
+    @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
+    @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }
+    @objc private func refreshStatus(_ sender: Any?) { health.refresh(); health.refreshPermission(); run(.inspect) }
     @objc private func openCodex(_ sender: Any?) { openApplication("com.openai.codex") }
     @objc private func openClaude(_ sender: Any?) { openApplication("com.anthropic.claudefordesktop") }
     private func openApplication(_ identifier: String) {
@@ -443,6 +474,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         alert.beginSheetModal(for: window)
     }
     @objc private func quit(_ sender: Any?) { NSApp.terminate(nil) }
+}
+
+if cliArguments.contains("--diagnose") {
+    let data = try JSONEncoder().encode(loadHealth(setupRoot))
+    print(String(decoding: data, as: UTF8.self))
+    exit(0)
 }
 
 let app = NSApplication.shared

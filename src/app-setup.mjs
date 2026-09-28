@@ -15,6 +15,7 @@ import { inspectServiceStart } from './service-supervisor.mjs';
 import { ensureClaudeFolderCache } from './claude-folder-install.mjs';
 import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
+import { installAppLogin } from './app-login.mjs';
 
 const execute = promisify(execFile);
 const defaults = Object.freeze({ allProjects: true, allowWrite: true, defaultPermission: 'workspace-write' });
@@ -53,10 +54,12 @@ export class AppSetup {
     run = execute, platform = process.platform, discover = discoverProviders, ensure = ensureProviders,
     collaborationInstall = installCollaboration, desktopInstall = installDesktopLauncher,
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
-    foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration } = {}) {
+    foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration,
+    interfaceInstall = installAppLogin, appPath } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
     Object.assign(this, { root: resolve(root), home, engineRoot: resolve(engineRoot), runtimeDirectory: runtimeDirectory ?? resolve(engineRoot, '..', 'runtime'),
-      run, platform, discover, ensure, collaborationInstall, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall });
+      run, platform, discover, ensure, collaborationInstall, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall,
+      interfaceInstall, appPath: appPath ?? resolve(engineRoot, '../../..') });
     this.cli = join(this.engineRoot, 'bin', 'claudex.mjs');
     this.collaborationCli = join(this.engineRoot, 'bin', 'claudex-collaboration.mjs');
     this.node = join(this.runtimeDirectory, 'bin', 'node');
@@ -117,6 +120,12 @@ export class AppSetup {
 
   async inspect({ providers, notes = {} } = {}) {
     const rows = [component('projects', 'Project access', 'ready', 'All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.')];
+    let interfaceError = notes.interface;
+    if (!interfaceError) {
+      try { interfaceError = (await appPrivateJSON(join(this.root, 'app-interface-status.json')))?.error; }
+      catch (error) { interfaceError = safeFailure(error); }
+    }
+    if (interfaceError) rows.push(component('interface', 'Claudex application', 'blocked', interfaceError, 'retry'));
     rows.push(component('runtime', 'Bundled runtime', await this.runtimeReady() ? 'ready' : 'missing',
       await this.runtimeReady() ? 'Node.js and the setup engine are included in this app.' : 'Use the complete Claudex app bundle; no separate Node.js installation is required.', 'retry'));
     let found = providers;
@@ -187,11 +196,13 @@ export class AppSetup {
     if (directory.uid !== process.getuid() || (directory.mode & 0o777) !== 0o700) throw new Error('Application state directory must be owner-private.');
     return withLock(join(this.root, 'app-setup.lock'), async () => {
       const notes = {};
-      if (!await this.runtimeReady()) return this.inspect();
+      try { await this.prepareInterface(); }
+      catch (error) { notes.interface = safeFailure(error); }
+      if (!await this.runtimeReady()) return this.inspect({ notes });
       let providers;
       try { providers = await this.providers(true); }
-      catch (error) { return this.inspect({ notes: { providers: safeFailure(error) } }); }
-      if (!providers.codex?.app || !providers.claude?.app) return this.inspect({ providers });
+      catch (error) { return this.inspect({ notes: { ...notes, providers: safeFailure(error) } }); }
+      if (!providers.codex?.app || !providers.claude?.app) return this.inspect({ providers, notes });
       const authenticated = Object.fromEntries(await Promise.all(['codex', 'claude'].map(async name => [name, await this.auth(name, providers[name]?.binary)])));
       const mappedRun = (command, args, options) => this.nativeRun(command === 'codex' ? providers.codex.binary : command === 'claude' ? providers.claude.binary : command, args, options);
       if (authenticated.codex.ready && authenticated.claude.ready) {
@@ -211,6 +222,27 @@ export class AppSetup {
       await writeJSON(join(this.root, 'app-setup-status.json'), { ...report, updatedAt: Date.now() });
       return report;
     }, { recoverDead: true });
+  }
+
+  async prepareInterface() {
+    try {
+      const result = await this.interfaceInstall({ root: this.root, home: this.home, appPath: this.appPath,
+        run: this.nativeRun, platform: this.platform });
+      await writeJSON(join(this.root, 'app-interface-status.json'), { version: 1, updatedAt: Date.now(), error: null });
+      return result;
+    } catch (error) {
+      await writeJSON(join(this.root, 'app-interface-status.json'), { version: 1, updatedAt: Date.now(), error: safeFailure(error) });
+      throw error;
+    }
+  }
+
+  async startup() {
+    if (this.platform !== 'darwin') throw new Error('The Claudex app requires macOS.');
+    this.root = await privateDirectory(this.root);
+    const notes = {};
+    try { await this.prepareInterface(); }
+    catch (error) { notes.interface = safeFailure(error); }
+    return this.inspect({ notes });
   }
 
   async configureSynchronization(providers) {
