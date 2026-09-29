@@ -9,6 +9,7 @@ import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock 
 import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude } from './claude.mjs';
+import { FORK_REJECTED, assertClaudeForkPrefix, claudeForkParent } from './claude-fork.mjs';
 import { inspectClaudeProjectRelocation } from './claude-relocation.mjs';
 import { inspectNativeSyncHookTrust } from './sync-hook-install.mjs';
 import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
@@ -128,7 +129,7 @@ export class DesktopRuntime {
   async verificationCacheContext() {
     this.verificationCodeHash ??= Promise.all([
       'history.mjs', 'claude.mjs', 'codex.mjs', 'owned-claude-history.mjs', 'owned-codex-history.mjs',
-      'base64.mjs', 'compaction.mjs', 'claude-parallel-tools.mjs', 'claude-image-assets.mjs',
+      'base64.mjs', 'compaction.mjs', 'claude-parallel-tools.mjs', 'claude-fork.mjs', 'claude-image-assets.mjs',
       'native-history.mjs', 'native-local-images.mjs', 'context-archive.mjs', 'context-packet.mjs',
       'context-packet-reader.mjs', 'desktop-runtime.mjs', 'desktop-watch-hints.mjs',
       'cold-verification-cache.mjs', 'verification-observations.mjs', 'storage.mjs', '../package-lock.json',
@@ -399,27 +400,50 @@ export class DesktopRuntime {
     const resolveArchive = packetHistory ? await prepareArchiveResolver({ root: this.root,
       contents: data.rows.filter(row => row.type === 'user').map(row => row.message?.content),
       conversationId: record.conversationId, targetSessionId: record.nativeId, key: this.key }) : undefined;
-    let parsed;
+    let parsed, fork = null;
     if (packetHistory) {
       parsed = decodeCompletedOwnedClaudeHistory({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
         key: this.key, resolveArchive, resetBootstrap: owner && !retainedData ? owner.status().lastReset : undefined,
         versionPolicy: this.versionPolicy });
     } else {
       const prefix = completedClaudePrefix({ text: data.text });
+      fork = await this.claudeForkProof(record, path, data.text, prefix.text);
       // Desktop checkpoints retain complete readable native history; a Local
       // context compaction must not replace an already synchronized prefix.
       parsed = { common: decodeClaude(prefix.text, { preserveCompactionHistory: true }), incompleteTail: prefix.incompleteTail };
+      if (fork) parsed.common.meta.id = fork.nativeId;
     }
     if (importPacket && !parsed.importedPackets) throw new Error('Imported Claude original is missing its authenticated bootstrap packet.');
     assertComplete(parsed.common);
     parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
     if (!UUID.test(parsed.common.meta.id)) throw new Error('Claude session identity changed.');
-    // Claude Desktop forks copy the parent's rows with their original session
-    // ID into a new file. That history belongs to another native session; it
-    // is an unsupported source, never an identity to adopt or a worker crash.
-    if (record.nativeId && parsed.common.meta.id !== record.nativeId)
-      throw new Error('Forked Claude history belongs to another native session; it was not enrolled.');
-    return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common) };
+    // Any other mismatch between the file and its rows is not an identity to
+    // adopt; it stays an unsupported source rather than a worker crash.
+    if (record.nativeId && parsed.common.meta.id !== record.nativeId) throw new Error(FORK_REJECTED);
+    return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common),
+      ...(fork ? { forkedFrom: fork.parentId } : {}) };
+  }
+
+  // A Claude Desktop fork file is named for its own session but begins with
+  // rows copied under its parent's session ID. Its own identity is accepted
+  // only after that copied prefix matches the parent's native bytes exactly.
+  async claudeForkProof(record, path, text, prefixText) {
+    const nativeId = basename(path, '.jsonl');
+    if (record.nativeId && record.nativeId !== nativeId) return null;
+    const parentId = claudeForkParent(text, nativeId);
+    if (!parentId) return null;
+    let parentText;
+    try { parentText = (await snapshot(await this.safePath(join(dirname(path), `${parentId}.jsonl`), this.claudeHome))).text; }
+    catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes(error.code)) throw new Error(FORK_REJECTED, { cause: error });
+      throw error;
+    }
+    const proof = assertClaudeForkPrefix({ text, nativeId, parentId, parentText });
+    // Until the fork completes its own reply it holds only the parent's history.
+    if (!prefixText.split('\n').filter(Boolean).map(JSON.parse)
+      .some(row => row.type === 'assistant' && row.sessionId === nativeId && row.isSidechain !== true))
+      throw new Error('Wait for a complete assistant turn.');
+    return { ...proof, nativeId };
   }
 
   async plan(side, { conversationId, nativeId, common, title, target, contextReset = false, contextRefresh = false }) {

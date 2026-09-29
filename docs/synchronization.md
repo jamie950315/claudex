@@ -794,6 +794,15 @@ authenticated packet is excluded from logical history; genuine replies are not.
 Discovery excludes SDK imports owned by other bridge roots as well, preventing
 an already imported conversation from creating a new synchronization loop.
 
+Claude Desktop forks are separate conversations. A fork file is named for its
+own session but begins with the parent's rows copied under the parent's session
+ID. It enrolls under its file identity only when those copied lines are a
+byte-identical prefix of the parent transcript in the same project directory,
+followed at most by identity-free metadata, and all later rows use the fork's
+own ID. The parent may continue growing. A fork without its own completed reply
+waits; a missing parent, edited copied row, extra authored parent row or third
+session identity remains an unsupported source. The parent is never modified.
+
 The real shared-backend watcher now enrolls ordinary Codex conversations and
 forks, excluding subagents using native metadata. Goal continuation turns may
 start with assistant work and accept steering later; the exporter preserves
