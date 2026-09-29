@@ -29,10 +29,19 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     var deliveryFailed = false
     var testNotice = ""
     var gate = NoticeGate()
+    private var presented: [String] = []
     let defaults = UserDefaults.standard
 
     func start(item: NSStatusItem) {
         self.item = item
+        // The fixed icon-only template symbol never changes; configure it once, not per poll.
+        if let button = item.button {
+            button.title = ""
+            button.imagePosition = .imageOnly
+            button.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "Claudex")
+            button.image?.size = NSSize(width: 18, height: 18)
+            button.image?.isTemplate = true
+        }
         if !readOnly { center.delegate = self }
         gate.lastIssue = defaults.string(forKey: "lastIssue") ?? ""
         gate.lastNoticeAt = defaults.double(forKey: "lastNoticeAt")
@@ -51,11 +60,6 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     func refresh() {
         report = loadHealth(root)
         if let button = item?.button {
-            button.title = ""
-            button.imagePosition = .imageOnly
-            button.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "Claudex")
-            button.image?.size = NSSize(width: 18, height: 18)
-            button.image?.isTemplate = true
             button.toolTip = L(report.title) + "\n" + LD(report.detail)
             button.setAccessibilityLabel("Claudex: " + L(report.title))
         }
@@ -111,7 +115,12 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
             : permission == .authorized || permission == .provisional
             ? (testNotice.isEmpty ? "Notifications: enabled · repeated alerts are suppressed" : testNotice)
             : "Notifications: not enabled · click Notifications to allow alerts")
-        onContentChange?()
+        // The three-second poll usually repeats identical content; refit the window only
+        // when presented text or visibility changed. Showing the window always refits.
+        let current = [report.symbol, String(report.attention), String(report.operational), L(report.title), LD(report.detail),
+                       details, updatedText?.stringValue ?? "", recovery, permissionText?.stringValue ?? "",
+                       String(issuePanel?.isHidden ?? true)]
+        if current != presented { presented = current; onContentChange?() }
     }
 
     var diagnosticText: String {

@@ -5,8 +5,10 @@ import { inspectArchivedContextPacket, decodeArchivedContextPacket, loadContextA
  * newly authored text. Archive resolution is provided by the trusted caller.
  */
 export function decodeTransportPacket(options) {
-  if (inspectArchivedContextPacket(options)) return decodeArchivedContextPacket(options);
-  return decodeContextPacket(options);
+  // The archived decoder authenticates (and returns null for) exactly what the
+  // archived inspector recognizes; one pass avoids a second full HMAC and image
+  // validation of the same immutable content.
+  return decodeArchivedContextPacket(options) ?? decodeContextPacket(options);
 }
 
 /** Authenticate every reference before I/O and bind visible lookup paths to

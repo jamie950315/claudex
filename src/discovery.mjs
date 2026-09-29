@@ -73,8 +73,11 @@ async function recent(path, since) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-/** Discover recent activity in selected projects, or every native project when opted in. */
-export async function discoverSources({ codexHome, claudeHome, projects = [], allProjects = false, since, excludeSubagents = false }, known = new Set()) {
+/** Discover recent activity in selected projects, or every native project when opted in.
+ * Optional onlyKeys (`side:lowercase-id`) narrows event-filtered discovery before
+ * reading full Claude transcripts; callers still verify identities themselves.
+ */
+export async function discoverSources({ codexHome, claudeHome, projects = [], allProjects = false, since, excludeSubagents = false, onlyKeys }, known = new Set()) {
   const selected = new Set(projects.map(path => resolve(path)));
   const eligible = cwd => typeof cwd === 'string' && isAbsolute(cwd) && (allProjects || selected.has(cwd));
   const sources = [];
@@ -82,6 +85,7 @@ export async function discoverSources({ codexHome, claudeHome, projects = [], al
     if (!(await recent(path, since))) continue;
     const row = await header(path);
     if (row?.type !== 'session_meta' || !row.payload || row.payload.originator === 'claudex') continue;
+    if (onlyKeys && typeof row.payload.id === 'string' && !onlyKeys.has(`codex:${row.payload.id.toLowerCase()}`)) continue;
     if (excludeSubagents && isCodexSubagentSource(row.payload.source ?? row.payload.sourceKind)) continue;
     if (!eligible(row.payload.cwd) || known.has(`codex:${row.payload.id}`)) continue;
     sources.push({ side: 'codex', path });
@@ -93,6 +97,7 @@ export async function discoverSources({ codexHome, claudeHome, projects = [], al
     for (const entry of await entries(directory)) {
       if (!entry.isFile() || !/^[a-f0-9-]{36}\.jsonl$/i.test(entry.name)) continue;
       if (known.has(`claude:${entry.name.slice(0, -6)}`)) continue;
+      if (onlyKeys && !onlyKeys.has(`claude:${entry.name.slice(0, -6).toLowerCase()}`)) continue;
       const path = join(directory, entry.name);
       // Different project paths can encode to the same Claude directory key.
       if (await recent(path, since) && eligible(await claudeCwd(path))) sources.push({ side: 'claude', path });

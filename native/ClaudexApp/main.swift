@@ -37,6 +37,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var lastVerifiedReport: SetupReport?
     private var failure: String?
     private var refreshTimer: Timer?
+    private var lastSetupRunAt: Date?
     private var setupFlowActive = false
     private var checkingOnly = true
     private var healthTitle: NSTextField!
@@ -94,7 +95,11 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         if launch.showSettings { showSetup(nil) } else { NSApp.setActivationPolicy(.accessory) }
         run(inspectOnly ? .inspect : launch.startSetup ? .setup : .startup)
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
-            guard let self, !self.busy, !self.stopping else { return }
+            // Each inspection starts the bundled engine, which deep-verifies both desktop
+            // app signatures and queries native CLIs. The setup report is only presented in
+            // the window, so hidden background inspection runs only while a setup/login flow
+            // may need its provider-ready follow-up. Showing the window refreshes a stale report.
+            guard let self, !self.busy, !self.stopping, self.window.isVisible || self.setupFlowActive else { return }
             self.run(.inspect)
         }
         RunLoop.main.add(refreshTimer!, forMode: .common)
@@ -583,6 +588,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         }
         let previousReport = lastVerifiedReport
         busy = true
+        lastSetupRunAt = Date()
         failure = nil
         render()
         runner.run(command) { [weak self] result in
@@ -856,6 +862,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         fitWindowToContent()
         NSApp.activate(ignoringOtherApps: true)
         if !inspectOnly && !uiSmoke { UserDefaults.standard.set(true, forKey: settingsPresentedKey) }
+        // Hidden periods skip periodic inspection; refresh a report older than one interval.
+        // Before the launch command has started there is no prior run, so it is never preempted.
+        if !uiSmoke, let last = lastSetupRunAt, Date().timeIntervalSince(last) >= 20 { run(.inspect) }
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }

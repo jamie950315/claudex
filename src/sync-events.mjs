@@ -84,7 +84,9 @@ export class SyncEventInbox {
       const stat = await file.stat();
       if (!stat.isFile() || !owned(stat) || (stat.mode & 0o777) !== 0o600 || stat.nlink > 1 || stat.size > MAX_BYTES)
         throw new Error('Unsafe synchronization event inbox.');
-      const bytes = Buffer.alloc(MAX_BYTES + 1);
+      // One byte beyond the observed size detects growth; the stat comparison
+      // below rejects any change, so a bound-sized zeroed buffer is unnecessary.
+      const bytes = Buffer.alloc(stat.size + 1);
       let size = 0;
       while (size < bytes.length) {
         const result = await file.read(bytes, size, bytes.length - size, null);

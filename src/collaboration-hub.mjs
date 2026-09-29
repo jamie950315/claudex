@@ -125,6 +125,7 @@ export class CollaborationHub extends EventEmitter {
         || (file.mode & 0o777) !== 0o600 || file.size > this.maxStateBytes) throw new Error('Unsafe collaboration ledger.');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     this.state = await readJSON(this.path, { version: 1, tasks: {}, requests: {} });
+    this.serializedState = JSON.stringify(this.state);
     if (this.state?.version !== 1 || !this.state.tasks || !this.state.requests
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
@@ -167,18 +168,26 @@ export class CollaborationHub extends EventEmitter {
     return this;
   }
 
-  mutate(fn) {
-    const operation = this.serial.then(async () => {
-      const state = copy(this.state);
-      const value = await fn(state);
-      if (JSON.stringify(state) === JSON.stringify(this.state)) return value;
-      if (bytes(state) > this.maxStateBytes) throw new Error('Collaboration ledger capacity reached; no history was discarded.');
-      await writeJSON(this.path, state);
-      this.state = state; this.emit('change');
-      return value;
-    });
+  serialized(fn) {
+    const operation = this.serial.then(fn);
     this.serial = operation.catch(() => {});
     return operation;
+  }
+
+  mutate(fn) { return this.serialized(() => this.commit(fn)); }
+
+  // Runs only inside the serialized journal chain. The committed state is never
+  // mutated in place, so its compact serialization is kept for change detection
+  // and the capacity check instead of re-serializing it on every transaction.
+  async commit(fn) {
+    const state = copy(this.state);
+    const value = await fn(state);
+    const serialized = JSON.stringify(state);
+    if (serialized === this.serializedState) return value;
+    if (Buffer.byteLength(serialized) > this.maxStateBytes) throw new Error('Collaboration ledger capacity reached; no history was discarded.');
+    await writeJSON(this.path, state);
+    this.state = state; this.serializedState = serialized; this.emit('change');
+    return value;
   }
 
   actor({ peer, token }, state = this.state) {
@@ -541,34 +550,40 @@ export class CollaborationHub extends EventEmitter {
     try {
       while (!this.closed && this.running.size < this.maxWorkers) {
         const token = randomBytes(32).toString('hex');
-        const next = await this.mutate(async state => {
-          if (Object.values(state.tasks).some(task => task.status === 'uncertain')) return null;
-          const task = Object.values(state.tasks).find(item => item.status === 'ready' && !this.running.has(item.id));
-          if (!task) return null;
-          if (task.permission === 'workspace-write' && !this.allowWrite) {
-            task.status = 'failed'; task.error = 'The current broker no longer authorizes workspace writes.'; task.revision++;
-            this.deliverToParent(state, task);
-            return { limit: true };
-          }
-          if (task.generation >= this.maxSteps) {
-            task.status = 'failed'; task.error = 'Execution/ownership transition limit reached.'; task.revision++;
-            this.deliverToParent(state, task);
-            return { limit: true };
-          }
-          try { await revalidateWorkspace(task); }
-          catch (error) {
-            task.status = 'failed'; task.error = String(error.message); task.revision++; task.updatedAt = Date.now();
-            this.deliverToParent(state, task);
-            return { limit: true };
-          }
-          task.status = 'running'; task.generation++; task.revision++; task.updatedAt = Date.now();
-          const from = task.lastExecution?.messageCount ?? 0;
-          const inputs = { from, to: task.messages.length,
-            kinds: [...new Set(task.messages.slice(from).map(message => message.kind)
-              .filter(kind => ['request', 'message', 'child-result', 'handoff'].includes(kind)))] };
-          task.active = { generation: task.generation, tokenHash: digest(token), messageCount: task.messages.length,
-            provider: task.owner, startedAt: Date.now(), pid: null, sessionId: null, seenChildren: {}, inputs };
-          return copy(task);
+        // An idle pump reads the committed state instead of cloning the whole ledger.
+        const next = await this.serialized(() => {
+          const tasks = Object.values(this.state.tasks);
+          if (tasks.some(task => task.status === 'uncertain')
+            || !tasks.some(item => item.status === 'ready' && !this.running.has(item.id))) return null;
+          return this.commit(async state => {
+            if (Object.values(state.tasks).some(task => task.status === 'uncertain')) return null;
+            const task = Object.values(state.tasks).find(item => item.status === 'ready' && !this.running.has(item.id));
+            if (!task) return null;
+            if (task.permission === 'workspace-write' && !this.allowWrite) {
+              task.status = 'failed'; task.error = 'The current broker no longer authorizes workspace writes.'; task.revision++;
+              this.deliverToParent(state, task);
+              return { limit: true };
+            }
+            if (task.generation >= this.maxSteps) {
+              task.status = 'failed'; task.error = 'Execution/ownership transition limit reached.'; task.revision++;
+              this.deliverToParent(state, task);
+              return { limit: true };
+            }
+            try { await revalidateWorkspace(task); }
+            catch (error) {
+              task.status = 'failed'; task.error = String(error.message); task.revision++; task.updatedAt = Date.now();
+              this.deliverToParent(state, task);
+              return { limit: true };
+            }
+            task.status = 'running'; task.generation++; task.revision++; task.updatedAt = Date.now();
+            const from = task.lastExecution?.messageCount ?? 0;
+            const inputs = { from, to: task.messages.length,
+              kinds: [...new Set(task.messages.slice(from).map(message => message.kind)
+                .filter(kind => ['request', 'message', 'child-result', 'handoff'].includes(kind)))] };
+            task.active = { generation: task.generation, tokenHash: digest(token), messageCount: task.messages.length,
+              provider: task.owner, startedAt: Date.now(), pid: null, sessionId: null, seenChildren: {}, inputs };
+            return copy(task);
+          });
         });
         if (!next) break;
         if (next.limit) continue;
@@ -672,7 +687,10 @@ export class CollaborationHub extends EventEmitter {
   async readTask(envelope, { baseline, timedOut = false } = {}) {
     const { taskId, view = 'full', afterRevision } = envelope.params;
     if (!['full', 'summary'].includes(view)) throw new Error('Invalid task view.');
-    return this.mutate(state => {
+    // Status reads use the committed state directly; only an unseen child outcome
+    // acknowledgement commits, in the same serialized step as the read.
+    return this.serialized(async () => {
+      const state = this.state;
       const actor = this.actor(envelope, state);
       const task = state.tasks[taskId];
       this.allowed(actor, task, state);
@@ -693,9 +711,12 @@ export class CollaborationHub extends EventEmitter {
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }
       }
       // A compact status must never acknowledge a child outcome it did not deliver.
-      if (child && includeOutcome) {
-        actor.task.active.seenChildren ??= {};
-        actor.task.active.seenChildren[taskId] = task.revision;
+      if (child && includeOutcome && actor.task.active.seenChildren?.[taskId] !== task.revision) {
+        await this.commit(next => {
+          const active = next.tasks[actor.task.id].active;
+          active.seenChildren ??= {};
+          active.seenChildren[taskId] = task.revision;
+        });
       }
       return response;
     });

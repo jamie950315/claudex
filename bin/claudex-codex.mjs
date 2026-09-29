@@ -16,6 +16,7 @@ import { resolveBundledCodex } from '../src/codex-app-layout.mjs';
 const execFileAsync = promisify(execFile);
 export const SUPPORTED_CODEX_VERSION = SUPPORTED_CODEX_VERSIONS[0];
 const ownPath = fileURLToPath(import.meta.url);
+const NEWLINE = Buffer.from('\n');
 const owns = stat => stat.uid === process.getuid?.() && !stat.isSymbolicLink();
 const alive = pid => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -266,32 +267,63 @@ export async function runCodexLauncher(args = process.argv.slice(2), env = proce
     ws = await connectCodexSocket(resolvedSocketPath);
     ws.on('error', () => { failure = true; stop(); });
     ws.on('close', () => { if (!stopped) { failure = true; stop(); } });
+    let awaitingDrain = false;
     ws.on('message', (data, binaryFrame) => {
       if (binaryFrame || process.stdout.writableLength + data.length + 1 > MAX_FRAME_BYTES) { failure = true; stop(); return; }
-      if (!process.stdout.write(Buffer.concat([data, Buffer.from('\n')]))) {
+      // One corked writev instead of copying every (possibly multi-MiB) frame.
+      process.stdout.cork();
+      process.stdout.write(data);
+      const flowing = process.stdout.write(NEWLINE);
+      process.stdout.uncork();
+      // Frames already parsed from one socket read can still arrive after
+      // pause(); keep a single drain listener instead of one per frame.
+      if (!flowing && !awaitingDrain) {
+        awaitingDrain = true;
         ws.pause();
-        process.stdout.once('drain', () => { if (!stopped) ws.resume(); });
+        process.stdout.once('drain', () => { awaitingDrain = false; if (!stopped) ws.resume(); });
       }
     });
-    let tail = Buffer.alloc(0);
+    // Partial-line chunks are kept as a list and joined once when their newline
+    // arrives, and only each new chunk is scanned, so a large frame costs
+    // O(frame) instead of re-copying and re-scanning the tail on every chunk.
+    let tail = [];
+    let tailLength = 0;
+    const sendLine = line => {
+      const sent = new Promise((resolveSend, reject) => ws.send(line, { binary: false }, error => error ? reject(new Error('Desktop transport send failed')) : resolveSend()));
+      // Observed by Promise.all below; this only prevents an unhandled
+      // rejection when a later frame of the same chunk fails the size check.
+      sent.catch(() => {});
+      return sent;
+    };
     try {
       for await (const chunk of process.stdin) {
         if (stopped) break;
-        tail = Buffer.concat([tail, chunk]);
+        // Frames of one chunk are queued in order on the same WebSocket and the
+        // next chunk is read only after all of them were written (backpressure).
+        const sends = [];
         let start = 0;
         let end;
-        while ((end = tail.indexOf(0x0a, start)) >= 0) {
-          const line = tail.subarray(start, end);
+        while ((end = chunk.indexOf(0x0a, start)) >= 0) {
+          let line = chunk.subarray(start, end);
+          if (tailLength) {
+            line = Buffer.concat([...tail, line], tailLength + line.length);
+            tail = [];
+            tailLength = 0;
+          }
           if (line.length > MAX_FRAME_BYTES) throw new Error('Desktop JSONL frame exceeds the transport size limit');
-          if (line.length) await new Promise((resolveSend, reject) => ws.send(line, { binary: false }, error => error ? reject(new Error('Desktop transport send failed')) : resolveSend()));
+          if (line.length) sends.push(sendLine(line));
           start = end + 1;
         }
-        tail = tail.subarray(start);
-        if (tail.length > MAX_FRAME_BYTES) throw new Error('Desktop JSONL frame exceeds the transport size limit');
+        if (start < chunk.length) {
+          tail.push(chunk.subarray(start));
+          tailLength += chunk.length - start;
+        }
+        if (sends.length) await Promise.all(sends);
+        if (tailLength > MAX_FRAME_BYTES) throw new Error('Desktop JSONL frame exceeds the transport size limit');
       }
     } catch (error) { if (!stopped) throw error; }
     // EOF is the end of Desktop ownership. A partial final frame is never sent.
-    if (tail.length) failure = true;
+    if (tailLength) failure = true;
     stop();
     const result = await childDone;
     return failure ? 1 : result.code ?? (result.signal === 'SIGTERM' ? 0 : 1);

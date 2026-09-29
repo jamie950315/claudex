@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
+import { isInlineBase64 } from './base64.mjs';
 import { assertComplete } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
@@ -21,7 +22,10 @@ function ordered(value) {
 function serialize(value) {
   try { return JSON.stringify(ordered(value)); } catch { fail('invalid JSON history.'); }
 }
-function digest(value) { return createHash('sha256').update(serialize(value)).digest('hex'); }
+// Values parsed from serialize() output already enumerate keys in canonical
+// order, and JSON.stringify(JSON.parse(text)) reproduces that text exactly.
+// Hash them directly instead of rebuilding an ordered deep copy.
+function canonicalDigest(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 
 function checkedLimits(input) {
   if (input !== undefined && !object(input)) fail('limits must be an object.');
@@ -132,7 +136,7 @@ async function readPass(client, threadId, limits, completedPrefix) {
   if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
   const incompleteTailCount = turns.length - exported.length;
-  return { turns: exported, digest: digest(exported), itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
+  return { turns: exported, digest: canonicalDigest(exported), itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
     bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount };
 }
 
@@ -146,9 +150,12 @@ function auxiliary(item, excluded) {
 
 function imageContent(input) {
   if (typeof input.url !== 'string' || input.fileId !== undefined) fail('external user images require verified asset ownership.');
-  const match = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(input.url);
-  if (!match || !match[2] || match[2].length % 4 !== 0 || Buffer.from(match[2], 'base64').toString('base64') !== match[2]) fail('user image must contain valid inline base64 bytes.');
-  return { type: 'image', source: { type: 'base64', media_type: match[1].toLowerCase(), data: match[2] } };
+  // Match only the short prefix by RegExp; the multi-megabyte payload uses the
+  // linear lexical check plus the canonical byte roundtrip.
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,/i.exec(input.url);
+  const data = match ? input.url.slice(match[0].length) : '';
+  if (!match || !isInlineBase64(data) || Buffer.from(data, 'base64').toString('base64') !== data) fail('user image must contain valid inline base64 bytes.');
+  return { type: 'image', source: { type: 'base64', media_type: match[1].toLowerCase(), data } };
 }
 
 function userContent(item) {
@@ -260,7 +267,10 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
   const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix });
   const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
   const common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
-  if (Buffer.byteLength(serialize(common)) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
+  // Key order never changes the serialized byte length of plain JSON values.
+  let encoded;
+  try { encoded = JSON.stringify(common); } catch { fail('invalid JSON history.'); }
+  if (Buffer.byteLength(encoded) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
   return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
     incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount };
 }

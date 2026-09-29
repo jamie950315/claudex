@@ -386,7 +386,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             // count of the same unsupported source during a long cold sweep.
             blockedSourceCount = 0;
             blockedSources.length = 0;
-            const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false }, known);
+            // Event-filtered discovery reads only the notified sources' transcripts;
+            // each candidate's identity is still derived and checked below.
+            const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false,
+              ...(onlyKeys ? { onlyKeys } : {}) }, known);
             for (const source of candidates) {
               if (signal?.aborted) break;
               let nativeId = source.nativeId ?? source.id;

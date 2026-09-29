@@ -1,4 +1,5 @@
 import { encodeContextPacket } from './context-packet.mjs';
+import { isInlineBase64 } from './base64.mjs';
 import { decodeTransportPacket as decodeContextPacket, prepareArchiveResolver } from './context-packet-reader.mjs';
 import { decodeCodex } from './native-drivers.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
@@ -94,9 +95,11 @@ function bootstrapContent(item) {
     if (block?.type === 'image') {
       onlyKeys(block, ['type', 'url', 'detail'], 'user image metadata');
       if (block.detail != null || typeof block.url !== 'string') throw new Error('Owned Codex checkpoint has modified image metadata.');
-      const image = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/]+={0,2})$/.exec(block.url);
-      if (!image || Buffer.from(image[2], 'base64').toString('base64') !== image[2]) throw new Error('Owned Codex checkpoint requires exact inline image bytes.');
-      return { type: 'image', source: { type: 'base64', media_type: image[1], data: image[2] } };
+      // Keep the RegExp to the short prefix; validate the payload linearly.
+      const image = /^data:(image\/[a-z0-9.+-]+);base64,/.exec(block.url);
+      const data = image ? block.url.slice(image[0].length) : '';
+      if (!image || !isInlineBase64(data) || Buffer.from(data, 'base64').toString('base64') !== data) throw new Error('Owned Codex checkpoint requires exact inline image bytes.');
+      return { type: 'image', source: { type: 'base64', media_type: image[1], data } };
     }
     throw new Error('Owned Codex checkpoint contains an unsupported native user input.');
   });

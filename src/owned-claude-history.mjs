@@ -77,6 +77,9 @@ function nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, d
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
   const byId = new Map(rows.filter(row => row.uuid).map(row => [row.uuid, row]));
   const excluded = new Set();
+  // Native message identities are computed once per decode, only when a
+  // candidate sidecar exists; counts retain the exact uniqueness requirement.
+  let nativeKeys;
   for (const [index, row] of rows.entries()) {
     if (row.type !== 'user' || row.isMeta !== true || row.isSidechain || row.sessionId !== sessionId
         || !runtimeVersionPermitted(row.version, '2.1.281', versionPolicy)) continue;
@@ -113,7 +116,11 @@ function nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, d
     });
     if (!valid) continue;
     const identity = messageKey({ role: 'user', content: row.message.content, timestamp: row.timestamp });
-    if (excluded.has(identity) || native.messages.filter(message => messageKey(message) === identity).length !== 1) {
+    if (!nativeKeys) {
+      nativeKeys = new Map();
+      for (const message of native.messages) { const key = messageKey(message); nativeKeys.set(key, (nativeKeys.get(key) ?? 0) + 1); }
+    }
+    if (excluded.has(identity) || nativeKeys.get(identity) !== 1) {
       throw new Error('Native image annotation identity is ambiguous; no metadata was discarded.');
     }
     excluded.add(identity);
@@ -206,8 +213,13 @@ function ownedClaudeHistory(options, decodePacket, validated) {
   const operations = new Set();
   let importedPackets = 0;
   let followsPacket = false;
+  const annotated = imageAnnotations.size > 0 || resetAnnotations.size > 0;
   for (const message of native.messages) {
-    if (imageAnnotations.has(messageKey(message)) || resetAnnotations.has(messageKey(message))) continue;
+    // Empty exclusion sets cannot match; avoid hashing every native message.
+    if (annotated) {
+      const identity = messageKey(message);
+      if (imageAnnotations.has(identity) || resetAnnotations.has(identity)) continue;
+    }
     const packet = message.role === 'user' ? decodePacket(message.content) : null;
     if (!packet) {
       const receipt = followsPacket && noQueryReceipt(message);

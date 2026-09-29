@@ -143,18 +143,22 @@ export class AppSetup {
       catch (error) { interfaceError = safeFailure(error); }
     }
     if (interfaceError) rows.push(component('interface', 'Claudex application', 'blocked', interfaceError, 'retry'));
-    rows.push(component('runtime', 'Bundled runtime', await this.runtimeReady() ? 'ready' : 'missing',
-      await this.runtimeReady() ? 'Node.js and the setup engine are included in this app.' : 'Use the complete Claudex app bundle; no separate Node.js installation is required.', 'retry'));
+    const runtimeReady = await this.runtimeReady();
+    rows.push(component('runtime', 'Bundled runtime', runtimeReady ? 'ready' : 'missing',
+      runtimeReady ? 'Node.js and the setup engine are included in this app.' : 'Use the complete Claudex app bundle; no separate Node.js installation is required.', 'retry'));
     let found = providers;
     if (!found) {
       try { found = await this.providers(); }
       catch (error) { rows.push(component('providers', 'Native applications', 'blocked', safeFailure(error), 'retry')); }
     }
+    // Both native account checks are independent read-only CLI calls; auth() never rejects.
+    const auths = Object.fromEntries(await Promise.all(['codex', 'claude']
+      .map(async name => [name, await this.auth(name, found?.[name]?.binary)])));
     for (const name of ['codex', 'claude']) {
       const item = found?.[name];
       rows.push(component(`${name}-cli`, name === 'codex' ? 'Codex' : 'Claude Code', item?.binary ? 'ready' : 'missing',
         item?.binary ? `Available: ${item.version ?? 'native CLI'}` : item?.issue ?? 'The official tool will be installed during setup.', 'retry'));
-      const auth = await this.auth(name, item?.binary);
+      const auth = auths[name];
       rows.push(component(`${name}-login`, name === 'codex' ? 'ChatGPT sign-in' : 'Claude sign-in', auth.ready ? 'ready' : auth.missing ? 'missing' : auth.failed ? 'blocked' : 'login-required',
         auth.ready ? 'Native account sign-in is available. Credentials are not copied.'
           : auth.missing ? 'Install the native tool before signing in.' : auth.failed ? 'Native account status could not be verified. Use the official sign-in flow.' : 'Sign in through the official provider in your browser.', `login-${name}`));

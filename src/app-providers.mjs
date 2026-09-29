@@ -74,8 +74,12 @@ export async function discoverProviders({ root, home = process.env.HOME, runtime
   if (!absolute(home)) throw new Error('An absolute home directory is required.');
   const cliEnv = { HOME: home, LANG: env.LANG || 'C.UTF-8',
     PATH: absolute(runtime) ? `${join(runtime, 'bin')}${delimiter}${env.PATH || ''}` : env.PATH || '' };
-  const codexFound = await findApp(home, expected.codex, run, systemApplications);
-  const claudeFound = await findApp(home, expected.claude, run, systemApplications);
+  // The two bundles are independent; verify them concurrently but report
+  // failures in the same provider order as a sequential inspection.
+  const found = await Promise.allSettled([findApp(home, expected.codex, run, systemApplications),
+    findApp(home, expected.claude, run, systemApplications)]);
+  for (const result of found) if (result.status === 'rejected') throw result.reason;
+  const [codexFound, claudeFound] = found.map(result => result.value);
   const codexApp = codexFound.app, claudeApp = claudeFound.app;
   let codexBinary = null;
   if (codexApp) {
@@ -91,17 +95,22 @@ export async function discoverProviders({ root, home = process.env.HOME, runtime
       },
     });
   }
-  if (!codexBinary || !await versionOf(codexBinary, run, cliEnv)) {
-    codexBinary = join(root || '', 'providers', 'codex-cli', 'node_modules', '.bin', 'codex');
-    if (!await versionOf(codexBinary, run, cliEnv)) codexBinary = await commandOnPath('codex', env);
-  }
-  let claudeBinary = join(home, '.local', 'bin', 'claude');
-  if (!await versionOf(claudeBinary, run, cliEnv)) {
-    claudeBinary = join(root || '', 'providers', 'claude-cli', 'node_modules', '.bin', 'claude');
-    if (!await versionOf(claudeBinary, run, cliEnv)) claudeBinary = await commandOnPath('claude', env);
-  }
-  const codexVersion = await versionOf(codexBinary, run, cliEnv);
-  const claudeVersion = await versionOf(claudeBinary, run, cliEnv);
+  // Each candidate's --version result selects it and is reported directly,
+  // instead of starting the selected native CLI a second time.
+  const select = async (candidates, command) => {
+    for (const binary of candidates) {
+      const version = binary ? await versionOf(binary, run, cliEnv) : null;
+      if (version) return [binary, version];
+    }
+    const binary = await commandOnPath(command, env);
+    return [binary, await versionOf(binary, run, cliEnv)];
+  };
+  const [[codexSelected, codexVersion], [claudeSelected, claudeVersion]] = await Promise.all([
+    select([codexBinary, join(root || '', 'providers', 'codex-cli', 'node_modules', '.bin', 'codex')], 'codex'),
+    select([join(home, '.local', 'bin', 'claude'), join(root || '', 'providers', 'claude-cli', 'node_modules', '.bin', 'claude')], 'claude'),
+  ]);
+  codexBinary = codexSelected;
+  const claudeBinary = claudeSelected;
   return {
     codex: { app: codexApp, binary: codexVersion ? codexBinary : null, version: codexVersion,
       ...(codexFound.appIssue ? { appIssue: codexFound.appIssue } : {}) },

@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { privateDirectory, withLock, writeJSON } from './storage.mjs';
+import { atomicWrite, privateDirectory, withLock } from './storage.mjs';
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_ITEMS = 1024;
@@ -53,7 +53,7 @@ function validate(state) {
   for (const name of ['chats', 'messages', 'receipts']) {
     if (!Array.isArray(state[name]) || state[name].length > MAX_ITEMS) fail(`invalid ${name} journal.`);
   }
-  const chats = new Set(), messages = new Set(), receipts = new Set();
+  const chats = new Set(), messages = new Map(), receipts = new Set();
   for (const chat of state.chats) {
     const identity = key(provider(chat.provider), nativeId(chat.nativeId));
     cwd(chat.cwd);
@@ -79,13 +79,13 @@ function validate(state) {
         || (wake.state !== 'deferred' && !['offered', 'acknowledged'].includes(message.state))) fail('invalid wake record.');
       if (wake.state !== 'dispatching') text(wake.detail, 2048, 'wake detail');
     }
-    messages.add(message.messageId);
+    messages.set(message.messageId, message);
   }
   for (const receipt of state.receipts) {
     provider(receipt.fromProvider); text(receipt.requestId, 256, 'request ID');
     const identity = JSON.stringify([receipt.fromProvider, receipt.requestId]);
     if (receipts.has(identity) || !messages.has(receipt.messageId) || typeof receipt.payload !== 'string') fail('invalid receipt record.');
-    const message = state.messages.find(item => item.messageId === receipt.messageId);
+    const message = messages.get(receipt.messageId);
     const payload = [message.targetProvider, message.targetSessionId, message.message, message.expiresAt - message.createdAt];
     if (Object.hasOwn(message, 'wakeRequested')) {
       if (typeof message.wakeRequested !== 'boolean') fail('invalid wake request.');
@@ -156,8 +156,9 @@ export class ChatMailbox {
         const result = await operation(state, now);
         if (JSON.stringify(state) !== before) {
           validate(state);
-          if (Buffer.byteLength(`${JSON.stringify(state, null, 2)}\n`) > MAX_BYTES) fail('journal capacity exhausted; preserve and inspect existing records.');
-          await writeJSON(this.path, state);
+          const serialized = `${JSON.stringify(state, null, 2)}\n`;
+          if (Buffer.byteLength(serialized) > MAX_BYTES) fail('journal capacity exhausted; preserve and inspect existing records.');
+          await atomicWrite(this.path, serialized);
         }
         return result;
       });

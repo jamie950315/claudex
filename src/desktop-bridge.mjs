@@ -14,6 +14,12 @@ const normalize = common => ({ ...common, messages: portableMessages(common.mess
 function matches(common, checkpoint) {
   return common.messages.length >= checkpoint.count && fingerprint(common, checkpoint.count) === checkpoint.digest;
 }
+// Same predicate for a reading returned by inspect(): when the checkpoint spans
+// the whole reading, its full digest was just computed over this exact value.
+function readingMatches(data, checkpoint) {
+  if (data.common.messages.length === checkpoint.count) return data.digest === checkpoint.digest;
+  return matches(data.common, checkpoint);
+}
 function checkpoint(common) { return { count: common.messages.length, digest: fingerprint(common) }; }
 
 function imageOrigins(side, data, committed) {
@@ -178,7 +184,7 @@ export class DesktopBridge {
     if (!source || current?.id !== pending.record.id || current.nativeId !== pending.record.nativeId)
       throw anchorGuard('Dependency anchor replacement identity changed; histories were preserved.');
     for (const record of [source, current]) {
-      if (!matches((await this.inspect(record)).common, pending.checkpoint))
+      if (!readingMatches(await this.inspect(record), pending.checkpoint))
         throw anchorGuard('Dependency anchor replacement prefix changed; histories were preserved.');
     }
   }
@@ -274,7 +280,7 @@ export class DesktopBridge {
       const readings = [];
       for (const record of records) {
         const data = await this.inspect(record);
-        if (!matches(data.common, conversation.canonical)) throw new Error('Conversation history diverged before the common checkpoint; no branch was selected.');
+        if (!readingMatches(data, conversation.canonical)) throw new Error('Conversation history diverged before the common checkpoint; no branch was selected.');
         readings.push({ record, data });
       }
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
@@ -394,7 +400,7 @@ export class DesktopBridge {
     await this.assertOriginalsUnchanged(state, original.conversationId);
     const data = await this.inspect(replacement);
     if (data.incompleteTail || data.digest !== canonical.digest || data.common.messages.length !== canonical.count
-        || !matches(data.common, original.checkpoint))
+        || !readingMatches(data, original.checkpoint))
       throw originalArchiveGuard('Original archive replacement changed or does not contain the exact original prefix.');
     await this.adapters.codex.assertArchiveReplacement(original, replacement, title);
   }
@@ -437,7 +443,7 @@ export class DesktopBridge {
       const sourceData = await this.inspect(source);
       // A later complete source turn may already exist. Only the copied prefix
       // is committed now; the subsequent round remains dirty for the next sync.
-      if (!matches(sourceData.common, pending.checkpoint)) throw new Error('Source changed during handoff; pending evidence was preserved.');
+      if (!readingMatches(sourceData, pending.checkpoint)) throw new Error('Source changed during handoff; pending evidence was preserved.');
       const target = state.records.find(record => record.id === pending.targetId);
       const applied = await driver.operationApplied(pending.record, pending);
       // A new projection does not write the old target. Recheck that target on
@@ -455,14 +461,14 @@ export class DesktopBridge {
         pending.record = resolved;
       }
       const targetData = await this.inspect(pending.record);
-      if (!matches(targetData.common, pending.checkpoint)) throw new Error('Native destination did not preserve the complete copied checkpoint.');
+      if (!readingMatches(targetData, pending.checkpoint)) throw new Error('Native destination did not preserve the complete copied checkpoint.');
       pending.record = { ...pending.record, path: targetData.path ?? pending.record.path, verified: true,
         checkpoint: pending.checkpoint, bytes: targetData.bytes ?? 0,
         ...imageOrigins(pending.record.side, targetData, pending.checkpoint) };
       pending.phase = 'applied';
       await this.save(state, { event: 'verified', conversationId: pending.record.conversationId });
       const latestSource = await this.inspect(source);
-      if (!matches(latestSource.common, pending.checkpoint)) throw new Error('Source changed before promotion; pending evidence was preserved.');
+      if (!readingMatches(latestSource, pending.checkpoint)) throw new Error('Source changed before promotion; pending evidence was preserved.');
       await this.assertOriginalsUnchanged(state, pending.record.conversationId);
       if (target && !pending.reuse) {
         await this.adapters[target.side].assertIdle(target);
@@ -545,7 +551,7 @@ export class DesktopBridge {
       && retainedConversations.has(record.conversationId))) {
       try {
         const data = await this.inspect(current);
-        if (!matches(data.common, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
+        if (!readingMatches(data, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
       } catch (error) {
         // Allocation-time collection reads other conversations. Preserve the
         // failing history's identity so the caller does not blame its own task.

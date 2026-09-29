@@ -217,23 +217,38 @@ export class DesktopRuntime {
 
   async snapshotBytes(nativeId, currentPath) {
     let bytes = 0; const seen = new Set(); let foundCurrent = false;
-    const walk = async directory => {
-      let entries;
-      try { entries = await readdir(directory, { withFileTypes: true }); }
-      catch (error) { if (error.code === 'ENOENT') return; throw error; }
-      for (const entry of entries) {
-        const path = join(directory, entry.name);
-        if (entry.isDirectory()) { await walk(path); continue; }
-        if (!entry.isFile() || !entry.name.startsWith('rollout-') || !entry.name.includes(nativeId) || !entry.name.endsWith('.jsonl')) continue;
-        const row = await header(path);
-        if (row.type !== 'session_meta' || row.payload?.id !== nativeId) continue;
-        const info = await lstat(path); const identity = `${info.dev}:${info.ino}`;
-        if (!seen.has(identity)) { bytes += info.size; seen.add(identity); }
-        if (path === currentPath) foundCurrent = true;
-      }
+    // Every managed Codex read counts the whole dated rollout tree. Visit each
+    // breadth level with up to 16 overlapping read-only directory listings; the
+    // same complete set of files is examined and a batch drains before failing.
+    const settle = async (items, operation) => {
+      const results = [];
+      for (let index = 0; index < items.length; index += 16)
+        results.push(...await Promise.allSettled(items.slice(index, index + 16).map(operation)));
+      const failure = results.find(result => result.status === 'rejected');
+      if (failure) throw failure.reason;
+      return results.map(result => result.value);
     };
-    await walk(join(this.codexHome, 'sessions'));
-    await walk(join(this.codexHome, 'archived_sessions'));
+    let directories = [join(this.codexHome, 'sessions'), join(this.codexHome, 'archived_sessions')];
+    const candidates = [];
+    while (directories.length) {
+      const listings = await settle(directories, async directory => {
+        try { return { directory, entries: await readdir(directory, { withFileTypes: true }) }; }
+        catch (error) { if (error.code === 'ENOENT') return { directory, entries: [] }; throw error; }
+      });
+      directories = [];
+      for (const { directory, entries } of listings) for (const entry of entries) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) directories.push(path);
+        else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.includes(nativeId) && entry.name.endsWith('.jsonl')) candidates.push(path);
+      }
+    }
+    for (const path of candidates) {
+      const row = await header(path);
+      if (row.type !== 'session_meta' || row.payload?.id !== nativeId) continue;
+      const info = await lstat(path); const identity = `${info.dev}:${info.ino}`;
+      if (!seen.has(identity)) { bytes += info.size; seen.add(identity); }
+      if (path === currentPath) foundCurrent = true;
+    }
     if (!foundCurrent || !Number.isSafeInteger(bytes)) throw new Error('Owned rollout storage could not be counted safely.');
     return bytes;
   }
