@@ -6,9 +6,11 @@ const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, provider: { type: 'string' }, 'runtime-directory': { type: 'string' },
   'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
   'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
+  'read-only': { type: 'boolean' },
 } });
 try {
-  const app = new AppSetup({ ...(values.root ? { root: values.root } : {}), ...(values['runtime-directory'] ? { runtimeDirectory: values['runtime-directory'] } : {}) });
+  const app = new AppSetup({ ...(values.root ? { root: values.root } : {}), ...(values['runtime-directory'] ? { runtimeDirectory: values['runtime-directory'] } : {}),
+    readOnly: values['read-only'] === true });
   const action = positionals[0] ?? 'inspect';
   let result;
   if (action === 'inspect') result = await app.inspect();

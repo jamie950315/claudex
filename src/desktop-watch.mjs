@@ -4,7 +4,7 @@ import { coldImportHint, coldImportInactive, persistentColdEligible, persistentC
 import { ColdVerificationCache, captureVerificationFiles } from './cold-verification-cache.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 import { codexSessionId, discoverSources, isCodexSubagentSource } from './discovery.mjs';
-import { withLock, writeJSON } from './storage.mjs';
+import { withLock, writeDiagnosticJSON } from './storage.mjs';
 import { publishClaudeFolderMap } from './claude-folder-map.mjs';
 import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mjs';
 import { homedir } from 'node:os';
@@ -63,7 +63,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   discover = discoverSources, sleep = (ms, options) => delay(ms, undefined, options),
   now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
   blockedRetryMs = 30_000,
-  writeStatus = writeJSON,
+  writeStatus = writeDiagnosticJSON,
   verificationCache,
   events,
   publishFolders = publishClaudeFolderMap,

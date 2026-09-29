@@ -19,10 +19,19 @@ const exists = async path => {
   catch (error) { if (absent(error)) return false; throw error; }
 };
 
-async function signedApp(path, spec, run) {
+async function signedApp(path, spec, run, signatures) {
   if (!await exists(path)) return false;
   const stat = await lstat(path);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Untrusted app at ${path}`);
+  const identity = signatures ? await signatures.identity(path) : null;
+  const cached = signatures ? await signatures.lookup(path, spec, identity) : null;
+  if (cached) return cached;
+  const signature = await verifiedSignature(path, spec, run);
+  if (signatures) await signatures.record(path, spec, signature, identity);
+  return signature;
+}
+
+async function verifiedSignature(path, spec, run) {
   await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', path]);
   const { stderr = '' } = await run('/usr/bin/codesign', ['-d', '--verbose=2', path]);
   const lines = stderr.split('\n');
@@ -37,12 +46,12 @@ const unexpectedPublisher = path => Object.assign(new Error(`Unexpected publishe
 // An unaccepted bundle is never skipped in favor of another copy. It blocks
 // only its own provider, so unrelated prerequisites keep reporting their real
 // state instead of appearing uninstalled.
-async function findApp(home, spec, run, systemApplications) {
+async function findApp(home, spec, run, systemApplications, signatures) {
   for (const directory of [join(home, 'Applications'), systemApplications]) {
     for (const name of spec.names) {
       const path = join(directory, name);
       try {
-        const signature = await signedApp(path, spec, run);
+        const signature = await signedApp(path, spec, run, signatures);
         if (signature) return { app: path, ...(signature === 'local' ? { appSignature: 'local' } : {}) };
       }
       catch (error) { if (error.code === 'CLAUDEX_UNEXPECTED_PUBLISHER') return { app: null, appIssue: error.message }; throw error; }
@@ -70,15 +79,16 @@ async function commandOnPath(command, env) {
 }
 
 export async function discoverProviders({ root, home = process.env.HOME, runtime, env = process.env,
-  run = execute, systemApplications = '/Applications' } = {}) {
+  run = execute, systemApplications = '/Applications', signatures = null } = {}) {
   if (!absolute(home)) throw new Error('An absolute home directory is required.');
   const cliEnv = { HOME: home, LANG: env.LANG || 'C.UTF-8',
     PATH: absolute(runtime) ? `${join(runtime, 'bin')}${delimiter}${env.PATH || ''}` : env.PATH || '' };
   // The two bundles are independent; verify them concurrently but report
   // failures in the same provider order as a sequential inspection.
-  const found = await Promise.allSettled([findApp(home, expected.codex, run, systemApplications),
-    findApp(home, expected.claude, run, systemApplications)]);
+  const found = await Promise.allSettled([findApp(home, expected.codex, run, systemApplications, signatures),
+    findApp(home, expected.claude, run, systemApplications, signatures)]);
   for (const result of found) if (result.status === 'rejected') throw result.reason;
+  if (signatures) await signatures.save();
   const [codexFound, claudeFound] = found.map(result => result.value);
   const codexApp = codexFound.app, claudeApp = claudeFound.app;
   let codexBinary = null;

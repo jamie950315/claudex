@@ -51,6 +51,21 @@ export async function publishExclusive(path, value) {
 
 export const writeJSON = (path, value) => atomicWrite(path, `${JSON.stringify(value, null, 2)}\n`);
 
+/** Disposable status diagnostics only: readers still observe either the old or
+ * the new complete file through the atomic rename, but the frequent heartbeat
+ * does not force a full device flush. A crash may leave the previous or an
+ * unreadable diagnostic until the next heartbeat; never use this for journals,
+ * checkpoints, ownership or any state that authorizes work.
+ */
+export async function writeDiagnosticJSON(path, value) {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  const temporary = `${path}.next`;
+  const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try { await file.writeFile(`${JSON.stringify(value, null, 2)}\n`); } finally { await file.close(); }
+  await rename(temporary, path);
+  await chmod(path, 0o600);
+}
+
 const sameFile = (left, right) => left.dev === right.dev && left.ino === right.ino;
 
 async function reclaimDeadLock(path) {

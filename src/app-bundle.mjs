@@ -10,7 +10,7 @@ export const ENGINE_BIN = Object.freeze([
   'claudex-sync-hook.mjs',
 ]);
 export const ENGINE_SRC = Object.freeze([
-  'app-setup.mjs', 'app-providers.mjs', 'app-login.mjs',
+  'app-setup.mjs', 'app-providers.mjs', 'app-signature-cache.mjs', 'app-login.mjs',
   'base64.mjs', 'bridge.mjs', 'chat-mailbox.mjs', 'chat-titles.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
   'codex-chat-wake.mjs', 'native-chat-catalog.mjs', 'claude-chat-wake-manifest.mjs',
   'claude-chat-wake-runtime.mjs', 'claude-desktop-wake-install.mjs', 'claude-chat-wake-cache.mjs',

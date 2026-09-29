@@ -13,7 +13,7 @@ private final class TopAlignedDocumentView: NSView {
 
 final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private lazy var health = StatusController(root: setupRoot, readOnly: inspectOnly)
-    private let runner = SetupRunner(root: setupRoot, resources: Bundle.main.resourceURL)
+    private let runner = SetupRunner(root: setupRoot, resources: Bundle.main.resourceURL, readOnly: inspectOnly)
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
     private var statusIcon: NSImageView!

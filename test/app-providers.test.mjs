@@ -139,3 +139,52 @@ test('a locally ad-hoc re-signed official Claude build is accepted but Codex is 
   };
   await assert.rejects(discoverProviders({ ...options, run: unsealed }), /not signed/);
 });
+
+test('inspection reuses only a recent unchanged successful deep signature verification', async t => {
+  const options = await fixture(t);
+  const { chmod, utimes } = await import('node:fs/promises');
+  const { AppSignatureCache } = await import('../src/app-signature-cache.mjs');
+  await chmod(options.root, 0o700);
+  const apps = [];
+  for (const name of ['ChatGPT.app', 'Claude.app']) {
+    const path = await app(options.home, name);
+    await mkdir(join(path, 'Contents', 'MacOS'), { recursive: true });
+    await mkdir(join(path, 'Contents', '_CodeSignature'), { recursive: true });
+    await writeFile(join(path, 'Contents', 'Info.plist'), 'plist');
+    await writeFile(join(path, 'Contents', '_CodeSignature', 'CodeResources'), 'seal');
+    apps.push(path);
+  }
+  let clock = 1_000_000;
+  const deepVerifications = commands => commands.filter(([command, flag, deep]) => command === '/usr/bin/codesign' && flag === '--verify' && deep === '--deep').length;
+  const inspect = async ({ reuse = true, persist = true, wrongTeam = false } = {}) => {
+    const commands = [];
+    const signatures = new AppSignatureCache({ root: options.root, reuse, persist, now: () => clock });
+    const found = await discoverProviders({ ...options, run: runner({ commands, wrongTeam }), signatures });
+    return { found, deep: deepVerifications(commands) };
+  };
+
+  // Read-only inspection verifies but records nothing.
+  assert.equal((await inspect({ persist: false })).deep, 2);
+  assert.equal((await inspect()).deep, 2);
+  const reused = await inspect();
+  assert.equal(reused.deep, 0);
+  assert.equal(reused.found.codex.app, apps[0]);
+  assert.equal(reused.found.claude.app, apps[1]);
+  // Setup and sign-in never reuse the record.
+  assert.equal((await inspect({ reuse: false })).deep, 2);
+
+  // A resealed bundle is verified again, and a rejected publisher is never cached.
+  await writeFile(join(apps[1], 'Contents', '_CodeSignature', 'CodeResources'), 'new seal');
+  const rejected = await inspect({ wrongTeam: true });
+  assert.equal(rejected.deep, 1);
+  assert.equal(rejected.found.claude.appIssue, `Unexpected publisher for ${apps[1]}`);
+  assert.equal(rejected.found.codex.app, apps[0]);
+  assert.equal((await inspect()).deep, 1);
+
+  // Entries expire after their bounded age even when nothing observable changed.
+  clock += 60 * 60 * 1000;
+  assert.equal((await inspect()).deep, 2);
+  const future = new Date(Date.now() + 5000);
+  await utimes(join(apps[0], 'Contents', 'Info.plist'), future, future);
+  assert.equal((await inspect()).deep, 1);
+});

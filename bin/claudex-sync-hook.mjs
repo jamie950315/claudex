@@ -31,10 +31,8 @@ async function main() {
     && typeof input.cwd === 'string' && isAbsolute(input.cwd)) {
     try {
       const mailbox = new ChatMailbox({ root: join(options['--root'], 'collaboration', 'chat-mailbox') });
-      const identity = { provider: options['--provider'], sessionId: input.session_id };
-      await mailbox.register({ ...identity, cwd: input.cwd, event: input.hook_event_name });
-      const receipt = await mailbox.consume({ ...identity, event: input.hook_event_name,
-        stopHookActive: input.stop_hook_active === true,
+      const receipt = await mailbox.hook({ provider: options['--provider'], sessionId: input.session_id,
+        cwd: input.cwd, event: input.hook_event_name, stopHookActive: input.stop_hook_active === true,
         lastAssistantMessage: typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '' });
       if (receipt.context) {
         if (input.hook_event_name === 'Stop') kind = 'started';

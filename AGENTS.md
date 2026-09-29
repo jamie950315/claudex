@@ -118,6 +118,14 @@ Node installation, compiler or terminal setup. Build with an explicit file
 allowlist and verify nested signatures. Development signing is not notarized
 public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
 checks native layout with synthetic data, not installed service acceptance.
+The 20-second setup inspection runs only while the window is visible or a
+setup/login flow is active. By user decision, report inspection may reuse a
+successful deep desktop-app signature verification recorded in the private
+app-signatures.json for at most one hour, keyed by the expected publisher and
+nanosecond identities of the bundle, Contents, Info.plist, MacOS and the code
+seal. Setup and sign-in always verify again; failures and bundles that changed
+during verification are never recorded; `--read-only` (used by --inspect-only)
+never writes it. The cache is a scheduling optimization, not publisher proof.
 
 ## Adapters
 
@@ -175,6 +183,8 @@ completed sync hint. stop_hook_active prevents additional Stop continuation loop
 Keep queued/offered/acknowledged distinct; offered may be lost and must never be
 automatically replayed. Only the same native recipient's Stop acknowledgement
 marker counts as receipt, never as proof of task shutdown or new authorization.
+The sync hook registers and consumes in one ChatMailbox.hook journal
+transaction with the same register-then-consume semantics.
 Idle wake requires an explicitly authorized and verified native-owner adapter;
 hook-only delivery must continue to report that it cannot wake idle chats.
 Never resolve fuzzy titles, create/archive replacement chats,
@@ -398,6 +408,9 @@ recover. Launchd recovers supervisor crashes; detached workers and
 AbandonProcessGroup retain surviving work until it exits safely. Normal exit
 respects intentional stop, while login startup remains installed. CLI shutdown
 rechecks only the explicit busy-owner refusal until native closure is safe.
+service-status.json and watcher-status.json are disposable diagnostics written
+by writeDiagnosticJSON (atomic rename, no device flush). Never use it for
+journals, checkpoints, ownership, inbox or any state that authorizes work.
 
 For CLI-only installations, `status-app install|status` manages a separately signed macOS menu-bar app in
 the private root, with independent login startup. It only reads bounded private

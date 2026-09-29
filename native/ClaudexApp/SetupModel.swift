@@ -164,9 +164,11 @@ final class SetupRunner {
     private let node: URL
     private let engine: URL
     private let maxOutput = 1_048_576
+    private let readOnly: Bool
 
-    init(root: String, resources: URL?) {
+    init(root: String, resources: URL?, readOnly: Bool = false) {
         self.root = root
+        self.readOnly = readOnly
         let base = resources ?? URL(fileURLWithPath: "/nonexistent")
         self.node = base.appendingPathComponent("runtime/bin/node")
         self.engine = base.appendingPathComponent("engine/bin/claudex-app.mjs")
@@ -217,7 +219,8 @@ final class SetupRunner {
         }
         let process = Process()
         process.executableURL = node
-        process.arguments = [engine.path] + arguments + ["--root", root]
+        // Read-only inspection must not record engine state such as verification caches.
+        process.arguments = [engine.path] + arguments + ["--root", root] + (readOnly ? ["--read-only"] : [])
         let output = Pipe(), errors = Pipe()
         process.standardOutput = output
         process.standardError = errors

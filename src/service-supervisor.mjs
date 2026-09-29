@@ -3,7 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { privateDirectory, withLock, writeJSON } from './storage.mjs';
+import { privateDirectory, withLock, writeDiagnosticJSON } from './storage.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const OWNER_LOCK = /^[a-f0-9]{64}\.json\.lock$/;
@@ -101,7 +101,7 @@ export async function runServiceSupervisor({ root, cli, node = process.execPath,
     const status = { version: 1, kind: 'claudex-service', pid: process.pid, startedAt: now(), updatedAt: now(),
       state: 'starting', watcherPid: null, restartCount: 0, consecutiveFailures: 0, autoRestart: true,
       nextAttemptAt: null, lastExit: null, blockerCount: 0, blockers: [] };
-    const publish = async fields => { Object.assign(status, fields, { updatedAt: now() }); await writeJSON(statusPath, status); };
+    const publish = async fields => { Object.assign(status, fields, { updatedAt: now() }); await writeDiagnosticJSON(statusPath, status); };
     const wait = async ms => {
       try { await sleep(ms, undefined, { signal }); }
       catch (error) { if (error.name !== 'AbortError') throw error; }

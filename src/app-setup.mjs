@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { privateDirectory, withLock, writeJSON } from './storage.mjs';
 import { discoverProviders, ensureProviders } from './app-providers.mjs';
+import { AppSignatureCache } from './app-signature-cache.mjs';
 import { installCollaboration, controlCollaboration } from './collaboration-install.mjs';
 import { installClaudeDesktopWake } from './claude-desktop-wake-install.mjs';
 import { ensureClaudeChatWakeCache } from './claude-chat-wake-cache.mjs';
@@ -60,11 +61,11 @@ export class AppSetup {
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
     foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration, desktopWakeInstall = installClaudeDesktopWake,
     desktopWakeCacheInstall = ensureClaudeChatWakeCache,
-    interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath } = {}) {
+    interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath, readOnly = false } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
     Object.assign(this, { root: resolve(root), home, engineRoot: resolve(engineRoot), runtimeDirectory: runtimeDirectory ?? resolve(engineRoot, '..', 'runtime'),
       run, platform, discover, ensure, collaborationInstall, collaborationControl, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall, desktopWakeInstall, desktopWakeCacheInstall,
-      interfaceInstall, syncHooksInstall, appPath: appPath ?? resolve(engineRoot, '../../..') });
+      interfaceInstall, syncHooksInstall, appPath: appPath ?? resolve(engineRoot, '../../..'), readOnly });
     this.cli = join(this.engineRoot, 'bin', 'claudex.mjs');
     this.collaborationCli = join(this.engineRoot, 'bin', 'claudex-collaboration.mjs');
     this.node = join(this.runtimeDirectory, 'bin', 'node');
@@ -84,9 +85,12 @@ export class AppSetup {
     catch { return false; }
   }
 
-  async providers(install = false) {
+  // Only report inspection may reuse a recent unchanged deep signature verification;
+  // setup and sign-in always verify again. Read-only inspection never records one.
+  async providers(install = false, { reuseSignatures = false } = {}) {
+    const signatures = new AppSignatureCache({ root: this.root, reuse: reuseSignatures, persist: !this.readOnly });
     return (install ? this.ensure : this.discover)({ root: this.root, home: this.home, runtime: this.runtimeDirectory,
-      env: { ...process.env, PATH: `${join(this.home, '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` }, run: this.nativeRun });
+      env: { ...process.env, PATH: `${join(this.home, '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` }, run: this.nativeRun, signatures });
   }
 
   async auth(provider, binary) {
@@ -148,7 +152,7 @@ export class AppSetup {
       runtimeReady ? 'Node.js and the setup engine are included in this app.' : 'Use the complete Claudex app bundle; no separate Node.js installation is required.', 'retry'));
     let found = providers;
     if (!found) {
-      try { found = await this.providers(); }
+      try { found = await this.providers(false, { reuseSignatures: true }); }
       catch (error) { rows.push(component('providers', 'Native applications', 'blocked', safeFailure(error), 'retry')); }
     }
     // Both native account checks are independent read-only CLI calls; auth() never rejects.
