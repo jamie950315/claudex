@@ -146,6 +146,22 @@ test('an exact successful PreToolUse hook between parallel results remains inert
   }
 });
 
+test('a tool that changes the native cwd keeps its later hook and result rows in the same wave', () => {
+  const f = fixture(), baseline = read(fixture().rows);
+  // Observed Claude 2.1.284: Bash `cd` in one parallel call moves the session
+  // cwd before its PreToolUse hook and both results are persisted.
+  const hook = { type: 'attachment', uuid: 'hook', parentUuid: 'stream-2', sessionId: f.sessionId,
+    cwd: '/tmp/claudex-parallel/work', version: '2.1.281', isSidechain: false,
+    attachment: { type: 'hook_success', hookEvent: 'PreToolUse', hookName: 'PreToolUse:Bash',
+      toolUseID: 'tool-a', content: '', stdout: '{"hookSpecificOutput":{}}', stderr: '',
+      exitCode: 0, command: '/synthetic/hook', durationMs: 12 } };
+  f.rows.splice(f.rows.indexOf(f.get('result-a')), 0, hook);
+  for (const id of ['result-a', 'result-b', 'final']) f.get(id).cwd = '/tmp/claudex-parallel/work';
+  const before = text(f.rows), actual = read(f.rows); assertComplete(actual);
+  assert.equal(fingerprint(actual), fingerprint(baseline));
+  assert.equal(text(f.rows), before);
+});
+
 test('ambiguous tool metadata, missing results and real competing continuations stay blocked', () => {
   const mutations = [
     f => { f.get('stream-2').message.id = 'different-response'; },
@@ -161,7 +177,9 @@ test('ambiguous tool metadata, missing results and real competing continuations 
     f => { f.get('result-a').message.content.push({ type: 'text', text: 'An actual user request' }); },
     f => { f.get('result-b').promptId = 'different-prompt'; },
     f => { f.get('result-b').sessionId = randomUUID(); },
-    f => { f.get('result-b').cwd = '/different'; },
+    f => { f.get('stream-2').cwd = '/different'; },
+    f => { f.get('result-b').cwd = 'relative/path'; },
+    f => { delete f.get('result-b').cwd; },
     f => { f.get('result-b').version = 'different'; },
     f => { f.rows.splice(f.rows.indexOf(f.get('result-b')), 1); f.get('final').parentUuid = 'result-a'; },
     f => { f.rows.splice(f.rows.length - 1, 0, f.row('duplicate', 'stream-1', 'user',

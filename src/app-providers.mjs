@@ -25,18 +25,22 @@ async function signedApp(path, spec, run) {
   const { stderr = '' } = await run('/usr/bin/codesign', ['-d', '--verbose=2', path]);
   if (!stderr.split('\n').includes(`Identifier=${spec.id}`)
       || !stderr.split('\n').includes(`TeamIdentifier=${spec.team}`))
-    throw new Error(`Unexpected publisher for ${path}`);
+    throw Object.assign(new Error(`Unexpected publisher for ${path}`), { code: 'CLAUDEX_UNEXPECTED_PUBLISHER' });
   return true;
 }
 
+// A re-signed or third-party bundle is never accepted or skipped in favor of
+// another copy. It blocks only its own provider, so unrelated prerequisites
+// keep reporting their real state instead of appearing uninstalled.
 async function findApp(home, spec, run, systemApplications) {
   for (const directory of [join(home, 'Applications'), systemApplications]) {
     for (const name of spec.names) {
       const path = join(directory, name);
-      if (await signedApp(path, spec, run)) return path;
+      try { if (await signedApp(path, spec, run)) return { app: path }; }
+      catch (error) { if (error.code === 'CLAUDEX_UNEXPECTED_PUBLISHER') return { app: null, appIssue: error.message }; throw error; }
     }
   }
-  return null;
+  return { app: null };
 }
 
 async function versionOf(binary, run, env) {
@@ -62,8 +66,9 @@ export async function discoverProviders({ root, home = process.env.HOME, runtime
   if (!absolute(home)) throw new Error('An absolute home directory is required.');
   const cliEnv = { HOME: home, LANG: env.LANG || 'C.UTF-8',
     PATH: absolute(runtime) ? `${join(runtime, 'bin')}${delimiter}${env.PATH || ''}` : env.PATH || '' };
-  const codexApp = await findApp(home, expected.codex, run, systemApplications);
-  const claudeApp = await findApp(home, expected.claude, run, systemApplications);
+  const codexFound = await findApp(home, expected.codex, run, systemApplications);
+  const claudeFound = await findApp(home, expected.claude, run, systemApplications);
+  const codexApp = codexFound.app, claudeApp = claudeFound.app;
   let codexBinary = null;
   if (codexApp) {
     const packaged = join(codexApp, 'Contents', 'Resources', 'codex-cli', 'CodexCLI.app', 'Contents', 'MacOS', 'codex');
@@ -90,8 +95,10 @@ export async function discoverProviders({ root, home = process.env.HOME, runtime
   const codexVersion = await versionOf(codexBinary, run, cliEnv);
   const claudeVersion = await versionOf(claudeBinary, run, cliEnv);
   return {
-    codex: { app: codexApp, binary: codexVersion ? codexBinary : null, version: codexVersion },
-    claude: { app: claudeApp, binary: claudeVersion ? claudeBinary : null, version: claudeVersion },
+    codex: { app: codexApp, binary: codexVersion ? codexBinary : null, version: codexVersion,
+      ...(codexFound.appIssue ? { appIssue: codexFound.appIssue } : {}) },
+    claude: { app: claudeApp, binary: claudeVersion ? claudeBinary : null, version: claudeVersion,
+      ...(claudeFound.appIssue ? { appIssue: claudeFound.appIssue } : {}) },
   };
 }
 
@@ -125,7 +132,8 @@ export async function ensureProviders(options = {}) {
   let found = await discoverProviders(options);
   if (!found.codex.app || !found.claude.app) {
     for (const name of ['codex', 'claude']) if (!found[name].app)
-      found[name].issue = `${name === 'codex' ? 'ChatGPT/Codex' : 'Claude'} Desktop app is required; install and sign in to the official app before setup.`;
+      found[name].issue = found[name].appIssue
+        ?? `${name === 'codex' ? 'ChatGPT/Codex' : 'Claude'} Desktop app is required; install and sign in to the official app before setup.`;
     return found;
   }
   const { root, runtime, home = process.env.HOME, run = execute } = options;

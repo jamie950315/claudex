@@ -335,6 +335,21 @@ test('unsupported new histories have a bounded warning count and do not stop oth
   assert.equal((await f.status()).error, null);
 });
 
+test('a global collection guard reports the conversation whose history failed, not the caller', async () => {
+  const f = await fixture({ bridge: { async sync() {
+    throw Object.assign(new Error('Nonlinear Claude history requires an explicit branch selection.'), { conversationId: 'other' });
+  } } });
+  f.state.conversations.other = { id: 'other', title: 'Branched conversation' };
+  const track = f.bridge.track;
+  f.bridge.track = async source => { await track(source); f.state.conversations[source.id].title = 'Healthy caller'; };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.synchronization, 'degraded');
+  assert.equal(pass.blockedConversations[0].conversationId, 'other');
+  assert.equal(pass.blockedConversations[0].title, 'Branched conversation');
+  assert.equal(f.state.pending, null);
+});
+
 test('conflicting tracked histories stay blocked without stopping owners or choosing a branch', async () => {
   const f = await fixture({ bridge: { async sync() { throw new Error('Both sides changed; no history was replaced.'); } } });
   const track = f.bridge.track;
@@ -629,6 +644,7 @@ const boundedNativeDiscoveryErrors = [
   'Native Codex history export: converted byte limit exceeded; no partial export is returned.',
   'Native Codex history export: a completed turn lacks its final assistant response.',
   'Native Codex history export: a completed turn has no persisted items.',
+  'Forked Claude history belongs to another native session; it was not enrolled.',
 ];
 
 test('unenrolled native image, provenance, size and incomplete stored histories produce bounded diagnostics without blocking discovery', async () => {
@@ -647,7 +663,7 @@ test('unenrolled native image, provenance, size and incomplete stored histories 
   assert.equal(pass.waiting, null);
   assert.equal(pass.blockedSourceCount, 28);
   assert.equal(pass.blockedSources.length, 20);
-  assert.deepEqual(pass.blockedSources.slice(0, 7).map(source => source.reason), boundedNativeDiscoveryErrors);
+  assert.deepEqual(pass.blockedSources.slice(0, boundedNativeDiscoveryErrors.length).map(source => source.reason), boundedNativeDiscoveryErrors);
   assert.equal((await f.status()).error, null);
 });
 
