@@ -26,10 +26,15 @@ const timestamp = value => Number.isSafeInteger(value) && value >= 0;
 const lockContention = new Set([
   'Another bridge operation holds the lock. Inspect status before retrying.',
   'Another bridge operation holds the lock; lock owner publication is pending. Inspect status before retrying.',
+  // A live owner published its identity or released and another owner acquired
+  // it between observations; each retry revalidates the lock from the start.
+  'Lock state changed during owner publication; stale lock was preserved.',
+  'Lock identity changed; stale lock was preserved.',
 ]);
 
 async function acquireMailboxLock(path, operation) {
-  const deadline = performance.now() + 2000;
+  // Matches the synchronization inbox bound for concurrent native hook bursts.
+  const deadline = performance.now() + 5000;
   let backoff = 10;
   for (;;) {
     let entered = false;

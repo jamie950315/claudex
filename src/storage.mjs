@@ -75,6 +75,9 @@ async function reclaimDeadLock(path) {
   let original;
   try { original = await lstat(path); }
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  // lstat can resolve the name at the instant its owner unlinks it (nlink 0);
+  // like absence, that only means the caller should retry exclusive create.
+  if (original.nlink === 0) return;
   if (!original.isFile() || original.isSymbolicLink() || original.uid !== process.getuid()
       || (original.mode & 0o777) !== 0o600 || original.nlink !== 1)
     throw new Error('Lock is not a private owned regular file; stale lock was preserved.');

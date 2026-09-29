@@ -205,6 +205,16 @@ test('concurrent hook processes preserve every distinct wake event', async t => 
   assert.equal((await inbox.list()).length, 24);
 });
 
+test('concurrent hook bursts register every chat despite live lock contention', async t => {
+  const inbox = await fixture(t);
+  const mailbox = new ChatMailbox({ root: join(inbox.root, 'collaboration', 'chat-mailbox') });
+  const sessions = Array.from({ length: 24 }, () => randomUUID());
+  const results = await Promise.all(sessions.map(session_id => hook(inbox, { hook_event_name: 'Stop', session_id, cwd: inbox.root })));
+  for (const result of results) assert.deepEqual(result, { code: 0, stdout: '', stderr: '' });
+  assert.equal((await inbox.list()).length, 24);
+  assert.deepEqual((await mailbox.list()).map(chat => chat.nativeId).sort(), [...sessions].sort());
+});
+
 test('hook ignores subagents and unknown hooks; completed native input stores no private content', async t => {
   const inbox = await fixture(t), session_id = randomUUID();
   for (const extra of [{ agent_id: 'child' }, { hook_event_name: 'SubagentStop' }, { hook_event_name: 'Other' }]) {

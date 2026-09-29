@@ -79,6 +79,12 @@ test('only completion-armed trusted transcript changes wake; next turn disarms',
   assert.equal(batch.length, 1, JSON.stringify(traces)); assert.equal(batch[0].kind, 'changed');
   await source.acknowledge(batch);
   await source.observe([{ ...event, kind: 'started' }], state);
+  // The same rename may deliver a later OS notification (macOS can omit its
+  // filename) that published another hint while the source was still armed.
+  // Drain only hints already published before disarming; after it nothing may wake.
+  const late = await source.wait({ timeoutMs: 1 });
+  assert.ok(late.every(item => item.kind === 'changed' && item.nativeId === nativeId), JSON.stringify(late));
+  if (late.length) await source.acknowledge(late);
   await writeFile(path, 'token streaming');
   assert.deepEqual(await source.wait({ timeoutMs: 50 }), []);
   assert.equal(source.metrics.armedSources, 0);
@@ -160,10 +166,13 @@ test('a late private backend directory attaches without polling and replacement 
 });
 
 test('an unsafe newly created backend directory fails the waiter explicitly', async t => {
-  const { root, source, traces } = await fixture(t, { shared: false });
+  // Directory validation is the contract here; macOS can drop a notification for a
+  // just-registered watcher, and the reconnect rename test exercises real OS delivery.
+  const { root, source, traces, emitWatch } = await fixture(t, { shared: false, syntheticWatches: true });
   const staging = join(root, 'unsafe');
   await mkdir(staging); await chmod(staging, 0o755);
   await rename(staging, join(root, 'codex-shared'));
+  emitWatch(root, 'codex-shared');
   await assert.rejects(source.wait({ timeoutMs: 1000 }), /Unsafe native synchronization connection directory/, JSON.stringify(traces));
 });
 

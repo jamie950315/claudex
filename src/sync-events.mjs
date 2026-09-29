@@ -31,6 +31,9 @@ async function retryableCurrentLock(path) {
     try { owner = JSON.parse(bytes.subarray(0, bytesRead).toString('utf8')); } catch { return false; }
     if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.started !== 'string' || !Number.isFinite(Date.parse(owner.started))) return false;
     const after = await file.stat(), named = await lstat(path);
+    // lstat can resolve the name to this inode at the instant its owner unlinks
+    // it (nlink 0): the lock is being released, so recheck rather than refuse.
+    if (named.nlink === 0) return undefined;
     if (!named.isFile() || named.isSymbolicLink() || !owned(named) || (named.mode & 0o777) !== 0o600 || named.nlink !== 1) return false;
     if (['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs'].some(field => before[field] !== after[field] || before[field] !== named[field])) return undefined;
     try { process.kill(owner.pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
@@ -101,7 +104,10 @@ export class SyncEventInbox {
         throw new Error('Synchronization event inbox changed while being read.');
       // Atomic replacement may leave this descriptor unlinked. A stable old snapshot
       // remains safe because acknowledgements compare exact revisions under the lock.
-      const named = await lstat(this.path);
+      let named = await lstat(this.path);
+      // lstat can observe this descriptor's inode at the instant a concurrent
+      // atomic replacement unlinks it (nlink 0); validate the name's current file.
+      if (named.nlink === 0 && sameIdentity(named, after)) named = await lstat(this.path);
       if (!named.isFile() || named.isSymbolicLink() || !owned(named) || (named.mode & 0o777) !== 0o600
           || named.nlink !== 1 || named.size > MAX_BYTES) throw new Error('Unsafe synchronization event inbox.');
       const state = JSON.parse(bytes.subarray(0, size).toString('utf8'));

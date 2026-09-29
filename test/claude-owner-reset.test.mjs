@@ -96,7 +96,7 @@ async function fixture() {
   const config = { root: join(root, 'state'), conversationId: 'synthetic reset', cwd: root, claudeHome,
     queryFactory, settingsResolver: async options => { calls.policy.push(options); return faults.policy ?? { effective: {}, sources: [] }; },
     policyPreflight: async () => faults.policySnapshot ?? { version: 1, sources: [] },
-    sdkVersion: CLAUDE_OWNER_SDK_VERSION, claudeVersion: CLAUDE_OWNER_CLI_VERSION, receiptTimeoutMs: 100 };
+    sdkVersion: CLAUDE_OWNER_SDK_VERSION, claudeVersion: CLAUDE_OWNER_CLI_VERSION, receiptTimeoutMs: 2000 };
   const open = async (cold = false, overrides = {}) => { owner = await ClaudeOwner.open({ ...config, deferRemoteConnection: cold, ...overrides }); return owner; };
   const first = await open();
   const baseline = await first.append({ operationId: 'original', content: 'Canonical source user and assistant history.' });
@@ -110,6 +110,9 @@ async function fixture() {
 const builder = async sessionId => `Authenticated archive bootstrap for native ${sessionId}`;
 const reset = owner => owner.resetContext({ operationId: 'rotation-1', buildContent: builder });
 const tick = () => new Promise(resolve => setImmediate(resolve));
+// Receipts normally get a load-tolerant bound; owners whose only awaited receipt
+// is the dropped one under test use a short bound, so they stay fast.
+const expiring = { receiptTimeoutMs: 100 };
 
 test('an unfinished native user input prevents launching a restricted cold maintenance worker', async () => {
   const f = await fixture();
@@ -122,7 +125,7 @@ test('an unfinished native user input prevents launching a restricted cold maint
 });
 
 test('a persisted pending no-query input is reconciled before the cold boundary check without resend', async () => {
-  const f = await fixture(), first = await f.open();
+  const f = await fixture(), first = await f.open(false, expiring);
   f.faults.dropAppend = true;
   await assert.rejects(first.append({ operationId: 'pending-before-upgrade', content: 'A fully persisted synchronized checkpoint.' }), /receipt timed out/);
   await first.close();
@@ -361,7 +364,7 @@ test('a running cold owner is never reset or closed', async () => {
 
 test('lost clear result leaves an unknown durable outcome and never resends or resumes an empty old identity', async () => {
   const f = await fixture(); f.faults.dropClear = true;
-  const owner = await f.open(true);
+  const owner = await f.open(true, expiring);
   await assert.rejects(reset(owner), /timed out/);
   assert.equal(owner.status().reset.phase, 'sent');
   await assert.rejects(owner.append({ operationId: 'later', content: 'Not allowed' }), /context reset/);
@@ -375,7 +378,7 @@ test('lost clear result leaves an unknown durable outcome and never resends or r
 
 test('a clear result without matching init cannot silently fabricate a successful reset', async () => {
   const f = await fixture(); f.faults.dropInit = true;
-  const owner = await f.open(true);
+  const owner = await f.open(true, expiring);
   await assert.rejects(reset(owner), /timed out/);
   const saved = JSON.parse(await readFile(owner.statePath, 'utf8'));
   assert.equal(saved.reset.targetSessionId, f.faults.actualTarget);
@@ -433,6 +436,7 @@ test('a held reset transaction excludes append, reconnect, close and concurrent 
 });
 
 test('lost bootstrap receipt recovers exact persisted packet without clear or packet resend', async () => {
+  // The clear receipt must succeed before the dropped restore receipt expires.
   const f = await fixture(); f.faults.dropRestore = true;
   let owner = await f.open(true);
   await assert.rejects(reset(owner), /append receipt timed out/);
@@ -447,6 +451,7 @@ test('lost bootstrap receipt recovers exact persisted packet without clear or pa
 });
 
 test('changed bootstrap content after a persisted intent is rejected across restart', async () => {
+  // The clear receipt must succeed before the dropped restore receipt expires.
   const f = await fixture(); f.faults.dropRestore = true;
   let owner = await f.open(true);
   await assert.rejects(reset(owner), /timed out/); await owner.close();
