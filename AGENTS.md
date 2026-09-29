@@ -13,8 +13,9 @@ migration boundaries in docs/compatibility.md. Do not use broad maturity labels
 as substitutes for version requirements or explicit unsupported behavior.
 Keep collaboration acceptance separate from the synchronization allowlist, and
 distinguish synthetic checks from authorized native model or Desktop evidence.
-When publishing from a private development checkout, apply reviewed file changes
-on top of the sanitized public history; never merge private ancestors into it.
+This checkout's history is published directly to origin main with a normal
+push. Keep secrets, credentials and private transcripts out of commits; test
+fixtures use placeholder paths and IDs.
 
 ## Development
 
