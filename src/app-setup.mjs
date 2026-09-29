@@ -158,8 +158,10 @@ export class AppSetup {
       rows.push(component(`${name}-login`, name === 'codex' ? 'ChatGPT sign-in' : 'Claude sign-in', auth.ready ? 'ready' : auth.missing ? 'missing' : auth.failed ? 'blocked' : 'login-required',
         auth.ready ? 'Native account sign-in is available. Credentials are not copied.'
           : auth.missing ? 'Install the native tool before signing in.' : auth.failed ? 'Native account status could not be verified. Use the official sign-in flow.' : 'Sign in through the official provider in your browser.', `login-${name}`));
-      rows.push(component(`${name}-desktop`, name === 'codex' ? 'Codex Desktop integration' : 'Claude Desktop integration', item?.app ? 'ready' : 'missing',
-        item?.app ? 'The installed app has the expected vendor signature.' : 'Claudex expects this desktop app to be installed already. It will not download or replace it.', `open-${name}`));
+      rows.push(component(`${name}-desktop`, name === 'codex' ? 'Codex Desktop integration' : 'Claude Desktop integration',
+        item?.app ? 'ready' : item?.appIssue ? 'blocked' : 'missing',
+        item?.app ? 'The installed app has the expected vendor signature.' : item?.appIssue
+          ?? 'Claudex expects this desktop app to be installed already. It will not download or replace it.', item?.appIssue ? 'retry' : `open-${name}`));
     }
     try {
       const broker = await this.collaborationStatus();

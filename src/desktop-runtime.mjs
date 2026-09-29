@@ -413,7 +413,12 @@ export class DesktopRuntime {
     if (importPacket && !parsed.importedPackets) throw new Error('Imported Claude original is missing its authenticated bootstrap packet.');
     assertComplete(parsed.common);
     parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
-    if (!UUID.test(parsed.common.meta.id) || record.nativeId && parsed.common.meta.id !== record.nativeId) throw new Error('Claude session identity changed.');
+    if (!UUID.test(parsed.common.meta.id)) throw new Error('Claude session identity changed.');
+    // Claude Desktop forks copy the parent's rows with their original session
+    // ID into a new file. That history belongs to another native session; it
+    // is an unsupported source, never an identity to adopt or a worker crash.
+    if (record.nativeId && parsed.common.meta.id !== record.nativeId)
+      throw new Error('Forked Claude history belongs to another native session; it was not enrolled.');
     return { ...parsed, nativeId: parsed.common.meta.id, path, bytes: data.bytes, digest: fingerprint(parsed.common) };
   }
 

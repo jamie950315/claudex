@@ -93,6 +93,25 @@ test('existing apps and CLIs are reused without installer commands', async t => 
 
 test('a desktop app with the wrong publisher is rejected', async t => {
   const options = await fixture(t);
+  const path = await app(options.home, 'ChatGPT.app');
+  const found = await discoverProviders({ ...options, run: runner({ wrongTeam: true }) });
+  assert.equal(found.codex.app, null);
+  assert.equal(found.codex.appIssue, `Unexpected publisher for ${path}`);
+});
+
+test('a re-signed desktop app blocks only its own provider and never triggers installation', async t => {
+  const options = await fixture(t);
   await app(options.home, 'ChatGPT.app');
-  await assert.rejects(discoverProviders({ ...options, run: runner({ wrongTeam: true }) }), /Unexpected publisher/);
+  const claude = await app(options.home, 'Claude.app');
+  // A signed copy elsewhere must not be substituted for the rejected bundle.
+  await mkdir(join(options.systemApplications, 'Claude.app'), { recursive: true });
+  const commands = [], base = runner({ commands, install: true });
+  const run = async (command, args) => command === '/usr/bin/codesign' && args[0] === '-d' && args.at(-1) === claude
+    ? { stderr: 'Identifier=com.anthropic.claudefordesktop\nTeamIdentifier=not set\n' } : base(command, args);
+  const found = await ensureProviders({ ...options, run });
+  assert.equal(found.codex.app, join(options.home, 'Applications', 'ChatGPT.app'));
+  assert.equal(found.codex.issue, undefined);
+  assert.equal(found.claude.app, null);
+  assert.equal(found.claude.issue, `Unexpected publisher for ${claude}`);
+  assert.equal(commands.some(([command]) => command.endsWith('/node')), false);
 });

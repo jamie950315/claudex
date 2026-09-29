@@ -543,8 +543,15 @@ export class DesktopBridge {
     // Both current sides of every affected conversation still gate retirement.
     for (const current of state.records.filter(record => record.status === 'current'
       && retainedConversations.has(record.conversationId))) {
-      const data = await this.inspect(current);
-      if (!matches(data.common, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
+      try {
+        const data = await this.inspect(current);
+        if (!matches(data.common, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
+      } catch (error) {
+        // Allocation-time collection reads other conversations. Preserve the
+        // failing history's identity so the caller does not blame its own task.
+        error.conversationId ??= current.conversationId;
+        throw error;
+      }
     }
     const previous = [];
     for (const record of snapshots.filter(record => record.status === 'previous')) {

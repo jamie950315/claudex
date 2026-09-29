@@ -338,3 +338,19 @@ test('uncertain collaboration work opens diagnostics instead of retrying setup',
   assert.equal(row.state, 'blocked');
   assert.equal(row.action, 'diagnostics');
 });
+
+test('a re-signed Claude app blocks only Claude Desktop integration and never starts setup work', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'claudex-app-setup-publisher-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const providers = readyProviders(base);
+  providers.claude = { ...providers.claude, app: null, appIssue: 'Unexpected publisher for /Applications/Claude.app' };
+  const { setup, events } = await fixture(t, { providers });
+  const report = await setup.inspect();
+  const rows = Object.fromEntries(report.components.map(row => [row.id, row]));
+  assert.equal(rows['claude-desktop'].state, 'blocked');
+  assert.equal(rows['claude-desktop'].detail, 'Unexpected publisher for /Applications/Claude.app');
+  for (const id of ['codex-cli', 'codex-login', 'codex-desktop', 'claude-cli', 'claude-login']) assert.equal(rows[id].state, 'ready', id);
+  assert.equal(rows.providers, undefined);
+  await setup.setup();
+  assert.equal(events.some(([kind]) => ['collaboration', 'desktop', 'service'].includes(kind)), false);
+});

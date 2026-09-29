@@ -106,6 +106,9 @@ The app profile enables all projects and task-scoped writes; explicit read-only
 requests and child permission bounds remain strict. Do not loosen existing
 writer, version, resource, account or macOS guards to report a ready checklist.
 An active or incompatible existing deployment must be preserved and explained.
+A vendor app with an unexpected publisher (for example a locally re-signed
+bundle) blocks only its own desktop-integration row; never accept it, skip to
+another copy, or show unrelated prerequisites as missing.
 Package portable Node/npm and production dependencies so end users need no Git,
 Node installation, compiler or terminal setup. Build with an explicit file
 allowlist and verify nested signatures. Development signing is not notarized
@@ -360,7 +363,10 @@ seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
 All-project discovery skips unsupported unenrolled histories and reports a
-bounded diagnostic list. In Desktop mode, recognized tracked-history guards
+bounded diagnostic list. Claude Desktop forks copy parent rows under the parent's
+session ID into a new file; they are unsupported sources, never adopted
+identities or worker crashes. Allocation-time collection tags another
+conversation's history failure with that conversation's identity for status. In Desktop mode, recognized tracked-history guards
 pause synchronization without exiting the watcher or closing live Claude owners.
 A pending transaction blocks all discovery, new syncs and collection until normal
 verified recovery succeeds; it is never cleared or resent to regain availability.
@@ -515,7 +521,9 @@ replacement histories, and general Claude preserved-segment chains remain blocke
 The observed Claude split-response parallel-tool graph is supported without
 choosing a branch: require one request/response/model/session identity, ordered
 apiBlockIndex records, unique tool IDs and exactly one native result per call,
-matching sourceToolAssistantUUID, prompt, cwd and version. Validate one final
+matching sourceToolAssistantUUID, prompt, cwd and version. Only result and
+PreToolUse hook rows may carry another absolute cwd, because a tool in the wave
+(for example Bash `cd`) can move the native cwd before they are persisted. Validate one final
 join and reject intervening authored input or alternate continuations. Only
 virtual graph-validation parents change; native bytes, codec input, message
 order and every tool record remain untouched. Missing/ambiguous evidence and

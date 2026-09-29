@@ -67,3 +67,11 @@ test('unmanaged Local preserved-segment compaction remains explicit rather than 
     await assert.rejects(f.runtime.inspect(f.record), /preserved-segment/);
   } finally { await f.runtime.close(); }
 });
+
+test('a Desktop fork carrying its parent session rows is an unsupported source, not an identity to adopt', async () => {
+  const f = await fixture();
+  try {
+    const forkId = randomUUID();
+    await assert.rejects(f.runtime.inspect({ ...f.record, nativeId: forkId }), /^Error: Forked Claude history belongs to another native session/);
+  } finally { await f.runtime.close(); }
+});

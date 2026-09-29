@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { RECONNECT_ID } from './sync-event-source.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
-const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
+const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Forked Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
 // These are explicit history guards, not permission to choose a branch or retry
 // an arbitrary failed native operation. Keep the owning process alive so one
 // blocked handoff does not disconnect every unrelated Remote Control session.
@@ -362,7 +362,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 // No durable intent exists, so other conversations may still
                 // be verified. Their normal global quota/original guards are
                 // unchanged and may independently block a new allocation.
-                blockedConversations.set(id, block(blockedConversations.get(id), error, conversationContext(latest, id)));
+                // Other global guards keep this caller held, but report the exact
+                // conversation whose history failed instead of the caller's title.
+                const blockedId = typeof error?.conversationId === 'string' && latest.conversations[error.conversationId]
+                  ? error.conversationId : id;
+                blockedConversations.set(id, block(blockedConversations.get(id), error, conversationContext(latest, blockedId)));
                 return { blocked: true };
               }
               throw error;

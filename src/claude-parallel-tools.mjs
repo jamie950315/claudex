@@ -40,6 +40,11 @@ export function parallelToolGraphParents(rows) {
         || anchor.sessionId !== first.sessionId || anchor.cwd !== first.cwd) continue;
     const sameSession = row => row.sessionId === first.sessionId && row.cwd === first.cwd
       && row.version === first.version && row.isSidechain !== true && row.isMeta !== true && row.isSynthetic !== true;
+    // A tool in this wave (for example Bash `cd`) can move the native session's
+    // working directory before later hook/result rows are persisted. Only those
+    // rows may carry another absolute cwd; the response blocks stay exact.
+    const sameToolSession = row => sameSession({ ...row, cwd: first.cwd })
+      && typeof row.cwd === 'string' && row.cwd.startsWith('/');
     if (group.some((row, index) => !nonempty(row.uuid) || duplicates.has(row.uuid) || !sameSession(row)
         || row.requestId !== first.requestId || row.apiBlockIndex !== index || row.message?.role !== 'assistant'
         || row.message.model !== first.message.model || row.isApiErrorMessage === true
@@ -53,7 +58,7 @@ export function parallelToolGraphParents(rows) {
       const block = call.message.content[0], matches = toolResults.get(block.id) ?? [];
       if (!nonempty(block.id) || toolUses.get(block.id)?.length !== 1 || matches.length !== 1) { valid = false; break; }
       const result = matches[0], content = result.message?.content;
-      if (!nonempty(result.uuid) || duplicates.has(result.uuid) || !sameSession(result) || !nonempty(result.promptId)
+      if (!nonempty(result.uuid) || duplicates.has(result.uuid) || !sameToolSession(result) || !nonempty(result.promptId)
           || result.message.role !== 'user' || result.sourceToolAssistantUUID !== call.uuid || result.parentUuid !== call.uuid
           || content.length !== 1 || content[0].type !== 'tool_result' || content[0].tool_use_id !== block.id
           || positions.get(result.uuid) <= positions.get(call.uuid)) { valid = false; break; }
@@ -67,7 +72,7 @@ export function parallelToolGraphParents(rows) {
     const toolHook = row => {
       const hook = row.attachment;
       if (row.type !== 'attachment' || !nonempty(row.uuid) || duplicates.has(row.uuid) || row.message !== undefined
-          || !sameSession(row) || !members.has(row.parentUuid) || positions.get(row.parentUuid) >= positions.get(row.uuid)
+          || !sameToolSession(row) || !members.has(row.parentUuid) || positions.get(row.parentUuid) >= positions.get(row.uuid)
           || hook?.type !== 'hook_success' || hook.hookEvent !== 'PreToolUse' || hook.exitCode !== 0
           || hook.content !== '' || hook.stderr !== '' || typeof hook.stdout !== 'string' || !nonempty(hook.command)
           || !Number.isFinite(hook.durationMs) || hook.durationMs < 0) return false;
