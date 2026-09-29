@@ -367,8 +367,10 @@ One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
 All-project discovery skips unsupported unenrolled histories and reports a
 bounded diagnostic list. Claude Desktop forks copy parent rows under the parent's
-session ID into a new file; they are unsupported sources, never adopted
-identities or worker crashes. Allocation-time collection tags another
+session ID into a new file. Enroll one under its file identity only after the
+copied lines match the parent's native bytes (identity-free metadata may
+follow) and it has its own completed reply; otherwise it is an unsupported
+source, never an adopted parent identity or a worker crash. Allocation-time collection tags another
 conversation's history failure with that conversation's identity for status. In Desktop mode, recognized tracked-history guards
 pause synchronization without exiting the watcher or closing live Claude owners.
 A pending transaction blocks all discovery, new syncs and collection until normal
