@@ -354,3 +354,14 @@ test('a re-signed Claude app blocks only Claude Desktop integration and never st
   await setup.setup();
   assert.equal(events.some(([kind]) => ['collaboration', 'desktop', 'service'].includes(kind)), false);
 });
+
+test('a locally re-signed Claude app is ready and labeled as a local build', async t => {
+  const base = await mkdtemp(join(tmpdir(), 'claudex-app-setup-local-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const providers = readyProviders(base);
+  providers.claude = { ...providers.claude, appSignature: 'local' };
+  const { setup } = await fixture(t, { providers });
+  const row = (await setup.inspect()).components.find(item => item.id === 'claude-desktop');
+  assert.equal(row.state, 'ready');
+  assert.equal(row.detail, 'The installed app is a locally re-signed build of the official app.');
+});

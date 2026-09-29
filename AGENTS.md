@@ -106,9 +106,12 @@ The app profile enables all projects and task-scoped writes; explicit read-only
 requests and child permission bounds remain strict. Do not loosen existing
 writer, version, resource, account or macOS guards to report a ready checklist.
 An active or incompatible existing deployment must be preserved and explained.
-A vendor app with an unexpected publisher (for example a locally re-signed
-bundle) blocks only its own desktop-integration row; never accept it, skip to
-another copy, or show unrelated prerequisites as missing.
+By user decision, Claude.app is accepted with the official Anthropic team or
+as a locally patched build: official bundle identifier, ad-hoc signature, no
+team, and a passing strict deep verification; it is labeled as a local build.
+Codex keeps its vendor-only check. Any other publisher blocks only its own
+desktop-integration row; never skip to another copy or show unrelated
+prerequisites as missing.
 Package portable Node/npm and production dependencies so end users need no Git,
 Node installation, compiler or terminal setup. Build with an explicit file
 allowlist and verify nested signatures. Development signing is not notarized
