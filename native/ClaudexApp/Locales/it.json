@@ -184,6 +184,7 @@
   "Codex Desktop integration": "Integrazione di Codex Desktop",
   "Claude Desktop integration": "Integrazione di Claude Desktop",
   "The installed app has the expected vendor signature.": "L’app installata ha la firma prevista del produttore.",
+  "The installed app is a locally re-signed build of the official app.": "L’app installata è una build dell’app ufficiale firmata di nuovo in locale.",
   "Claudex expects this desktop app to be installed already. It will not download or replace it.": "Claudex richiede che questa app desktop sia già installata. Non la scaricherà né la sostituirà.",
   "Cross-model collaboration": "Collaborazione tra modelli",
   "The background broker and MCP connections will be configured automatically.": "Il gestore in background e le connessioni MCP verranno configurati automaticamente.",

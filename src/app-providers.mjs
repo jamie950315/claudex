@@ -8,7 +8,9 @@ import { resolveBundledCodex } from './codex-app-layout.mjs';
 const execute = promisify(execFile);
 const expected = {
   codex: { names: ['ChatGPT.app', 'Codex.app'], id: 'com.openai.codex', team: '2DC432GLL2' },
-  claude: { names: ['Claude.app'], id: 'com.anthropic.claudefordesktop', team: 'Q6L2SF6YDW' },
+  // Users may run a locally patched Claude build (for example a translation)
+  // that keeps the official bundle identifier with a valid ad-hoc seal.
+  claude: { names: ['Claude.app'], id: 'com.anthropic.claudefordesktop', team: 'Q6L2SF6YDW', allowLocalResign: true },
 };
 const absent = error => error?.code === 'ENOENT';
 const absolute = path => typeof path === 'string' && path.startsWith('/') && resolve(path) === path;
@@ -23,20 +25,26 @@ async function signedApp(path, spec, run) {
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(`Untrusted app at ${path}`);
   await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', path]);
   const { stderr = '' } = await run('/usr/bin/codesign', ['-d', '--verbose=2', path]);
-  if (!stderr.split('\n').includes(`Identifier=${spec.id}`)
-      || !stderr.split('\n').includes(`TeamIdentifier=${spec.team}`))
-    throw Object.assign(new Error(`Unexpected publisher for ${path}`), { code: 'CLAUDEX_UNEXPECTED_PUBLISHER' });
-  return true;
+  const lines = stderr.split('\n');
+  if (!lines.includes(`Identifier=${spec.id}`)) throw unexpectedPublisher(path);
+  if (lines.includes(`TeamIdentifier=${spec.team}`)) return 'vendor';
+  // The strict --verify above still proves the local seal covers every file.
+  if (spec.allowLocalResign && lines.includes('Signature=adhoc') && lines.includes('TeamIdentifier=not set')) return 'local';
+  throw unexpectedPublisher(path);
 }
+const unexpectedPublisher = path => Object.assign(new Error(`Unexpected publisher for ${path}`), { code: 'CLAUDEX_UNEXPECTED_PUBLISHER' });
 
-// A re-signed or third-party bundle is never accepted or skipped in favor of
-// another copy. It blocks only its own provider, so unrelated prerequisites
-// keep reporting their real state instead of appearing uninstalled.
+// An unaccepted bundle is never skipped in favor of another copy. It blocks
+// only its own provider, so unrelated prerequisites keep reporting their real
+// state instead of appearing uninstalled.
 async function findApp(home, spec, run, systemApplications) {
   for (const directory of [join(home, 'Applications'), systemApplications]) {
     for (const name of spec.names) {
       const path = join(directory, name);
-      try { if (await signedApp(path, spec, run)) return { app: path }; }
+      try {
+        const signature = await signedApp(path, spec, run);
+        if (signature) return { app: path, ...(signature === 'local' ? { appSignature: 'local' } : {}) };
+      }
       catch (error) { if (error.code === 'CLAUDEX_UNEXPECTED_PUBLISHER') return { app: null, appIssue: error.message }; throw error; }
     }
   }
@@ -98,7 +106,8 @@ export async function discoverProviders({ root, home = process.env.HOME, runtime
     codex: { app: codexApp, binary: codexVersion ? codexBinary : null, version: codexVersion,
       ...(codexFound.appIssue ? { appIssue: codexFound.appIssue } : {}) },
     claude: { app: claudeApp, binary: claudeVersion ? claudeBinary : null, version: claudeVersion,
-      ...(claudeFound.appIssue ? { appIssue: claudeFound.appIssue } : {}) },
+      ...(claudeFound.appIssue ? { appIssue: claudeFound.appIssue } : {}),
+      ...(claudeFound.appSignature ? { appSignature: claudeFound.appSignature } : {}) },
   };
 }
 

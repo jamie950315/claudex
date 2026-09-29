@@ -184,6 +184,7 @@
   "Codex Desktop integration": "Codex 桌面集成",
   "Claude Desktop integration": "Claude 桌面集成",
   "The installed app has the expected vendor signature.": "已安装应用的发布者签名符合预期。",
+  "The installed app is a locally re-signed build of the official app.": "已安装的是官方应用经本机重新签名的版本。",
   "Claudex expects this desktop app to be installed already. It will not download or replace it.": "Claudex 需要您先安装此桌面应用。不会下载或替换它。",
   "Cross-model collaboration": "跨模型协作",
   "The background broker and MCP connections will be configured automatically.": "后台协调服务与 MCP 连接会自动配置。",

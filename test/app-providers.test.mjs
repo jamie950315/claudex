@@ -99,7 +99,7 @@ test('a desktop app with the wrong publisher is rejected', async t => {
   assert.equal(found.codex.appIssue, `Unexpected publisher for ${path}`);
 });
 
-test('a re-signed desktop app blocks only its own provider and never triggers installation', async t => {
+test('a foreign-publisher desktop app blocks only its own provider and never triggers installation', async t => {
   const options = await fixture(t);
   await app(options.home, 'ChatGPT.app');
   const claude = await app(options.home, 'Claude.app');
@@ -107,11 +107,35 @@ test('a re-signed desktop app blocks only its own provider and never triggers in
   await mkdir(join(options.systemApplications, 'Claude.app'), { recursive: true });
   const commands = [], base = runner({ commands, install: true });
   const run = async (command, args) => command === '/usr/bin/codesign' && args[0] === '-d' && args.at(-1) === claude
-    ? { stderr: 'Identifier=com.anthropic.claudefordesktop\nTeamIdentifier=not set\n' } : base(command, args);
+    ? { stderr: 'Identifier=com.anthropic.claudefordesktop\nTeamIdentifier=OTHERTEAM1\n' } : base(command, args);
   const found = await ensureProviders({ ...options, run });
   assert.equal(found.codex.app, join(options.home, 'Applications', 'ChatGPT.app'));
   assert.equal(found.codex.issue, undefined);
   assert.equal(found.claude.app, null);
   assert.equal(found.claude.issue, `Unexpected publisher for ${claude}`);
   assert.equal(commands.some(([command]) => command.endsWith('/node')), false);
+});
+
+test('a locally ad-hoc re-signed official Claude build is accepted but Codex is not', async t => {
+  const options = await fixture(t);
+  const codex = await app(options.home, 'ChatGPT.app');
+  const claude = await app(options.home, 'Claude.app');
+  const adhoc = id => ({ stderr: `Identifier=${id}\nSignature=adhoc\nTeamIdentifier=not set\n` });
+  const base = runner();
+  const run = async (command, args) => command === '/usr/bin/codesign' && args[0] === '-d'
+    ? args.at(-1) === claude ? adhoc('com.anthropic.claudefordesktop') : args.at(-1) === codex ? adhoc('com.openai.codex') : base(command, args)
+    : base(command, args);
+  const found = await discoverProviders({ ...options, run });
+  assert.equal(found.claude.app, claude);
+  assert.equal(found.claude.appSignature, 'local');
+  assert.equal(found.codex.app, null);
+  assert.equal(found.codex.appIssue, `Unexpected publisher for ${codex}`);
+  const renamed = async (command, args) => command === '/usr/bin/codesign' && args[0] === '-d' && args.at(-1) === claude
+    ? adhoc('com.example.claude') : run(command, args);
+  assert.equal((await discoverProviders({ ...options, run: renamed })).claude.appIssue, `Unexpected publisher for ${claude}`);
+  const unsealed = async (command, args) => {
+    if (command === '/usr/bin/codesign' && args[0] === '--verify' && args.at(-1) === claude) throw new Error('code object is not signed at all');
+    return run(command, args);
+  };
+  await assert.rejects(discoverProviders({ ...options, run: unsealed }), /not signed/);
 });
