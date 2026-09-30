@@ -141,6 +141,8 @@ requested action.
 The Claude wake bridge is pinned to a verified frontend resource. Loading an
 upgraded bridge requires a normal idle Claude restart; later vendor updates can
 require adaptation. An unavailable bridge is reported, never treated as delivery.
+Each new resource pin has its own recovery journal, retaining earlier resource
+originals and installation receipts.
 See [native-chat messaging](collaboration.md#messages-to-existing-native-chats)
 for supported discovery, delivery and recovery boundaries.
 
