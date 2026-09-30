@@ -468,6 +468,11 @@ The final full fingerprint still independently checks the result. Archive chunks
 use at most four concurrent reads with all existing identity, permission and
 content checks preserved; writes remain serialized. Nothing is cached across
 snapshots, and missing or changed archive content still fails closed.
+Full fingerprints hash the same canonical JSON one message at a time, avoiding
+an additional history-sized string while retaining existing checkpoint digests.
+Raw archive reads verify the bound manifest, ordered pages, every chunk, portable
+message shape and full semantic digest without regenerating the archive tree.
+Custom message resolvers still require independent deterministic archive binding.
 
 Backup collection reads both current sides of every conversation with a managed
 snapshot, but does not export unrelated cold pairs that have no backups. A missing
@@ -1013,6 +1018,9 @@ without re-exporting and decoding the full history. The first run after this fea
 is installed establishes proofs through normal complete verification. Changes to
 history, dependencies, native state, decoder code or relevant configuration require
 full verification again; elapsed time alone does not discard an unchanged proof.
+An ordinary proof miss proceeds directly to full verification. Successful refreshes
+replace the proof once; failed reads durably revoke it even if the old context later
+returns. This avoids flushing a tombstone immediately before every successful refresh.
 An inactive original's unchanged unfinished tail remains withheld. Reusing its
 already verified canonical prefix never sends that tail or marks it complete.
 
@@ -1021,6 +1029,9 @@ Proofs never authorize writes, history promotion, archival or snapshot collectio
 They contain metadata, not copied messages, and have a 64 MiB aggregate limit.
 During the cold backlog, discovery and changed conversations are refreshed between
 operations instead of repeatedly checking every unchanged active conversation.
+An assistant-first Codex history without supported initial request provenance
+remains explicitly unsupported. It does not enroll or restart the whole watcher;
+an already tracked conversation with that error remains individually held.
 
 ## Native project relocation
 

@@ -41,6 +41,7 @@ async function fixture(t) {
       assert.equal(conversationId, id);
       assert.equal(state.pending, null);
       events.push('sync');
+      if (f.failSync) throw new Error('Native Codex history export: converted byte limit exceeded; no partial export is returned.');
       // Use actual authenticated archive reads, so the watcher observes all
       // manifest, page and chunk files rather than synthetic cache fixtures.
       await loadContextArchive({ root, archive });
@@ -149,4 +150,21 @@ test('pending recovery completes before persisted proof reuse or discovery', asy
   assert.equal(f.events.includes('sync'), false);
   assert.ok(f.events.indexOf('metadata') > f.events.indexOf('recover'));
   assert.ok(f.events.indexOf('discover') > f.events.indexOf('recover'));
+});
+
+test('a failed full read durably revokes the old proof even when its prior context is restored', async t => {
+  const f = await fixture(t);
+  await f.run();
+  f.clear();
+  f.context.codexVersion = 'changed-synthetic-version';
+  f.failSync = true;
+  await f.run();
+  const envelope = JSON.parse(await readFile(join(f.root, 'cold-verification', `${f.id}.json`), 'utf8'));
+  assert.equal(envelope.payload.invalidated, true);
+  f.clear(); f.failSync = false;
+  f.context.codexVersion = 'synthetic';
+  await f.run();
+  assert.equal(f.events.filter(event => event === 'sync').length, 1);
+  const replacement = JSON.parse(await readFile(join(f.root, 'cold-verification', `${f.id}.json`), 'utf8'));
+  assert.notEqual(replacement.payload.invalidated, true);
 });

@@ -124,6 +124,35 @@ test('tracked and owned identities are not enrolled again on later passes', asyn
   assert.equal(f.calls.codex, 3);
 });
 
+test('an unenrolled assistant-first native history stays unsupported while other conversations load', async () => {
+  const f = await fixture(); let pass;
+  f.state.conversations.healthy = { id: 'healthy' };
+  f.bridge.track = async () => {
+    throw new Error('Native Codex history export: an assistant message precedes the turn user input. [Codex thread 00000000-0000-4000-8000-000000000099]');
+  };
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.blockedSourceCount, 1);
+  assert.match(pass.blockedSources[0].reason, /assistant message precedes/);
+  assert.deepEqual(Object.keys(f.state.conversations), ['healthy']);
+  assert.deepEqual(f.calls.sync, ['healthy', 'healthy']);
+});
+
+test('a tracked assistant-first history retains its explicit hold without interrupting other conversations', async () => {
+  const f = await fixture(); let pass;
+  f.state.conversations = { unsupported: { id: 'unsupported' }, healthy: { id: 'healthy' } };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id === 'unsupported') throw new Error('Native Codex history export: an assistant message precedes the turn user input.');
+  };
+  await f.run({ maxPasses: 2, discover: async () => [], sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.blockedConversationCount, 1);
+  assert.equal(pass.blockedConversations[0].conversationId, 'unsupported');
+  assert.match(pass.blockedConversations[0].reason, /assistant message precedes/);
+  assert.equal(f.calls.sync.filter(id => id === 'healthy').length, 2);
+});
+
 test('rapid progress coalesces within two seconds and publishes the latest state at the next boundary', async () => {
   const f = await fixture(), publications = []; let clock = 0;
   f.state.conversations = Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`c${i}`, { title: `Conversation ${i}` }]));

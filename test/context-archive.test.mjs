@@ -244,6 +244,7 @@ test('loaded messages or validated raw bytes support synchronous decoding withou
   const { manifestBytes, chunks, pageBytes } = await archiveFiles(root, metadata.archive);
   assert.deepEqual(decode(content, loaded.messages).messages, messages);
   assert.deepEqual(decode(content, { manifestBytes, chunkBytes: chunks, pageBytes }).messages, messages);
+  assert.deepEqual(decode(content, { messages: null, manifestBytes, chunkBytes: chunks, pageBytes }).messages, messages);
   const mutated = structuredClone(loaded);
   mutated.messages[0].content[0].text += ' changed';
   assert.throws(() => decode(content, mutated), /binding mismatch/);
@@ -255,6 +256,29 @@ test('loaded messages or validated raw bytes support synchronous decoding withou
   assert.throws(() => decodeArchivedContextPacket({ ...identity, content }), /resolver is required/);
   await rename(join(root, 'history-assets'), join(root, 'temporarily-unavailable'));
   assert.deepEqual(decode(content, loaded).messages, messages);
+});
+
+test('hash-bound raw chunks still reject nonportable messages and unsupported assets', async t => {
+  const { root } = await fixture(t);
+  const directory = join(root, 'history-assets');
+  await mkdir(directory, { mode: 0o700 });
+  for (const message of [
+    { ...messages[0], timestamp: '2026-09-25T00:00:00Z' },
+    { role: 'user', content: [{ type: 'thinking', text: 'Not portable.' }] },
+    { role: 'assistant', content: [] },
+    { role: 'system', content: [{ type: 'text', text: 'Unsupported role.' }] },
+    { role: 'user', content: [{ type: 'image', source: { type: 'url', url: 'https://example.invalid/image' } }] },
+    { role: 'user', content: [{ type: 'text', text: 'Extra field.', extra: true }] },
+  ]) {
+    const chunk = canonicalBytes({ type: 'claudex-history-message', version: 1, message });
+    const digest = fingerprint({ messages: [message] });
+    const manifest = canonicalBytes({ type: 'claudex-history-archive', version: 1, digest,
+      messages: [{ hash: bytesHash(chunk), bytes: chunk.length }] });
+    const archive = { version: 1, hash: bytesHash(manifest), bytes: manifest.length, messageCount: 1, digest };
+    await writeFile(join(directory, bytesHash(chunk)), chunk, { mode: 0o600 });
+    await writeFile(join(directory, archive.hash), manifest, { mode: 0o600 });
+    await assert.rejects(loadContextArchive({ root, archive }), /portable history|unsupported|image/);
+  }
 });
 
 test('view, signature, identity, reference, native block, and footer tampering fail before resolver calls', async t => {

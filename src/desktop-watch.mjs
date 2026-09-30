@@ -26,7 +26,8 @@ const conversationContext = (state, id) => ({
 const isWaiting = error => WAITING.test(reason(error));
 const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verified synchronized checkpoint)?\.$/.test(reason(error))
   || /^Native Codex history export: no completed persisted history is available; wait for a complete turn\.(?: \[Codex thread [a-f0-9-]+\])?$/.test(reason(error));
-const isUnsupported = error => UNSUPPORTED.test(reason(error));
+const isUnsupported = error => UNSUPPORTED.test(reason(error))
+  || /^Native Codex history export: an assistant message precedes the turn user input\.(?: \[Codex thread [a-f0-9-]+\])?$/i.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
   || error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
@@ -260,7 +261,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   checkedConversations.add(id); reusedConversations.add(id);
                   return { changed: false, reused: true };
                 }
-                await proofCache.invalidate(id);
+                // A miss grants no reuse. Full verification still runs, and
+                // its failure handler durably revokes any old proof. Do not
+                // flush a tombstone before every successful context refresh
+                // only to immediately replace it with a freshly verified proof.
               }
               if (!persistent && before && !coldDirty.has(id) && previous?.signature === before && observedAt >= previous.verifiedAt
                 && observedAt - previous.verifiedAt < coldValidationMs) return;

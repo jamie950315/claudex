@@ -165,7 +165,12 @@ function canonicalHistory(messages) {
   }
   const portable = portableMessages(messages).map(({ role, content }) => ({ role, content }));
   if (!portable.length) fail('empty portable messages');
-  const text = serialize(portable);
+  // Loaded archive chunks already contain exactly portable role/content
+  // messages. Their canonical source serialization is also the normalized
+  // serialization; avoid building another history-sized string in that case.
+  const sourceIsPortable = messages.every(message => exactKeys(message, ['role', 'content'])
+    && message.content.length > 0 && message.content.every(block => block.type !== 'thinking'));
+  const text = sourceIsPortable ? sourceText : serialize(portable);
   return { messages: JSON.parse(text), sourceText, text };
 }
 
@@ -419,7 +424,26 @@ function messagesFromBytes(archive, { manifestBytes, chunkBytes, pageBytes }) {
 function validateLoadedArchive(archive, loaded) {
   if (!loaded || typeof loaded.then === 'function') fail('archive resolver must synchronously return loaded history');
   if (loaded.archive && serialize(loaded.archive) !== serialize(archive)) fail('loaded archive identity mismatch');
-  const source = Array.isArray(loaded) ? loaded : loaded.messages ?? messagesFromBytes(archive, loaded);
+  if (!Array.isArray(loaded) && loaded.messages == null) {
+    // Manifest/page/chunk bytes have already been canonically parsed and
+    // hash-bound to every ordered reference. Validate their portable shape
+    // and complete semantic digest directly instead of regenerating the
+    // entire chunk/page tree. Caller-supplied message arrays still need the
+    // independent deterministic archive binding below.
+    const messages = messagesFromBytes(archive, loaded);
+    for (const message of messages) {
+      if (!exactKeys(message, ['role', 'content']) || !ROLES.has(message.role)
+        || !Array.isArray(message.content) || !message.content.length) fail('loaded archive is not canonical portable history');
+      for (const block of message.content) {
+        if (!block || !KINDS.has(block.type)) fail('loaded archive is not canonical portable history');
+        if (block.type === 'text' && (!exactKeys(block, ['type', 'text']) || typeof block.text !== 'string')) fail('unsupported text block');
+        checkAssets(block);
+      }
+    }
+    if (fingerprint({ messages }) !== archive.digest) fail('loaded archive binding mismatch');
+    return messages;
+  }
+  const source = Array.isArray(loaded) ? loaded : loaded.messages;
   const { messages, sourceText, text } = canonicalHistory(source);
   if (sourceText !== text) fail('loaded archive is not canonical portable history');
   if (serialize(describeArchive(messages, archive.version).archive) !== serialize(archive)) fail('loaded archive binding mismatch');

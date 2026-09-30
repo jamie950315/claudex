@@ -474,6 +474,9 @@ fields and native file identities, including superseded originals, with a fixed
 60-second full-verification deadline. Pending work suspends proof use until verified
 recovery; errors revoke the affected proof. New and active
 conversations and dirty cold imports run before the fair cold-validation sweep.
+Proof misses run full verification directly; only failed reads require durable
+revocation. A successful refresh replaces its proof once, without a preceding
+tombstone flush. Restoring an old context never revives a failed proof.
 During startup/reconnection reconciliation, between complete cold operations,
 refresh discovery and changed work after two
 seconds, not the entire unchanged foreground queue. Every managed owner retains
@@ -493,6 +496,11 @@ Raw observations select priority only; unsuccessful dirty work stays foreground
 until stable full verification. One in-flight native operation can exceed this
 interval, so it is not an end-to-end latency guarantee. Never advance semantic
 checkpoints from hints or skip a current managed Claude owner's lifecycle checks.
+Full fingerprints stream the existing canonical JSON digest by message. Raw
+archive reads retain canonical byte, reference, portable-shape, asset and semantic
+digest validation without regenerating the chunk/page tree; custom message
+resolvers still require independent deterministic archive binding. Never change
+persisted digest bytes or treat this optimization as a cross-snapshot content cache.
 Bounded watcher timing fields report discovery gaps and last/slowest syncs,
 without transcript content; they are operation timings, not UI latency promises.
 Ordinary progress diagnostics coalesce at two-second intervals. Initial status,

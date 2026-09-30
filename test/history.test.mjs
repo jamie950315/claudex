@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { assertComplete, fingerprint, incrementalFingerprint } from '../src/history.mjs';
 import { encodeCodexProjection } from '../src/codex-projection.mjs';
 import { encodeClaude, decodeClaude } from '../src/claude.mjs';
@@ -48,11 +49,23 @@ test('append-only fingerprints exactly match every full portable prefix without 
     { role: 'assistant', content: [{ type: 'thinking', text: '' }, { type: 'text', text: 'Complete.' }] },
   ];
   const untouched = structuredClone(messages);
+  // The original whole-array format is an independent compatibility oracle:
+  // persisted checkpoints and packet signatures must keep the same digest.
+  const ordered = value => Array.isArray(value) ? value.map(ordered)
+    : value && typeof value === 'object'
+      ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+  const originalDigest = length => {
+    const portable = messages.slice(0, length).map(({ role, content }) => ({ role, content: content.flatMap(block =>
+      block.type === 'thinking' ? block.text ? [{ type: 'text', text: `[Imported reasoning]\n${block.text}` }] : [] : [block]) }))
+      .filter(message => message.content.length);
+    return createHash('sha256').update(JSON.stringify(ordered(portable))).digest('hex');
+  };
   const growing = incrementalFingerprint();
   assert.equal(growing.digest(), fingerprint({ messages: [] }));
   for (let index = 0; index < messages.length; index++) {
     growing.append([messages[index]]);
     const expected = fingerprint({ messages }, index + 1);
+    assert.equal(expected, originalDigest(index + 1));
     assert.equal(growing.digest(), expected);
     assert.equal(growing.digest(), expected, 'reading a prefix must not finalize or alter the append state');
   }

@@ -19,8 +19,17 @@ export function portableMessages(messages) {
 }
 
 export function fingerprint(common, length = common.messages.length) {
-  const messages = portableMessages(common.messages.slice(0, length)).map(({ role, content }) => ({ role, content }));
-  return createHash('sha256').update(JSON.stringify(ordered(messages))).digest('hex');
+  // Preserve the exact canonical JSON byte sequence without allocating a
+  // second serialization of the entire history (including inline images).
+  const digest = createHash('sha256').update('[');
+  let separator = '';
+  for (const { role, content } of common.messages.slice(0, length)) {
+    const portable = portableContent(content);
+    if (!portable.length) continue;
+    digest.update(separator).update(JSON.stringify(ordered({ role, content: portable })));
+    separator = ',';
+  }
+  return digest.update(']').digest('hex');
 }
 
 /** Equivalent to fingerprint over an append-only portable message sequence.
