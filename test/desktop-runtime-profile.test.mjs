@@ -90,6 +90,52 @@ test('native-only Desktop startup never becomes an available synchronization bac
   } finally { await f.runtime.close(); }
 });
 
+test('concurrent Codex readers share one fully initialized transport', async () => {
+  const f = await fixture();
+  const factoryGate = Promise.withResolvers(), initializeGate = Promise.withResolvers(), started = Promise.withResolvers();
+  let factories = 0, initializations = 0, early = false;
+  const client = {
+    async initialize() { initializations++; started.resolve(); await initializeGate.promise; return {}; },
+    async close() {},
+  };
+  f.runtime.clientFactory = async () => { factories++; await factoryGate.promise; return client; };
+  const first = f.runtime.codex(), second = f.runtime.codex();
+  try {
+    assert.equal(factories, 1);
+    factoryGate.resolve();
+    await started.promise;
+    const third = f.runtime.codex().then(value => { early = true; return value; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(early, false);
+    initializeGate.resolve();
+    assert.deepEqual(await Promise.all([first, second, third]), [client, client, client]);
+    assert.equal(initializations, 1);
+  } finally {
+    factoryGate.resolve(); initializeGate.resolve();
+    await Promise.allSettled([first, second]);
+    await f.runtime.close();
+  }
+});
+
+test('shared Codex initialization failure reaches every reader before a later explicit connection', async () => {
+  const f = await fixture();
+  const gate = Promise.withResolvers(), failure = new Error('Synthetic initialization failed');
+  let factories = 0, closes = 0;
+  const client = { async initialize() { await gate.promise; throw failure; }, async close() { closes++; } };
+  f.runtime.clientFactory = async () => { factories++; return client; };
+  const reads = [f.runtime.codex(), f.runtime.codex()];
+  const settled = Promise.allSettled(reads);
+  try {
+    gate.resolve();
+    for (const result of await settled) { assert.equal(result.status, 'rejected'); assert.equal(result.reason, failure); }
+    assert.equal(factories, 1); assert.equal(closes, 1); assert.equal(f.runtime.client, null);
+    const next = { async initialize() { return {}; }, async close() {} };
+    f.runtime.clientFactory = async () => { factories++; return next; };
+    assert.equal(await f.runtime.codex(), next);
+    assert.equal(factories, 2);
+  } finally { gate.resolve(); await settled; await f.runtime.close(); }
+});
+
 test('a transient title-proof read does not poison or replace the healthy native owner', async () => {
   const f = await fixture();
   let started = 0, checked = 0;

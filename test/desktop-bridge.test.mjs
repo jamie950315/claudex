@@ -122,6 +122,113 @@ async function fixture(policy = {}, sourceSide = 'claude') {
   };
 }
 
+test('paired inspections overlap under one lock and all finish before allocating a handoff', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  await f.advance('claude', 1);
+  const started = Promise.withResolvers(), gates = { codex: Promise.withResolvers(), claude: Promise.withResolvers() };
+  const inspected = Promise.withResolvers();
+  const starts = [], finished = [];
+  for (const side of ['codex', 'claude']) {
+    const inspect = f.bridge.adapters[side].inspect;
+    f.bridge.adapters[side].inspect = async record => {
+      if (record.status !== 'current') return inspect(record);
+      starts.push(side); started.resolve();
+      await gates[side].promise;
+      const data = await inspect(record);
+      finished.push(side); inspected.resolve();
+      return data;
+    };
+  }
+  const plans = f.calls.plan.length;
+  const operation = f.bridge.sync(f.conversationId);
+  const drained = operation.catch(() => {});
+  try {
+    await started.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(starts, ['codex', 'claude']);
+    gates.codex.resolve();
+    await inspected.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(finished, ['codex']);
+    assert.equal(f.calls.plan.length, plans);
+    assert.equal((await f.bridge.status()).pending, null);
+    gates.claude.resolve();
+    await operation;
+    assert.ok(f.calls.plan.length > plans);
+  } finally {
+    gates.codex.resolve(); gates.claude.resolve();
+    await drained;
+  }
+});
+
+test('a failed paired inspection drains its peer without planning or changing durable state', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  const before = await f.bridge.status(), plans = f.calls.plan.length;
+  const started = Promise.withResolvers(), gate = Promise.withResolvers();
+  let finished = false, settled = false;
+  f.bridge.adapters.codex.inspect = async () => { throw new Error('Codex inspection failed'); };
+  const inspect = f.bridge.adapters.claude.inspect;
+  f.bridge.adapters.claude.inspect = async record => {
+    started.resolve(); await gate.promise;
+    finished = true;
+    return inspect(record);
+  };
+  const operation = f.bridge.sync(f.conversationId);
+  const drained = operation.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await started.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(settled, false);
+    assert.equal(finished, false);
+    assert.equal(f.calls.plan.length, plans);
+    assert.deepEqual(await f.bridge.status(), before);
+    gate.resolve();
+    await assert.rejects(operation, /Codex inspection failed/);
+    assert.equal(finished, true);
+    assert.deepEqual(await f.bridge.status(), before);
+  } finally { gate.resolve(); await drained; }
+});
+
+test('superseded-original reads are bounded and drain a failed batch before stopping', async () => {
+  const f = await fixture();
+  const state = await f.bridge.status(), current = state.records[0];
+  for (let index = 0; index < 9; index++) {
+    const path = `/preserved/original-${index}`, nativeId = `preserved-${index}`;
+    state.records.push({ ...current, id: nativeId, path, nativeId, status: 'original' });
+    f.files.set(path, { ...f.files.get('/original'), nativeId });
+  }
+  const gate = Promise.withResolvers(), started = Promise.withResolvers(), expected = new Error('First original failed');
+  const inspect = f.bridge.adapters.claude.inspect;
+  const starts = [];
+  let active = 0, peak = 0, settled = false;
+  f.bridge.adapters.claude.inspect = async record => {
+    starts.push(record.nativeId); started.resolve();
+    active++; peak = Math.max(peak, active);
+    try {
+      await gate.promise;
+      if (record.nativeId === 'preserved-0') throw expected;
+      if (record.nativeId === 'preserved-1') throw new Error('Later original failed');
+      return inspect(record);
+    } finally { active--; }
+  };
+  const operation = f.bridge.locked(() => f.bridge.assertOriginalsUnchanged(state));
+  const drained = operation.then(() => { settled = true; }, () => { settled = true; });
+  try {
+    await started.promise;
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(peak, 4);
+    assert.equal(starts.length, 4);
+    assert.equal(settled, false);
+    gate.resolve();
+    await assert.rejects(operation, error => error === expected);
+    assert.equal(active, 0);
+    assert.equal(starts.length, 4);
+    assert.deepEqual(f.calls.plan, []);
+  } finally { gate.resolve(); await drained; }
+});
+
 test('dependent old snapshots complete promoted recovery without replay, retirement or future collection', async () => {
   const f = await fixture();
   await f.bridge.sync(f.conversationId);

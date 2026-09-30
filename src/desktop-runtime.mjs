@@ -149,10 +149,18 @@ export class DesktopRuntime {
   }
 
   async codex() {
+    if (this.codexConnecting) return this.codexConnecting;
     // A new connection is not a replay: the coordinator rechecks durable
     // operation evidence before deciding whether a native write is required.
     if (this.client?.closed) this.client = null;
     if (this.client) return this.client;
+    const connecting = this.connectCodex();
+    this.codexConnecting = connecting;
+    try { return await connecting; }
+    finally { if (this.codexConnecting === connecting) this.codexConnecting = null; }
+  }
+
+  async connectCodex() {
     if (this.clientFactory) this.client = await this.clientFactory();
     else {
       const path = join(this.root, 'codex-shared', 'owner.json');

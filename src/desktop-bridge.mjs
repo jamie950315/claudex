@@ -22,6 +22,21 @@ function readingMatches(data, checkpoint) {
 }
 function checkpoint(common) { return { count: common.messages.length, digest: fingerprint(common) }; }
 
+async function readBatches(records, read) {
+  const readings = [];
+  for (let index = 0; index < records.length; index += 4) {
+    // Complete every started read before selecting the first ordered error or
+    // releasing the coordinator lock. Never leave a native inspection running
+    // into recovery, allocation, shutdown or a later batch.
+    const batch = await Promise.allSettled(records.slice(index, index + 4).map(read));
+    for (const result of batch) {
+      if (result.status === 'rejected') throw result.reason;
+      readings.push(result.value);
+    }
+  }
+  return readings;
+}
+
 function imageOrigins(side, data, committed) {
   if (data.localImageRollouts === undefined) return {};
   if (side !== 'codex' || !Array.isArray(data.localImageRollouts))
@@ -167,14 +182,14 @@ export class DesktopBridge {
     for (const record of state.records.filter(record => record.status === 'dependency-anchor' && included(record))) {
       await this.assertDependencyAnchor(record);
     }
-    for (const record of state.records.filter(record => !record.managed && record.status === 'original' && included(record))) {
+    await readBatches(state.records.filter(record => !record.managed && record.status === 'original' && included(record)), async record => {
       const data = await this.inspect(record);
       if (data.digest !== record.checkpoint.digest || data.common.messages.length !== record.checkpoint.count) {
         const current = this.current(state, record.conversationId, record.side);
         throw new Error(`Superseded original ${record.nativeId} changed; current ${record.side} session is ${current?.nativeId ?? 'unavailable'}. No branch was selected.`);
       }
       if (data.incompleteTail) throw new Error('A superseded original has an in-progress turn; synchronization postponed.');
-    }
+    });
   }
 
   async assertDependencyAnchor(record) {
@@ -299,12 +314,11 @@ export class DesktopBridge {
       await this.reconcileOriginalRelocations(state, id);
       await this.assertOriginalsUnchanged(state, id);
       const records = ['codex', 'claude'].map(side => this.current(state, id, side)).filter(Boolean);
-      const readings = [];
-      for (const record of records) {
+      const readings = await readBatches(records, async record => {
         const data = await this.inspect(record);
         if (!readingMatches(data, conversation.canonical)) throw new Error('Conversation history diverged before the common checkpoint; no branch was selected.');
-        readings.push({ record, data });
-      }
+        return { record, data };
+      });
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
       const maintenance = [];

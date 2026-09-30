@@ -496,6 +496,14 @@ Raw observations select priority only; unsuccessful dirty work stays foreground
 until stable full verification. One in-flight native operation can exceed this
 interval, so it is not an end-to-end latency guarantee. Never advance semantic
 checkpoints from hints or skip a current managed Claude owner's lifecycle checks.
+Within the coordinator lock, the two current Codex/Claude history inspections
+may overlap. Superseded-original inspections use batches of at most four;
+dependency-anchor checks retain their ordering. Drain every started read before
+reporting the first input-ordered error, starting another batch, planning writes
+or releasing the lock. Relocation, recovery, maintenance, native writes and
+checkpoint commits remain serial. Concurrent Codex readers share one pending
+transport initialization and receive a client only after it fully initializes;
+initialization failures reach all waiters without replaying native work.
 Full fingerprints stream the existing canonical JSON digest by message. Raw
 archive reads retain canonical byte, reference, portable-shape, asset and semantic
 digest validation without regenerating the chunk/page tree; custom message

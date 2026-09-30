@@ -474,6 +474,15 @@ Raw archive reads verify the bound manifest, ordered pages, every chunk, portabl
 message shape and full semantic digest without regenerating the archive tree.
 Custom message resolvers still require independent deterministic archive binding.
 
+The coordinator overlaps the two current Codex/Claude history inspections while
+holding the same operation lock. Global superseded-original checks use batches
+of at most four independent inspections, after the existing dependency-anchor
+checks. All started reads finish before an error leaves the lock or any next
+batch, maintenance, allocation or native write begins. Errors retain input order;
+partial results never authorize a handoff. Concurrent Codex reads wait for one
+complete transport initialization, including its identity and configuration
+checks. A failed initialization reaches every waiter; it never replays work.
+
 Backup collection reads both current sides of every conversation with a managed
 snapshot, but does not export unrelated cold pairs that have no backups. A missing
 or diverged current history still prevents retirement of that conversation's
