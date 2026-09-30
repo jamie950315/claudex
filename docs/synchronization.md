@@ -607,6 +607,12 @@ using `archive-original CONVERSATION_ID --id NATIVE_ID` while the watcher is
 safely stopped. The verified original and its direct spawned children are archived
 through the native API with exact content preservation. Ordinary forks remain
 unchanged. This is not bulk archival and does not relax deletion guards.
+This explicit cascade operation is validated on Codex `0.155.0-alpha.16.4`,
+`0.158.0-alpha.2.1` and `0.159.2`. Isolated `0.159.2` native checks preserved
+parent and child bytes and full history, kept active and archived ordinary forks
+unchanged, and recovered a lost archive receipt after restart without repeating
+the archive request. These checks use synthetic histories without inference;
+they do not extend the general synchronization runtime allowlist.
 
 The current App's CLI entrypoint is
 `/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`.

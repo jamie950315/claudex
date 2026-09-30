@@ -870,7 +870,7 @@ export class DesktopRuntime {
   }
   async readOriginalArchiveTree(record) {
     const client = await this.codex();
-    if (!['0.155.0-alpha.16.4', '0.158.0-alpha.2.1'].includes(this.codexNativeVersion))
+    if (!['0.155.0-alpha.16.4', '0.158.0-alpha.2.1', '0.159.2'].includes(this.codexNativeVersion))
       throw originalArchiveGuard('Preserved original archive requires a validated native cascade-archive version.');
     return snapshotOriginalArchiveTree({ client, codexHome: this.codexHome, parentId: record.nativeId, cwd: record.cwd,
       safePath: path => this.safePath(path, this.codexHome) });
