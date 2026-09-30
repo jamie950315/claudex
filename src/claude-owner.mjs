@@ -564,8 +564,12 @@ export class ClaudeOwner {
     if (!UUID.test(previous?.sessionId) || previous.transcriptPath !== sessionPath(this.claudeHome, this.cwd, previous.sessionId)
       || !Number.isSafeInteger(previous.bytes) || previous.bytes < 1 || !/^[a-f0-9]{64}$/.test(previous.hash))
       throw new Error('Invalid retained context-reset source identity.');
-    const info = await lstat(previous.transcriptPath), data = await snapshot(previous.transcriptPath);
-    if (!info.isFile() || info.isSymbolicLink() || info.dev !== previous.dev || info.ino !== previous.ino
+    // macOS may renumber a volume's st_dev across reboots, so the saved dev is not
+    // compared. The file must share its native project directory's volume and keep
+    // its inode; the saved content prefix below remains the authoritative check.
+    const info = await lstat(previous.transcriptPath), parent = await lstat(dirname(previous.transcriptPath));
+    const data = await snapshot(previous.transcriptPath);
+    if (!info.isFile() || info.isSymbolicLink() || info.dev !== parent.dev || info.ino !== previous.ino
       || data.bytes < previous.bytes || hash(Buffer.from(data.text).subarray(0, previous.bytes).toString('utf8')) !== previous.hash)
       throw new Error('The preserved context-reset source changed; refusing to discard concurrent history.');
     if (data.bytes === previous.bytes) return data;

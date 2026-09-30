@@ -214,6 +214,20 @@ test('retained native generation changes continue blocking normal reads and appe
   assert.equal(f.calls.inputs.length, 3); await owner.close();
 });
 
+test('a volume device number renumbered by a reboot does not invalidate an unchanged retained generation', async () => {
+  const f = await fixture(), owner = await f.open(true);
+  await reset(owner); await owner.close();
+  const saved = JSON.parse(await readFile(owner.statePath, 'utf8'));
+  saved.retainedGeneration.dev += 1;
+  await writeFile(owner.statePath, JSON.stringify(saved));
+  const reopened = await f.open(true);
+  await reopened.inspectTranscript();
+  await appendFile(f.previousPath, JSON.stringify({ type: 'user', sessionId: f.baseline.sessionId,
+    uuid: randomUUID(), message: { role: 'user', content: 'Later work in preserved source' } }) + '\n');
+  await assert.rejects(reopened.inspectTranscript(), /preserved context-reset source changed/);
+  await reopened.close();
+});
+
 test('context usage returns only validated native capacity numbers through the summary read', async () => {
   const f = await fixture(), owner = await f.open(true);
   assert.deepEqual(await owner.contextUsage(), { totalTokens: 2000, maxTokens: 200000, rawMaxTokens: 1000000, percentage: 0.2 });
