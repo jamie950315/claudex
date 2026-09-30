@@ -4,6 +4,7 @@ import { realpath, stat } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { revalidateWorkspace } from './collaboration-workspace.mjs';
+import { createOwnedProcessTracker } from './collaboration-processes.mjs';
 
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
@@ -117,8 +118,10 @@ export function createNativeCollaborationRunner({
     try { process.kill(-pid, 0); return true; }
     catch (error) { return error.code !== 'ESRCH'; }
   },
+  // Injected synthetic spawns have no OS process identity. Production always tracks descendants.
+  processTrackerFactory = spawnImpl === spawn ? createOwnedProcessTracker : null,
 } = {}) {
-  return async function runCollaborationNative({
+  const run = async function runCollaborationNative({
     provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
     projectRoot, readOnlyDirs = [], writableDirs = [],
     signal, onEvent,
@@ -132,8 +135,11 @@ export function createNativeCollaborationRunner({
     if (!['read-only', 'workspace-write'].includes(permission)) throw failure('Invalid permission.');
     if (onEvent != null && typeof onEvent !== 'function') throw failure('onEvent must be a function.');
     const mcp = checkedMcp(rawMcp);
-    const canonicalCwd = await realpath(cwd);
-    if (!(await stat(canonicalCwd)).isDirectory()) throw failure('cwd must be a directory.');
+    let canonicalCwd;
+    try {
+      canonicalCwd = await realpath(cwd);
+      if (!(await stat(canonicalCwd)).isDirectory()) throw failure('cwd must be a directory.');
+    } catch (cause) { throw failure('Native working directory is unavailable before launch.', { cause }); }
     try {
       await revalidateWorkspace({ cwd: canonicalCwd, projectRoot: projectRoot ?? canonicalCwd, readOnlyDirs, writableDirs, permission });
       if (provider === 'claude' && readOnlyDirs.some(path => /[\u0000-\u001f\u007f*?\[\]{}()!\\]/u.test(path)))
@@ -164,6 +170,8 @@ export function createNativeCollaborationRunner({
         return;
       }
       let closed = false;
+      let leaderExited = false;
+      child.once('exit', () => { leaderExited = true; });
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let startupDiagnostic = '';
@@ -174,11 +182,16 @@ export function createNativeCollaborationRunner({
       let cancelled = false;
       let eventQueue = Promise.resolve();
       let sessionNotified = false;
+      let processTracker, trackerReady, stopping;
       const notify = (event) => {
         eventQueue = eventQueue.then(() => onEvent?.(event)).catch((cause) => {
           stop(failure('Native event handler failed.', { uncertain: true, cause }));
         });
         return eventQueue;
+      };
+      const ownershipFailure = cause => {
+        notify({ type: 'process-inspection-failed' });
+        stop(failure('Native process ownership inspection failed.', { uncertain: true, cause }));
       };
       const signalOwnedGroup = (kind) => {
         if (Number.isSafeInteger(child.pid) && child.pid > 0) {
@@ -190,8 +203,27 @@ export function createNativeCollaborationRunner({
       const stop = (error) => {
         if (!problem) problem = error;
         if (!closed) {
-          signalOwnedGroup('SIGTERM');
-          killTimer ??= setTimeout(() => { if (!closed) signalOwnedGroup('SIGKILL'); }, 2000);
+          if (processTrackerFactory) {
+            stopping ??= (async () => {
+              await trackerReady;
+              if (processTracker) await processTracker.signal('SIGTERM');
+              else if (!leaderExited) child.kill('SIGTERM');
+            })().catch(cause => {
+              problem = failure('Native process ownership inspection failed.', { uncertain: true, cause });
+              notify({ type: 'process-inspection-failed' });
+              if (!closed && !leaderExited) child.kill('SIGTERM');
+            });
+          } else signalOwnedGroup('SIGTERM');
+          killTimer ??= setTimeout(() => {
+            if (!closed) {
+              if (processTracker) processTracker.signal('SIGKILL').catch(cause => {
+                problem = failure('Native process ownership inspection failed.', { uncertain: true, cause });
+                notify({ type: 'process-inspection-failed' });
+              });
+              else if (!processTrackerFactory) signalOwnedGroup('SIGKILL');
+              else if (!leaderExited) child.kill('SIGKILL');
+            }
+          }, 2000);
           killTimer.unref?.();
         }
       };
@@ -202,12 +234,18 @@ export function createNativeCollaborationRunner({
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) abort();
       if (Number.isSafeInteger(child.pid) && child.pid > 0) {
-        notify({ type: 'spawn', pid: child.pid }).then(() => {
+        const spawned = notify({ type: 'spawn', pid: child.pid });
+        if (processTrackerFactory) trackerReady = spawned.then(async () => {
+          processTracker = await processTrackerFactory({ pid: child.pid,
+            onChange: ownedProcesses => notify({ type: 'processes', ownedProcesses }),
+            onError: ownershipFailure });
+        });
+        (trackerReady ?? spawned).then(() => {
           if (!problem && !closed) {
             try { child.stdin?.end(prompt); }
             catch (cause) { stop(failure('Native input could not be delivered.', { uncertain: true, cause })); }
           }
-        });
+        }).catch(ownershipFailure);
       }
       const consume = (line) => {
         if (!line.trim() || problem) return;
@@ -268,8 +306,35 @@ export function createNativeCollaborationRunner({
           }),
         ]);
         clearTimeout(drainTimer);
-        // The detached group belongs only to this invocation, including its MCP children.
-        if (Number.isSafeInteger(child.pid) && child.pid > 0 && groupAliveImpl(child.pid)) {
+        await stopping;
+        let groupClosed;
+        if (processTrackerFactory && !Number.isSafeInteger(child.pid) && problem?.executionUncertain === false) {
+          // ENOENT and other proven spawn failures have no native identity or descendants.
+          groupClosed = true;
+        } else if (processTrackerFactory) {
+          try {
+            await trackerReady;
+            if (!processTracker) throw new Error('Native process identities were not recorded.');
+            // Capture and persist again before release; native tools may use separate process groups.
+            await processTracker.refresh();
+            if (!await processTracker.stopped()) {
+              await processTracker.signal('SIGTERM');
+              for (let i = 0; i < 20 && !await processTracker.stopped(); i++)
+                await new Promise(done => setTimeout(done, 50));
+              if (!await processTracker.stopped()) await processTracker.signal('SIGKILL');
+              for (let i = 0; i < 20 && !await processTracker.stopped(); i++)
+                await new Promise(done => setTimeout(done, 50));
+            }
+            groupClosed = await processTracker.stopped() && !groupAliveImpl(child.pid);
+            await processTracker.close();
+            await eventQueue;
+          } catch (cause) {
+            problem = failure('Native process ownership inspection failed.', { uncertain: true, cause });
+            notify({ type: 'process-inspection-failed' });
+            groupClosed = false;
+            await processTracker?.close().catch(() => {});
+          }
+        } else if (Number.isSafeInteger(child.pid) && child.pid > 0 && groupAliveImpl(child.pid)) {
           signalOwnedGroup('SIGTERM');
           for (let i = 0; i < 20 && groupAliveImpl(child.pid); i++) {
             await new Promise((done) => setTimeout(done, 50));
@@ -279,7 +344,8 @@ export function createNativeCollaborationRunner({
             await new Promise((done) => setTimeout(done, 50));
           }
         }
-        const groupClosed = !Number.isSafeInteger(child.pid) || !groupAliveImpl(child.pid);
+        await eventQueue;
+        if (!processTrackerFactory) groupClosed = !Number.isSafeInteger(child.pid) || !groupAliveImpl(child.pid);
         if (cancelled && problem && groupClosed) problem.executionUncertain = false;
         if (problem) { reject(problem); return; }
         if (!groupClosed) { reject(failure('Native subprocesses survived completion.', { uncertain: true })); return; }
@@ -304,6 +370,8 @@ export function createNativeCollaborationRunner({
       });
     });
   };
+  run.tracksOwnedProcesses = Boolean(processTrackerFactory);
+  return run;
 }
 
 export const runCollaborationNative = createNativeCollaborationRunner();

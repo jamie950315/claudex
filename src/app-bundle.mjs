@@ -20,7 +20,7 @@ export const ENGINE_SRC = Object.freeze([
   'codex-app-layout.mjs', 'codex-delegation.mjs', 'codex-desktop-relaunch.mjs', 'codex-dependencies.mjs', 'codex-original-archive-tree.mjs',
   'codex-projection.mjs', 'codex-versions.mjs', 'codex-websocket.mjs', 'codex.mjs',
   'cold-import.mjs', 'cold-verification-cache.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
-  'collaboration-native.mjs', 'collaboration-transport.mjs', 'collaboration-effort.mjs', 'collaboration-workspace.mjs', 'app-stop-state.mjs', 'compaction.mjs',
+  'collaboration-native.mjs', 'collaboration-processes.mjs', 'collaboration-transport.mjs', 'collaboration-effort.mjs', 'collaboration-workspace.mjs', 'app-stop-state.mjs', 'compaction.mjs',
   'context-archive.mjs', 'context-packet-reader.mjs', 'context-packet.mjs',
   'desktop-bridge.mjs', 'desktop-install.mjs', 'desktop-runtime.mjs',
   'desktop-shutdown.mjs', 'desktop-watch-hints.mjs', 'desktop-watch.mjs',

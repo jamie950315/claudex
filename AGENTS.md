@@ -28,6 +28,11 @@ fixtures use placeholder paths and IDs.
 - Read transcript snapshots through a no-follow file descriptor and compare its
   nanosecond file identity with the named file before and after reading. Size and
   modification time alone do not prove stability after a replacement or rewrite.
+- Before truncating a reusable staging file, verify its opened inode is an owned
+  regular file with exactly one link and still matches the named file. No-follow
+  alone does not protect originals against hardlink staging aliases. Controlled
+  fixture appends compare exact serialized nanosecond identities, never converted
+  floating-point millisecond timestamps.
 - Preserve original contents and never prune originals as generated backups. Authorized same-title handoffs may archive an unchanged superseded original only after verifying its replacement and the applicable native lifecycle guards; archival never grants an external transcript writer lease.
 
 ## macOS app setup
@@ -106,6 +111,14 @@ who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
 replace those apps. Reuse native CLIs or fill missing CLI components from pinned
 official npm packages in the private root. Keep normal native credential
 namespaces, never copy credentials, and do not auto-start model work during setup.
+Private state and status reads use non-blocking, no-follow file descriptors and
+reject non-regular files before reading. Read-only AppSetup inspection refuses
+setup, account, service and model-setting mutations before any native operation.
+Service control verifies the loaded launchd job's definition path, program and
+exact arguments against the owned installation before reporting readiness or
+starting, stopping or removing it; a matching on-disk plist alone is insufficient.
+Completion-event history holds have no scheduled retry countdown. Only actual
+supervisor backoff supplies the next recovery time in that scheduler.
 The app profile enables all projects and task-scoped writes; explicit read-only
 requests and child permission bounds remain strict. Do not loosen existing
 writer, version, resource, account or macOS guards to report a ready checklist.
@@ -185,6 +198,13 @@ generation capabilities fence old workers. Never launch the next owner before
 the outgoing invocation and its owned process group finish. Never replay an
 uncertain native invocation. In-flight work found after restart becomes uncertain
 and blocks dispatch; preserve its process/session evidence and work record.
+Native tools may detach into another process group. A shared bounded metadata
+sampler records observed descendants by exact ancestry, PID, UID, PGID and UTC
+start identity; persist those records with each execution. Recheck before every
+individual signal and require both primary-group and recorded-descendant closure
+before releasing ownership. Missing, changed or incomplete inventories retain
+uncertainty. This is evidence for observed descendants, not every transient fork
+or hostile same-user process. Never interpret a changed PGID as process absence.
 
 `bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
 Controller-only chat_list/chat_send/chat_status coordinate exact native sessions
@@ -215,7 +235,12 @@ can queue messages waiting-for-resume. Only real SessionStart/UserPromptSubmit
 reactivates them; late Stop events cannot. Receipt deliveryStatus is computed,
 not a new durable state or proof of native receipt. This
 does not introduce managed-task-to-origin-chat mapping. Codex metadata discovery
-does not fabricate hook registrations. Native owner IPC supports untrusted-input
+does not fabricate hook registrations. The broker inspects the synchronization
+root beside its collaboration root for the configured Desktop launcher. When
+configured, metadata discovery uses its private codex-shared/app.sock listener;
+an unavailable or invalid configured listener never falls back to another backend.
+Without a launcher configuration, discovery uses the native control endpoint.
+Native owner IPC supports untrusted-input
 wake in the original Desktop chat, including deep-link opening of unloaded originals;
 busy/native-owner changes never authorize a second writer. Claude wake uses the
 version-pinned renderer and narrow Desktop MCP claim/receipt endpoint.

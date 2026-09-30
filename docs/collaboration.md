@@ -53,7 +53,8 @@ a native model session or UI chat ID. An external caller relinquishes its own
 work by ending its turn; the protocol cannot forcibly stop an unrelated native chat.
 
 A running worker's handoff is recorded first. The next owner starts only after
-the outgoing native execution finishes successfully and its process group closes.
+the outgoing native execution finishes successfully, its primary process group
+closes and all recorded owned descendants exit.
 The outgoing worker must stop work after handoff acknowledgement. It cannot issue
 further mutations with that generation's capability. No handoff occurs after a
 failure or an uncertain outcome. Idempotency keys reject changed request payloads
@@ -401,14 +402,21 @@ After a broker crash, in-flight work becomes `uncertain` and blocks new dispatch
 No native input or pending handoff is replayed. Inspect the last recorded native
 process/session and workspace before operator recovery; do not clear the ledger
 to regain availability. Completed work remains readable. Cancellation targets only
-the invocation's owned process group and does not undo file changes.
+the invocation's verified owned processes and does not undo file changes.
+Native tools can create separate process groups. One shared metadata sampler
+records observed same-user descendants through exact ancestry, PID, UID, process
+group and UTC start identity, with at most 256 records per invocation. Individual
+signals recheck those identities. This does not capture every instantaneous fork
+or provide isolation against hostile same-user processes. Primary-group closure
+remains required. Missing, changed or incomplete inventories retain uncertainty;
+they never authorize replay or a successful shutdown report.
 
 A controller can explicitly close an inspected uncertain task as
 failed through `claudex collaboration request resolve --peer codex`, supplying
 JSON on stdin with `taskId`, the current `revision`, a stable `requestId`,
 `outcome: "failed"` and a nonempty `reason` of at most 2,048 bytes. This operation
 is not an MCP worker tool. The broker checks that the recorded native PID and its
-process group are both absent, refuses permission or inspection errors, active
+process group and every recorded descendant are absent, refuses permission or inspection errors, active
 in-memory workers, missing process evidence and unfinished
 descendants. The original messages, error, native execution evidence and result
 are preserved together with a durable resolution and inspection timestamp.
@@ -444,3 +452,12 @@ default. This validates bounded text-file editing, not arbitrary builds, shell
 availability in Claude, Desktop UI chat transfer, arbitrary future runtimes, or
 synchronization compatibility for every feature of these versions. Automated
 tests still never start inference.
+
+Additional isolated native checks on Codex `0.159.2` and Claude Code `2.1.283`
+cover writable bidirectional delegation, parent resumption, consecutive handoffs,
+completed-task follow-up, native reference-write denial, cancellation, broker
+shutdown and crash recovery. Eighteen native invocations include the reproducer
+for a separate-process-group cancellation leak. After its repair, live recorded
+descendants block uncertain resolution until verified cleanup; queued work then
+dispatches once. These checks preserve the same Desktop UI and general
+synchronization compatibility limits stated above.

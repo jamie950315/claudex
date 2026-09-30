@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { atomicWrite, privateDirectory, publishExclusive, readJSON, withLock, writeJSON } from './storage.mjs';
+import { inspectOwnedProcesses } from './collaboration-processes.mjs';
 
 const execute = promisify(execFile);
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -166,15 +167,24 @@ async function readOwnedDefinition(path) {
   return contents;
 }
 
-async function loadedStatus(run, label) {
+async function loadedStatus(run, label, definition) {
+  let stdout;
   try {
-    const { stdout } = await run('launchctl', ['print', `gui/${process.getuid()}/${label}`]);
-    return { loaded: true, running: /state = running/.test(stdout ?? '') };
+    ({ stdout } = await run('launchctl', ['print', `gui/${process.getuid()}/${label}`]));
   } catch (error) {
     if (/Could not find|No such process|No such file/i.test(error.stderr ?? ''))
       return { loaded: false, running: false };
     throw error;
   }
+  if (definition !== undefined) {
+    const value = key => stdout.match(new RegExp(`^\\s*${key} = (.+)$`, 'm'))?.[1];
+    const block = stdout.match(/^\s*arguments = \{\n([\s\S]*?)^\s*\}/m)?.[1];
+    const args = block?.split('\n').map(line => line.trim()).filter(Boolean);
+    if (!definition || value('path') !== definition.path || value('program') !== definition.args[0]
+        || JSON.stringify(args) !== JSON.stringify(definition.args))
+      throw new Error('Loaded collaboration LaunchAgent differs from the owned installation; it was preserved.');
+  }
+  return { loaded: true, running: /state = running/.test(stdout ?? '') };
 }
 
 function validJournal(journal, definition) {
@@ -233,7 +243,7 @@ function savedControlDefinition(journal, options) {
   return definition;
 }
 
-async function collaborationProcessesStopped(root, absent) {
+async function collaborationProcessesStopped(root, absent, inspectProcesses) {
   const lock = await privateControlJSON(join(root, 'broker.lock'));
   const endpoint = await privateControlJSON(join(root, 'endpoint.json'));
   const pids = new Set();
@@ -257,12 +267,23 @@ async function collaborationProcessesStopped(root, absent) {
     throw new Error('Collaboration work evidence is malformed.');
   for (const task of Object.values(work?.tasks ?? {})) {
     if (!task || typeof task !== 'object') throw new Error('Collaboration work evidence is malformed.');
-    const execution = task.active ?? (task.status === 'uncertain' ? task.lastExecution : null);
+    const execution = task.active ?? (task.status === 'uncertain' || task.lastExecution?.ownedProcesses
+      || task.lastExecution?.processInventoryRequired ? task.lastExecution : null);
     if (!execution) {
       if (task.status === 'running' || task.status === 'uncertain') throw new Error('Cannot verify collaboration shutdown: native process identity is missing.');
       continue;
     }
     if (!Number.isSafeInteger(execution.pid) || execution.pid <= 1) throw new Error('Cannot verify collaboration shutdown: native process identity is missing.');
+    if (execution.processInventoryRequired && !execution.ownedProcesses)
+      throw new Error('Cannot verify collaboration shutdown: native descendant identities are missing.');
+    if (execution.processInventoryError)
+      throw new Error('Cannot verify collaboration shutdown: native process inventory is incomplete.');
+    if (execution.ownedProcesses) {
+      const proof = await inspectProcesses(execution.ownedProcesses);
+      if (!Array.isArray(proof?.processes) || proof.processes.length !== execution.ownedProcesses.length
+        || proof.processes.some((record, index) => record.absent !== true
+          || ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => record[key] !== execution.ownedProcesses[index][key]))) return false;
+    }
     pids.add(execution.pid);
   }
   for (const pid of pids) if (!await absent(pid) || !await absent(-pid)) return false;
@@ -272,7 +293,7 @@ async function collaborationProcessesStopped(root, absent) {
 // Control only an exact installed artifact, never paths supplied by its journal.
 // Bootout requests graceful shutdown; detached native groups can outlive launchd.
 export async function controlCollaboration(action, options,
-  { run = execute, platform = process.platform, absent = processAbsent } = {}) {
+  { run = execute, platform = process.platform, absent = processAbsent, inspectProcesses = inspectOwnedProcesses } = {}) {
   if (!['start', 'stop', 'status'].includes(action)) throw new Error('Unknown collaboration control action.');
   if (platform !== 'darwin') throw new Error('Collaboration LaunchAgent control supports macOS only.');
   const requestedRoot = resolve(options.root);
@@ -281,7 +302,7 @@ export async function controlCollaboration(action, options,
   catch (error) {
     if (error.code === 'ENOENT' && action !== 'start') {
       const definition = collaborationDefinition({ ...options, root: requestedRoot });
-      const status = await loadedStatus(run, definition.label);
+      const status = await loadedStatus(run, definition.label, null);
       if (status.loaded) throw new Error('Loaded collaboration job has no owned installation root; it was preserved.');
       return { installed: false, ...status, stopped: true, shutdownRequested: false };
     }
@@ -295,12 +316,15 @@ export async function controlCollaboration(action, options,
     const journal = await privateControlJSON(join(root, 'collaboration-install.json'));
     definition = savedControlDefinition(journal, { ...options, root, node: options.node ?? process.execPath });
     const contents = await readOwnedDefinition(definition.path);
-    const loaded = await loadedStatus(run, definition.label);
-    if (!journal && contents === null && !loaded.loaded) return { installed: false, ...loaded };
+    if (!journal && contents === null) {
+      const loaded = await loadedStatus(run, definition.label, null);
+      return { installed: false, ...loaded };
+    }
     const directory = await lstat(dirname(definition.path));
     if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid() || (directory.mode & 0o022)
         || !validJournal(journal, definition) || journal.after !== definition.plist || contents !== definition.plist)
       throw new Error('Collaboration control requires the exact owned installation; existing artifacts were preserved.');
+    const loaded = await loadedStatus(run, definition.label, definition);
     return { installed: true, ...loaded };
   };
   const control = async () => {
@@ -309,21 +333,23 @@ export async function controlCollaboration(action, options,
     if (action === 'start') {
       if (!status.installed) throw new Error('Collaboration is not installed.');
       if (!status.loaded) {
-        if (!await collaborationProcessesStopped(root, absent))
+        if (!await collaborationProcessesStopped(root, absent, inspectProcesses))
           throw new Error('Prior collaboration broker or native process group has not safely stopped.');
         // Recheck artifact ownership immediately before launchd mutation.
         status = await inspect();
         if (!status.loaded) await run('launchctl', ['bootstrap', `gui/${process.getuid()}`, definition.path]);
       }
-      return { ...base, installed: true, ...await loadedStatus(run, definition.label), stopped: false, shutdownRequested: false };
+      const started = await loadedStatus(run, definition.label, definition);
+      if (!started.loaded) throw new Error('Collaboration LaunchAgent did not become loaded; the application stop hold was preserved.');
+      return { ...base, installed: true, ...started, stopped: false, shutdownRequested: false };
     }
     let shutdownRequested = false;
     if (action === 'stop' && status.loaded) {
       await run('launchctl', ['bootout', `gui/${process.getuid()}/${definition.label}`]);
       shutdownRequested = true;
-      status = { ...status, ...await loadedStatus(run, definition.label) };
+      status = { ...status, ...await loadedStatus(run, definition.label, definition) };
     }
-    const stopped = !status.loaded && await collaborationProcessesStopped(root, absent);
+    const stopped = !status.loaded && await collaborationProcessesStopped(root, absent, inspectProcesses);
     return { ...base, ...status, stopped, shutdownRequested };
   };
   return action === 'status' ? control()
@@ -360,6 +386,10 @@ export async function installCollaboration(options, { run = execute, platform = 
     } else if (journal && contents !== journal.after) {
       throw new Error('Existing collaboration LaunchAgent differs from its ownership journal; it was preserved.');
     }
+    if (loaded.loaded) {
+      const installed = savedControlDefinition({ after: contents }, { ...options, root, node: options.node ?? process.execPath });
+      await loadedStatus(run, definition.label, installed);
+    }
     if (contents !== definition.plist) {
       if (loaded.loaded) throw new Error('Stop the loaded collaboration job before upgrading its LaunchAgent.');
       if (journal?.phase !== 'prepared') {
@@ -376,6 +406,8 @@ export async function installCollaboration(options, { run = execute, platform = 
     }
     await run('plutil', ['-lint', definition.path]);
     if (!loaded.loaded) await run('launchctl', ['bootstrap', `gui/${process.getuid()}`, definition.path]);
+    if (!(await loadedStatus(run, definition.label, definition)).loaded)
+      throw new Error('Collaboration LaunchAgent did not become loaded; installation remains recoverable.');
     await writeJSON(journalPath, { ...journal, phase: 'installed', installedAt: Date.now() });
     return { installed: true, label: definition.label, launchAgent: definition.path, loaded: true };
   }, { recoverDead: true });

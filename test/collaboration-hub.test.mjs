@@ -252,6 +252,52 @@ test('writable uncertainty requires reconciliation and preserves its attestation
   assert.equal(calls, 0);
 });
 
+test('uncertain resolution refuses a recorded separate-group descendant and never replays native work', async t => {
+  let calls = 0, childAbsent = false;
+  const ownedProcesses = [123456, 123457].map((pid, index) => ({ pid, ppid: index ? 123456 : 1,
+    pgid: pid, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }));
+  const { root, hub } = await setup(t, async () => { calls++; return { text: 'Unexpected replay' }; }, {
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+    inspectProcesses: records => ({ inspectedAt: 123, processes: records.map((row, index) => ({ ...row, absent: !index || childAbsent })) }),
+  });
+  const task = await uncertainFixture(hub, root, { lastExecution: { generation: 1, pid: 123456,
+    processInventoryRequired: true, ownedProcesses } });
+  await assert.rejects(hub.dispatch(resolution(hub, task)), /descendants must all be confirmed absent/);
+  assert.equal((await status(hub, task.id)).status, 'uncertain');
+  childAbsent = true;
+  const request = resolution(hub, task);
+  await hub.dispatch(request);
+  assert.equal((await hub.dispatch(request)).replayed, true);
+  const done = await status(hub, task.id);
+  assert.deepEqual(done.lastExecution.ownedProcesses, ownedProcesses);
+  assert.equal(done.resolution.ownedProcessInspection.processes.length, 2);
+  assert.equal(calls, 0);
+});
+
+test('an incomplete process inventory never becomes resolution proof after the saved prefix exits', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'Unexpected replay' }), {
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+    inspectProcesses: records => ({ inspectedAt: 123, processes: records.map(row => ({ ...row, absent: true })) }),
+  });
+  const task = await uncertainFixture(hub, root, { lastExecution: { generation: 1, pid: 123456,
+    processInventoryRequired: true, processInventoryError: true, ownedProcesses: [{ pid: 123456, ppid: 1,
+      pgid: 123456, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }] } });
+  await assert.rejects(hub.dispatch(resolution(hub, task)), /inventory is incomplete/);
+  assert.equal((await status(hub, task.id)).status, 'uncertain');
+});
+
+test('known failure without a native spawn clears only its unused inventory requirement', async t => {
+  const run = async () => { const error = new Error('Native binary is absent'); error.executionUncertain = false; throw error; };
+  run.tracksOwnedProcesses = true;
+  const { root, hub } = await setup(t, run);
+  const started = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root,
+    prompt: 'Never infer', requestId: 'no-binary' }));
+  const failed = await until(async () => { const task = await status(hub, started.taskId); return task.status === 'failed' && task; });
+  assert.equal(failed.lastExecution.notStarted, true);
+  assert.equal(failed.lastExecution.pid, null);
+  assert.equal(failed.lastExecution.processInventoryRequired, undefined);
+});
+
 test('uncertain resolution refuses missing identity, live processes, inspection errors and stale revisions', async t => {
   for (const scenario of [
     { name: 'missing pid', extra: { lastExecution: null }, pattern: /identity is missing/ },

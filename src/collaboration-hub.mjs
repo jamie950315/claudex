@@ -8,6 +8,7 @@ import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
+import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -80,13 +81,14 @@ function inspectExitedProcessGroup(pid) {
 export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
-    inspectProcessGroup = inspectExitedProcessGroup, chatTitleResolver = enrichChatTitles,
+    inspectProcessGroup = inspectExitedProcessGroup, inspectProcesses = inspectOwnedProcesses, chatTitleResolver = enrichChatTitles,
     nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
     if (!isAbsolute(root ?? '') || typeof run !== 'function') throw new Error('Absolute root and native runner are required.');
     if (typeof inspectProcessGroup !== 'function') throw new Error('Process-group inspector must be a function.');
+    if (typeof inspectProcesses !== 'function') throw new Error('Owned-process inspector must be a function.');
     if (!['read-only', 'workspace-write'].includes(defaultPermission)
       || defaultPermission === 'workspace-write' && !allowWrite) throw new Error('Default permission exceeds broker authorization.');
     for (const [name, value, max] of [['maxWorkers', maxWorkers, 64], ['maxDepth', maxDepth, 8],
@@ -94,7 +96,7 @@ export class CollaborationHub extends EventEmitter {
       ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024]]) {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
     }
-    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, inspectProcessGroup });
+    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, inspectProcessGroup, inspectProcesses });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
     this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
     this.chatTitleResolver = chatTitleResolver;
@@ -131,6 +133,8 @@ export class CollaborationHub extends EventEmitter {
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
     for (const [id, task] of Object.entries(this.state.tasks)) {
+      for (const execution of [task.active, task.lastExecution]) if (execution?.ownedProcesses !== undefined)
+        validateOwnedProcesses(execution.ownedProcesses);
       if (task.projectRoot !== undefined && (!isAbsolute(task.projectRoot) || task.cwd !== task.projectRoot)
         || ['readOnlyDirs', 'writableDirs'].some(key => task[key] !== undefined
           && (!Array.isArray(task[key]) || task[key].length > 16 || task[key].some(path => typeof path !== 'string' || !isAbsolute(path)))))
@@ -485,6 +489,20 @@ export class CollaborationHub extends EventEmitter {
           const pid = execution?.pid;
           if (!Number.isSafeInteger(pid) || pid <= 1 || execution?.generation !== task.generation)
             throw new Error('Recorded native process identity is missing or ambiguous.');
+          if (execution.processInventoryRequired && !execution.ownedProcesses)
+            throw new Error('Recorded native descendant identities are missing; process absence cannot be established.');
+          if (execution.processInventoryError)
+            throw new Error('Recorded native process inventory is incomplete; descendant absence cannot be established.');
+          let ownedProcessInspection;
+          if (execution.ownedProcesses) {
+            ownedProcessInspection = await this.inspectProcesses(execution.ownedProcesses);
+            if (!Array.isArray(ownedProcessInspection?.processes)
+              || ownedProcessInspection.processes.length !== execution.ownedProcesses.length
+              || !Number.isSafeInteger(ownedProcessInspection.inspectedAt) || ownedProcessInspection.inspectedAt <= 0
+              || ownedProcessInspection.processes.some((record, index) => record.absent !== true
+                || ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => record[key] !== execution.ownedProcesses[index][key])))
+              throw new Error('Recorded native descendants must all be confirmed absent.');
+          }
           const proof = await this.inspectProcessGroup(pid);
           if (proof?.pid !== pid || proof.processAbsent !== true || proof.groupAbsent !== true
             || !Number.isSafeInteger(proof.inspectedAt) || proof.inspectedAt <= 0)
@@ -492,6 +510,7 @@ export class CollaborationHub extends EventEmitter {
           task.resolution = { outcome: 'failed', reason, previousStatus: task.status, previousError: task.error,
             previousRevision: task.revision, inspectedAt: proof.inspectedAt, pid,
             processAbsent: true, groupAbsent: true, resolvedAt: Date.now(), controller: actor.peer,
+            ...(ownedProcessInspection ? { ownedProcessInspection } : {}),
             ...(workspaceReconciliation ? { workspaceReconciled: true, workspaceReconciliation } : {}) };
           task.status = 'failed';
         } else if (method === 'send') {
@@ -593,6 +612,7 @@ export class CollaborationHub extends EventEmitter {
                 .filter(kind => ['request', 'message', 'child-result', 'handoff'].includes(kind)))] };
             task.active = { generation: task.generation, tokenHash: digest(token), messageCount: task.messages.length,
               provider: task.owner, startedAt: Date.now(), pid: null, sessionId: null, seenChildren: {}, inputs };
+            if (this.run.tracksOwnedProcesses) task.active.processInventoryRequired = true;
             return copy(task);
           });
         });
@@ -647,14 +667,26 @@ export class CollaborationHub extends EventEmitter {
         prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
         mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
         onEvent: async event => {
-          if (!event || !['spawn', 'session'].includes(event.type)) return;
+          if (!event || !['spawn', 'session', 'processes', 'process-inspection-failed'].includes(event.type)) return;
           await this.mutate(state => {
             const current = state.tasks[task.id];
             if (current.active?.generation !== task.generation || current.status !== 'running') throw new Error('Native event has a stale ownership generation.');
             if (event.type === 'spawn') {
               if (!Number.isSafeInteger(event.pid) || event.pid <= 0) throw new Error('Invalid native process identity.');
               current.active.pid = event.pid;
-            } else { current.active.sessionId = text(event.sessionId, 'sessionId', 200); }
+            } else if (event.type === 'session') { current.active.sessionId = text(event.sessionId, 'sessionId', 200); }
+            else if (event.type === 'process-inspection-failed') {
+              current.active.processInventoryRequired = true;
+              current.active.processInventoryError = true;
+            } else {
+              validateOwnedProcesses(event.ownedProcesses);
+              if (event.ownedProcesses[0].pid !== current.active.pid
+                || (current.active.ownedProcesses ?? []).some((saved, index) =>
+                  ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => saved[key] !== event.ownedProcesses[index]?.[key])))
+                throw new Error('Native descendant inventory changed its saved ownership proof.');
+              current.active.processInventoryRequired = true;
+              current.active.ownedProcesses = copy(event.ownedProcesses);
+            }
           });
         } });
       text(result?.text, 'native result', 65536);
@@ -667,6 +699,11 @@ export class CollaborationHub extends EventEmitter {
         current.status = failure.executionUncertain === false ? (current.cancelRequested ? 'cancelled' : 'failed') : 'uncertain';
         current.error = String(failure.message ?? 'Native execution failed.').slice(0, 2048);
         current.pendingHandoff = null;
+        if (failure.executionUncertain === false && active.pid === null && !active.ownedProcesses) {
+          active.notStarted = true;
+          delete active.processInventoryRequired;
+          delete active.processInventoryError;
+        }
       } else {
         current.result = { text: result.text, provider: task.owner, sessionId: result.sessionId ?? active.sessionId,
           generation: task.generation, at: Date.now() };

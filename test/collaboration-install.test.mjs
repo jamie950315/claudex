@@ -11,10 +11,12 @@ async function fixture() {
   const options = { root, home: root, node: process.execPath,
     cli: resolve('bin/claudex-collaboration.mjs') };
   const calls = [];
-  let loaded = false;
+  let loaded = false, loadedOutput = null, ignoreBootstrap = false;
   let failBootstrap = false;
   let codex = null, claude = null, claudeScope = 'User config';
   return { options, calls, set loaded(value) { loaded = value; }, set failBootstrap(value) { failBootstrap = value; },
+    set loadedOutput(value) { loadedOutput = value; },
+    set ignoreBootstrap(value) { ignoreBootstrap = value; },
     set codex(value) { codex = value; }, set claude(value) { claude = value; },
     set claudeScope(value) { claudeScope = value; },
     deps: { platform: 'darwin', async run(command, args) {
@@ -39,11 +41,17 @@ async function fixture() {
       }
       if (command === 'launchctl' && args[0] === 'print') {
         if (!loaded) throw Object.assign(new Error('Absent job'), { stderr: 'Could not find service' });
-        return { stdout: 'state = running' };
+        if (loadedOutput !== null) return { stdout: loadedOutput };
+        const definition = collaborationDefinition(options);
+        const contents = await readFile(definition.path, 'utf8').catch(() => '');
+        const block = contents.match(/<key>ProgramArguments<\/key><array>(.*?)<\/array>/s)?.[1] ?? '';
+        const unxml = value => value.replaceAll('&apos;', "'").replaceAll('&quot;', '"').replaceAll('&gt;', '>').replaceAll('&lt;', '<').replaceAll('&amp;', '&');
+        const argumentsList = [...block.matchAll(/<string>(.*?)<\/string>/gs)].map(match => unxml(match[1]));
+        return { stdout: `path = ${definition.path}\nprogram = ${argumentsList[0]}\narguments = {\n${argumentsList.join('\n')}\n}\nstate = running` };
       }
       if (command === 'launchctl' && args[0] === 'bootstrap') {
         if (failBootstrap) throw new Error('Synthetic bootstrap interruption');
-        loaded = true;
+        if (!ignoreBootstrap) loaded = true;
       }
       if (command === 'launchctl' && args[0] === 'bootout') loaded = false;
       return { stdout: '' };
@@ -103,6 +111,31 @@ test('bootout does not claim native groups stopped and restart waits for absence
   assert.equal((await controlCollaboration('start', f.options, { ...f.deps, absent: () => true })).running, true);
 });
 
+test('loaded collaboration label collisions preserve foreign jobs despite an owned disk installation', async () => {
+  for (const kind of ['path', 'program', 'arguments']) {
+    const f = await fixture(); await installCollaboration(f.options, f.deps);
+    const definition = collaborationDefinition(f.options);
+    f.loadedOutput = `path = ${kind === 'path' ? '/foreign/job.plist' : definition.path}\nprogram = ${kind === 'program' ? '/bin/sleep' : definition.args[0]}\narguments = {\n${(kind === 'arguments' ? ['/bin/sleep', '300'] : definition.args).join('\n')}\n}\nstate = running`;
+    for (const action of ['stop', 'start', 'status'])
+      await assert.rejects(controlCollaboration(action, f.options, f.deps), /Loaded collaboration LaunchAgent differs/);
+    const beforeJournal = await readFile(join(f.options.root, 'collaboration-install.json'), 'utf8');
+    await assert.rejects(installCollaboration(f.options, f.deps), /Loaded collaboration LaunchAgent differs/);
+    assert.equal(await readFile(join(f.options.root, 'collaboration-install.json'), 'utf8'), beforeJournal);
+    assert.equal(f.calls.some(call => call[1] === 'bootout'), false);
+    assert.equal(await readFile(definition.path, 'utf8'), definition.plist);
+  }
+});
+
+test('bootstrap success without a loaded broker preserves the recovery journal', async () => {
+  const f = await fixture(); f.ignoreBootstrap = true;
+  await assert.rejects(installCollaboration(f.options, f.deps), /did not become loaded/);
+  assert.equal((await readJSON(join(f.options.root, 'collaboration-install.json'))).phase, 'prepared');
+  await assert.rejects(controlCollaboration('start', f.options, f.deps), /did not become loaded/);
+  f.ignoreBootstrap = false;
+  await installCollaboration(f.options, f.deps);
+  assert.equal((await readJSON(join(f.options.root, 'collaboration-install.json'))).phase, 'installed');
+});
+
 test('control rejects changed artifacts, foreign executable identity and unsafe journals', async () => {
   const f = await fixture();
   await installCollaboration(f.options, f.deps);
@@ -129,6 +162,32 @@ test('restart preserves unresolved native worker evidence and never signals it',
   await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
     tasks: { worker: { status: 'running', active: {} } } }));
   await assert.rejects(controlCollaboration('status', f.options, f.deps), /native process identity is missing/);
+});
+
+test('Quit and restart retain a recorded descendant hold after the native leader exits', async () => {
+  const f = await fixture();
+  await installCollaboration(f.options, f.deps); f.loaded = false;
+  const ownedProcesses = [54321, 54322].map((pid, index) => ({ pid, ppid: index ? 54321 : 1,
+    pgid: pid, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }));
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
+    tasks: { worker: { status: 'cancelled', lastExecution: { pid: 54321, ownedProcesses, processInventoryRequired: true } } } }));
+  let childAbsent = false;
+  const deps = { ...f.deps, absent: () => true, inspectProcesses: records => ({ inspectedAt: 123,
+    processes: records.map((row, index) => ({ ...row, absent: !index || childAbsent })) }) };
+  assert.equal((await controlCollaboration('status', f.options, deps)).stopped, false);
+  await assert.rejects(controlCollaboration('start', f.options, deps), /has not safely stopped/);
+  childAbsent = true;
+  assert.equal((await controlCollaboration('status', f.options, deps)).stopped, true);
+});
+
+test('known no-spawn failure permits stopped status while incomplete native inventory keeps its hold', async () => {
+  const f = await fixture(); await installCollaboration(f.options, f.deps); f.loaded = false;
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
+    tasks: { worker: { status: 'failed', lastExecution: { pid: null, notStarted: true } } } }));
+  assert.equal((await controlCollaboration('status', f.options, { ...f.deps, absent: () => true })).stopped, true);
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
+    tasks: { worker: { status: 'uncertain', lastExecution: { pid: 54321, processInventoryError: true } } } }));
+  await assert.rejects(controlCollaboration('status', f.options, { ...f.deps, absent: () => true }), /inventory is incomplete/);
 });
 
 test('new installation journals exact artifact and does not bootstrap again', async () => {

@@ -342,3 +342,44 @@ test('early native exit during an asynchronous spawn receipt never sends input',
   await assert.rejects(work, (error) => error.executionUncertain === true);
   assert.equal(fake.calls.length, 0);
 });
+
+test('native completion drains separately grouped descendants before returning its terminal receipt', async () => {
+  const fake = fakeSpawn([{ type: 'item.completed', item: { type: 'agent_message', text: 'Done.' } }, { type: 'turn.completed' }]);
+  let alive = true, drained = false;
+  const calls = [];
+  const run = createNativeCollaborationRunner({ spawnImpl: fake.spawnImpl, groupAliveImpl: () => false,
+    processTrackerFactory: async ({ onChange }) => {
+      await onChange([{ pid: 42, ppid: 1, pgid: 42, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' },
+        { pid: 43, ppid: 42, pgid: 43, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }]);
+      return { refresh: async () => calls.push('capture'), stopped: async () => !alive,
+        signal: async kind => { calls.push(kind); alive = false; drained = true; }, close: async () => calls.push('close') };
+    } });
+  const events = [];
+  const result = await run({ provider: 'codex', cwd: process.cwd(), prompt: 'Synthetic descendant lifecycle',
+    onEvent: event => events.push(event.type) });
+  assert.equal(result.text, 'Done.');
+  assert.equal(drained, true);
+  assert.deepEqual(calls, ['capture', 'SIGTERM', 'close']);
+  assert.deepEqual(events.slice(0, 2), ['spawn', 'processes']);
+});
+
+test('descendant inspection failure preserves uncertainty after an otherwise successful native result', async () => {
+  const fake = fakeSpawn([{ type: 'item.completed', item: { type: 'agent_message', text: 'Done.' } }, { type: 'turn.completed' }]);
+  const events = [];
+  const run = createNativeCollaborationRunner({ spawnImpl: fake.spawnImpl, groupAliveImpl: () => false,
+    processTrackerFactory: async () => ({ refresh: async () => { throw new Error('Inspection unavailable'); },
+      close: async () => {}, stopped: async () => true }) });
+  await assert.rejects(run({ provider: 'codex', cwd: process.cwd(), prompt: 'Synthetic descendant inspection', onEvent: event => events.push(event) }),
+    error => error.executionUncertain === true && /ownership inspection failed/.test(error.message));
+  assert.equal(events.some(event => event.type === 'process-inspection-failed'), true);
+});
+
+test('production runner reports an absent binary and unavailable cwd as known failures before native launch', async () => {
+  const run = createNativeCollaborationRunner({ commands: { codex: '/missing/native-codex-for-test', claude: '/missing/native-claude-for-test' } });
+  const events = [];
+  await assert.rejects(run({ provider: 'codex', cwd: process.cwd(), prompt: 'Never infer', onEvent: event => events.push(event) }),
+    error => error.executionUncertain === false);
+  assert.deepEqual(events, []);
+  await assert.rejects(run({ provider: 'codex', cwd: '/missing/native-cwd-for-test', prompt: 'Never infer' }),
+    error => error.executionUncertain === false);
+});
