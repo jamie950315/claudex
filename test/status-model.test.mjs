@@ -60,6 +60,15 @@ check(health(changed).state == "unknown")
 changed = ready; changed["blocked"] = ["reason": "Exact history mismatch", "retryAt": now + 30000] as [String: Any]
 let paused = health(changed)
 check(paused.state == "paused" && paused.attention && paused.retryAt == now + 30000)
+changed["scheduler"] = "completion-events"
+check(health(changed).retryAt == nil && health(changed).attention)
+changed["blocked"] = ["reason": "Exact history mismatch", "retryAt": now - 30000] as [String: Any]
+check(health(changed).retryAt == nil && health(changed).attention)
+changed["blocked"] = nil; changed["blockedConversationCount"] = 1
+changed["blockedConversations"] = [["reason": "Saved working directory is unavailable", "retryAt": now + 30000] as [String: Any]]
+check(health(changed).retryAt == nil && health(changed).attention)
+let scheduledRecovery: [String: Any] = ["pid": 42, "state": "backoff", "autoRestart": true, "nextAttemptAt": now + 5000]
+check(health(changed, scheduledRecovery).retryAt == now + 5000)
 changed = ready; changed["blockedConversationCount"] = 1
 check(health(changed).state == "paused")
 changed = ready; changed["blockedSourceCount"] = 1
@@ -126,13 +135,15 @@ check((try privateJSON(folder, "good.json"))?["state"] as? String == "ready")
 check(try privateJSON(folder, "missing.json") == nil)
 do { _ = try privateJSON(folder, "link.json"); fatalError("Symlink was followed") } catch {}
 do { _ = try privateJSON(folder, "public.json"); fatalError("Public file was trusted") } catch {}
+do { _ = try privateJSON(folder, "pipe.json"); fatalError("FIFO was trusted") } catch {}
 print("status-contracts-passed")
 `, { mode: 0o600 });
     await writeFile(join(root, 'good.json'), '{"state":"ready"}', { mode: 0o600 });
     await writeFile(join(root, 'public.json'), '{}', { mode: 0o644 });
     await chmod(join(root, 'public.json'), 0o644);
     await symlink(join(root, 'good.json'), join(root, 'link.json'));
+    await run('/usr/bin/mkfifo', [join(root, 'pipe.json')]);
     await run('xcrun', ['swiftc', resolve('native/ClaudexStatus/StatusModel.swift'), main, '-o', binary]);
-    const result = await run(binary, [root]);
+    const result = await run(binary, [root], { timeout: 5000 });
     assert.match(result.stdout, /status-contracts-passed/);
   });

@@ -29,7 +29,7 @@ export function appLaunchDefinition({ root, home = homedir(), appPath }) {
 
 async function ownedText(path) {
   let handle;
-  try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   try {
     const info = await handle.stat();

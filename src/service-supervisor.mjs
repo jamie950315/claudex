@@ -19,7 +19,7 @@ export function processAlive(pid) {
 // must still win its own exclusive lock and recheck all durable pending work.
 async function privateJSON(path) {
   let file;
-  try { file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  try { file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   try {
     const before = await file.stat();

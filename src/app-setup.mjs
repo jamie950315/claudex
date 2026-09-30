@@ -33,7 +33,7 @@ const processAlive = pid => {
 /** Bounded, no-follow inspection. Never print native account or transcript data. */
 export async function appPrivateJSON(path, maxBytes = 1024 * 1024) {
   let handle;
-  try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+  try { handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
   catch (error) { if (error.code === 'ENOENT') return null; throw error; }
   try {
     const stat = await handle.stat();
@@ -80,6 +80,10 @@ export class AppSetup {
     return this.run(command, args, { timeout: 30000, maxBuffer: 1024 * 1024, ...options, env });
   };
 
+  requireWritable() {
+    if (this.readOnly) throw new Error('Read-only application inspection cannot change setup, accounts or services.');
+  }
+
   async runtimeReady() {
     try { await access(this.node, constants.X_OK); await access(join(this.runtimeDirectory, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')); return true; }
     catch { return false; }
@@ -88,6 +92,7 @@ export class AppSetup {
   // Only report inspection may reuse a recent unchanged deep signature verification;
   // setup and sign-in always verify again. Read-only inspection never records one.
   async providers(install = false, { reuseSignatures = false } = {}) {
+    if (install) this.requireWritable();
     const signatures = new AppSignatureCache({ root: this.root, reuse: reuseSignatures, persist: !this.readOnly });
     return (install ? this.ensure : this.discover)({ root: this.root, home: this.home, runtime: this.runtimeDirectory,
       env: { ...process.env, PATH: `${join(this.home, '.local', 'bin')}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin` }, run: this.nativeRun, signatures });
@@ -110,9 +115,12 @@ export class AppSetup {
   }
 
   async collaborationRequest(method, params = {}) {
+    if (this.readOnly && (method !== 'list' && method !== 'models'
+      || method === 'models' && (params.defaultModels !== undefined || params.defaultEfforts !== undefined)))
+      this.requireWritable();
     const root = join(this.root, 'collaboration');
     try {
-      const file = await open(join(root, 'controller-key'), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const file = await open(join(root, 'controller-key'), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       let token;
       try {
         const info = await file.stat();
@@ -132,6 +140,7 @@ export class AppSetup {
   }
 
   async models(defaultModels, defaultEfforts) {
+    if (defaultModels !== undefined || defaultEfforts !== undefined) this.requireWritable();
     return this.collaborationRequest('models', {
       ...(defaultModels === undefined ? {} : { defaultModels }),
       ...(defaultEfforts === undefined ? {} : { defaultEfforts }),
@@ -226,6 +235,7 @@ export class AppSetup {
   }
 
   async setup() {
+    this.requireWritable();
     if (this.platform !== 'darwin') throw new Error('The Claudex app requires macOS.');
     this.root = await privateDirectory(this.root);
     const directory = await lstat(this.root);
@@ -266,6 +276,7 @@ export class AppSetup {
   }
 
   async prepareInterface() {
+    this.requireWritable();
     try {
       const result = await this.interfaceInstall({ root: this.root, home: this.home, appPath: this.appPath,
         run: this.nativeRun, platform: this.platform });
@@ -278,6 +289,7 @@ export class AppSetup {
   }
 
   async startup() {
+    this.requireWritable();
     if (this.platform !== 'darwin') throw new Error('The Claudex app requires macOS.');
     this.root = await privateDirectory(this.root);
     const notes = {};
@@ -312,6 +324,7 @@ export class AppSetup {
   }
 
   async stop() {
+    this.requireWritable();
     if (this.platform !== 'darwin') throw new Error('Application shutdown requires macOS.');
     this.root = await privateDirectory(this.root);
     // Serialize against setup and startup; status inspection remains read-only.
@@ -334,6 +347,7 @@ export class AppSetup {
   }
 
   async resumeStoppedServices() {
+    this.requireWritable();
     if (!(await readAppStopState(this.root))?.stopped) return;
     return withLock(join(this.root, 'app-setup.lock'), async () => {
       const state = await readAppStopState(this.root);
@@ -358,6 +372,7 @@ export class AppSetup {
   }
 
   async configureSynchronization(providers) {
+    this.requireWritable();
     const path = join(this.root, 'config.json');
     let config = await appPrivateJSON(path);
     const original = JSON.stringify(config);
@@ -400,6 +415,7 @@ export class AppSetup {
   }
 
   async login(provider) {
+    this.requireWritable();
     if (!['codex', 'claude'].includes(provider)) throw new Error('Unknown account provider.');
     const found = await this.providers();
     const binary = found[provider]?.binary;

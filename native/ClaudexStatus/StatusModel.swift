@@ -65,7 +65,7 @@ func privateJSON(_ root: String, _ name: String) throws -> [String: Any]? {
           lstat(root, &directory) == 0, directory.st_uid == getuid(),
           directory.st_mode & S_IFMT == S_IFDIR, directory.st_mode & 0o077 == 0 else { throw StatusReadError.unsafe }
     let path = root + "/" + name
-    let fd = open(path, O_RDONLY | O_NOFOLLOW)
+    let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK)
     if fd < 0 { if errno == ENOENT { return nil }; throw StatusReadError.unsafe }
     defer { close(fd) }
     var before = stat()
@@ -143,13 +143,13 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
     }
     if let blocked = watcher["blocked"] as? [String: Any] {
         return report("paused", "Synchronization paused", blocked["reason"] as? String ?? "A saved handoff needs verified recovery.", true,
-                      statusTimestamp(blocked["retryAt"]))
+                      watcher["scheduler"] as? String == "completion-events" ? nil : statusTimestamp(blocked["retryAt"]))
     }
     if (watcher["blockedConversationCount"] as? Int ?? 0) > 0 {
         let entries = watcher["blockedConversations"] as? [[String: Any]] ?? []
         let count = watcher["blockedConversationCount"] as? Int ?? entries.count
         return report("paused", "Some conversations paused", "\(count) conversation(s) need attention. " + (entries.first?["reason"] as? String ?? "Open diagnostics for details."), true,
-                      statusTimestamp(entries.first?["retryAt"]))
+                      watcher["scheduler"] as? String == "completion-events" ? nil : statusTimestamp(entries.first?["retryAt"]))
     }
     if (watcher["blockedSourceCount"] as? Int ?? 0) > 0 {
         let sources = watcher["blockedSources"] as? [[String: Any]] ?? []

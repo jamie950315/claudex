@@ -54,7 +54,7 @@ export class AppSignatureCache {
     this.entries = {};
     if (!this.path) return this.entries;
     let handle;
-    try { handle = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW); }
+    try { handle = await open(this.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK); }
     catch { return this.entries; }
     try {
       const stat = await handle.stat();

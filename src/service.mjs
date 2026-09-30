@@ -18,7 +18,7 @@ export function serviceDefinition({ root, node = process.execPath, cli, path = p
   const args = legacy ? [node, cli, 'watch', '--root', root] : [node, supervisor, '--cli', cli, '--root', root];
   const lifecycle = legacy ? '<key>RunAtLoad</key><true/><key>KeepAlive</key><false/>'
     : '<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>\n<key>ThrottleInterval</key><integer>30</integer>\n<key>AbandonProcessGroup</key><true/>';
-  return { label, path: join(home, 'Library', 'LaunchAgents', `${label}.plist`),
+  return { label, args, path: join(home, 'Library', 'LaunchAgents', `${label}.plist`),
     plist: `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>
 <key>Label</key><string>${xml(label)}</string>
 <key>ProgramArguments</key><array>${args.map(arg => `<string>${xml(arg)}</string>`).join('')}</array>
@@ -33,10 +33,14 @@ function ownedDefinition(contents, options) {
   const args = /<key>ProgramArguments<\/key><array>(.*?)<\/array>/s.exec(contents)?.[1];
   const values = [...(args ?? '').matchAll(/<string>([^<]*)<\/string>/g)].map(match => unxml(match[1]));
   const path = /<key>PATH<\/key><string>([^<]*)<\/string>/.exec(contents)?.[1];
-  if (!values.length || path === undefined) return false;
+  if (!values.length || path === undefined) return null;
   // Reproduce only an exact known generator. Mere presence of our root/CLI
   // text is insufficient proof of ownership of an arbitrary launchd job.
-  return [true, false].some(legacy => serviceDefinition({ ...options, node: values[0], path: unxml(path), legacy }).plist === contents);
+  for (const legacy of [true, false]) {
+    const definition = serviceDefinition({ ...options, node: values[0], path: unxml(path), legacy });
+    if (definition.plist === contents) return definition;
+  }
+  return null;
 }
 
 async function definitionContents(path) {
@@ -51,14 +55,21 @@ async function definitionContents(path) {
   return text;
 }
 
-async function nativeStatus(run, target) {
+async function nativeStatus(run, target, definition) {
+  let result;
   try {
-    const result = await run('launchctl', ['print', target]);
-    return { loaded: true, running: /state = running/.test(result.stdout) };
+    result = await run('launchctl', ['print', target]);
   } catch (error) {
     if (/Could not find|No such process|No such file/i.test(error.stderr ?? '')) return { loaded: false, running: false };
     throw error;
   }
+  const value = key => result.stdout.match(new RegExp(`^\\s*${key} = (.+)$`, 'm'))?.[1];
+  const block = result.stdout.match(/^\s*arguments = \{\n([\s\S]*?)^\s*\}/m)?.[1];
+  const args = block?.split('\n').map(line => line.trim()).filter(Boolean);
+  if (!definition || value('path') !== definition.path || value('program') !== definition.args[0]
+      || JSON.stringify(args) !== JSON.stringify(definition.args))
+    throw new Error('Loaded service LaunchAgent differs from the owned installation; it was preserved.');
+  return { loaded: true, running: /state = running/.test(result.stdout) };
 }
 
 function platformCheck(platform) {
@@ -74,7 +85,7 @@ export async function installService(options, { run = execute, platform = proces
     const journalPath = join(root, 'service-install.json');
     let journal = await readJSON(journalPath, null);
     let contents = await definitionContents(definition.path);
-    const loaded = await nativeStatus(run, target);
+    const loaded = await nativeStatus(run, target, contents === null ? null : ownedDefinition(contents, { ...options, root }));
     if (journal && (journal.version !== 1 || journal.label !== definition.label || journal.path !== definition.path
       || journal.cli !== options.cli || !['prepared', 'installed'].includes(journal.phase)
       || typeof journal.after !== 'string' || hash(journal.after) !== journal.afterHash
@@ -107,6 +118,8 @@ export async function installService(options, { run = execute, platform = proces
     // a prepared journal can safely complete this last step without replacing
     // native conversation files or restarting a running watcher.
     if (!loaded.loaded) await run('launchctl', ['bootstrap', `gui/${process.getuid()}`, definition.path]);
+    if (!(await nativeStatus(run, target, definition)).loaded)
+      throw new Error('Service LaunchAgent did not become loaded; installation remains recoverable.');
     journal = journal?.after === definition.plist ? journal : {
       version: 1, label: definition.label, path: definition.path, cli: options.cli,
       before: contents, beforeHash: hash(contents), after: definition.plist, afterHash: hash(definition.plist), preparedAt: Date.now(),
@@ -121,11 +134,12 @@ export async function controlService(action, options, { run = execute, platform 
   platformCheck(platform);
   const { label, path } = serviceDefinition(options);
   const target = `gui/${process.getuid()}/${label}`;
-  if (action === 'status') return { label, ...await nativeStatus(run, target), supervisor: await readJSON(join(options.root, 'service-status.json'), null) };
   const contents = await definitionContents(path);
-  if (contents === null || !ownedDefinition(contents, options)) throw new Error('Service ownership could not be verified.');
+  const definition = contents === null ? null : ownedDefinition(contents, options);
+  if (action === 'status') return { label, ...await nativeStatus(run, target, definition), supervisor: await readJSON(join(options.root, 'service-status.json'), null) };
+  if (!definition) throw new Error('Service ownership could not be verified.');
   if (action === 'uninstall' || action === 'stop') {
-    if ((await nativeStatus(run, target)).loaded) await run('launchctl', ['bootout', target]);
+    if ((await nativeStatus(run, target, definition)).loaded) await run('launchctl', ['bootout', target]);
     if (action === 'uninstall') {
       const check = await inspect(options.root, { includeSupervisor: true });
       if (!check.allowed) throw new Error('Service shutdown is still waiting for native owners; the installed definition was preserved.');
@@ -136,7 +150,9 @@ export async function controlService(action, options, { run = execute, platform 
     return { label, action, shutdownRequested: true, note: 'Native busy owners are allowed to finish. No forced termination is requested.' };
   }
   if (action === 'start') {
-    if (!(await nativeStatus(run, target)).loaded) await run('launchctl', ['bootstrap', `gui/${process.getuid()}`, path]);
+    if (!(await nativeStatus(run, target, definition)).loaded) await run('launchctl', ['bootstrap', `gui/${process.getuid()}`, path]);
+    if (!(await nativeStatus(run, target, definition)).loaded)
+      throw new Error('Service LaunchAgent did not become loaded; the application stop hold was preserved.');
   } else throw new Error('Unknown service action.');
   return { label, action };
 }

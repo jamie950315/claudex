@@ -9,17 +9,24 @@ import { atomicWrite, publishExclusive, readJSON } from '../src/storage.mjs';
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-service-test-')));
   const options = { root, cli: resolve('bin/claudex.mjs'), node: process.execPath, path: '/bin:/usr/bin', home: root };
-  const calls = []; let loaded = false, failBootstrap = false;
+  const calls = []; let loaded = false, failBootstrap = false, loadedOutput = null, ignoreBootstrap = false;
   return { options, calls, set loaded(value) { loaded = value; }, set failBootstrap(value) { failBootstrap = value; },
+    set loadedOutput(value) { loadedOutput = value; },
+    set ignoreBootstrap(value) { ignoreBootstrap = value; },
     dependencies: { platform: 'darwin', async run(binary, args) {
       calls.push([binary, ...args]);
       if (args[0] === 'print') {
         if (!loaded) throw Object.assign(new Error('Absent test job'), { stderr: 'Could not find service' });
-        return { stdout: 'state = running' };
+        if (loadedOutput !== null) return { stdout: loadedOutput };
+        const definition = serviceDefinition(options);
+        const contents = await readFile(definition.path, 'utf8');
+        const argumentBlock = contents.match(/<key>ProgramArguments<\/key><array>(.*?)<\/array>/s)[1];
+        const argumentsList = [...argumentBlock.matchAll(/<string>(.*?)<\/string>/gs)].map(match => match[1]);
+        return { stdout: `path = ${definition.path}\nprogram = ${argumentsList[0]}\narguments = {\n${argumentsList.join('\n')}\n}\nstate = running` };
       }
       if (args[0] === 'bootstrap') {
         if (failBootstrap) throw new Error('Synthetic bootstrap interruption');
-        loaded = true;
+        if (!ignoreBootstrap) loaded = true;
       }
       if (args[0] === 'bootout') loaded = false;
       return { stdout: '' };
@@ -90,4 +97,27 @@ test('explicit stop is bootout rather than kill/restart and preserves installati
   assert.equal(await readFile(serviceDefinition(f.options).path, 'utf8'), serviceDefinition(f.options).plist);
   assert.equal(f.calls.filter(call => call[1] === 'bootout').length, 1);
   assert.equal(f.calls.some(call => call.includes('kill') || call.includes('kickstart')), false);
+});
+
+test('loaded label collisions are refused before stop, start or status can claim an owned service', async () => {
+  for (const kind of ['path', 'program', 'arguments']) {
+    const f = await fixture(); await installService(f.options, f.dependencies);
+    const definition = serviceDefinition(f.options);
+    f.loadedOutput = `path = ${kind === 'path' ? '/foreign/job.plist' : definition.path}\nprogram = ${kind === 'program' ? '/bin/sleep' : definition.args[0]}\narguments = {\n${(kind === 'arguments' ? ['/bin/sleep', '300'] : definition.args).join('\n')}\n}\nstate = running`;
+    for (const action of ['stop', 'start', 'status'])
+      await assert.rejects(controlService(action, f.options, f.dependencies), /Loaded service LaunchAgent differs/);
+    await assert.rejects(installService(f.options, f.dependencies), /Loaded service LaunchAgent differs/);
+    assert.equal(f.calls.some(call => call[1] === 'bootout'), false);
+    assert.equal(await readFile(definition.path, 'utf8'), definition.plist);
+  }
+});
+
+test('successful bootstrap output without a loaded job leaves installation recoverable', async () => {
+  const f = await fixture(); f.ignoreBootstrap = true;
+  await assert.rejects(installService(f.options, f.dependencies), /did not become loaded/);
+  assert.equal((await readJSON(join(f.options.root, 'service-install.json'))).phase, 'prepared');
+  await assert.rejects(controlService('start', f.options, f.dependencies), /did not become loaded/);
+  f.ignoreBootstrap = false;
+  await installService(f.options, f.dependencies);
+  assert.equal((await readJSON(join(f.options.root, 'service-install.json'))).phase, 'installed');
 });
