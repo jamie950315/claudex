@@ -426,7 +426,9 @@ seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
 All-project discovery skips unsupported unenrolled histories and reports a
-bounded diagnostic list. Claude Desktop forks copy parent rows under the parent's
+bounded diagnostic list. Keep unsupported-source diagnostics across configuration
+and unrelated native events; only exact targeted reinspection or full discovery
+may replace their snapshot. Claude Desktop forks copy parent rows under the parent's
 session ID into a new file. Enroll one under its file identity only after the
 copied lines match the parent's native bytes (identity-free metadata may
 follow) and it has its own completed reply; otherwise it is an unsupported

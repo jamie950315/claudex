@@ -72,6 +72,53 @@ function presentationOptions(f, { failHandoff, failFolders } = {}) {
 const configurationEvent = () => ({ side: 'codex', nativeId: '00000000-0000-4000-8000-000000000002',
   kind: 'configuration', revision: randomUUID(), at: 1 });
 
+test('unsupported sources remain visible across configuration and unrelated targeted discovery', async () => {
+  const f = await fixture(), pair = f.add();
+  const unsupportedId = randomUUID(), unrelatedId = randomUUID();
+  const unsupported = { side: 'codex', id: unsupportedId, path: '/synthetic/unsupported.jsonl' };
+  const unrelated = { side: 'claude', id: unrelatedId, path: `/synthetic/${unrelatedId}.jsonl` };
+  const track = f.bridge.track;
+  f.bridge.track = async source => {
+    if (source.id === unsupportedId) throw new Error('Native Codex history export: an assistant message precedes the turn user input.');
+    return track(source);
+  };
+  await f.run({ discover: async options => {
+    f.calls.discover++;
+    return options.onlyKeys ? [unrelated] : [unsupported];
+  }, events: f.eventQueue([[configurationEvent()], [pair.event('completed')],
+    [{ side: 'claude', nativeId: unrelatedId, kind: 'session' }]]), maxPasses: 4 });
+  assert.equal(f.calls.discover, 2);
+  const statuses = f.calls.status.filter(status => status.running && status.initialSweepCompletedAt !== null);
+  assert.ok(statuses.length > 3);
+  for (const status of statuses) {
+    assert.equal(status.blockedSourceCount, 1);
+    assert.equal(status.blockedSources[0].nativeId, unsupportedId);
+    assert.match(status.blockedSources[0].reason, /assistant message precedes/);
+  }
+  assert.ok(f.state.conversations[unrelatedId]);
+  assert.equal(f.state.conversations[unsupportedId], undefined);
+});
+
+test('exact source reinspection clears its diagnostic after successful enrollment', async () => {
+  const f = await fixture(), nativeId = randomUUID();
+  const source = { side: 'codex', id: nativeId, path: '/synthetic/unsupported.jsonl' };
+  let supported = false;
+  const track = f.bridge.track;
+  f.bridge.track = async candidate => {
+    if (!supported) throw new Error('Native Codex history export: an assistant message precedes the turn user input.');
+    return track(candidate);
+  };
+  await f.run({ discover: async () => [source], events: f.eventQueue([[configurationEvent()], () => {
+    supported = true;
+    return [{ side: 'codex', nativeId, kind: 'session' }];
+  }]), maxPasses: 3 });
+  const statuses = f.calls.status.filter(status => status.running);
+  assert.ok(statuses.some(status => status.blockedSourceCount === 1));
+  assert.equal(statuses.at(-1).blockedSourceCount, 0);
+  assert.deepEqual(statuses.at(-1).blockedSources, []);
+  assert.ok(f.state.conversations[nativeId]);
+});
+
 test('unchanged configuration events refresh hooks without repeating presentation publication', async () => {
   const f = await fixture(), pair = f.add(), { options, presentation } = presentationOptions(f);
   let hooks = 0, clock = 0;

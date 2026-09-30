@@ -142,6 +142,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   const checkedConversations = new Set();
   const reusedConversations = new Set();
   let fullVerificationCount = 0;
+  let blockedSourceDiagnostics = new Map();
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
   let localHandoff = null;
@@ -257,8 +258,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           if (waitingContexts.length < 20 && !waitingContexts.some(item => JSON.stringify(item) === JSON.stringify(context)))
             waitingContexts.push(context);
         };
-        let blockedSourceCount = 0;
-        const blockedSources = [];
+        let blockedSourceCount = blockedSourceDiagnostics.size;
+        const blockedSources = [...blockedSourceDiagnostics.values()].slice(0, 20);
         let configurationOnly = false;
         try {
           // A pending transaction remains the only allowed native operation.
@@ -416,14 +417,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const existing = new Set(Object.keys(state.conversations));
             const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
             for (const id of await runtime.ownedNativeIds()) known.add(id);
-            // Each refresh reports one discovery snapshot, not an accumulating
-            // count of the same unsupported source during a long cold sweep.
-            blockedSourceCount = 0;
-            blockedSources.length = 0;
             // Event-filtered discovery reads only the notified sources' transcripts;
             // each candidate's identity is still derived and checked below.
             const candidates = await discover({ ...config, allProjects: true, projects: [], excludeSubagents: false,
               ...(onlyKeys ? { onlyKeys } : {}) }, known);
+            // A full discovery replaces its snapshot. A targeted discovery may
+            // resolve only its exact identities; unrelated events cannot erase
+            // an unsupported source that was never rechecked.
+            const nextBlockedSources = onlyKeys ? new Map(blockedSourceDiagnostics) : new Map();
+            if (onlyKeys) for (const [key, entry] of nextBlockedSources)
+              if (entry.nativeId && onlyKeys.has(`${entry.side}:${entry.nativeId.toLowerCase()}`)) nextBlockedSources.delete(key);
             for (const source of candidates) {
               if (signal?.aborted) break;
               let nativeId = source.nativeId ?? source.id;
@@ -469,10 +472,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   continue;
                 }
                 if (!isUnsupported(error)) throw error;
-                blockedSourceCount++;
-                if (blockedSources.length < 20) blockedSources.push({ side: source.side, path: source.path, reason: reason(error) });
+                nextBlockedSources.set(`${source.side}:${source.path}`, { side: source.side, path: source.path,
+                  ...(typeof nativeId === 'string' && nativeId ? { nativeId } : {}), reason: reason(error) });
               }
             }
+            blockedSourceDiagnostics = nextBlockedSources;
+            blockedSourceCount = blockedSourceDiagnostics.size;
+            blockedSources.splice(0, blockedSources.length, ...[...blockedSourceDiagnostics.values()].slice(0, 20));
             state = await bridge.status();
             checkingConversationCount = activeDesktopConversationIds(state).length;
             const completedAt = now();
