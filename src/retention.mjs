@@ -44,6 +44,7 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
       if (typeof record[key] !== 'boolean') throw new TypeError(`${key} must be a boolean`);
     }
     if (record.busy !== undefined && typeof record.busy !== 'boolean') throw new TypeError('busy must be a boolean');
+    if (record.frozen !== undefined && typeof record.frozen !== 'boolean') throw new TypeError('frozen must be a boolean');
     nonnegativeInteger(record.bytes, 'bytes');
     timestamp(record.createdAt, 'createdAt');
     if (record.dependentIds !== undefined) {
@@ -84,7 +85,11 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
   if (anchors.length > MAX_DEPENDENCY_ANCHORS) {
     for (const record of anchors) blocked.set(record.id, { id: record.id, reason: 'dependency-anchor-limit' });
   }
+  // Frozen records belong to a conversation that cannot currently be verified
+  // (for example its working directory was deleted). Retain them unconditionally
+  // without blocking other conversations; they still count toward the quota.
   function evict(record) {
+    if (record.frozen) return;
     const reason = !record.managed ? 'unmanaged' : !record.verified ? 'unverified' : record.busy ? 'busy'
       : record.dependentIds?.length ? 'dependent-records' : null;
     if (reason) { blocked.set(record.id, { id: record.id, reason }); return; }
@@ -99,6 +104,8 @@ export function planRetention(records, { now = Date.now(), policy = DEFAULT_POLI
   if (backupBytes > limits.maxBackupBytes) {
     for (const record of anchors) if (!blocked.has(record.id))
       blocked.set(record.id, { id: record.id, reason: 'dependency-anchor-quota' });
+    for (const record of previous) if (record.frozen && !blocked.has(record.id))
+      blocked.set(record.id, { id: record.id, reason: 'frozen-quota' });
   }
   return {
     keep: records.filter(record => !remove.has(record.id)).map(record => record.id),

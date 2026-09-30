@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, withLock } from './storage.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { DEFAULT_POLICY, planRetention } from './retention.mjs';
@@ -139,13 +139,35 @@ export class DesktopBridge {
     }
   }
 
-  async assertOriginalsUnchanged(state, conversationId) {
-    for (const record of state.records.filter(record => record.status === 'dependency-anchor'
-      && (!conversationId || record.conversationId === conversationId))) {
+  /** Conversations whose saved working directory no longer exists (for example
+   * a cleaned-up Codex worktree) cannot be verified until it returns. Global
+   * guards defer them instead of blocking every other conversation; their own
+   * syncs still fail with an explicit per-conversation hold.
+   */
+  async frozenConversations(state) {
+    const frozen = new Set();
+    // Only native adapters can observe working directories; synthetic adapters
+    // without this capability never freeze a conversation.
+    const probe = ['codex', 'claude'].map(side => this.adapters[side]?.workingDirectoryAbsent).find(Boolean);
+    if (!probe) return frozen;
+    const absent = new Map();
+    for (const [id, conversation] of Object.entries(state.conversations)) {
+      const cwds = [conversation.cwd, ...state.records.filter(record => record.conversationId === id).map(record => record.cwd)]
+        .filter(cwd => typeof cwd === 'string' && isAbsolute(cwd));
+      for (const cwd of new Set(cwds)) {
+        if (!absent.has(cwd)) absent.set(cwd, await probe(cwd) === true);
+        if (absent.get(cwd)) { frozen.add(id); break; }
+      }
+    }
+    return frozen;
+  }
+
+  async assertOriginalsUnchanged(state, conversationId, frozen = new Set()) {
+    const included = record => conversationId ? record.conversationId === conversationId : !frozen.has(record.conversationId);
+    for (const record of state.records.filter(record => record.status === 'dependency-anchor' && included(record))) {
       await this.assertDependencyAnchor(record);
     }
-    for (const record of state.records.filter(record => !record.managed && record.status === 'original'
-      && (!conversationId || record.conversationId === conversationId))) {
+    for (const record of state.records.filter(record => !record.managed && record.status === 'original' && included(record))) {
       const data = await this.inspect(record);
       if (data.digest !== record.checkpoint.digest || data.common.messages.length !== record.checkpoint.count) {
         const current = this.current(state, record.conversationId, record.side);
@@ -540,9 +562,11 @@ export class DesktopBridge {
   }
   async collectInLock(state) {
     await this.reconcileOriginalRelocations(state);
-    await this.assertOriginalsUnchanged(state);
+    const frozen = await this.frozenConversations(state);
+    await this.assertOriginalsUnchanged(state, undefined, frozen);
     const snapshots = state.records.filter(record => record.managed && record.kind === 'snapshot');
-    const retainedConversations = new Set(snapshots.map(record => record.conversationId));
+    const retainedConversations = new Set(snapshots.map(record => record.conversationId)
+      .filter(id => !frozen.has(id)));
     // Only conversations with disposable snapshots participate in retention.
     // Unchanged cold-import pairs have no backups to protect and must not make
     // global collection export every historical transcript or start an owner.
@@ -560,7 +584,7 @@ export class DesktopBridge {
       }
     }
     const previous = [];
-    for (const record of snapshots.filter(record => record.status === 'previous')) {
+    for (const record of snapshots.filter(record => record.status === 'previous' && !frozen.has(record.conversationId))) {
       if (!await this.adapters[record.side].exists(record)) {
         state.records = state.records.filter(value => value.id !== record.id);
         continue;
@@ -585,7 +609,8 @@ export class DesktopBridge {
       }
     }
     const plan = planRetention(state.records.filter(record => record.managed && record.kind === 'snapshot')
-      .map(record => ({ ...record, createdAt: record.retiredAt ?? record.createdAt })), { now: this.now(), policy: this.policy });
+      .map(record => ({ ...record, createdAt: record.retiredAt ?? record.createdAt,
+        ...(frozen.has(record.conversationId) ? { frozen: true } : {}) })), { now: this.now(), policy: this.policy });
     if (plan.blocked.length) throw new Error('Snapshot retention cannot be satisfied safely; new allocations are paused.');
     for (const id of plan.remove) {
       const record = state.records.find(value => value.id === id);
@@ -596,6 +621,6 @@ export class DesktopBridge {
       await this.save(state, { event: 'pruned', conversationId: record.conversationId });
     }
     await this.save(state);
-    return { removed: plan.remove.length, backupBytes: plan.backupBytes };
+    return { removed: plan.remove.length, backupBytes: plan.backupBytes, frozen: [...frozen].sort() };
   }
 }

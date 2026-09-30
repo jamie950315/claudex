@@ -101,6 +101,7 @@ export class DesktopRuntime {
       needsMaintenance: (record, data) => this.needsMaintenance(record, data),
       resolveAppliedRecord: (record, pending) => this.resolveAppliedRecord(record, pending),
       completePromotion: record => this.completePromotion(record),
+      workingDirectoryAbsent: cwd => this.workingDirectoryAbsent(cwd),
     }]));
     Object.assign(this.adapters.codex, {
       prepareDependencyAnchors: records => this.prepareDependencyAnchors(records),
@@ -301,6 +302,13 @@ export class DesktopRuntime {
     if (!record.relocation && await exists(record.path)) return null;
     const proof = await this.relocatedClaudeHistory(record);
     return proof && (proof.path !== record.path || proof.record.cwd !== record.cwd) ? proof : null;
+  }
+
+  /** True only when the exact saved directory is gone, never for other errors. */
+  async workingDirectoryAbsent(cwd) {
+    if (typeof cwd !== 'string' || !isAbsolute(cwd)) return false;
+    try { await lstat(cwd); return false; }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return true; throw error; }
   }
 
   async inspect(record) {

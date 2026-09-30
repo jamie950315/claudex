@@ -87,3 +87,11 @@ test('invalid records and policies fail explicitly', () => {
   assert.throws(() => plan(null), TypeError);
   assert.throws(() => plan([], null), TypeError);
 });
+
+test('frozen previous snapshots are retained without blocking and still count toward the quota', () => {
+  const records = [record('frozen', { createdAt: 0, frozen: true }), record('old', { createdAt: now - 200 }), record('latest')];
+  assert.deepEqual(plan(records), { keep: ['frozen', 'latest'], remove: ['old'], blocked: [], backupBytes: 20 });
+  assert.deepEqual(plan(records, { maxBackupBytes: 5 }), { keep: ['frozen'], remove: ['old', 'latest'],
+    blocked: [{ id: 'frozen', reason: 'frozen-quota' }], backupBytes: 10 });
+  assert.throws(() => plan([record('bad', { frozen: 'yes' })]), /frozen must be a boolean/);
+});

@@ -391,13 +391,19 @@ worker crashes. Preserve the saved native identity/path and pending evidence.
 A removed saved working directory (such as a cleaned-up Codex worktree) is the
 same kind of explicit hold (CLAUDEX_TRACKED_CWD_UNAVAILABLE), never a worker
 crash or a substitute directory; the folder map omits only that owner's row.
+By user decision such a conversation is frozen: when a native adapter reports
+any of its saved cwds absent, global collection defers its superseded-original,
+dependency-anchor and current-side verification and never retires its snapshots
+(they still count toward the backup quota; exceeding it blocks explicitly). Its
+own syncs still verify everything and hold. Full verification resumes when the
+directory exists again. Freezing is deferral, never checkpoint or mutation proof.
 Event-filtered discovery skips a Codex source whose metadata read fails only
 when its exact discovered rollout file is now absent (Desktop deleted a
 transient thread); other metadata failures keep their severity.
 Never scan for same-ID substitutes; only the explicit native registry relocation
 protocol above may adopt a verified new project location without pending work.
 Without pending work, affected syncs are held individually, but global original
-and quota guards still apply to other deliveries. In event mode a new relevant
+and quota guards still apply to other deliveries (except frozen conversations). In event mode a new relevant
 event revalidates a hold; no recurring scan attempts to clear it. Unclassified unsafe failures remain
 fatal to that worker rather than being treated as successful. Discovery starts
 at initialization, not a bulk history import.
@@ -496,7 +502,7 @@ ledgers and expiring Desktop handoff proofs never use this diagnostic throttle.
 Normal discovery scope is unchanged.
 Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep
-the superseded-original guards global, retain every managed snapshot in the
+the superseded-original guards global (frozen conversations are deferred), retain every managed snapshot in the
 global quota, and preserve exact previous-snapshot/native retirement checks.
 Within one collection, previous Codex snapshots share one fresh initial global
 metadata dependency inventory; each parent still has its own ancestor queries.

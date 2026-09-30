@@ -137,3 +137,38 @@ test('backup quota remains global across every snapshot conversation and uses in
   for (const record of [first.current, first.paired, second.current, second.paired])
     assert.ok(f.calls.inspect.includes(record.id));
 });
+
+test('a conversation whose working directory was deleted is frozen instead of blocking global collection', async () => {
+  const f = await fixture({ previousPerSide: 0 });
+  const active = f.owned('active');
+  const gone = f.owned('gone');
+  const original = f.add('gone', 'superseded', 'codex', 'original', false, 'original', false);
+  for (const record of [gone.current, gone.paired, gone.previous, original]) record.cwd = '/deleted/worktree';
+  // Unreadable frozen histories must not even be inspected.
+  for (const record of [gone.current, gone.paired, gone.previous]) f.files.delete(record.id);
+  const probed = [];
+  for (const side of ['codex', 'claude'])
+    f.bridge.adapters[side].workingDirectoryAbsent = async cwd => { probed.push(cwd); return cwd === '/deleted/worktree'; };
+  const result = await f.collect();
+  assert.deepEqual(result.frozen, ['gone']);
+  assert.deepEqual(f.calls.remove, [active.previous.id]);
+  assert.ok(f.calls.inspect.every(id => !id.startsWith('gone-')));
+  const retained = (await f.bridge.status()).records.filter(record => record.conversationId === 'gone');
+  assert.equal(retained.length, 4);
+  assert.equal(new Set(probed).size, probed.length);
+
+  // The frozen conversation's own sync still verifies its originals and fails explicitly.
+  const state = await f.bridge.status();
+  await assert.rejects(f.bridge.assertOriginalsUnchanged(state, 'gone'), /Missing native history: gone-superseded/);
+});
+
+test('frozen snapshots still count toward the global backup quota', async () => {
+  const f = await fixture({ maxBackupBytes: 50 });
+  f.owned('active');
+  const gone = f.owned('gone');
+  for (const record of [gone.current, gone.paired, gone.previous]) record.cwd = '/deleted/worktree';
+  for (const side of ['codex', 'claude'])
+    f.bridge.adapters[side].workingDirectoryAbsent = async cwd => cwd === '/deleted/worktree';
+  await assert.rejects(f.collect(), /Snapshot retention cannot be satisfied safely/);
+  assert.deepEqual(f.calls.remove, []);
+});
