@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,16 @@ import { once } from 'node:events';
 import { callCollaboration } from '../src/collaboration-transport.mjs';
 
 const cli = fileURLToPath(new URL('../bin/claudex.mjs', import.meta.url));
+
+test('standalone collaboration CLI executes through a filesystem alias', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cldx-cli-alias-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const target = fileURLToPath(new URL('../bin/claudex-collaboration.mjs', import.meta.url));
+  const alias = join(root, 'collaboration.mjs');
+  await symlink(target, alias);
+  const { stdout } = await promisify(execFile)(process.execPath, [alias, '--help']);
+  assert.match(stdout, /^Claudex collaboration: one work protocol/);
+});
 
 test('real broker process serves both MCP peers without starting inference or requiring sync initialization', async t => {
   const root = await mkdtemp(join(tmpdir(), 'cldx-cli-'));

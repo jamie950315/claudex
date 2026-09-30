@@ -6,7 +6,7 @@ import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.m
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { lstat, readFile, unlink } from 'node:fs/promises';
+import { lstat, readFile, realpath, unlink } from 'node:fs/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
 import { callCollaboration, runCollaborationMcp, serveCollaborationSocket } from '../src/collaboration-transport.mjs';
@@ -154,6 +154,6 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   throw new Error('Unknown collaboration command. Use collaboration help.');
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === cli) collaborationMain().catch(error => {
+if (process.argv[1] && await realpath(process.argv[1]) === cli) collaborationMain().catch(error => {
   console.error(`Claudex collaboration: ${error.message}`); process.exitCode = 1;
 });
