@@ -14,10 +14,11 @@ function fixture(change = {}) {
     isArchived: false, isRunning: false, turnRunning: false, lastActivityAt: 100, ...change.session };
   const registry = { ...session, cliSessionId: sessionId, ...change.registry };
   const sends = [], receipts = [], errors = [], claims = [], statuses = [];
+  let sessionReads = 0;
   const result = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   const native = {
     readFileAtCwd: async () => ({ contents: JSON.stringify(registry) }),
-    getSession: async () => ({ ...session }),
+    getSession: async () => change.getSession ? change.getSession({ ...session }, ++sessionReads) : ({ ...session }),
     getBusyShellPtyKeys: async () => ({ probed: true, busy: [], unknown: [], ...change.busy }),
     mcpCallTool: async (target, server, tool, args) => {
       assert.equal(target, localSessionId); assert.equal(server, 'claudex-desktop-wake');
@@ -42,6 +43,57 @@ test('lifecycle and waiting diagnostics are distinct and repeated reasons are co
   f.runtime.start(); await flush(); await f.runtime.poll(); f.runtime.stop();
   assert.deepEqual(f.statuses, ['loaded', 'started', 'waiting: draft']);
   assert.equal(f.claims.length, 0);
+});
+
+test('every native idle guard identifies its blocking field without relaxing the guard', async () => {
+  const cases = [
+    [{ getSession: () => null }, 'native session unavailable'],
+    ...['sessionId', 'cwd', 'title'].map(key => [{ session: { [key]: 'different' } }, `native identity ${key}`]),
+    ...['isArchived', 'isRunning', 'turnRunning'].flatMap(key => [
+      [{ session: { [key]: undefined } }, `native ${key} missing`],
+      [{ session: { [key]: 'false' } }, `native ${key} invalid`],
+      [{ session: { [key]: true } }, `native ${key} active`],
+    ]),
+    [{ session: { lastActivityAt: 0.5 } }, 'native lastActivityAt invalid'],
+    ...['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork',
+      'remoteTarget', 'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId',
+      'agentDispatched', 'lanyard', 'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt',
+      'pendingLanyardConsent', 'pendingViolinBowPrompt', 'pendingRewind', 'isStopping']
+      .map(key => [{ session: { [key]: true } }, `native ${key} present`]),
+    ...['pendingToolPermissions', 'loops', 'spawningTaskIds'].flatMap(key => [
+      [{ session: { [key]: {} } }, `native ${key} invalid`],
+      [{ session: { [key]: [{}] } }, `native ${key} pending`],
+    ]),
+  ];
+  for (const [change, reason] of cases) {
+    // Keep the independent registry proof valid while testing the native snapshot.
+    const f = fixture({ ...change, registry: { sessionId: localSessionId, cwd: '/project', title: 'Example', isArchived: false } });
+    f.runtime.start(); await flush(); await f.runtime.poll(); f.runtime.stop();
+    assert.deepEqual(f.statuses, ['loaded', 'started', `waiting: ${reason}`], reason);
+    assert.equal(f.claims.length, 0, reason); assert.equal(f.sends.length, 0, reason);
+  }
+});
+
+test('native waiting diagnostics never include metadata or prompt contents', async () => {
+  for (const change of [
+    { session: { title: 'Private title with secret content' }, registry: { title: 'Example' } },
+    { session: { isRunning: 'private metadata' } },
+    { session: { heldInput: { prompt: 'Private draft and credentials' } } },
+    { session: { pendingToolPermissions: [{ input: 'Private command' }] } },
+  ]) {
+    const f = fixture(change); f.runtime.start(); await flush(); f.runtime.stop();
+    assert.equal(f.claims.length, 0); assert.equal(f.sends.length, 0);
+    assert.equal(f.statuses.length, 3);
+    assert.ok(f.statuses[2].length < 80);
+    assert.doesNotMatch(f.statuses.join('\n'), /private|secret|credentials/i);
+  }
+});
+
+test('the final pre-claim recheck reports changed native state without claiming', async () => {
+  const f = fixture({ getSession: (session, count) => ({ ...session, isRunning: count > 1 }) });
+  f.runtime.start(); await flush(); f.runtime.stop();
+  assert.deepEqual(f.statuses, ['loaded', 'started', 'waiting: native isRunning active']);
+  assert.equal(f.claims.length, 0); assert.equal(f.sends.length, 0);
 });
 
 test('idle exact native identity is claimed once, sent through existing session and receipted without claiming acknowledgement', async () => {
@@ -69,6 +121,7 @@ test('state change after claim consumes no input and records uncertainty', async
   const f = fixture({ onClaim: session => { session.isRunning = true; } });
   f.runtime.start(); await flush(); f.runtime.stop();
   assert.equal(f.claims.length, 1); assert.equal(f.sends.length, 0); assert.equal(f.receipts[0].status, 'uncertain');
+  assert.deepEqual(f.statuses, ['loaded', 'started', 'waiting: native isRunning active']);
 });
 
 test('unknown native send outcome is recorded and never sent again', async () => {

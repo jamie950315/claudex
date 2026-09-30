@@ -34,18 +34,26 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
       || !message.registryPath.endsWith(`/${message.localSessionId}.json`)
       || !Number.isSafeInteger(message.expiresAt)) throw new Error('Desktop wake identity is invalid');
   }
-  function idle(session, message) {
-    if (!session || session.sessionId !== message.localSessionId || session.cwd !== message.cwd
-      || session.title !== message.title || session.isArchived !== false
-      || session.isRunning !== false || session.turnRunning !== false
-      || !Number.isSafeInteger(session.lastActivityAt)) return false;
+  function idleBlock(session, message) {
+    if (!session) return 'native session unavailable';
+    for (const [key, expected] of [['sessionId', message.localSessionId], ['cwd', message.cwd], ['title', message.title]])
+      if (session[key] !== expected) return `native identity ${key}`;
+    for (const key of ['isArchived', 'isRunning', 'turnRunning']) {
+      if (session[key] === undefined) return `native ${key} missing`;
+      if (typeof session[key] !== 'boolean') return `native ${key} invalid`;
+      if (session[key] !== false) return `native ${key} active`;
+    }
+    if (!Number.isSafeInteger(session.lastActivityAt)) return 'native lastActivityAt invalid';
     for (const key of ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork',
       'remoteTarget', 'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId',
       'agentDispatched', 'lanyard', 'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt',
-      'pendingLanyardConsent', 'pendingViolinBowPrompt', 'pendingRewind', 'isStopping']) if (session[key]) return false;
+      'pendingLanyardConsent', 'pendingViolinBowPrompt', 'pendingRewind', 'isStopping']) if (session[key]) return `native ${key} present`;
     for (const key of ['pendingToolPermissions', 'loops', 'spawningTaskIds'])
-      if (session[key] !== undefined && (!Array.isArray(session[key]) || session[key].length)) return false;
-    return true;
+      if (session[key] !== undefined) {
+        if (!Array.isArray(session[key])) return `native ${key} invalid`;
+        if (session[key].length) return `native ${key} pending`;
+      }
+    return null;
   }
   async function inspect(message) {
     const cut = message.registryPath.lastIndexOf('/');
@@ -53,7 +61,8 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
     if (mapped.sessionId !== message.localSessionId || mapped.cliSessionId !== message.sessionId
       || mapped.cwd !== message.cwd || mapped.title !== message.title || mapped.isArchived !== false) { report('waiting: registry identity'); return null; }
     const session = await native.getSession(message.localSessionId);
-    if (!idle(session, message)) { report('waiting: native idle or identity guard'); return null; }
+    const blocked = idleBlock(session, message);
+    if (blocked) { report(`waiting: ${blocked}`); return null; }
     if (session.lastActivityAt !== mapped.lastActivityAt) { report('waiting: activity changed'); return null; }
     if (hasDraft(message.localSessionId)) { report('waiting: draft'); return null; }
     const busy = await native.getBusyShellPtyKeys(message.localSessionId, false);
@@ -80,7 +89,10 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
         const before = await inspect(message);
         if (!before || !running || ticket !== generation) continue;
         const current = await native.getSession(message.localSessionId);
-        if (!idle(current, message) || current.lastActivityAt !== before.lastActivityAt || hasDraft(message.localSessionId)) continue;
+        const blocked = idleBlock(current, message);
+        if (blocked) { report(`waiting: ${blocked}`); continue; }
+        if (current.lastActivityAt !== before.lastActivityAt) { report('waiting: activity changed'); continue; }
+        if (hasDraft(message.localSessionId)) { report('waiting: draft'); continue; }
         // Mark before the claim request: unknown claim outcomes are never retried
         // by this renderer, and the broker never grants a claim twice.
         attempted.add(message.messageId);
