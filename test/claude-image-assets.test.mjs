@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, symlink, unlink, chmod, lstat, rename } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, symlink, unlink, chmod, chown, lstat, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -69,8 +69,12 @@ test('native project hardening refuses public cache roots, writable projects and
   await assert.rejects(captureImageAssets(f), /private owned directory/);
   assert.equal((await lstat(project)).mode & 0o777, 0o755);
   await chmod(f.claudeTempRoot, 0o700);
+  // On macOS a directory inherits its parent's group. An isolated TMPDIR may
+  // belong to a group the test user cannot setgid, which silently drops that bit.
+  await chown(project, process.getuid(), process.getgid());
   for (const mode of [0o750, 0o777, 0o2755]) {
     await chmod(project, mode);
+    assert.equal((await lstat(project)).mode & 0o7777, mode);
     await assert.rejects(captureImageAssets(f), /private owned directory/);
     assert.equal((await lstat(project)).mode & 0o7777, mode);
   }

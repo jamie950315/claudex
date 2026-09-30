@@ -20,7 +20,9 @@ Run all commands from the repository directory.
 
 ## Runtime compatibility
 
-Requires macOS and Node.js 22+. Validated native baselines are Codex CLI
+Requires macOS and Node.js 22.15+ (22.x) or 23.8+. The earlier 22.x and 23.x
+runtimes lack the Zstandard/CRC32 APIs used by the Desktop resource adapters.
+The app supplies its own compatible runtime. Validated native baselines are Codex CLI
 `0.155.0-alpha.16.3`/`0.155.0-alpha.16.4` and Claude Code `2.1.210`/`2.1.281`.
 The default `versionPolicy: "strict"` enforces these baselines. An explicit
 `versionPolicy: "warn"` attempts newer or otherwise unvalidated runtimes without
@@ -910,6 +912,16 @@ the Desktop displays a smaller native preview. Source and native transcript
 files are not rewritten. Missing or changed assets fail explicitly. These
 originals are conversation content, not expiring rollback copies; identical
 images deduplicate and image-free sync rounds do not add asset records.
+
+The cache location follows the native owner's `CLAUDE_CODE_TMPDIR` setting and
+current UID; it is not tied to a particular home or project. When the observed
+native CLI creates an owned project directory with mode `0755` below its private
+`0700` per-UID cache root, the bridge verifies that directory's opened and named
+identities and tightens it to `0700` before capturing the image. Public roots,
+writable projects, symlink aliases and unexpected modes are refused. A refused
+or interrupted capture preserves the pending intent; restart verifies the same
+native append without resending it. Once the original is durably bound, later
+reads no longer require the temporary native cache.
 
 Large-attachment regression and isolated real SDK checks cover approximately
 5.5 MiB PNG and JPEG inputs, later text-only deltas, a native restart, removal of

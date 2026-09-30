@@ -19,10 +19,17 @@ fixtures use placeholder paths and IDs.
 
 ## Development
 
-- Node.js 22+, ES modules; install with `npm ci`.
+- Node.js 22.15+ (22.x) or 23.8+, ES modules; install with `npm ci`.
 - Run `npm test` for the coordinator and adapter contracts.
 - Native integration checks use isolated temporary homes and synthetic transcripts.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
+- Product repairs must apply through normal installation and runtime paths on
+  other users' machines. Do not depend on one account, UID, project path, native
+  conversation ID or manually repaired local state. Reproduce relevant failures
+  in fresh isolated roots and cover environment-dependent paths, permissions and
+  restart recovery. Establish fixture permissions explicitly when they matter,
+  so the test process's umask cannot hide the failing native state. Keep local
+  recovery evidence separate from clean-profile and other-machine acceptance.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
 - Read transcript snapshots through a no-follow file descriptor and compare its
@@ -131,7 +138,9 @@ desktop-integration row; never skip to another copy or show unrelated
 prerequisites as missing.
 Package portable Node/npm and production dependencies so end users need no Git,
 Node installation, compiler or terminal setup. Build with an explicit file
-allowlist and verify nested signatures. Development signing is not notarized
+allowlist, probe the supplied Node binary's Zstandard/CRC32 APIs before staging,
+and verify nested signatures. Reject incompatible runtime distributions before
+producing an app. Development signing is not notarized
 public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
 checks native layout with synthetic data, not installed service acceptance.
 The 20-second setup inspection runs only while the window is visible or a

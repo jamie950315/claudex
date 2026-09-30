@@ -86,7 +86,7 @@ test('cancelling a queued child delivers its final revision once and an observin
     if (calls.length > 1) return { text: 'Unexpected parent rerun' };
     hub.schedule = () => {};
     const child = await hub.dispatch(request('codex', 'start', {
-      provider: 'claude', cwd: '/tmp', prompt: 'Queued child', permission: 'workspace-write', requestId: 'queued-child',
+      provider: 'claude', cwd: fixture.root, prompt: 'Queued child', permission: 'workspace-write', requestId: 'queued-child',
     }, parentToken));
     childId = child.taskId;
     assert.notEqual(child.deferredUntilParentExit, true);
@@ -98,7 +98,7 @@ test('cancelling a queued child delivers its final revision once and an observin
   }, { allowWrite: true, mcp: async ({ provider, token }) => { if (provider === 'codex') parentToken = token; return {}; } });
   hub = fixture.hub;
   const started = await hub.dispatch(controller(hub, 'codex', 'start', {
-    provider: 'codex', cwd: '/tmp', prompt: 'Parent', permission: 'workspace-write', requestId: 'cancel-observer-parent',
+    provider: 'codex', cwd: fixture.root, prompt: 'Parent', permission: 'workspace-write', requestId: 'cancel-observer-parent',
   }));
   const done = await until(async () => { const value = await status(hub, started.taskId); return value.status === 'completed' && value; });
   await delay(20);

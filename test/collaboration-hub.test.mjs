@@ -640,7 +640,7 @@ test('writable child runs concurrently with its parent and delivers a durable re
       assert.equal(provider, 'codex');
       assert.equal(permission, 'workspace-write');
       const started = await hub.dispatch(request('codex', 'start', {
-        provider: 'claude', cwd: '/tmp', prompt: 'Implement child work', permission: 'workspace-write', requestId: 'writable-child',
+        provider: 'claude', cwd: fixture.root, prompt: 'Implement child work', permission: 'workspace-write', requestId: 'writable-child',
       }, tokens.get('codex')));
       childId = started.taskId;
       assert.notEqual(started.deferredUntilParentExit, true);
@@ -666,7 +666,7 @@ test('writable child runs concurrently with its parent and delivers a durable re
   }, { allowWrite: true, mcp: async ({ provider, token }) => { tokens.set(provider, token); return {}; } });
   hub = fixture.hub;
   const started = await hub.dispatch(controller(hub, 'codex', 'start', {
-    provider: 'codex', cwd: '/tmp', prompt: 'Parent work', permission: 'workspace-write', requestId: 'writable-parent',
+    provider: 'codex', cwd: fixture.root, prompt: 'Parent work', permission: 'workspace-write', requestId: 'writable-parent',
   }));
   parentId = started.taskId;
   const done = await until(async () => { const value = await status(hub, parentId); return value.status === 'completed' && value; });
@@ -687,7 +687,7 @@ test('cancelling a queued writable child releases its waiting parent', async t =
     if (order.length === 1) {
       hub.schedule = () => {};
       const child = await hub.dispatch(request('codex', 'start', {
-        provider: 'claude', cwd: '/tmp', prompt: 'Queued child', permission: 'workspace-write', requestId: 'cancel-queued-child',
+        provider: 'claude', cwd: fixture.root, prompt: 'Queued child', permission: 'workspace-write', requestId: 'cancel-queued-child',
       }, parentToken));
       childId = child.taskId;
       assert.notEqual(child.deferredUntilParentExit, true);
@@ -701,7 +701,7 @@ test('cancelling a queued writable child releases its waiting parent', async t =
   }, { allowWrite: true, mcp: async ({ provider, token }) => { if (provider === 'codex') parentToken = token; return {}; } });
   hub = fixture.hub;
   const started = await hub.dispatch(controller(hub, 'codex', 'start', {
-    provider: 'codex', cwd: '/tmp', prompt: 'Parent', permission: 'workspace-write', requestId: 'cancel-queued-parent',
+    provider: 'codex', cwd: fixture.root, prompt: 'Parent', permission: 'workspace-write', requestId: 'cancel-queued-parent',
   }));
   parentId = started.taskId;
   const done = await until(async () => { const value = await status(hub, parentId); return value.status === 'completed' && value; });

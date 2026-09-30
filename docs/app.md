@@ -189,7 +189,10 @@ node bin/build-claudex-app.mjs \
   --zip /absolute/output/Claudex-macOS-arm64.zip
 ```
 
-The builder uses an explicit engine-file allowlist, lockfile-based production
+The builder requires Node.js 22.15+ (22.x) or 23.8+ and probes the portable
+runtime's Zstandard/CRC32 APIs before staging. It refuses an incompatible runtime
+instead of packaging an app whose Desktop adapters would fail later.
+It uses an explicit engine-file allowlist, lockfile-based production
 dependency installation, portable Mach-O dependency checks, and nested code
 signatures. Existing output bundles are not overwritten. Transcripts, account
 files, tests, local Git history and private configuration are not bundled.

@@ -135,6 +135,15 @@ async function verifyPortableBinary(binary, arch, run) {
   }
 }
 
+async function verifyNodeCacheAPIs(binary, run) {
+  const probe = await run(binary, ['--input-type=module', '-e',
+    'import * as zlib from "node:zlib"; console.log(JSON.stringify({crc32:typeof zlib.crc32,zstdCompressSync:typeof zlib.zstdCompressSync,zstdDecompressSync:typeof zlib.zstdDecompressSync}))']);
+  let features;
+  try { features = JSON.parse(probe.stdout); } catch { /* Rejected below. */ }
+  if (!features || ['crc32', 'zstdCompressSync', 'zstdDecompressSync'].some(key => features[key] !== 'function'))
+    throw new Error('Portable Node runtime requires Zstandard and CRC32 APIs; use Node.js 22.15+ (22.x) or 23.8+.');
+}
+
 export async function buildClaudexApp({
   sourceRoot, destination, nodeDistribution, identity, zip, arch = 'arm64',
   run = runCommand,
@@ -156,6 +165,7 @@ export async function buildClaudexApp({
   await requireRegular(join(npmSource, 'bin', 'npm-cli.js'));
   await requireRegular(join(distribution, 'LICENSE'));
   await verifyPortableBinary(nodeSource, arch, run);
+  await verifyNodeCacheAPIs(nodeSource, run);
   const manifest = JSON.parse(await readFile(join(source, 'package.json'), 'utf8'));
   const stageRoot = await mkdtemp(join(dirname(output), '.claudex-app-'));
   const app = join(stageRoot, 'Claudex.app');

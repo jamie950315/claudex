@@ -20,7 +20,7 @@ history without asking a model to generate a reply or summarize it.
 
 - macOS with ChatGPT/Codex and Claude desktop apps already installed.
 - Native account access for the Codex and Claude Code workflows you want to use.
-- Node.js 22+ and Git only for command-line/source installation; the macOS app
+- Node.js `22.15+` (22.x) or `23.8+`, and Git only for command-line/source installation; the macOS app
   bundles its runtime and can supply missing CLI components.
 - For Desktop synchronization, the native desktop applications and compatible
   runtimes listed under [Compatibility and verification](#compatibility-and-verification).

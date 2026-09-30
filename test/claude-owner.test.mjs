@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, appendFile, readFile, writeFile, realpath } from 'node:fs/promises';
-import { join, dirname, basename } from 'node:path';
+import { mkdtemp, mkdir, appendFile, readFile, writeFile, realpath, lstat, chmod, rm } from 'node:fs/promises';
+import { join, dirname, basename, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { ClaudeOwner, CLAUDE_OWNER_CLI_VERSION, CLAUDE_OWNER_SDK_VERSION, claudeOwnerEnvironment, resolveClaudeOwnerExecutable } from '../src/claude-owner.mjs';
@@ -45,8 +45,9 @@ test('owner resolves a PATH command to the same absolute executable it will vali
   await assert.rejects(resolveClaudeOwnerExecutable('missing-synthetic-claude', { PATH: '/does-not-exist' }), /could not be resolved/);
 });
 
-async function fixture({ receipt = true, persist = true, receiptMutator, beforeReceipt, remoteFailure = false, initializationFailure = false } = {}) {
-  const root = await mkdtemp(join(tmpdir(), 'claudex-owner-'));
+async function fixture({ receipt = true, persist = true, receiptMutator, beforeReceipt, persistRow,
+  directoryPrefix = 'claudex-owner-', remoteFailure = false, initializationFailure = false } = {}) {
+  const root = await mkdtemp(join(tmpdir(), directoryPrefix));
   const claudeHome = join(root, 'claude'); await mkdir(claudeHome);
   const calls = { appends: [], remote: [], options: [] }, events = [];
   let live, output, closeCount = 0;
@@ -79,7 +80,9 @@ async function fixture({ receipt = true, persist = true, receiptMutator, beforeR
         calls.appends.push(item);
         if (persist) {
           await mkdir(join(path, '..'), { recursive: true });
-          await appendFile(path, JSON.stringify({ type: 'user', uuid: item.uuid, sessionId: id, message: item.message }) + '\n');
+          const row = persistRow ? await persistRow({ item, id, options })
+            : { type: 'user', uuid: item.uuid, sessionId: id, message: item.message };
+          await appendFile(path, JSON.stringify(row) + '\n');
         }
         if (beforeReceipt) await beforeReceipt({ output, item, id, path });
         if (receipt) {
@@ -229,6 +232,104 @@ test('lost receipt recovers by native UUID and content without a second append',
   assert.equal(recovered.duplicate, true);
   assert.equal(f.calls.appends.length, 1);
   await owner.close();
+});
+
+async function resizedImageFixture({ receipt = true, cacheMode = 0o700 } = {}) {
+  const original = Buffer.from('Synthetic original image from an isolated user profile');
+  const preview = Buffer.from('Synthetic native resized preview');
+  const image = bytes => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: bytes.toString('base64') } });
+  const content = [{ type: 'text', text: 'Preserve this exact image' }, image(original)];
+  let cache;
+  const f = await fixture({ receipt, directoryPrefix: 'claudex owner 空白路徑-',
+    async persistRow({ item, id, options }) {
+      const cacheRoot = join(options.env.CLAUDE_CODE_TMPDIR, `claude-${process.getuid()}`);
+      const project = join(cacheRoot, resolve(options.cwd).replace(/[^a-zA-Z0-9]/g, '-'));
+      const images = join(project, id, 'images');
+      await mkdir(cacheRoot, { recursive: true, mode: cacheMode });
+      await mkdir(images, { recursive: true, mode: 0o755 });
+      // Establish the observed native modes explicitly: a caller's restrictive
+      // umask must not turn this regression into an already-private cache.
+      await chmod(cacheRoot, cacheMode);
+      for (const path of [project, dirname(images), images]) await chmod(path, 0o755);
+      await writeFile(join(images, '1.png'), original, { mode: 0o600 });
+      cache = { root: cacheRoot, project, path: join(images, '1.png'), identity: await lstat(project) };
+      return { type: 'user', uuid: item.uuid, sessionId: id, version: CLAUDE_OWNER_CLI_VERSION,
+        queueTranscriptOnly: true, promptSource: 'sdk', imagePasteIds: [1],
+        message: { ...item.message, content: [content[0], image(preview)] } };
+    } });
+  f.config.options = { env: { CLAUDE_CODE_TMPDIR: join(f.root, 'custom temporary 快取') } };
+  return { ...f, content, original, preview: image(preview), cache: () => cache };
+}
+
+test('new native 0755 image projects recover through custom temporary paths and restart without rewriting or resending', async t => {
+  for (const receipt of [true, false]) await t.test(receipt ? 'normal receipt' : 'lost receipt', async () => {
+    const f = await resizedImageFixture({ receipt });
+    let owner;
+    try {
+      owner = await ClaudeOwner.open(f.config);
+      const operationId = 'portable-native-image';
+      if (receipt) await owner.append({ operationId, content: f.content });
+      else {
+        await assert.rejects(owner.append({ operationId, content: f.content }), /timed out/);
+        assert.equal(owner.status().pending, operationId);
+        assert.equal((await lstat(f.cache().project)).mode & 0o777, 0o755);
+      }
+      const sessionId = owner.status().sessionId, remoteId = owner.status().remoteId;
+      const nativeBefore = await readFile(owner.status().transcriptPath);
+      const nativeRow = nativeBefore.toString().trim().split('\n').map(JSON.parse).find(row => row.type === 'user');
+      assert.deepEqual(nativeRow.message.content[1], f.preview);
+      await owner.close(); owner = null;
+      owner = await ClaudeOwner.open(f.config);
+      assert.equal(owner.status().sessionId, sessionId); assert.equal(owner.status().remoteId, remoteId);
+      assert.equal(owner.status().pending, null);
+      const recovered = await owner.append({ operationId, content: f.content });
+      assert.equal(recovered.duplicate, true);
+      assert.equal(recovered.recovered === true, !receipt);
+      assert.equal(f.calls.appends.length, 1); assert.equal(f.calls.appends[0].shouldQuery, false);
+      assert.equal(f.calls.options.every(options => options.env.CLAUDE_CODE_TMPDIR === f.config.options.env.CLAUDE_CODE_TMPDIR), true);
+      const after = await lstat(f.cache().project);
+      assert.equal(after.mode & 0o777, 0o700);
+      assert.equal(after.dev, f.cache().identity.dev); assert.equal(after.ino, f.cache().identity.ino);
+      assert.deepEqual(await readFile(f.cache().path), f.original);
+      assert.deepEqual((await readFile(owner.status().transcriptPath)).subarray(0, nativeBefore.length), nativeBefore);
+      const restored = await owner.inspectTranscript();
+      assert.deepEqual(restored.rows.find(row => row.type === 'user').message.content, f.content);
+      // Once durably bound, restart reads the private asset store rather than
+      // depending on a native temporary cache that the OS can remove.
+      await rm(f.config.options.env.CLAUDE_CODE_TMPDIR, { recursive: true });
+      await owner.close(); owner = null;
+      owner = await ClaudeOwner.open(f.config);
+      assert.deepEqual((await owner.inspectTranscript()).rows.find(row => row.type === 'user').message.content, f.content);
+      assert.equal((await owner.append({ operationId, content: f.content })).duplicate, true);
+      assert.equal(f.calls.appends.length, 1);
+    } finally { await owner?.close(); await rm(f.root, { recursive: true, force: true }); }
+  });
+});
+
+test('unsafe image caches retain the exact pending append until guarded recovery becomes possible', async () => {
+  const f = await resizedImageFixture({ cacheMode: 0o755 });
+  let owner;
+  try {
+    owner = await ClaudeOwner.open(f.config);
+    await assert.rejects(owner.append({ operationId: 'unsafe-cache', content: f.content }), /private owned directory/);
+    assert.equal(owner.status().pending, 'unsafe-cache');
+    const nativeBefore = await readFile(owner.status().transcriptPath);
+    await owner.close(); owner = null;
+    const failedRestart = new ClaudeOwner(f.config);
+    await assert.rejects(failedRestart.start(), /private owned directory/);
+    assert.equal(f.calls.appends.length, 1); assert.equal(f.calls.options.length, 1);
+    assert.equal((await lstat(f.cache().root)).mode & 0o777, 0o755);
+    assert.equal((await lstat(f.cache().project)).mode & 0o777, 0o755);
+    assert.deepEqual(await readFile(failedRestart.status().transcriptPath), nativeBefore);
+    // Only the isolated fixture repairs its deliberately unsafe parent. The
+    // product must not alter it or discard the intent to regain availability.
+    await chmod(f.cache().root, 0o700);
+    owner = await ClaudeOwner.open(f.config);
+    assert.equal(owner.status().pending, null);
+    assert.equal((await owner.append({ operationId: 'unsafe-cache', content: f.content })).recovered, true);
+    assert.equal(f.calls.appends.length, 1);
+    assert.deepEqual((await readFile(owner.status().transcriptPath)).subarray(0, nativeBefore.length), nativeBefore);
+  } finally { await owner?.close(); await rm(f.root, { recursive: true, force: true }); }
 });
 
 test('real remote results cannot satisfy a bridge receipt and are not interrupted', async () => {

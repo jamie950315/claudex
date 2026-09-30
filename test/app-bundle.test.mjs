@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
@@ -54,4 +54,32 @@ test('builder rejects nonportable Node dependencies before staging', { skip: pro
   await assert.rejects(buildClaudexApp({ sourceRoot: resolve(import.meta.dirname, '..'), destination: join(root, 'Claudex.app'),
     nodeDistribution: distribution, identity: 'test', run }), /non-system library/);
   assert.equal(calls.length, 2);
+});
+
+test('builder rejects missing cache APIs before staging a public app', { skip: process.platform !== 'darwin' }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'claudex-node-api-test-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const distribution = join(root, 'node'), binary = join(distribution, 'bin', 'node');
+  await mkdir(join(distribution, 'bin'), { recursive: true });
+  await mkdir(join(distribution, 'lib', 'node_modules', 'npm', 'bin'), { recursive: true });
+  await writeFile(binary, 'fake');
+  await writeFile(join(distribution, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'fake');
+  await writeFile(join(distribution, 'LICENSE'), 'test');
+  const features = { crc32: 'function', zstdCompressSync: 'function', zstdDecompressSync: 'function' };
+  for (const stdout of [...Object.keys(features).map(key => JSON.stringify({ ...features, [key]: 'undefined' })),
+    'not JSON', 'null', '{}']) {
+    const calls = [];
+    const run = async (command, args) => {
+      calls.push([command, args]);
+      if (command === '/usr/bin/lipo') return { stdout: 'arm64\n' };
+      if (command === '/usr/bin/otool') return { stdout: binary + ':\n /usr/lib/libSystem.B.dylib\n' };
+      assert.equal(command, binary);
+      assert.deepEqual(args.slice(0, 2), ['--input-type=module', '-e']);
+      return { stdout };
+    };
+    await assert.rejects(buildClaudexApp({ sourceRoot: resolve(import.meta.dirname, '..'),
+      destination: join(root, 'Claudex.app'), nodeDistribution: distribution, identity: 'test', run }), /Zstandard and CRC32/);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(await readdir(root), ['node']);
+  }
 });
