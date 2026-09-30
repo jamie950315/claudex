@@ -4,7 +4,7 @@ import { prepareCodexChatWake } from '../src/codex-chat-wake.mjs';
 import { discoverCodexChats } from '../src/native-chat-catalog.mjs';
 import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.mjs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { lstat, readFile, unlink } from 'node:fs/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
@@ -67,7 +67,8 @@ async function serve(root, allowWrite, values) {
   root = await privateDirectory(root);
   return withLock(join(root, 'broker.lock'), async () => {
     const hub = new CollaborationHub({ root, allowWrite, defaultPermission: values['default-permission'] ?? 'read-only',
-      chatWake: prepareCodexChatWake, nativeChatDiscovery: discoverCodexChats,
+      chatWake: prepareCodexChatWake,
+      nativeChatDiscovery: params => discoverCodexChats(params, { syncRoot: dirname(root) }),
       claudeWakeManifest: createClaudeChatWakeManifest({ root }),
       run: createNativeCollaborationRunner({ commands: { codex: values['codex-binary'] ?? 'codex', claude: values['claude-binary'] ?? 'claude' } }),
       mcp: ({ provider, token }) => ({ command: process.execPath,

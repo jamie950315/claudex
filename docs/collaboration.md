@@ -133,6 +133,12 @@ error rather than a guessed name. Activity is a hint, not proof a process is ali
 Claude search covers hook-registered chats. Codex title queries also inspect
 bounded, unarchived native metadata, so a chat need not have fired a hook first.
 Metadata discovery is explicitly distinguished from hook registration.
+The broker reads the synchronization root beside its private collaboration root
+to select the configured Desktop launcher's shared listener. Keep custom
+collaboration roots directly inside their synchronization root when using that
+integration. An absent shared listener remains an explicit transport error;
+discovery does not start another backend. Without a configured launcher, it uses
+the native Desktop control endpoint.
 Never guess between duplicate or partial matches. Ask the user to disambiguate
 using provider and project/cwd. `exactMatchCount`, `titleMatch`, `titleSource` and
 `unavailableTitleCount` make the search coverage explicit. Pass the selected
