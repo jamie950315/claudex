@@ -5,7 +5,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { publishExclusive, writeJSON, privateDirectory, withLock, snapshot } from '../src/storage.mjs';
+import { publishExclusive, writeJSON, writeDiagnosticJSON, privateDirectory, withLock, snapshot } from '../src/storage.mjs';
 import { nativeDrivers } from '../src/native-drivers.mjs';
 
 test('native publication replaces an interrupted private staging write but never an existing session', async () => {
@@ -27,6 +27,39 @@ test('atomic state writes use a bounded staging slot', async () => {
   assert.equal(JSON.parse(await readFile(path, 'utf8')).n, 4);
   assert.deepEqual(await readdir(root), ['state.json']);
 });
+
+for (const kind of ['native', 'state', 'diagnostic']) {
+  test(`${kind} staging rejects hard links without changing the linked original`, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'claudex-linked-staging-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const original = join(root, 'original.jsonl'), target = join(root, 'candidate');
+    const temporary = target + (kind === 'native' ? '.claudex-next' : '.next');
+    const contents = '{"original":"preserve"}\n';
+    await writeFile(original, contents, { mode: 0o600 });
+    await link(original, temporary);
+    const write = kind === 'native' ? () => publishExclusive(target, '{"replacement":true}\n')
+      : kind === 'state' ? () => writeJSON(target, { replacement: true })
+      : () => writeDiagnosticJSON(target, { replacement: true });
+    await assert.rejects(write(), /Staging file must be an owned regular file with one link/);
+    assert.equal(await readFile(original, 'utf8'), contents);
+    assert.equal(await readFile(temporary, 'utf8'), contents);
+    assert.equal((await fs.lstat(original)).nlink, 2);
+    await assert.rejects(fs.lstat(target), { code: 'ENOENT' });
+  });
+
+  test(`${kind} staging refuses FIFOs without waiting for a reader`, { timeout: 5000 }, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'claudex-fifo-staging-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const target = join(root, 'candidate'), temporary = target + (kind === 'native' ? '.claudex-next' : '.next');
+    const result = spawnSync('mkfifo', ['-m', '600', temporary]);
+    assert.equal(result.status, 0);
+    const write = kind === 'native' ? () => publishExclusive(target, 'replacement')
+      : kind === 'state' ? () => writeJSON(target, {}) : () => writeDiagnosticJSON(target, {});
+    await assert.rejects(write());
+    assert.ok((await fs.lstat(temporary)).isFIFO());
+    await assert.rejects(fs.lstat(target), { code: 'ENOENT' });
+  });
+}
 
 test('private roots, rollback roots, and staging files reject symlinks', async () => {
   const root = await mkdtemp(join(tmpdir(), 'claudex-symlink-test-'));

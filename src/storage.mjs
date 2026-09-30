@@ -18,9 +18,22 @@ async function syncDirectory(path) {
   try { await directory.sync(); } finally { await directory.close(); }
 }
 
-async function writeTemporary(path, value) {
-  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-  try { await file.writeFile(value); await file.sync(); } finally { await file.close(); }
+async function writeTemporary(path, value, { durable = true } = {}) {
+  // Inspect the opened inode before truncating an interrupted staging file.
+  // O_NOFOLLOW alone does not protect an original reached through a hard link.
+  const file = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+  try {
+    const current = await file.stat();
+    if (!current.isFile() || current.uid !== process.getuid() || current.nlink !== 1)
+      throw new Error('Staging file must be an owned regular file with one link.');
+    const named = await lstat(path);
+    if (!named.isFile() || named.isSymbolicLink() || named.dev !== current.dev || named.ino !== current.ino)
+      throw new Error('Staging file changed before write.');
+    await file.chmod(0o600);
+    await file.truncate(0);
+    await file.writeFile(value);
+    if (durable) await file.sync();
+  } finally { await file.close(); }
 }
 
 export async function readJSON(path, fallback) {
@@ -60,8 +73,7 @@ export const writeJSON = (path, value) => atomicWrite(path, `${JSON.stringify(va
 export async function writeDiagnosticJSON(path, value) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const temporary = `${path}.next`;
-  const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-  try { await file.writeFile(`${JSON.stringify(value, null, 2)}\n`); } finally { await file.close(); }
+  await writeTemporary(temporary, `${JSON.stringify(value, null, 2)}\n`, { durable: false });
   await rename(temporary, path);
   await chmod(path, 0o600);
 }
@@ -177,6 +189,8 @@ export async function snapshot(path) {
     const rows = text.split('\n').filter(Boolean).map((line, index) => {
       try { return JSON.parse(line); } catch { throw new Error(`Malformed transcript record at line ${index + 1}; source left unchanged.`); }
     });
-    return { text, rows, hash: hash(text), bytes: Number(after.size), mtimeMs: Number(after.mtimeNs) / 1e6 };
+    const fileIdentity = Object.fromEntries(['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink']
+      .map(key => [key, String(after[key])]));
+    return { text, rows, hash: hash(text), bytes: Number(after.size), mtimeMs: Number(after.mtimeNs) / 1e6, fileIdentity };
   } finally { await file.close(); }
 }

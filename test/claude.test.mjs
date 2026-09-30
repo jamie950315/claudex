@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, appendFile, stat } from 'node:fs/promises';
+import fs, { mkdtemp, readFile, appendFile, stat, rename, writeFile, symlink, rm, utimes } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClaudeSession, appendClaudeSession, decodeClaude, projectDirectory } from '../src/claude.mjs';
+import { snapshot } from '../src/storage.mjs';
 
 const common = (text = 'Remember BLUE.') => ({ meta: { id: 'test', cwd: '/tmp/claudex-test', timestamp: '2026-09-24T00:00:00Z' }, messages: [
   { role: 'user', content: [{ type: 'text', text }] },
@@ -35,6 +38,57 @@ test('source divergence fails closed', async () => {
   await assert.rejects(appendClaudeSession({ ...result, id: result.id, common: common(), expectedHash: result.hash }), /diverged/);
   assert.equal(await readFile(result.path, 'utf8'), before);
 });
+
+test('unchanged nanosecond timestamps append without a floating point millisecond comparison', async t => {
+  const claudeHome = await mkdtemp(join(tmpdir(), 'claudex-precise-append-'));
+  t.after(() => rm(claudeHome, { recursive: true, force: true }));
+  const result = await createClaudeSession({ claudeHome, common: common() });
+  const before = await readFile(result.path, 'utf8');
+  // Real fractional timestamps can round differently when obtained directly as
+  // mtimeMs and when converted from nanoseconds. Choose one where this occurs.
+  let convertedDifferently = false;
+  for (let offset = 0; offset < 256; offset++) {
+    const seconds = 1790726400 + offset / 1e6;
+    await utimes(result.path, seconds, seconds);
+    const source = await snapshot(result.path), current = await stat(result.path);
+    if (source.mtimeMs !== current.mtimeMs) { convertedDifferently = true; break; }
+  }
+  t.diagnostic(`Native timestamp conversion difference observed: ${convertedDifferently}`);
+  await appendClaudeSession({ path: result.path, id: result.id, common: common('Next exact batch.'), expectedHash: result.hash });
+  const after = await readFile(result.path, 'utf8');
+  assert.ok(after.startsWith(before));
+  assert.equal(decodeClaude(after).messages.length, 4);
+});
+
+for (const replacement of ['regular', 'symlink', 'missing']) {
+  test(`append preserves a ${replacement} replacement introduced after its stable snapshot`, async t => {
+    const claudeHome = await mkdtemp(join(tmpdir(), 'claudex-append-replacement-'));
+    t.after(() => rm(claudeHome, { recursive: true, force: true }));
+    const result = await createClaudeSession({ claudeHome, common: common() });
+    const before = await readFile(result.path, 'utf8'), original = `${result.path}.original`;
+    const originalOpen = fs.open;
+    let replaced = false;
+    const mock = t.mock.method(fs, 'open', async (path, flags, ...args) => {
+      if (path === result.path && (flags === 'a' || (typeof flags === 'number' && (flags & constants.O_APPEND) !== 0))) {
+        replaced = true;
+        await rename(result.path, original);
+        if (replacement === 'regular') {
+          const previous = await stat(original);
+          await writeFile(result.path, before, { mode: 0o600 });
+          await utimes(result.path, previous.atime, previous.mtime);
+        } else if (replacement === 'symlink') await symlink(original, result.path);
+      }
+      return originalOpen(path, flags, ...args);
+    });
+    syncBuiltinESMExports();
+    t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+    await assert.rejects(appendClaudeSession({ path: result.path, id: result.id, common: common('Unsafe batch.'), expectedHash: result.hash }));
+    assert.equal(replaced, true);
+    assert.equal(await readFile(original, 'utf8'), before);
+    if (replacement !== 'missing') assert.equal(await readFile(result.path, 'utf8'), before);
+    else await assert.rejects(stat(result.path), { code: 'ENOENT' });
+  });
+}
 
 test('compacted sessions are not silently flattened', () => {
   assert.throws(() => decodeClaude('{"type":"system","subtype":"compact_boundary"}\n'), /compaction/);

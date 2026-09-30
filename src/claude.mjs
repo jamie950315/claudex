@@ -1,6 +1,7 @@
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { access, mkdir, open } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, mkdir, open, lstat } from 'node:fs/promises';
 import { fromCommon, toCommon } from 'txcript';
 import { hash, snapshot, publishExclusive } from './storage.mjs';
 import { portableMessages } from './history.mjs';
@@ -68,10 +69,12 @@ export async function appendClaudeSession({ path, common, id, expectedHash }) {
   const batch = encodeClaude(common, id, lastUuid);
   // The coordinator must hold the ownership lease before calling this adapter.
   // Append-only writes preserve every byte of the original transcript.
-  const file = await open(path, 'a', 0o600);
+  const file = await open(path, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const current = await file.stat();
-    if (current.size !== source.bytes || current.mtimeMs !== source.mtimeMs) throw new Error('Claude transcript changed before append.');
+    const current = await file.stat({ bigint: true }), named = await lstat(path, { bigint: true });
+    if (!current.isFile() || !named.isFile() || named.isSymbolicLink()
+        || Object.entries(source.fileIdentity).some(([key, value]) => String(current[key]) !== value || String(named[key]) !== value))
+      throw new Error('Claude transcript changed before append.');
     await file.writeFile(batch.text); await file.sync();
   } finally { await file.close(); }
   return { hash: hash(source.text + batch.text), lastUuid: batch.rows.at(-1)?.uuid ?? lastUuid };
