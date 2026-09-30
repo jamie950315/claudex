@@ -94,15 +94,28 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             hasPriorSetup: FileManager.default.fileExists(atPath: setupRoot + "/app-setup-status.json"))
         if launch.showSettings { showSetup(nil) } else { NSApp.setActivationPolicy(.accessory) }
         run(inspectOnly ? .inspect : launch.startSetup ? .setup : .startup)
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+        updateRefreshTimer()
+    }
+
+    private func updateRefreshTimer(windowVisible: Bool? = nil, synthetic: Bool = false) {
+        guard !uiSmoke || synthetic else { return }
+        guard !stopping, (windowVisible ?? window.isVisible) || setupFlowActive else {
+            refreshTimer?.invalidate()
+            refreshTimer = nil
+            return
+        }
+        guard refreshTimer == nil else { return }
+        let timer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             // Each inspection starts the bundled engine, which deep-verifies both desktop
             // app signatures and queries native CLIs. The setup report is only presented in
             // the window, so hidden background inspection runs only while a setup/login flow
             // may need its provider-ready follow-up. Showing the window refreshes a stale report.
-            guard let self, !self.busy, !self.stopping, self.window.isVisible || self.setupFlowActive else { return }
+            guard let self, !uiSmoke, !self.busy, !self.stopping, self.window.isVisible || self.setupFlowActive else { return }
             self.run(.inspect)
         }
-        RunLoop.main.add(refreshTimer!, forMode: .common)
+        timer.tolerance = 2
+        refreshTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private func buildMainMenu() {
@@ -166,6 +179,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         if allowTermination || inspectOnly || uiSmoke { return .terminateNow }
         guard !stopping else { showSetup(nil); return .terminateCancel }
         stopping = true
+        updateRefreshTimer()
         health.headline = nil
         health.descriptionText = nil
         health.statusIcon = nil
@@ -230,6 +244,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     func windowWillClose(_ notification: Notification) {
+        updateRefreshTimer(windowVisible: false)
         if !NSApp.windows.contains(where: { $0 != window && $0.isVisible }) {
             NSApp.setActivationPolicy(.accessory)
         }
@@ -283,6 +298,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
+        health.refreshPermission()
         menu.removeAllItems()
         let heading = NSMenuItem(title: L(stopping ? "Stopping Claudex…" : health.report.title), action: nil, keyEquivalent: "")
         heading.isEnabled = false
@@ -586,6 +602,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .setup, .login: setupFlowActive = true; checkingOnly = false
         case .inspect, .startup: checkingOnly = true
         }
+        updateRefreshTimer()
         let previousReport = lastVerifiedReport
         busy = true
         lastSetupRunAt = Date()
@@ -598,23 +615,18 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .success(let report): self.report = report; self.lastVerifiedReport = report; self.failure = nil
             case .failure(let error): self.report = nil; self.failure = error.message
             }
+            self.lastSetupRunAt = Date()
+            let providerReady = self.setupFlowActive && self.report?.providerBecameReady(from: previousReport) == true
+            // Only installation/sign-in changes need hidden provider follow-up.
+            // Completed setup and failures must not leave an inspection loop alive.
+            self.setupFlowActive = self.setupFlowActive && self.report?.needsProviderFollowUp == true
+            self.updateRefreshTimer()
             self.render()
-            if case .inspect = command, !inspectOnly, !self.stopping, self.setupFlowActive, let current = self.report,
-               Self.providerBecameReady(from: previousReport, to: current) {
+            if case .inspect = command, !inspectOnly, !self.stopping, providerReady {
                 self.run(.setup)
             }
             // Startup may be resuming the broker after Quit; read preferences only after it finishes.
             if !self.stopping && !self.busy && self.modelSettings == nil { self.loadModels() }
-        }
-    }
-
-    private static func providerBecameReady(from previous: SetupReport?, to current: SetupReport) -> Bool {
-        guard let previous else { return false }
-        let providerIDs: Set<String> = ["codex-cli", "claude-cli", "codex-login", "claude-login", "codex-desktop", "claude-desktop"]
-        let old = Dictionary(uniqueKeysWithValues: previous.components.map { ($0.id, $0.state) })
-        return current.components.contains { component in
-            providerIDs.contains(component.id) && component.state == .ready
-                && old[component.id].map { $0 == .missing || $0 == .loginRequired } == true
         }
     }
 
@@ -769,6 +781,41 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             + LF("Next step: %@", L("Wait for the reply to finish. No action is required."))
         showSetup(nil)
         DispatchQueue.main.async {
+            let presentation = StatusController(root: setupRoot, readOnly: true)
+            presentation.report = HealthReport(state: "ready", title: "Synchronization ready", detail: "Verified",
+                symbol: "checkmark.circle", attention: false, autoRestart: true, operational: true)
+            let icon = NSImageView()
+            presentation.statusIcon = icon
+            presentation.updateWindow()
+            let originalIcon = icon.image
+            presentation.updateWindow()
+            var presentationValid = originalIcon != nil && icon.image === originalIcon
+            // Quit temporarily unbinds and changes this same view. A failed stop
+            // must restore its health icon without waiting for an intervening poll.
+            presentation.statusIcon = nil
+            let stoppingIcon = NSImage(systemSymbolName: "clock", accessibilityDescription: "Stopping")
+            icon.image = stoppingIcon
+            presentation.statusIcon = icon
+            presentation.updateWindow()
+            presentationValid = presentationValid && icon.image != nil && icon.image !== stoppingIcon
+            if presentationValid { print("Claudex health presentation: rebind ready") }
+            self.updateRefreshTimer(windowVisible: false, synthetic: true)
+            var pollingValid = self.refreshTimer == nil
+            self.updateRefreshTimer(windowVisible: true, synthetic: true)
+            pollingValid = pollingValid && self.refreshTimer != nil
+            self.updateRefreshTimer(windowVisible: false, synthetic: true)
+            pollingValid = pollingValid && self.refreshTimer == nil
+            self.setupFlowActive = true
+            self.updateRefreshTimer(windowVisible: false, synthetic: true)
+            pollingValid = pollingValid && self.refreshTimer != nil
+            self.setupFlowActive = false
+            self.updateRefreshTimer(windowVisible: false, synthetic: true)
+            pollingValid = pollingValid && self.refreshTimer == nil
+            self.stopping = true
+            self.updateRefreshTimer(windowVisible: true, synthetic: true)
+            pollingValid = pollingValid && self.refreshTimer == nil
+            self.stopping = false
+            if pollingValid { print("Claudex inspection timer: lifecycle ready") }
             self.window.setContentSize(NSSize(width: 560, height: 480))
             self.window.contentView?.layoutSubtreeIfNeeded()
             self.pageScroll.documentView?.layoutSubtreeIfNeeded()
@@ -783,7 +830,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             func scrollCount(_ view: NSView) -> Int {
                 (view is NSScrollView ? 1 : 0) + view.subviews.reduce(0) { $0 + scrollCount($1) }
             }
-            var valid = self.diagnosticCards.arrangedSubviews.count == ids.count && document?.isFlipped == true
+            var valid = presentationValid && pollingValid && self.diagnosticCards.arrangedSubviews.count == ids.count && document?.isFlipped == true
                 && (document?.frame.height ?? 0) > 0 && self.connections.frame.width > 0
                 && self.pageScroll.contentView.bounds.height > smallHeight + 300
                 && abs((document?.frame.width ?? 0) - self.pageScroll.contentView.bounds.width) < 1
@@ -865,6 +912,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         // Hidden periods skip periodic inspection; refresh a report older than one interval.
         // Before the launch command has started there is no prior run, so it is never preempted.
         if !uiSmoke, let last = lastSetupRunAt, Date().timeIntervalSince(last) >= 20 { run(.inspect) }
+        updateRefreshTimer()
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }

@@ -89,6 +89,10 @@ test('existing apps and CLIs are reused without installer commands', async t => 
   assert.equal(found.codex.binary, codex);
   assert.equal(found.claude.binary, claude);
   assert.equal(commands.some(([command]) => command.endsWith('/node')), false);
+  assert.equal(commands.filter(([command, flag, deep]) => command === '/usr/bin/codesign'
+    && flag === '--verify' && deep === '--deep').length, 2, 'verify each app once when no installation is needed');
+  assert.equal(commands.filter(([command, flag]) => command === codex && flag === '--version').length, 1);
+  assert.equal(commands.filter(([command, flag]) => command === claude && flag === '--version').length, 1);
 });
 
 test('a desktop app with the wrong publisher is rejected', async t => {

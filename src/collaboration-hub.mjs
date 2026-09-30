@@ -390,15 +390,21 @@ export class CollaborationHub extends EventEmitter {
         || params.afterRevision !== undefined && (!Number.isSafeInteger(params.afterRevision) || params.afterRevision < 0)) throw new Error('Invalid wait bounds.');
       const current = this.state.tasks[params.taskId];
       const baseline = params.afterRevision ?? current.revision;
+      const signal = envelope.signal;
       let timedOut = false;
       const ready = () => terminal.has(this.state.tasks[params.taskId].status)
         || this.state.tasks[params.taskId].revision > (params.afterRevision ?? current.revision);
       if (!ready() && timeoutMs) await new Promise(resolve => {
-        const done = () => { clearTimeout(timer); this.off('change', changed); resolve(); };
-        const changed = () => { if (ready() || this.closed) done(); };
+        const done = () => {
+          clearTimeout(timer); this.off('change', changed);
+          signal?.removeEventListener('abort', done); resolve();
+        };
+        const changed = () => { if (ready() || this.closed || signal?.aborted) done(); };
         const timer = setTimeout(() => { timedOut = true; done(); }, timeoutMs);
+        signal?.addEventListener('abort', done, { once: true });
         this.on('change', changed); changed();
       });
+      if (signal?.aborted) throw new Error('Collaboration wait connection closed.');
       return this.readTask(envelope, { baseline, timedOut });
     }
     if (!['start', 'send', 'handoff', 'cancel', 'resolve'].includes(method)) throw new Error('Unknown collaboration method.');
@@ -546,12 +552,15 @@ export class CollaborationHub extends EventEmitter {
   async pump() {
     if (this.pumping || this.closed) return;
     this.pumping = true;
+    let finishPump;
+    this.pumpDrain = new Promise(resolve => { finishPump = resolve; });
     this.pumpRequested = false;
     try {
       while (!this.closed && this.running.size < this.maxWorkers) {
         const token = randomBytes(32).toString('hex');
         // An idle pump reads the committed state instead of cloning the whole ledger.
         const next = await this.serialized(() => {
+          if (this.closed) return null;
           const tasks = Object.values(this.state.tasks);
           if (tasks.some(task => task.status === 'uncertain')
             || !tasks.some(item => item.status === 'ready' && !this.running.has(item.id))) return null;
@@ -575,6 +584,7 @@ export class CollaborationHub extends EventEmitter {
               this.deliverToParent(state, task);
               return { limit: true };
             }
+            if (this.closed) return null;
             task.status = 'running'; task.generation++; task.revision++; task.updatedAt = Date.now();
             const from = task.lastExecution?.messageCount ?? 0;
             const inputs = { from, to: task.messages.length,
@@ -588,6 +598,7 @@ export class CollaborationHub extends EventEmitter {
         if (!next) break;
         if (next.limit) continue;
         const controller = new AbortController();
+        if (this.closed) controller.abort();
         const active = { controller, promise: null };
         this.running.set(next.id, active);
         active.promise = this.execute(next, token, controller).finally(() => {
@@ -597,6 +608,7 @@ export class CollaborationHub extends EventEmitter {
       }
     } finally {
       this.pumping = false;
+      finishPump(); this.pumpDrain = null;
       if (this.pumpRequested && !this.closed) this.schedule();
     }
   }
@@ -624,6 +636,11 @@ export class CollaborationHub extends EventEmitter {
   async execute(task, token, controller) {
     let result, failure;
     try {
+      if (controller.signal.aborted) {
+        const error = new Error('Broker stopped before native execution.');
+        error.executionUncertain = false;
+        throw error;
+      }
       result = await this.run({ provider: task.owner, cwd: task.cwd, permission: task.permission,
         projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [],
         prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
@@ -678,7 +695,10 @@ export class CollaborationHub extends EventEmitter {
     parent.revision++; parent.updatedAt = Date.now();
     if (bytes(parent.messages) > 192 * 1024) {
       parent.error = 'Child results exceed task context capacity. Inspect results explicitly; no further execution is allowed.';
-      if (parent.status !== 'running') parent.status = 'failed';
+      if (parent.status !== 'running') {
+        parent.status = 'failed';
+        this.deliverToParent(state, parent);
+      }
     } else if (parent.status === 'waiting' && !Object.values(state.tasks).some(child => child.parentId === parent.id && !terminal.has(child.status))) {
       parent.status = 'ready';
     }
@@ -690,6 +710,7 @@ export class CollaborationHub extends EventEmitter {
     // Status reads use the committed state directly; only an unseen child outcome
     // acknowledgement commits, in the same serialized step as the read.
     return this.serialized(async () => {
+      if (envelope.signal?.aborted) throw new Error('Collaboration wait connection closed.');
       const state = this.state;
       const actor = this.actor(envelope, state);
       const task = state.tasks[taskId];
@@ -724,6 +745,9 @@ export class CollaborationHub extends EventEmitter {
 
   async close() {
     this.closed = true; this.emit('change');
+    // A pump may already be waiting on a journal commit. Drain its launch boundary
+    // before taking the worker snapshot so no invocation escapes shutdown.
+    await this.pumpDrain;
     for (const active of this.running.values()) active.controller.abort();
     await Promise.allSettled([...this.running.values()].map(active => active.promise));
     await this.serial;

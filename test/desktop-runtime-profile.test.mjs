@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
+import fs, { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -10,6 +11,38 @@ import { encodeArchivedContextPacket, inspectArchivedContextPacket } from '../sr
 import { fingerprint } from '../src/history.mjs';
 import { encodeClaude, sessionPath } from '../src/claude.mjs';
 import { hash, snapshot, writeJSON } from '../src/storage.mjs';
+
+test('rollout accounting drains a failed directory batch without starting later batches', async t => {
+  const runtime = new DesktopRuntime({ root: '/synthetic/state', codexHome: '/synthetic/codex', claudeHome: '/synthetic/claude' });
+  const gate = Promise.withResolvers(), reading = Promise.withResolvers(), failure = new Error('Synthetic directory failure');
+  const directories = Array.from({ length: 18 }, (_, index) => ({ name: `directory-${index}`,
+    isDirectory: () => true, isFile: () => false }));
+  let started = 0, finished = false;
+  const original = fs.readdir;
+  const mock = t.mock.method(fs, 'readdir', async (path, ...args) => {
+    if (path === join(runtime.codexHome, 'sessions')) return directories;
+    if (path === join(runtime.codexHome, 'archived_sessions')) return [];
+    if (path.startsWith(join(runtime.codexHome, 'sessions') + '/')) {
+      started++;
+      if (path.endsWith('directory-0')) throw failure;
+      if (path.endsWith('directory-1')) { reading.resolve(); await gate.promise; }
+      return [];
+    }
+    return original(path, ...args);
+  });
+  syncBuiltinESMExports();
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+  const result = runtime.snapshotBytes('unused', '/synthetic/unused').then(
+    () => { finished = true; return null; }, error => { finished = true; return error; });
+  try {
+    await reading.promise;
+    assert.equal(started, 16);
+    assert.equal(finished, false, 'the failed batch must drain before returning');
+    gate.resolve();
+    assert.equal(await result, failure);
+    assert.equal(started, 16, 'later batches must not run after an observed failure');
+  } finally { gate.resolve(); await result; }
+});
 
 async function fixture(packetVersion = 2) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-profile-')));

@@ -164,6 +164,7 @@ export async function ensureProviders(options = {}) {
         ?? `${name === 'codex' ? 'ChatGPT/Codex' : 'Claude'} Desktop app is required; install and sign in to the official app before setup.`;
     return found;
   }
+  if (found.codex.binary && found.claude.binary) return found;
   const { root, runtime, home = process.env.HOME, run = execute } = options;
   const issues = {};
   for (const name of ['codex', 'claude']) if (!found[name].binary) {

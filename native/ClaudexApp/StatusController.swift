@@ -17,7 +17,9 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     }
     var onOpen: (() -> Void)?
     var onContentChange: (() -> Void)?
-    var statusIcon: NSImageView?
+    var statusIcon: NSImageView? {
+        didSet { presentedIcon = "" }
+    }
     var issuePanel: NSView?
     var issueText: NSTextField?
     var headline: NSTextField?
@@ -30,6 +32,10 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     var testNotice = ""
     var gate = NoticeGate()
     private var presented: [String] = []
+    private var presentedIcon = ""
+    private let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"; return formatter
+    }()
     let defaults = UserDefaults.standard
 
     func start(item: NSStatusItem) {
@@ -47,6 +53,7 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         gate.lastNoticeAt = defaults.double(forKey: "lastNoticeAt")
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }
+        timer?.tolerance = 0.5
         RunLoop.main.add(timer!, forMode: .common)
         refreshPermission()
     }
@@ -60,7 +67,8 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     func refresh() {
         report = loadHealth(root)
         if let button = item?.button {
-            button.toolTip = L(report.title) + "\n" + LD(report.detail)
+            let tooltip = L(report.title) + "\n" + LD(report.detail)
+            if button.toolTip != tooltip { button.toolTip = tooltip }
             button.setAccessibilityLabel("Claudex: " + L(report.title))
         }
         updateWindow()
@@ -96,31 +104,38 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func updateWindow() {
-        statusIcon?.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: L(report.title))
-        statusIcon?.contentTintColor = report.attention ? .systemOrange : report.operational ? .systemGreen : .secondaryLabelColor
-        headline?.stringValue = L(report.title)
-        descriptionText?.stringValue = LD(report.detail)
-        issuePanel?.isHidden = report.issues.isEmpty
+        let iconKey = [report.symbol, L(report.title), String(report.attention), String(report.operational)].joined(separator: "\n")
+        if presentedIcon != iconKey {
+            statusIcon?.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: L(report.title))
+            statusIcon?.contentTintColor = report.attention ? .systemOrange : report.operational ? .systemGreen : .secondaryLabelColor
+            presentedIcon = iconKey
+        }
+        setText(headline, L(report.title))
+        setText(descriptionText, LD(report.detail))
+        if issuePanel?.isHidden != report.issues.isEmpty { issuePanel?.isHidden = report.issues.isEmpty }
         var details = formattedIssues(Array(report.issues.prefix(1)), includeIdentity: false)
         if report.issues.count > 1 { details += "\n\n" + LF("%@ more items are available in diagnostics.", String(report.issues.count - 1)) }
-        if issueText?.stringValue != details { issueText?.stringValue = details }
+        setText(issueText, details)
         if let update = report.updatedAt {
-            let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
-            updatedText?.stringValue = LF("Last status update: %@", formatter.string(from: Date(timeIntervalSince1970: update / 1000)))
-        } else { updatedText?.stringValue = L("No verified status update yet") }
+            setText(updatedText, LF("Last status update: %@", timeFormatter.string(from: Date(timeIntervalSince1970: update / 1000))))
+        } else { setText(updatedText, L("No verified status update yet")) }
         var recovery = L(report.autoRestart ? "Automatic service recovery: enabled" : "Automatic service recovery: not confirmed")
         if let retry = report.retryAt { recovery += LF(" · next check in %@s", String(max(0, Int(ceil((retry - Date().timeIntervalSince1970 * 1000) / 1000))))) }
-        recoveryText?.stringValue = recovery
-        permissionText?.stringValue = L(deliveryFailed ? "Notification delivery failed · another attempt is scheduled"
+        setText(recoveryText, recovery)
+        setText(permissionText, L(deliveryFailed ? "Notification delivery failed · another attempt is scheduled"
             : permission == .authorized || permission == .provisional
             ? (testNotice.isEmpty ? "Notifications: enabled · repeated alerts are suppressed" : testNotice)
-            : "Notifications: not enabled · click Notifications to allow alerts")
+            : "Notifications: not enabled · click Notifications to allow alerts"))
         // The three-second poll usually repeats identical content; refit the window only
         // when presented text or visibility changed. Showing the window always refits.
         let current = [report.symbol, String(report.attention), String(report.operational), L(report.title), LD(report.detail),
                        details, updatedText?.stringValue ?? "", recovery, permissionText?.stringValue ?? "",
                        String(issuePanel?.isHidden ?? true)]
         if current != presented { presented = current; onContentChange?() }
+    }
+
+    private func setText(_ field: NSTextField?, _ text: String) {
+        if field?.stringValue != text { field?.stringValue = text }
     }
 
     var diagnosticText: String {
@@ -148,29 +163,31 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     @objc func notificationAction(_ sender: Any?) {
         guard !readOnly else { return }
         center.getNotificationSettings { settings in
-            if settings.authorizationStatus == .notDetermined {
-                self.center.requestAuthorization(options: [.alert, .sound]) { _, _ in self.refreshPermission() }
-            } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                let content = UNMutableNotificationContent(); content.title = L("Claudex notification test")
-                content.body = L("Alerts are working. No conversation or synchronization state was changed.")
-                self.center.add(UNNotificationRequest(identifier: "claudex-test", content: content, trigger: nil)) { error in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                        if error != nil {
-                            self.testNotice = "Test notification failed. Check macOS notification settings."
-                            self.updateWindow(); return
-                        }
-                        self.center.getDeliveredNotifications { delivered in
-                            DispatchQueue.main.async {
-                                self.testNotice = delivered.contains(where: { $0.request.identifier == "claudex-test" })
-                                    ? "Test notification delivered to Notification Center"
-                                    : "Test submitted · macOS Focus may suppress its presentation"
-                                self.updateWindow()
+            DispatchQueue.main.async {
+                self.permission = settings.authorizationStatus
+                self.updateWindow()
+                if settings.authorizationStatus == .notDetermined {
+                    self.center.requestAuthorization(options: [.alert, .sound]) { _, _ in self.refreshPermission() }
+                } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+                    let content = UNMutableNotificationContent(); content.title = L("Claudex notification test")
+                    content.body = L("Alerts are working. No conversation or synchronization state was changed.")
+                    self.center.add(UNNotificationRequest(identifier: "claudex-test", content: content, trigger: nil)) { error in
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                            if error != nil {
+                                self.testNotice = "Test notification failed. Check macOS notification settings."
+                                self.updateWindow(); return
+                            }
+                            self.center.getDeliveredNotifications { delivered in
+                                DispatchQueue.main.async {
+                                    self.testNotice = delivered.contains(where: { $0.request.identifier == "claudex-test" })
+                                        ? "Test notification delivered to Notification Center"
+                                        : "Test submitted · macOS Focus may suppress its presentation"
+                                    self.updateWindow()
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                DispatchQueue.main.async {
+                } else {
                     let alert = NSAlert(); alert.messageText = L("Notifications are disabled")
                     alert.informativeText = L("Allow Claudex in System Settings > Notifications. The menu bar status remains available.")
                     alert.runModal()

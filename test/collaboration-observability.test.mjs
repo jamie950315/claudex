@@ -36,6 +36,48 @@ const status = (hub, id) => hub.dispatch(controller(hub, 'codex', 'status', { ta
 const packet = prompt => JSON.parse(prompt.slice(prompt.lastIndexOf('\n') + 1));
 const results = task => task.messages.filter(item => item.kind === 'result').length;
 
+test('a waiting intermediate task that exceeds context capacity reports its failure to its parent', async t => {
+  const leafGate = pending();
+  let hub, middleId;
+  const leafIds = [];
+  const fixture = await setup(t, async ({ provider, prompt, mcp }) => {
+    const task = packet(prompt);
+    if (task.parentId === null) {
+      middleId = (await hub.dispatch(request(provider, 'start', {
+        provider: 'claude', cwd: hub.root, prompt: 'Collect child results', requestId: 'middle-task',
+      }, mcp.token))).taskId;
+      return { text: 'Waiting for the intermediate task' };
+    }
+    if (provider === 'claude') {
+      for (let index = 0; index < 3; index++) leafIds.push((await hub.dispatch(request(provider, 'start', {
+        provider: 'codex', cwd: hub.root, prompt: 'Return the synthetic result', requestId: `leaf-${index}`,
+      }, mcp.token))).taskId);
+      return { text: 'Waiting for child results' };
+    }
+    return leafGate.promise;
+  }, { mcp: async ({ token }) => ({ token }) });
+  hub = fixture.hub;
+  const started = await hub.dispatch(controller(hub, 'codex', 'start', {
+    provider: 'codex', cwd: hub.root, prompt: 'Root task', requestId: 'context-root',
+  }));
+  await until(() => hub.state.tasks[started.taskId]?.status === 'waiting'
+    && hub.state.tasks[middleId]?.status === 'waiting' && leafIds.length === 3
+    && leafIds.every(id => hub.state.tasks[id]?.status === 'running') && !hub.pumping);
+  hub.schedule = () => {};
+  leafGate.resolve({ text: 'x'.repeat(65536) });
+  await until(() => leafIds.every(id => hub.state.tasks[id].status === 'completed') && hub.running.size === 0);
+  const middle = await status(hub, middleId);
+  assert.equal(middle.status, 'failed');
+  assert.match(middle.error, /Child results exceed task context capacity/);
+  assert.equal(middle.messages.filter(message => message.kind === 'child-result').length, 3);
+  const parent = await status(hub, started.taskId);
+  assert.equal(parent.status, 'ready', 'the root must resume with the failure instead of waiting forever');
+  const notifications = parent.messages.filter(message => message.kind === 'child-result' && message.from === middleId);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].sourceRevision, middle.revision);
+  assert.equal(JSON.parse(notifications[0].text).status, 'failed');
+});
+
 test('cancelling a queued child delivers its final revision once and an observing parent does not rerun', async t => {
   const calls = [];
   let hub, parentToken, childId, cancelReceipt, observed;

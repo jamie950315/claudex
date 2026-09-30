@@ -35,6 +35,46 @@ const request = (peer, method, params, token) => ({ peer, token, method, params 
 const controller = (hub, peer, method, params) => request(peer, method, params, hub.controllerToken);
 const status = (hub, id) => hub.dispatch(controller(hub, 'codex', 'status', { taskId: id }));
 
+test('closing while a pump is queued preserves unstarted work and launches no native invocation', async t => {
+  let calls = 0;
+  const { hub, root } = await setup(t, async () => { calls++; return { text: 'Unexpected invocation' }; });
+  hub.schedule = () => {};
+  const started = await hub.dispatch(controller(hub, 'codex', 'start', {
+    provider: 'codex', cwd: root, prompt: 'Queued work', requestId: 'closing-queued-pump',
+  }));
+  const gate = pending();
+  const holding = hub.mutate(async () => gate.promise);
+  const pumping = hub.pump();
+  assert.equal(hub.pumping, true);
+  const closing = hub.close();
+  gate.resolve();
+  await Promise.all([holding, pumping, closing]);
+  assert.equal(calls, 0);
+  assert.equal(hub.running.size, 0);
+  const task = await status(hub, started.taskId);
+  assert.equal(task.status, 'ready');
+  assert.equal(task.active, null);
+});
+
+test('closing during launch publication drains the pump without starting native work', async t => {
+  let calls = 0, closing;
+  const { hub, root } = await setup(t, async () => { calls++; return { text: 'Unexpected invocation' }; });
+  hub.schedule = () => {};
+  const started = await hub.dispatch(controller(hub, 'codex', 'start', {
+    provider: 'codex', cwd: root, prompt: 'Work at the launch boundary', requestId: 'closing-launch-publication',
+  }));
+  hub.once('change', () => { closing = hub.close(); });
+  await hub.pump();
+  assert.ok(closing);
+  await closing;
+  assert.equal(calls, 0);
+  assert.equal(hub.running.size, 0);
+  const task = await status(hub, started.taskId);
+  assert.equal(task.status, 'failed');
+  assert.match(task.error, /stopped before native execution/);
+  assert.equal(task.active, null);
+});
+
 test('provider model defaults persist, validate atomically and leave existing work unchanged', async t => {
   const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
   hub.schedule = () => {};

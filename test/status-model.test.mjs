@@ -87,6 +87,16 @@ check(health(changed).attention)
 check(health().issues.isEmpty)
 let recovering: [String: Any] = ["pid": 42, "state": "backoff", "autoRestart": true, "nextAttemptAt": now + 5000]
 check(health(ready, recovering).state == "recovering" && health(ready, recovering).autoRestart)
+for invalid in [Double.infinity, Double.nan, 1e300, -1.0] {
+  var corrupt = recovering; corrupt["nextAttemptAt"] = invalid
+  check(health(ready, corrupt).retryAt == nil)
+  changed = ready; changed["blocked"] = ["reason": "Exact history mismatch", "retryAt": invalid] as [String: Any]
+  check(health(changed).retryAt == nil && health(changed).attention)
+  changed = ready; changed["updatedAt"] = invalid
+  check(health(changed).state == "unknown" && health(changed).updatedAt == nil)
+}
+let largeJSON = try! JSONSerialization.jsonObject(with: Data("{\\"pid\\":42,\\"state\\":\\"backoff\\",\\"nextAttemptAt\\":1e300}".utf8)) as! [String: Any]
+check(health(ready, largeJSON).retryAt == nil)
 check(health(ready, ["pid": 42, "state": "blocked", "blockerCount": 1,
   "blockers": [["code": "live-owner", "pid": 42]], "autoRestart": true]).state == "ready")
 check(health(ready, ["pid": 42, "state": "blocked", "blockerCount": 1,

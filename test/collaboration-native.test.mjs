@@ -252,6 +252,18 @@ test('Codex diagnostic errors do not override a completed turn', async () => {
   assert.equal((await runner(fake)({ provider: 'codex', cwd: process.cwd(), prompt: 'Check.' })).text, 'Recovered.');
 });
 
+test('non-object and malformed native JSON events fail the invocation without crashing the broker', async () => {
+  for (const provider of ['codex', 'claude']) for (const event of [null, [], 'event', false, {}, { type: 3 }]) {
+    const fake = fakeSpawn([event]);
+    await assert.rejects(runner(fake)({ provider, cwd: process.cwd(), prompt: 'Check malformed native output.' }), error => {
+      assert.equal(error.executionUncertain, true);
+      assert.match(error.message, /invalid event/);
+      return true;
+    });
+    assert.equal(fake.calls.length, 1);
+  }
+});
+
 test('Claude explicit result error is known; missing receipt remains uncertain', async () => {
   const failed = fakeSpawn([{ type: 'result', is_error: true, result: 'Could not proceed.' }], 1);
   await assert.rejects(runner(failed)({ provider: 'claude', cwd: process.cwd(), prompt: 'Check.' }),

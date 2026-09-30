@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs, { mkdtemp, readFile, writeFile, readdir, symlink, mkdir, link, unlink, rename, utimes, chmod } from 'node:fs/promises';
+import fs, { mkdtemp, readFile, writeFile, readdir, symlink, mkdir, link, unlink, rename, utimes, chmod, rm } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { publishExclusive, writeJSON, privateDirectory, withLock } from '../src/storage.mjs';
+import { publishExclusive, writeJSON, privateDirectory, withLock, snapshot } from '../src/storage.mjs';
 import { nativeDrivers } from '../src/native-drivers.mjs';
 
 test('native publication replaces an interrupted private staging write but never an existing session', async () => {
@@ -92,6 +92,54 @@ function mockFsMethod(t, method, replacement) {
   const mock = t.mock.method(fs, method, (...args) => replacement(original, ...args));
   syncBuiltinESMExports();
   t.after(() => { mock.mock.restore(); syncBuiltinESMExports(); });
+}
+
+test('transcript snapshots read regular files and reject symlink aliases', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'claudex-snapshot-alias-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'transcript.jsonl'), alias = join(root, 'alias.jsonl');
+  const text = '{"type":"synthetic"}\n';
+  await writeFile(path, text);
+  assert.equal((await snapshot(path)).text, text);
+  await symlink(path, alias);
+  await assert.rejects(snapshot(alias), /regular file|symlink/);
+  assert.equal(await readFile(path, 'utf8'), text);
+});
+
+for (const change of ['replacement', 'rewrite']) {
+  test(`transcript snapshots reject a ${change} even when size and mtime are restored`, async t => {
+    const root = await mkdtemp(join(tmpdir(), 'claudex-snapshot-race-'));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const path = join(root, 'transcript.jsonl'), at = new Date('2026-09-30T00:00:00.000Z');
+    const before = '{"text":"before"}\n', after = '{"text":"after!"}\n';
+    assert.equal(Buffer.byteLength(before), Buffer.byteLength(after));
+    await writeFile(path, before);
+    await utimes(path, at, at);
+    let changed = false;
+    const replace = async () => {
+      if (changed) return;
+      changed = true;
+      if (change === 'replacement') await rename(path, `${path}.original`);
+      await writeFile(path, after);
+      await utimes(path, at, at);
+    };
+    mockFsMethod(t, 'readFile', async (original, target, ...args) => {
+      const contents = await original(target, ...args);
+      if (target === path) await replace();
+      return contents;
+    });
+    mockFsMethod(t, 'open', async (original, target, ...args) => {
+      const file = await original(target, ...args);
+      if (target === path) {
+        const read = file.readFile.bind(file);
+        file.readFile = async (...values) => { const contents = await read(...values); await replace(); return contents; };
+      }
+      return file;
+    });
+    await assert.rejects(snapshot(path), /Transcript changed while being read/);
+    assert.equal(changed, true);
+    assert.equal(await readFile(path, 'utf8'), after);
+  });
 }
 
 for (const stage of ['initial-stat', 'owner-read', 'identity-stat']) {

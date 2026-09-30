@@ -24,6 +24,15 @@ struct HealthReport: Codable, Equatable {
 
 enum StatusReadError: Error { case unsafe, tooLarge, changing }
 
+func statusTimestamp(_ value: Any?) -> Double? {
+    guard let number = value as? NSNumber else { return nil }
+    let timestamp = number.doubleValue
+    // Diagnostic files use JavaScript millisecond timestamps. Refuse values
+    // outside the JavaScript Date range before presentation converts them to Int.
+    guard timestamp.isFinite, timestamp > 0, timestamp <= 8_640_000_000_000_000 else { return nil }
+    return timestamp
+}
+
 func initialChecking(_ watcher: [String: Any]) -> Bool {
     guard watcher["mode"] as? String == "desktop" else { return false }
     let completion = watcher["checkingConversationCount"] == nil ? "foregroundCompletedAt" : "initialSweepCompletedAt"
@@ -83,7 +92,7 @@ func processAlive(_ value: Any?) -> Bool {
 func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: Double,
                     alive: (Any?) -> Bool = processAlive) -> HealthReport {
     let automatic = service?["autoRestart"] as? Bool == true
-    let updated = (watcher?["updatedAt"] as? NSNumber)?.doubleValue
+    let updated = statusTimestamp(watcher?["updatedAt"])
     func report(_ state: String, _ title: String, _ detail: String, _ attention: Bool = false,
                 _ retry: Double? = nil, operational: Bool = false) -> HealthReport {
         let symbols = ["ready": "checkmark.circle", "waiting": "clock", "recovering": "arrow.triangle.2.circlepath",
@@ -110,11 +119,11 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
                 return existing
             }
             return report("paused", "Recovery is waiting", "Another writer or an unverified ownership lock prevents a safe restart. Existing work is preserved. Ownership is checked again automatically.", true,
-                          (service["nextAttemptAt"] as? NSNumber)?.doubleValue)
+                          statusTimestamp(service["nextAttemptAt"]))
         }
         if state == "backoff" || state == "starting" {
             return report("recovering", "Recovering service", "The service will restart safely and verify the saved handoff before continuing. Messages are not blindly resent.", true,
-                          (service["nextAttemptAt"] as? NSNumber)?.doubleValue)
+                          statusTimestamp(service["nextAttemptAt"]))
         }
     }
     guard let watcher, alive(watcher["pid"]) else {
@@ -134,13 +143,13 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
     }
     if let blocked = watcher["blocked"] as? [String: Any] {
         return report("paused", "Synchronization paused", blocked["reason"] as? String ?? "A saved handoff needs verified recovery.", true,
-                      (blocked["retryAt"] as? NSNumber)?.doubleValue)
+                      statusTimestamp(blocked["retryAt"]))
     }
     if (watcher["blockedConversationCount"] as? Int ?? 0) > 0 {
         let entries = watcher["blockedConversations"] as? [[String: Any]] ?? []
         let count = watcher["blockedConversationCount"] as? Int ?? entries.count
         return report("paused", "Some conversations paused", "\(count) conversation(s) need attention. " + (entries.first?["reason"] as? String ?? "Open diagnostics for details."), true,
-                      (entries.first?["retryAt"] as? NSNumber)?.doubleValue)
+                      statusTimestamp(entries.first?["retryAt"]))
     }
     if (watcher["blockedSourceCount"] as? Int ?? 0) > 0 {
         let sources = watcher["blockedSources"] as? [[String: Any]] ?? []

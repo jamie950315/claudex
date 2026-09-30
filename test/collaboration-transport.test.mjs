@@ -4,6 +4,7 @@ import { mkdtemp, chmod, lstat, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { serveCollaborationSocket, callCollaboration, runCollaborationMcp } from '../src/collaboration-transport.mjs';
 
 async function fixture(t, dispatch = async value => value) {
@@ -31,6 +32,29 @@ test('dispatcher failure remains an error and is not retried', async t => {
   const { root } = await fixture(t, async () => { calls++; throw Object.assign(new Error('blocked'), { code: 'CONFLICT' }); });
   await assert.rejects(callCollaboration({ root, peer: 'codex', method: 'handoff', params: {} }), error => error.message === 'blocked' && error.code === 'CONFLICT');
   assert.equal(calls, 1);
+});
+
+test('a disconnected wait client releases its broker listener without cancelling queued work', async t => {
+  let hub;
+  const { root } = await fixture(t, envelope => hub.dispatch(envelope));
+  hub = await new CollaborationHub({ root, run: async () => { throw new Error('No native inference in this test.'); } }).initialize();
+  t.after(() => hub.close());
+  hub.schedule = () => {};
+  const task = await hub.dispatch({ peer: 'codex', token: hub.controllerToken, method: 'start', params: {
+    provider: 'codex', cwd: root, prompt: 'Queued work', requestId: 'disconnected-wait',
+  } });
+  const waiting = callCollaboration({ root, peer: 'codex', token: hub.controllerToken,
+    method: 'wait', params: { taskId: task.taskId, timeoutMs: 30000 }, timeoutMs: 50 });
+  const rejected = assert.rejects(waiting, /timed out/);
+  for (let attempt = 0; hub.listenerCount('change') === 0 && attempt < 100; attempt++)
+    await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(hub.listenerCount('change'), 1);
+  await rejected;
+  for (let attempt = 0; hub.listenerCount('change') !== 0 && attempt < 100; attempt++)
+    await new Promise(resolve => setTimeout(resolve, 1));
+  assert.equal(hub.listenerCount('change'), 0, 'a disconnected wait must release its listener and deadline timer');
+  assert.equal(hub.state.tasks[task.taskId].status, 'ready');
+  assert.equal(hub.state.tasks[task.taskId].cancelRequested, false);
 });
 
 test('operator resolution passes through the private transport without becoming an MCP tool', async t => {

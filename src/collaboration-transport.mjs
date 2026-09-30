@@ -77,6 +77,13 @@ export async function serveCollaborationSocket({ root, dispatch }) {
       if (newline !== data.length - 1) { socket.destroy(); return; }
       try {
         const request = validateEnvelope(decode(data.subarray(0, newline)));
+        if (request.method === 'wait') {
+          const controller = new AbortController();
+          // Internal connection lifetime only; never read cancellation from the
+          // wire or forward it to inference-capable protocol operations.
+          Object.defineProperty(request, 'signal', { value: controller.signal });
+          socket.once('close', () => controller.abort());
+        }
         const result = await dispatch(request);
         socket.end(encode({ ok: true, result: result ?? null }));
       } catch (error) {

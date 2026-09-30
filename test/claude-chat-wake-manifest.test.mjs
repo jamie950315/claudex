@@ -46,3 +46,31 @@ test('manifest bounds published identities and removes claimed candidates on rep
   assert.equal((await manifest.publish({ pendingWakes: async () => [] })).count, 0);
   assert.deepEqual(JSON.parse(await readFile(join(root, 'chat-mailbox', 'wake-manifest.json'), 'utf8')).messages, []);
 });
+
+test('overlapping publication cannot replace newly queued wake messages with an older snapshot', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cldx-wake-concurrent-'));
+  const first = { messageId: 'first-message', targetSessionId: 'first', expiresAt: 9000 };
+  const second = { messageId: 'second-message', targetSessionId: 'second', expiresAt: 9000 };
+  let pending = [first], release, inspected;
+  const gate = new Promise(resolve => { release = resolve; });
+  const inspecting = new Promise(resolve => { inspected = resolve; });
+  let calls = 0;
+  const manifest = createClaudeChatWakeManifest({ root, mappings: async () => {
+    if (++calls === 1) { inspected(); await gate; }
+    return new Map([first, second].map(message => [message.targetSessionId, {
+      sessionId: `local_${message.targetSessionId}`, cwd: root, title: message.targetSessionId,
+      registryPath: join(root, `${message.targetSessionId}.json`), isArchived: false,
+    }]));
+  } });
+  const mailbox = { pendingWakes: async () => [...pending] };
+  const old = manifest.publish(mailbox);
+  await inspecting;
+  pending = [first, second];
+  const fresh = manifest.publish(mailbox);
+  // Allow a competing publication to finish first if publication is not serialized.
+  await Promise.race([fresh, new Promise(resolve => setTimeout(resolve, 50))]);
+  release();
+  await Promise.all([old, fresh]);
+  const saved = JSON.parse(await readFile(join(root, 'chat-mailbox', 'wake-manifest.json'), 'utf8'));
+  assert.deepEqual(saved.messages.map(message => message.messageId), [first.messageId, second.messageId]);
+});

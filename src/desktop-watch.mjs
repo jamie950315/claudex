@@ -614,6 +614,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             })().catch(error => { heartbeatError = error; idleStop.abort(); });
             const abortIdle = () => idleStop.abort();
             signal?.addEventListener('abort', abortIdle, { once: true });
+            if (signal?.aborted) idleStop.abort();
             try {
               const nextDue = Math.min(...[...deferredEvents.values()].map(value => value.due));
               eventBatch = await events.wait({ signal: idleStop.signal,

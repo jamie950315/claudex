@@ -25,6 +25,9 @@ fixtures use placeholder paths and IDs.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
+- Read transcript snapshots through a no-follow file descriptor and compare its
+  nanosecond file identity with the named file before and after reading. Size and
+  modification time alone do not prove stability after a replacement or rewrite.
 - Preserve original contents and never prune originals as generated backups. Authorized same-title handoffs may archive an unchanged superseded original only after verifying its replacement and the applicable native lifecycle guards; archival never grants an external transcript writer lease.
 
 ## macOS app setup
@@ -119,8 +122,10 @@ allowlist and verify nested signatures. Development signing is not notarized
 public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
 checks native layout with synthetic data, not installed service acceptance.
 The 20-second setup inspection runs only while the window is visible or a
-setup/login flow is active. By user decision, report inspection may reuse a
-successful deep desktop-app signature verification recorded in the private
+setup/login flow is active. Clear that activity after failures or when no provider
+installation/sign-in follow-up remains. Stop the inspection timer when neither
+condition applies and recreate it when needed. By user decision, report inspection
+may reuse a successful deep desktop-app signature verification recorded in the private
 app-signatures.json for at most one hour, keyed by the expected publisher and
 nanosecond identities of the bundle, Contents, Info.plist, MacOS and the code
 seal. Setup and sign-in always verify again; failures and bundles that changed
@@ -150,8 +155,12 @@ ms and a completion-armed exact-file notification; started disarms streaming fil
 Never infer completion from a hook alone or resend uncertain native input.
 Socket notifications are primary: macOS fs.watch registration can lose events.
 Use one OS watcher per parent directory with subscriber fanout; filesystem signals
-are hints, never checkpoint or mutation evidence. A 30-second idle status heartbeat
-does no native history reads, discovery or archival proof renewal. Scope Desktop
+are hints, never checkpoint or mutation evidence. Release retired subscribers and
+recheck lifecycle after awaited path inspections. Anonymous directory signals use
+exact-file metadata to suppress unchanged transcript hints; root/config/backend
+signals must still check their exact target rather than discard unknown filenames.
+A 30-second idle status heartbeat does no native history reads, discovery or
+archival proof renewal. Scope Desktop
 handoff history checks to event targets; empty scope revokes commands while keeping
 validated presentation anchors. Test-only dependency injection retains the former
 bounded polling harness, not a production fallback.
@@ -215,7 +224,9 @@ acknowledges once under the same UI/CLI identities. This does not revalidate
 other frontend presentation adapters against the same vendor update.
 Shared mailbox claims fence hooks and native wake with exact claim IDs before dispatch;
 only proven pre-dispatch refusal may restore queued state. Unknown dispatch is
-never resent. Native acceptance is not hook acknowledgement or work completion.
+never resent. Serialize wake-manifest snapshots and publication so older metadata
+reads cannot replace newer queued messages or receipts. Native acceptance is not
+hook acknowledgement or work completion.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker
@@ -293,7 +304,10 @@ Whole-work handoff retains logical task identity; an external caller ends its
 own turn rather than forcibly transferring an unrelated native UI conversation.
 Work has no elapsed-time execution timeout; native invocations run until completion,
 failure or explicit cancellation. Bounded wait/socket request timeouts do not cancel
-work. Storage, context, concurrency, depth and generation limits fail explicitly without
+work. Disconnecting a socket wait releases only its listener and timer, never the
+native invocation. Shutdown drains an already queued pump before taking its worker
+snapshot and prevents any new native dispatch. Storage, context, concurrency, depth
+and generation limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
 Controller-only `request resolve` may close an inspected uncertain

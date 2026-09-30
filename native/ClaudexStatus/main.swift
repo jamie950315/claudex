@@ -25,6 +25,10 @@ final class StatusApp: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNo
     var deliveryFailed = false
     var testNotice = ""
     var gate = NoticeGate()
+    private var presentedIcon = ""
+    private let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"; return formatter
+    }()
     let defaults = UserDefaults.standard
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -41,6 +45,7 @@ final class StatusApp: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNo
         let menu = NSMenu(); menu.delegate = self; item.menu = menu
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in self?.refresh() }
+        timer?.tolerance = 0.5
         RunLoop.main.add(timer!, forMode: .common)
         refreshPermission()
         if !defaults.bool(forKey: "hasLaunched") {
@@ -69,10 +74,16 @@ final class StatusApp: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNo
         let labels = ["ready": "Ready", "waiting": "Waiting", "recovering": "Recovering", "paused": "Paused",
                       "offline": "Offline", "unknown": "Check", "stopping": "Stopping", "stopped": "Stopped"]
         if let button = item?.button {
-            button.title = " Claudex · " + (labels[report.state] ?? "Check")
-            button.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: report.title)
-            button.image?.isTemplate = true
-            button.toolTip = report.title + "\n" + report.detail
+            let title = " Claudex · " + (labels[report.state] ?? "Check")
+            if button.title != title { button.title = title }
+            let iconKey = report.symbol + "\n" + report.title
+            if iconKey != presentedIcon {
+                button.image = NSImage(systemSymbolName: report.symbol, accessibilityDescription: report.title)
+                button.image?.isTemplate = true
+                presentedIcon = iconKey
+            }
+            let tooltip = report.title + "\n" + report.detail
+            if button.toolTip != tooltip { button.toolTip = tooltip }
             button.setAccessibilityLabel("Claudex: " + report.title)
         }
         updateWindow()
@@ -159,19 +170,22 @@ final class StatusApp: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNo
     }
 
     func updateWindow() {
-        headline?.stringValue = report.title
-        descriptionText?.stringValue = report.detail
+        setText(headline, report.title)
+        setText(descriptionText, report.detail)
         if let update = report.updatedAt {
-            let formatter = DateFormatter(); formatter.dateFormat = "HH:mm:ss"
-            updatedText?.stringValue = "Last status update: " + formatter.string(from: Date(timeIntervalSince1970: update / 1000))
-        } else { updatedText?.stringValue = "No verified status update yet" }
+            setText(updatedText, "Last status update: " + timeFormatter.string(from: Date(timeIntervalSince1970: update / 1000)))
+        } else { setText(updatedText, "No verified status update yet") }
         var recovery = report.autoRestart ? "Automatic service recovery: enabled" : "Automatic service recovery: not confirmed"
         if let retry = report.retryAt { recovery += " · next check in \(max(0, Int(ceil((retry - Date().timeIntervalSince1970 * 1000) / 1000))))s" }
-        recoveryText?.stringValue = recovery
-        permissionText?.stringValue = deliveryFailed ? "Notification delivery failed · another attempt is scheduled"
+        setText(recoveryText, recovery)
+        setText(permissionText, deliveryFailed ? "Notification delivery failed · another attempt is scheduled"
             : permission == .authorized || permission == .provisional
             ? (testNotice.isEmpty ? "Notifications: enabled · repeated alerts are suppressed" : testNotice)
-            : "Notifications: not enabled · click Notifications to allow alerts"
+            : "Notifications: not enabled · click Notifications to allow alerts")
+    }
+
+    private func setText(_ field: NSTextField?, _ text: String) {
+        if field?.stringValue != text { field?.stringValue = text }
     }
 
     @objc func openCodex(_ sender: Any?) { openApplication("com.openai.codex") }
@@ -185,29 +199,31 @@ final class StatusApp: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNo
     }
     @objc func notificationAction(_ sender: Any?) {
         center.getNotificationSettings { settings in
-            if settings.authorizationStatus == .notDetermined {
-                self.center.requestAuthorization(options: [.alert, .sound]) { _, _ in self.refreshPermission() }
-            } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
-                let content = UNMutableNotificationContent(); content.title = "Claudex notification test"
-                content.body = "Alerts are working. No conversation or synchronization state was changed."
-                self.center.add(UNNotificationRequest(identifier: "claudex-test", content: content, trigger: nil)) { error in
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                        if error != nil {
-                            self.testNotice = "Test notification failed. Check macOS notification settings."
-                            self.updateWindow(); return
-                        }
-                        self.center.getDeliveredNotifications { delivered in
-                            DispatchQueue.main.async {
-                                self.testNotice = delivered.contains(where: { $0.request.identifier == "claudex-test" })
-                                    ? "Test notification delivered to Notification Center"
-                                    : "Test submitted · macOS Focus may suppress its presentation"
-                                self.updateWindow()
+            DispatchQueue.main.async {
+                self.permission = settings.authorizationStatus
+                self.updateWindow()
+                if settings.authorizationStatus == .notDetermined {
+                    self.center.requestAuthorization(options: [.alert, .sound]) { _, _ in self.refreshPermission() }
+                } else if settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional {
+                    let content = UNMutableNotificationContent(); content.title = "Claudex notification test"
+                    content.body = "Alerts are working. No conversation or synchronization state was changed."
+                    self.center.add(UNNotificationRequest(identifier: "claudex-test", content: content, trigger: nil)) { error in
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                            if error != nil {
+                                self.testNotice = "Test notification failed. Check macOS notification settings."
+                                self.updateWindow(); return
+                            }
+                            self.center.getDeliveredNotifications { delivered in
+                                DispatchQueue.main.async {
+                                    self.testNotice = delivered.contains(where: { $0.request.identifier == "claudex-test" })
+                                        ? "Test notification delivered to Notification Center"
+                                        : "Test submitted · macOS Focus may suppress its presentation"
+                                    self.updateWindow()
+                                }
                             }
                         }
                     }
-                }
-            } else {
-                DispatchQueue.main.async {
+                } else {
                     let alert = NSAlert(); alert.messageText = "Notifications are disabled"
                     alert.informativeText = "Allow Claudex Status in System Settings > Notifications. The menu bar status remains available."
                     alert.runModal()

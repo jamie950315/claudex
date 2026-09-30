@@ -9,6 +9,16 @@ export const CONFIG_ID = '00000000-0000-4000-8000-000000000002';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const keyOf = event => `${event.side}:${event.nativeId.toLowerCase()}`;
 
+// Metadata only suppresses duplicate directory hints. It never proves a native
+// checkpoint or grants permission to skip the coordinator's history checks.
+async function fileHint(path) {
+  try {
+    const stat = await lstat(path, { bigint: true });
+    return ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink']
+      .map(key => stat[key].toString()).join(':');
+  } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return 'missing'; throw error; }
+}
+
 /** Native notifications and completion-gated file events are hints, never write authorization. */
 export async function createSyncEventSource({ root, runtime, config = {}, inbox, settleMs = 200, maxWatchers = 4096, watchFactory = watch }) {
   if (!Number.isFinite(settleMs) || settleMs < 0 || !Number.isSafeInteger(maxWatchers) || maxWatchers < 1 || maxWatchers > 4096)
@@ -39,12 +49,41 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
   const metrics = { nativeEvents: 0, fileEvents: 0, armedSources: 0 };
   let closed = false, failure, publisher = Promise.resolve(), reconnectWatch, rootWatch;
   let connectionIdentity, connectionUpdates = Promise.resolve();
+  const notificationChecks = new Set();
   const prior = runtime.onEvent;
   const fail = error => { failure ??= error; for (const controller of waiters) controller.abort(); };
   const publish = event => {
     if (closed) return;
     try { event = validateSyncEvent(event); } catch { return; }
     publisher = publisher.then(() => closed ? undefined : inbox.publish(event)).catch(fail);
+  };
+  const subscribeFiles = async (parent, names, notify) => {
+    const paths = names.map(name => join(parent, name));
+    const hint = async () => JSON.stringify(await Promise.all(paths.map(fileHint)));
+    let signature = await hint(), dirty = false, checking, stopped = false;
+    if (closed) return;
+    const check = () => {
+      if (checking || stopped || closed) return;
+      checking = (async () => {
+        while (dirty && !stopped && !closed) {
+          dirty = false;
+          const latest = await hint();
+          if (stopped || closed) return;
+          if (latest !== signature) { signature = latest; notify(); }
+        }
+      })().catch(fail).finally(() => {
+        notificationChecks.delete(checking); checking = undefined;
+        if (dirty) check();
+      });
+      notificationChecks.add(checking);
+    };
+    const watcher = subscribe(parent, (_event, filename) => {
+      if (filename && !names.includes(String(filename))) return;
+      dirty = true; check();
+    });
+    const close = watcher.close;
+    watcher.close = () => { stopped = true; close(); };
+    return watcher;
   };
   const disarm = key => {
     const entry = armed.get(key);
@@ -113,10 +152,11 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
     if (closed) return;
     if (stat) {
       try {
-        const watcher = subscribe(shared, (_event, filename) => {
-          if (reconnectWatch !== watcher || !filename || !['owner.json', 'app.sock'].includes(String(filename))) return;
+        const watcher = await subscribeFiles(shared, ['owner.json', 'app.sock'], () => {
+          if (reconnectWatch !== watcher) return;
           publish({ side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' });
         });
+        if (!watcher) return;
         reconnectWatch = watcher;
         connectionIdentity = identity;
         watcher.on('error', fail);
@@ -130,7 +170,7 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
         || (stat.mode & 0o077) !== 0 || await realpath(root) !== root)
       throw new Error('Unsafe synchronization event source root.');
     rootWatch = subscribe(root, (_event, filename) => {
-      if (closed || String(filename) !== 'codex-shared') return;
+      if (closed || filename && String(filename) !== 'codex-shared') return;
       connectionUpdates = connectionUpdates.then(() => attachConnectionWatch(true)).catch(fail);
     });
     rootWatch.on('error', fail);
@@ -147,10 +187,10 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
       if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid()
           || (stat.mode & 0o022) !== 0 || await realpath(home) !== home)
         throw new Error('Unsafe native configuration notification directory.');
-      const watcher = subscribe(home, (_event, filename) => {
-        if (!filename || !names.includes(String(filename))) return;
+      const watcher = await subscribeFiles(home, names, () => {
         publish({ side: 'codex', nativeId: CONFIG_ID, kind: 'configuration' });
       });
+      if (!watcher) continue;
       watcher.on('error', fail);
       configWatches.push(watcher);
     }
@@ -160,31 +200,49 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
     runtime.onEvent = prior; await inbox.close?.(); throw error;
   }
 
-  const current = async batch => {
+  const readCurrent = async batch => {
     // Drain native publishers before comparing receipts, including already acknowledged phases.
     await publisher;
     if (failure) throw failure;
-    if (typeof inbox.read !== 'function') return batch;
+    const publishing = publisher, generation = inbox.generation;
+    if (typeof inbox.read !== 'function') return { batch, publishing, generation };
     const state = await inbox.read();
-    return batch.filter(event => !event.revision || state.entries[keyOf(event)]?.revision === event.revision);
+    return { batch: batch.filter(event => !event.revision || state.entries[keyOf(event)]?.revision === event.revision),
+      publishing, generation };
   };
+  const current = async batch => (await readCurrent(batch)).batch;
   return {
     metrics,
     current,
     async observe(batch, state) {
       if (failure) throw failure;
+      if (closed) return;
       const records = Array.isArray(state.records) ? state.records : Object.values(state.records ?? {});
-      for (const event of await current(batch)) {
+      const eligible = new Map();
+      for (const record of records) {
+        if (!['codex', 'claude'].includes(record.side) || !UUID.test(record.nativeId ?? '')
+          || !['current', 'original', 'dependency-anchor', 'previous'].includes(record.status)
+          || !record.verified || !isAbsolute(record.path ?? '')) continue;
+        const key = keyOf(record), list = eligible.get(key) ?? [];
+        list.push(record); eligible.set(key, list);
+      }
+      // Collection can retire a snapshot without producing another event for
+      // that native identity. Release its subscriber at the next observation.
+      for (const [key, entry] of armed) {
+        const matching = eligible.get(key);
+        if (matching?.length !== 1 || matching[0].path !== entry.path) disarm(key);
+      }
+      const observed = await readCurrent(batch);
+      for (const event of observed.batch) {
+        if (closed) return;
         validateSyncEvent(event);
         const key = keyOf(event);
         if (event.kind === 'started') { started(event); continue; }
         if (event.kind === 'changed' && active.has(key)) continue;
         if (!['completed', 'idle', 'interrupted', 'changed'].includes(event.kind)) continue;
         active.delete(key);
-        const matching = records.filter(record => record.side === event.side && record.nativeId?.toLowerCase() === event.nativeId.toLowerCase()
-          && ['current', 'original', 'dependency-anchor', 'previous'].includes(record.status)
-          && record.verified && isAbsolute(record.path ?? ''));
-        if (matching.length !== 1) { disarm(key); continue; }
+        const matching = eligible.get(key);
+        if (matching?.length !== 1) { disarm(key); continue; }
         const path = matching[0].path;
         if (armed.get(key)?.path === path) continue;
         disarm(key);
@@ -202,13 +260,25 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
         if (!canonicalParent) continue;
         if (!stat.isDirectory() || stat.isSymbolicLink() || canonicalParent !== parent || stat.uid !== process.getuid())
           throw new Error('Unsafe tracked transcript parent directory.');
-        const entry = { path, timer: undefined, watcher: undefined };
+        const signature = await fileHint(path);
+        // A new turn or shutdown can arrive while the filesystem checks await.
+        // Recheck the exact durable phase before registering any subscription.
+        if (closed || active.has(key)) continue;
+        if ((observed.publishing !== publisher || observed.generation === undefined || observed.generation !== inbox.generation)
+          && !(await current([event])).length) continue;
+        if (closed || active.has(key)) continue;
+        const entry = { path, signature, timer: undefined, watcher: undefined };
         try { entry.watcher = subscribe(parent, (_event, filename) => {
           if (closed || (filename && String(filename) !== basename(path)) || armed.get(key) !== entry) return;
           clearTimeout(entry.timer);
           entry.timer = setTimeout(() => {
-            if (closed || armed.get(key) !== entry) return;
-            metrics.fileEvents++; publish({ side: event.side, nativeId: event.nativeId, kind: 'changed' });
+            (async () => {
+              if (closed || armed.get(key) !== entry) return;
+              const signature = await fileHint(path);
+              if (closed || armed.get(key) !== entry || signature === entry.signature) return;
+              entry.signature = signature;
+              metrics.fileEvents++; publish({ side: event.side, nativeId: event.nativeId, kind: 'changed' });
+            })().catch(fail);
           }, settleMs);
         }); } catch (error) {
           if (['ENOENT', 'ENOTDIR'].includes(error.code)) continue;
@@ -240,6 +310,7 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
       for (const watcher of configWatches) watcher.close();
       await connectionUpdates;
       reconnectWatch?.close();
+      await Promise.all(notificationChecks);
       for (const controller of waiters) controller.abort();
       if (runtime.onEvent === callback) runtime.onEvent = prior;
       await publisher;

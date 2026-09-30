@@ -231,11 +231,13 @@ export class DesktopRuntime {
     // same complete set of files is examined and a batch drains before failing.
     const settle = async (items, operation) => {
       const results = [];
-      for (let index = 0; index < items.length; index += 16)
-        results.push(...await Promise.allSettled(items.slice(index, index + 16).map(operation)));
-      const failure = results.find(result => result.status === 'rejected');
-      if (failure) throw failure.reason;
-      return results.map(result => result.value);
+      for (let index = 0; index < items.length; index += 16) {
+        const batch = await Promise.allSettled(items.slice(index, index + 16).map(operation));
+        const failure = batch.find(result => result.status === 'rejected');
+        if (failure) throw failure.reason;
+        results.push(...batch.map(result => result.value));
+      }
+      return results;
     };
     let directories = [join(this.codexHome, 'sessions'), join(this.codexHome, 'archived_sessions')];
     const candidates = [];

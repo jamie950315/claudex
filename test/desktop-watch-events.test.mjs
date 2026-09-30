@@ -145,6 +145,23 @@ test('idle event source sleeps until cancellation without repeated native or dis
   assert.deepEqual(await inbox.list(), []);
 });
 
+test('cancellation during idle status publication reaches the subsequent event wait', async () => {
+  const f = await fixture(), stop = new AbortController();
+  f.add();
+  await f.run({ signal: stop.signal,
+    writeStatus: async (_path, value) => {
+      f.calls.status.push(structuredClone(value));
+      if (value.awaitingEvents) stop.abort();
+    },
+    events: f.eventQueue([options => {
+      assert.equal(options.signal.aborted, true, 'An abort received before waiter registration must remain visible.');
+      return [];
+    }]),
+  });
+  assert.equal(f.calls.wait.length, 1);
+  assert.equal(f.calls.status.at(-1).running, false);
+});
+
 test('a newer real inbox revision arriving during sync survives acknowledgement of the old event', async () => {
   const f = await fixture(), pair = f.add();
   const inbox = await new SyncEventInbox({ root: f.root }).initialize();

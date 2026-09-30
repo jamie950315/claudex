@@ -54,6 +54,21 @@ struct SetupReport: Decodable {
     let components: [SetupComponent]
     let message: String?
 
+    private static let providerIDs: Set<String> = ["codex-cli", "claude-cli", "codex-login", "claude-login", "codex-desktop", "claude-desktop"]
+
+    var needsProviderFollowUp: Bool {
+        components.contains { Self.providerIDs.contains($0.id) && [.missing, .loginRequired].contains($0.state) }
+    }
+
+    func providerBecameReady(from previous: SetupReport?) -> Bool {
+        guard let previous else { return false }
+        let old = Dictionary(uniqueKeysWithValues: previous.components.map { ($0.id, $0.state) })
+        return components.contains { component in
+            Self.providerIDs.contains(component.id) && component.state == .ready
+                && old[component.id].map { $0 == .missing || $0 == .loginRequired } == true
+        }
+    }
+
     var attentionComponents: [SetupComponent] {
         components.filter { [.blocked, .missing, .loginRequired].contains($0.state) }
     }

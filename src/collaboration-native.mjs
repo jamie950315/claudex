@@ -214,6 +214,11 @@ export function createNativeCollaborationRunner({
         let event;
         try { event = JSON.parse(line); }
         catch (cause) { stop(failure('Native execution emitted invalid JSON.', { uncertain: true, cause })); return; }
+        if (!event || typeof event !== 'object' || Array.isArray(event)
+          || typeof event.type !== 'string' || !event.type) {
+          stop(failure('Native execution emitted an invalid event.', { uncertain: true }));
+          return;
+        }
         decodeEvent(provider, event, result);
         if (result.sessionId && !sessionNotified &&
           (provider === 'codex' ? event.type === 'thread.started' : typeof event.session_id === 'string')) {

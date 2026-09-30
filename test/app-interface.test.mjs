@@ -29,6 +29,7 @@ let components = ["codex-cli", "codex-login", "codex-desktop", "claude-cli", "cl
 let ready = SetupReport(version: 1, phase: .ready, allProjects: true, allowWrite: true, components: components, message: nil)
 precondition(ready.attentionComponents.isEmpty && ready.connectionSummaries.count == 2)
 precondition(!ready.needsSetupRetry)
+precondition(!ready.needsProviderFollowUp)
 precondition(ready.connectionSummaries.allSatisfy { $0.state == .ready && $0.detail == "Ready to connect" })
 precondition(ready.connectionSummaries[0].action == .openCodex && ready.connectionSummaries[1].action == .openClaude)
 let missing = SetupReport(version: 1, phase: .needsAction, allProjects: true, allowWrite: true,
@@ -37,10 +38,15 @@ precondition(missing.attentionComponents.count == 1)
 precondition(missing.connectionSummaries[1].state == .loginRequired)
 precondition(missing.connectionSummaries[1].action == nil)
 precondition(missing.needsSetupRetry)
+precondition(missing.needsProviderFollowUp)
+precondition(ready.providerBecameReady(from: missing))
+precondition(!ready.providerBecameReady(from: ready))
+precondition(!ready.providerBecameReady(from: nil))
 let blocked = SetupReport(version: 1, phase: .blocked, allProjects: true, allowWrite: true,
     components: components + [SetupComponent(id: "synchronization", label: "Conversation synchronization", state: .blocked,
        detail: "Nonlinear history", action: .diagnostics)], message: nil)
 precondition(blocked.attentionComponents.count == 1 && !blocked.needsSetupRetry)
+precondition(!blocked.needsProviderFollowUp)
 let installationFailure = SetupReport(version: 1, phase: .blocked, allProjects: true, allowWrite: true,
     components: blocked.components + [SetupComponent(id: "interface", label: "Claudex application", state: .blocked,
        detail: "Installation failed", action: .retry)], message: nil)
@@ -63,6 +69,17 @@ test('settings owns retry setup; menus only expose the settings entry', async ()
   assert.match(source, /NSButton\(title: L\("Retry setup"\), target: self, action: #selector\(retrySetup\(_:\)\)\)/);
   assert.match(source, /if !inspectOnly && !uiSmoke \{ UserDefaults.standard.set\(true, forKey: settingsPresentedKey\) \}/);
   assert.match(source, /if launch.showSettings \{ showSetup\(nil\) \}/);
+});
+
+test('background inspections end after provider setup settles and notification settings are refreshed on the main thread', async () => {
+  const source = await readFile(new URL('../native/ClaudexApp/main.swift', import.meta.url), 'utf8');
+  const controller = await readFile(new URL('../native/ClaudexApp/StatusController.swift', import.meta.url), 'utf8');
+  assert.match(source, /self\.setupFlowActive = self\.setupFlowActive && self\.report\?\.needsProviderFollowUp == true/);
+  assert.match(source, /updateRefreshTimer\(windowVisible: false\)/);
+  assert.match(source, /refreshTimer\?\.invalidate\(\)/);
+  assert.match(source, /let self, !uiSmoke, !self\.busy/);
+  assert.match(source, /Claudex inspection timer: lifecycle ready/);
+  assert.match(controller, /func notificationAction[\s\S]*getNotificationSettings \{ settings in\s*DispatchQueue\.main\.async \{\s*self\.permission = settings\.authorizationStatus/);
 });
 
 test('graphical Quit waits for verified service shutdown and read-only exits bypass it', async () => {

@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, chmod, stat, unlink, link, lstat, realpath } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, chmod, unlink, link, lstat, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -159,13 +159,24 @@ export async function withLock(path, fn, { recoverDead = false } = {}) {
 }
 
 export async function snapshot(path) {
-  const before = await stat(path);
-  const text = await readFile(path, 'utf8');
-  const after = await stat(path);
-  if (before.size !== after.size || before.mtimeMs !== after.mtimeMs) throw new Error('Transcript changed while being read.');
-  if (text && !text.endsWith('\n')) throw new Error('Transcript has an incomplete final line.');
-  const rows = text.split('\n').filter(Boolean).map((line, index) => {
-    try { return JSON.parse(line); } catch { throw new Error(`Malformed transcript record at line ${index + 1}; source left unchanged.`); }
-  });
-  return { text, rows, hash: hash(text), bytes: after.size, mtimeMs: after.mtimeMs };
+  const namedBefore = await lstat(path, { bigint: true });
+  if (!namedBefore.isFile() || namedBefore.isSymbolicLink()) throw new Error('Transcript must be a regular file, never a symlink.');
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const sameSnapshot = (left, right) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink']
+      .every(key => left[key] === right[key]);
+    const before = await file.stat({ bigint: true });
+    if (!before.isFile() || !sameSnapshot(namedBefore, before)) throw new Error('Transcript changed while being read.');
+    const text = await file.readFile('utf8');
+    const after = await file.stat({ bigint: true });
+    let namedAfter;
+    try { namedAfter = await lstat(path, { bigint: true }); }
+    catch (error) { if (error.code === 'ENOENT') throw new Error('Transcript changed while being read.'); throw error; }
+    if (!sameSnapshot(before, after) || !sameSnapshot(before, namedAfter)) throw new Error('Transcript changed while being read.');
+    if (text && !text.endsWith('\n')) throw new Error('Transcript has an incomplete final line.');
+    const rows = text.split('\n').filter(Boolean).map((line, index) => {
+      try { return JSON.parse(line); } catch { throw new Error(`Malformed transcript record at line ${index + 1}; source left unchanged.`); }
+    });
+    return { text, rows, hash: hash(text), bytes: Number(after.size), mtimeMs: Number(after.mtimeNs) / 1e6 };
+  } finally { await file.close(); }
 }

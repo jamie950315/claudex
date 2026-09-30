@@ -99,6 +99,61 @@ test('unknown hook identity cannot arm arbitrary input paths and idle status wri
   assert.deepEqual(await source.wait({ timeoutMs: 50 }), []);
 });
 
+test('filename-less directory notices only wake completion-armed files whose metadata changed', async t => {
+  const { root, source, emitWatch } = await fixture(t, { syntheticWatches: true });
+  const first = randomUUID(), second = randomUUID();
+  const paths = [join(root, 'first.jsonl'), join(root, 'second.jsonl')];
+  await Promise.all(paths.map(path => writeFile(path, 'initial')));
+  const state = { records: paths.map((path, index) => ({ side: 'claude', nativeId: [first, second][index],
+    path, verified: true, status: 'current' })) };
+  await source.observe([first, second].map(nativeId => ({ side: 'claude', nativeId, kind: 'completed' })), state);
+  emitWatch(root, null);
+  assert.deepEqual(await source.wait({ timeoutMs: 50 }), []);
+  assert.equal(source.metrics.fileEvents, 0);
+  await writeFile(paths[0], 'completed flush');
+  emitWatch(root, null);
+  const batch = await source.wait({ timeoutMs: 1000 });
+  assert.deepEqual(batch.map(event => event.nativeId), [first]);
+  await source.acknowledge(batch);
+  emitWatch(root, null);
+  assert.deepEqual(await source.wait({ timeoutMs: 50 }), []);
+  await rm(paths[0]);
+  emitWatch(root, null);
+  const removed = await source.wait({ timeoutMs: 1000 });
+  assert.deepEqual(removed.map(event => event.nativeId), [first]);
+  await source.acknowledge(removed);
+  await writeFile(paths[0], 'restored');
+  emitWatch(root, null);
+  const restored = await source.wait({ timeoutMs: 1000 });
+  assert.deepEqual(restored.map(event => event.nativeId), [first]);
+});
+
+test('retired or removed transcript records release their completion subscriptions', async t => {
+  const { root, source, emitWatch } = await fixture(t, { syntheticWatches: true }), nativeId = randomUUID();
+  const path = join(root, 'transcript.jsonl');
+  await writeFile(path, 'initial');
+  const record = { side: 'claude', nativeId, path, verified: true, status: 'current' };
+  await source.observe([{ side: 'claude', nativeId, kind: 'completed' }], { records: [record] });
+  assert.equal(source.metrics.armedSources, 1);
+  await source.observe([], { records: [{ ...record, status: 'retired' }] });
+  assert.equal(source.metrics.armedSources, 0);
+  await writeFile(path, 'old snapshot changed');
+  emitWatch(root, 'transcript.jsonl');
+  assert.deepEqual(await source.wait({ timeoutMs: 50 }), []);
+  await source.observe([{ side: 'claude', nativeId, kind: 'completed' }], { records: [record] });
+  await source.observe([], { records: [] });
+  assert.equal(source.metrics.armedSources, 0);
+});
+
+test('closing while a completion is being observed cannot create a late subscription', async t => {
+  const { root, source } = await fixture(t, { syntheticWatches: true }), nativeId = randomUUID();
+  const path = join(root, 'transcript.jsonl');
+  await writeFile(path, 'initial');
+  const state = { records: [{ side: 'claude', nativeId, path, verified: true, status: 'current' }] };
+  await Promise.all([source.observe([{ side: 'claude', nativeId, kind: 'completed' }], state), source.close()]);
+  assert.equal(source.metrics.armedSources, 0);
+});
+
 test('closing restores previous callback and aborts a sleeping wait', async t => {
   const { runtime, source } = await fixture(t);
   const pending = source.wait();
@@ -211,6 +266,70 @@ test('current filters stale completed receipts after draining newer native start
   assert.deepEqual(await source.current([prior]), []);
   const synthetic = { side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' };
   assert.deepEqual(await source.current([synthetic]), [synthetic]);
+});
+
+test('a native start arriving after receipt validation prevents a stale completion from arming', async t => {
+  const { root, runtime, source, inbox } = await fixture(t, { syntheticWatches: true }), nativeId = randomUUID();
+  const path = join(root, 'source.jsonl');
+  await writeFile(path, 'initial');
+  const completion = await inbox.publish({ side: 'codex', nativeId, kind: 'completed' });
+  const originalRead = inbox.read.bind(inbox);
+  let firstRead = true, started;
+  inbox.read = async () => {
+    const state = await originalRead();
+    if (firstRead) {
+      firstRead = false;
+      Object.defineProperty(state.entries[`codex:${nativeId}`], 'revision', { get() {
+        started = runtime.onEvent({ type: 'codex_notification', event: {
+          method: 'turn/started', params: { threadId: nativeId },
+        } });
+        return completion.revision;
+      } });
+    }
+    return state;
+  };
+  await source.observe([completion], { records: [{ side: 'codex', nativeId, path, verified: true, status: 'current' }] });
+  await started;
+  assert.equal(source.metrics.armedSources, 0);
+  assert.equal((await inbox.list())[0].kind, 'started');
+});
+
+test('filename-less root notices attach a newly created native backend', async t => {
+  const { root, source, emitWatch } = await fixture(t, { shared: false, syntheticWatches: true });
+  await mkdir(join(root, 'codex-shared'), { mode: 0o700 });
+  emitWatch(root, null);
+  const batch = await source.wait({ timeoutMs: 100 });
+  assert.equal(batch.length, 1);
+  assert.equal(batch[0].kind, 'reconnect');
+});
+
+test('filename-less backend and configuration notices detect exact changed metadata', async t => {
+  const { root, runtime, source, emitWatch } = await fixture(t, { nativeHomes: true, syntheticWatches: true });
+  const shared = join(root, 'codex-shared');
+  for (const [parent, name, kind] of [[shared, 'owner.json', 'reconnect'],
+    [runtime.codexHome, 'config.toml', 'configuration'], [runtime.claudeHome, 'settings.json', 'configuration']]) {
+    emitWatch(parent, null);
+    assert.deepEqual(await source.wait({ timeoutMs: 30 }), []);
+    await writeFile(join(parent, name), 'private metadata contents');
+    emitWatch(parent, null);
+    const batch = await source.wait({ timeoutMs: 100 });
+    assert.equal(batch.length, 1);
+    assert.equal(batch[0].kind, kind);
+    assert.doesNotMatch(JSON.stringify(batch), /private metadata/);
+    await source.acknowledge(batch);
+    emitWatch(parent, null);
+    assert.deepEqual(await source.wait({ timeoutMs: 30 }), []);
+    await rm(join(parent, name));
+    emitWatch(parent, null);
+    const removed = await source.wait({ timeoutMs: 100 });
+    assert.equal(removed[0]?.kind, kind);
+    await source.acknowledge(removed);
+    await writeFile(join(parent, name), 'restored metadata contents');
+    emitWatch(parent, null);
+    const restored = await source.wait({ timeoutMs: 100 });
+    assert.equal(restored[0]?.kind, kind);
+    await source.acknowledge(restored);
+  }
 });
 
 test('native configuration changes emit metadata-only wakes without watching histories', async t => {
