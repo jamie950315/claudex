@@ -48,6 +48,156 @@ async function fixture() {
   return { root, state, calls, runtime, bridge, add, eventQueue, run };
 }
 
+function presentationOptions(f, { failHandoff, failFolders } = {}) {
+  const presentation = { handoffs: [], folders: 0, maintenance: 0, order: [] };
+  const options = {
+    config: { codexHome: join(f.root, 'codex'), claudeHome: join(f.root, 'claude'), since: 0,
+      desktopLocalHandoff: { enabled: true }, folderProjection: { enabled: true } },
+    createHandoffPublisher: () => ({ async publish(state, scope) {
+      presentation.handoffs.push(structuredClone(scope)); presentation.order.push('handoff');
+      if (failHandoff?.(scope, presentation)) throw new Error('Synthetic handoff publication failed.');
+      return { changed: true, actions: scope.conversationIds?.length === 0 ? 0 : 1,
+        anchors: Object.keys(state.conversations).length, deferred: null };
+    } }),
+    publishFolders: async () => {
+      presentation.folders++; presentation.order.push('folders');
+      if (failFolders?.(presentation)) throw new Error('Synthetic folder publication failed.');
+      return { entries: Object.keys(f.state.conversations).length, deferred: null };
+    },
+    maintainFolders: async () => { presentation.maintenance++; return { ready: true }; },
+  };
+  return { options, presentation };
+}
+
+const configurationEvent = () => ({ side: 'codex', nativeId: '00000000-0000-4000-8000-000000000002',
+  kind: 'configuration', revision: randomUUID(), at: 1 });
+
+test('unchanged configuration events refresh hooks without repeating presentation publication', async () => {
+  const f = await fixture(), pair = f.add(), { options, presentation } = presentationOptions(f);
+  let hooks = 0, clock = 0;
+  f.runtime.synchronizationHooks = async () => ({ ready: true, inspections: ++hooks });
+  await f.run({ ...options, now: () => clock, events: f.eventQueue(Array.from({ length: 8 }, () => () => {
+    clock += 20_000; return [configurationEvent()];
+  })), maxPasses: 9 });
+  assert.equal(hooks, 9);
+  assert.equal(f.calls.codex, 9);
+  assert.deepEqual(f.calls.sync, [pair.id]);
+  assert.equal(f.calls.discover, 1);
+  assert.deepEqual(presentation.handoffs, [{}, {}, {}, { conversationIds: [] }]);
+  assert.equal(presentation.folders, 4);
+  assert.equal(presentation.maintenance, 1);
+  const final = f.calls.status.filter(status => status.running).at(-1);
+  assert.equal(final.localHandoff.actions, 0);
+  assert.equal(final.localHandoff.updatedAt, 20_000);
+  assert.equal(final.folderProjection.updatedAt, 20_000);
+  assert.equal(final.updatedAt, 160_000);
+});
+
+test('configuration hook readiness changes remain visible while empty presentation stays unchanged', async () => {
+  const f = await fixture(), { options, presentation } = presentationOptions(f);
+  f.add();
+  let checks = 0;
+  f.runtime.synchronizationHooks = async () => ++checks < 3 ? { ready: true } : { ready: false, reason: 'Review native hooks.' };
+  await f.run({ ...options, events: f.eventQueue([[configurationEvent()], [configurationEvent()]]), maxPasses: 3 });
+  assert.equal(checks, 3);
+  assert.equal(presentation.handoffs.length, 4);
+  const final = f.calls.status.filter(status => status.running).at(-1);
+  assert.equal(final.synchronization, 'blocked');
+  assert.equal(final.blocked.scope, 'hooks');
+  assert.equal(final.blocked.reason, 'Review native hooks.');
+});
+
+test('a ledger change invalidates configuration-only presentation reuse', async () => {
+  const f = await fixture(), pair = f.add(), { options, presentation } = presentationOptions(f);
+  await f.run({ ...options, events: f.eventQueue([[configurationEvent()], () => {
+    f.state.conversations[pair.id].title = 'Changed synthetic title'; return [configurationEvent()];
+  }, [configurationEvent()]]), maxPasses: 4 });
+  assert.equal(presentation.handoffs.length, 5);
+  assert.equal(presentation.folders, 5);
+  assert.deepEqual(f.calls.sync, [pair.id]);
+});
+
+test('pending recovery runs before configuration presentation and forces publication even when the ledger returns unchanged', async () => {
+  const f = await fixture(), pair = f.add(), { options, presentation } = presentationOptions(f);
+  f.bridge.recover = async () => {
+    presentation.order.push('recover'); f.calls.recover++; f.state.pending = null;
+  };
+  await f.run({ ...options, events: f.eventQueue([[configurationEvent()], () => {
+    presentation.order.length = 0;
+    f.state.pending = { operationId: randomUUID(), phase: 'applied', record: { conversationId: pair.id } };
+    return [configurationEvent()];
+  }]), maxPasses: 3 });
+  assert.deepEqual(presentation.order, ['recover', 'handoff', 'folders']);
+  assert.equal(presentation.handoffs.length, 5);
+  assert.equal(presentation.folders, 5);
+  assert.equal(f.calls.recover, 1);
+});
+
+for (const publisher of ['handoff', 'folders']) test(`a failed ${publisher} publisher is retried on configuration before reuse`, async () => {
+  const f = await fixture(), { options, presentation } = presentationOptions(f, {
+    failHandoff: publisher === 'handoff' ? (_scope, p) => p.handoffs.length === 4 : undefined,
+    failFolders: publisher === 'folders' ? p => p.folders === 4 : undefined,
+  });
+  f.add();
+  await f.run({ ...options, events: f.eventQueue(Array.from({ length: 3 }, () => [configurationEvent()])), maxPasses: 4 });
+  assert.equal(presentation.handoffs.length, 5);
+  assert.equal(presentation.folders, 5);
+  const field = publisher === 'handoff' ? 'localHandoff' : 'folderProjection';
+  assert.ok(f.calls.status.some(status => status[field]?.state === 'error'));
+  assert.equal(f.calls.status.filter(status => status.running).at(-1)[field].state, 'ready');
+});
+
+test('native lifecycle, completion and reconnect keep normal publication and empty-scope revocation', async () => {
+  const f = await fixture(), pair = f.add(), { options, presentation } = presentationOptions(f);
+  await f.run({ ...options, events: f.eventQueue([[configurationEvent()], [pair.event('started')],
+    [configurationEvent()], [pair.event('completed')], [configurationEvent()],
+    [{ side: 'codex', nativeId: '00000000-0000-4000-8000-000000000001', kind: 'reconnect' }]]), maxPasses: 7 });
+  assert.deepEqual(presentation.handoffs, [{}, {}, {}, { conversationIds: [] }, { conversationIds: [] },
+    { conversationIds: [pair.id] }, { conversationIds: [] }, {}, {}]);
+  assert.equal(presentation.folders, 9);
+  assert.deepEqual(f.calls.sync, [pair.id, pair.id, pair.id]);
+  assert.equal(f.calls.discover, 2);
+});
+
+test('transport failure during a configuration pass remains visible and prevents presentation reuse', async () => {
+  const f = await fixture(), { options, presentation } = presentationOptions(f);
+  f.add();
+  const original = f.runtime.codex;
+  f.runtime.codex = async () => {
+    if (f.calls.codex === 2) { f.calls.codex++; throw new Error('Shared Codex transport is not connected.'); }
+    return original();
+  };
+  await f.run({ ...options, events: f.eventQueue([[configurationEvent()], [configurationEvent()]]), maxPasses: 3 });
+  assert.equal(presentation.handoffs.length, 5);
+  assert.equal(presentation.folders, 5);
+  const final = f.calls.status.filter(status => status.running).at(-1);
+  assert.equal(final.synchronization, 'waiting');
+  assert.match(final.waiting, /Shared Codex transport/);
+});
+
+test('pending history failure during a configuration pass keeps its evidence and visible hold', async () => {
+  const f = await fixture(), pair = f.add(), { options, presentation } = presentationOptions(f);
+  f.bridge.recover = async () => {
+    f.calls.recover++;
+    throw Object.assign(new Error('Saved synthetic history is unavailable.'), {
+      code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', conversationId: pair.id,
+      side: 'claude', nativeId: pair.nativeId, savedPath: '/synthetic/unavailable.jsonl',
+    });
+  };
+  await f.run({ ...options, events: f.eventQueue([[configurationEvent()], () => {
+    f.state.pending = { operationId: randomUUID(), phase: 'applied', record: { conversationId: pair.id } };
+    return [configurationEvent()];
+  }]), maxPasses: 3 });
+  assert.equal(f.calls.recover, 1);
+  assert.equal(f.state.pending.phase, 'applied');
+  assert.equal(presentation.handoffs.length, 5);
+  const final = f.calls.status.filter(status => status.running).at(-1);
+  assert.equal(final.synchronization, 'blocked');
+  assert.equal(final.blocked.scope, 'pending');
+  assert.equal(final.blocked.conversationId, pair.id);
+  assert.match(final.blocked.reason, /Saved synthetic history/);
+});
+
 test('completion events run the startup sweep once, then only synchronize their target', async () => {
   const f = await fixture(), first = f.add(), second = f.add('codex'), third = f.add();
   const batch = [second.event('completed')];

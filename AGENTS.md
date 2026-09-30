@@ -138,7 +138,11 @@ Desktop synchronization is completion-event driven, not a recurring two-second
 history sweep. Native Stop/lifecycle hooks publish bounded identity-only hints to
 the private durable sync-events inbox and wake the owner through a private Unix
 socket. Native SDK/app-server events join the same queue. Configuration events
-only recheck hook readiness; known managed session registration and started events
+recheck hook readiness and liveness. After a successful empty-scope publication
+revokes archival commands, configuration-only passes with an unchanged ledger
+reuse presentation without renewing manifest timestamps or proof lifetimes.
+Pending recovery, changed state, native events and deferred/failed publications
+still use normal publication. Known managed session registration and started events
 never start a sync. Resuming an original reconciles that conversation for offline
 completions. Hook definitions are merged with existing settings and require the
 native Codex trust review; never bypass or forge trust receipts. CLI hooks install

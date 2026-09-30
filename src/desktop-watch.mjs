@@ -69,6 +69,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   verificationCache,
   events,
   publishFolders = publishClaudeFolderMap,
+  createHandoffPublisher = createClaudeDesktopHandoffPublisher,
   maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
   if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
@@ -142,7 +143,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
   let localHandoff = null;
-  const handoffs = config.desktopLocalHandoff?.enabled === true ? createClaudeDesktopHandoffPublisher({ root,
+  const handoffs = config.desktopLocalHandoff?.enabled === true ? createHandoffPublisher({ root,
     desktopHome: config.desktopHome ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
     inspect: async record => {
       const data = await bridge.inspect(record);
@@ -188,18 +189,36 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     lastProgressAt = timestamp; lastProgressHealth = health;
     if (progress.currentOperation) publishedFirstOperation = true;
   };
-  const status = async fields => {
+  let lastEmptyPresentationKey = null;
+  const status = async (fields, { configurationOnly = false } = {}) => {
     latestFields = fields;
+    const foldersEnabled = config.folderProjection?.enabled === true;
+    if (!handoffs && !foldersEnabled) return writeProgress();
+    let state;
+    try { state = await bridge.status(); }
+    catch (error) {
+      lastEmptyPresentationKey = null;
+      if (handoffs) localHandoff = { state: 'error', error: reason(error), updatedAt: now() };
+      if (foldersEnabled) folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
+      return writeProgress();
+    }
+    const emptyScope = Array.isArray(presentationScope) && presentationScope.length === 0;
+    const key = emptyScope && !state.pending ? JSON.stringify(state) : null;
+    // Configuration hints recheck hooks, not native presentation histories.
+    // Reuse only after an empty scope successfully revoked archive commands.
+    // Leave timestamps and proof lifetimes untouched, just like idle status.
+    if (configurationOnly && key !== null && key === lastEmptyPresentationKey) return writeProgress();
+    lastEmptyPresentationKey = null;
     if (handoffs) {
       try {
-        const result = await handoffs.publish(await bridge.status(), presentationScope === undefined ? {} : { conversationIds: presentationScope });
+        const result = await handoffs.publish(state, presentationScope === undefined ? {} : { conversationIds: presentationScope });
         localHandoff = { ...result, state: result.deferred === 'history_changed' ? 'waiting' : 'ready', updatedAt: now() };
       }
       catch (error) { localHandoff = { state: 'error', error: reason(error), updatedAt: now() }; }
     }
-    if (config.folderProjection?.enabled === true) {
+    if (foldersEnabled) {
       try {
-        const map = await publishFolders({ root, state: await bridge.status() });
+        const map = await publishFolders({ root, state });
         if (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000) {
           lastFolderMaintenance = now();
           try {
@@ -216,6 +235,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
       }
     }
+    if (key !== null && (!handoffs || localHandoff?.state === 'ready' && localHandoff.actions === 0 && !localHandoff.deferred)
+      && (!foldersEnabled || folderProjection?.state === 'ready')) lastEmptyPresentationKey = key;
     return writeProgress();
   };
   return withLock(join(root, 'watch.lock'), async () => {
@@ -236,6 +257,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         };
         let blockedSourceCount = 0;
         const blockedSources = [];
+        let configurationOnly = false;
         try {
           // A pending transaction remains the only allowed native operation.
           // Waiting out this backoff does not clear it or allocate a new target.
@@ -531,8 +553,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             await refreshNew();
           } else {
             eventBatch = await events.current?.(eventBatch) ?? eventBatch;
+            configurationOnly = eventBatch.length > 0 && eventBatch.every(event => event.kind === 'configuration');
             let state = await bridge.status();
-            if (state.pending) { clearHints(); await bridge.recover(); state = await bridge.status(); }
+            if (state.pending) { configurationOnly = false; clearHints(); await bridge.recover(); state = await bridge.status(); }
             await events.observe(eventBatch, state);
             const relevant = eventBatch.filter(event => !['started', 'configuration'].includes(event.kind));
             const keys = new Set(relevant.map(eventKey));
@@ -575,6 +598,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           }
           blocked = null;
         } catch (error) {
+          configurationOnly = false;
           clearHints();
           if (error === deferredBlock) { /* Keep the exact pending intent and visible blocked state. */ }
           else if (isWaiting(error)) {
@@ -595,7 +619,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
           } else throw error;
         }
-        await status({ waiting, waitingContexts, blockedSourceCount, blockedSources });
+        await status({ waiting, waitingContexts, blockedSourceCount, blockedSources }, { configurationOnly });
         if (!signal?.aborted && passes < maxPasses) {
           if (events) {
             if (eventBatch) await events.acknowledge(eventBatch);
