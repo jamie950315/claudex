@@ -443,6 +443,21 @@ test('native title search preserves ambiguous candidates and rechecks the chosen
   assert.equal(Object.keys(hub.state.tasks).length, 0, 'search and send never create managed work');
 });
 
+test('native title search preserves capitalization before matching returned metadata', async t => {
+  const sessionId = randomUUID(), title = 'Original Chat CHAT-M7K4';
+  const descriptor = { provider: 'codex', nativeId: sessionId, sessionId, chatId: `codex:${sessionId}`,
+    title, cwd: '/tmp', registeredByHook: false };
+  const queries = [];
+  const { hub } = await setup(t, async () => { throw new Error('No managed inference'); }, {
+    nativeChatDiscovery: async ({ query }) => { queries.push(query); return query === title ? [descriptor] : []; },
+  });
+  const result = await hub.dispatch(controller(hub, 'claude', 'chat_list', { query: title, match: 'exact', provider: 'codex' }));
+  assert.deepEqual(queries, [title]);
+  assert.equal(result.exactMatchCount, 1);
+  assert.equal(result.chats[0].sessionId, sessionId);
+  assert.equal((await hub.chatMailbox.list()).length, 0, 'metadata lookup never fabricates hook registration');
+});
+
 test('native title discovery and wake claim never duplicate a native dispatch', async t => {
   const sessionId = randomUUID(); let sends = 0;
   const descriptor = { provider: 'codex', nativeId: sessionId, sessionId, chatId: `codex:${sessionId}`,

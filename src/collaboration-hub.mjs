@@ -242,11 +242,12 @@ export class CollaborationHub extends EventEmitter {
         if (params.provider !== undefined) provider(params.provider);
         if (params.match !== undefined && !['exact', 'contains'].includes(params.match)) throw new Error('Invalid title match mode.');
         const normalize = value => value.normalize('NFC').trim().toLowerCase();
-        const query = params.query === undefined ? null : normalize(text(params.query, 'title query', 4096));
+        const nativeQuery = params.query === undefined ? null : text(params.query, 'title query', 4096).trim();
+        const query = nativeQuery === null ? null : normalize(nativeQuery);
         const registered = (await this.chatMailbox.list()).filter(chat => params.provider === undefined || chat.provider === params.provider);
         let titled = await this.chatTitleResolver(registered);
         if (query && this.nativeChatDiscovery && params.provider !== 'claude') {
-          const discovered = await this.nativeChatDiscovery({ query });
+          const discovered = await this.nativeChatDiscovery({ query: nativeQuery });
           const known = new Map(titled.map(chat => [chat.chatId, chat]));
           for (const chat of discovered) {
             const previous = known.get(chat.chatId);
