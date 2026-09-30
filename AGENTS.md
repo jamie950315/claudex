@@ -409,6 +409,12 @@ existing signed packet, prompt, session, cwd, image ID/path and graph checks.
 Apply this predicate consistently to completed tails and later delta decoding;
 never drop arbitrary image-like text or infer a general timestamp tolerance.
 
+Before capturing an authenticated owned image append, a native cache project
+created with the observed 0755 mode is tightened to 0700 through a stable
+no-follow owned directory descriptor. Its cache root must already be private;
+reject symlinks, foreign owners and other modes. Keep exact asset byte and
+append provenance checks, and preserve pending evidence on any failure.
+
 Dependency-bearing owned Codex snapshots are preserved as managed
 `dependency-anchor` records, not archived/deleted or relabeled unmanaged.
 Require stable metadata-only native dependency inventories, exact authenticated

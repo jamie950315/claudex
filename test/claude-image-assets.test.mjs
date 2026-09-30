@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, writeFile, symlink, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile, symlink, unlink, chmod, lstat, rename } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -44,6 +44,42 @@ test('capture binds the exact native preview to original cache bytes and restore
   assert.deepEqual(await restoreImageAssets({ root: f.root, rows: [f.row], bindings: { [f.row.uuid]: captured.bindings } }), [captured.row]);
   const unbound = [f.row];
   assert.equal(await restoreImageAssets({ root: f.root, rows: unbound, bindings: {} }), unbound);
+});
+
+test('the observed 0755 native project is hardened without changing its inode or image bytes', async () => {
+  const f = await fixture();
+  const project = join(f.claudeTempRoot, resolve(f.cwd).replace(/[^a-zA-Z0-9]/g, '-'));
+  await chmod(project, 0o755);
+  const before = await lstat(project);
+  const captured = await captureImageAssets(f);
+  const after = await lstat(project);
+  assert.equal(after.mode & 0o777, 0o700);
+  assert.equal(after.dev, before.dev);
+  assert.equal(after.ino, before.ino);
+  assert.deepEqual(captured.row.message.content, f.expectedContent);
+  assert.deepEqual(await readFile(join(project, f.sessionId, 'images', '1.png')), f.original);
+  assert.deepEqual((await captureImageAssets(f)).bindings, captured.bindings);
+});
+
+test('native project hardening refuses public cache roots, writable projects and symlink aliases', async () => {
+  const f = await fixture();
+  const project = join(f.claudeTempRoot, resolve(f.cwd).replace(/[^a-zA-Z0-9]/g, '-'));
+  await chmod(project, 0o755);
+  await chmod(f.claudeTempRoot, 0o755);
+  await assert.rejects(captureImageAssets(f), /private owned directory/);
+  assert.equal((await lstat(project)).mode & 0o777, 0o755);
+  await chmod(f.claudeTempRoot, 0o700);
+  for (const mode of [0o750, 0o777, 0o2755]) {
+    await chmod(project, mode);
+    await assert.rejects(captureImageAssets(f), /private owned directory/);
+    assert.equal((await lstat(project)).mode & 0o7777, mode);
+  }
+  await chmod(project, 0o755);
+  const original = project + '-original';
+  await rename(project, original);
+  await symlink(original, project);
+  await assert.rejects(captureImageAssets(f), /private owned directory/);
+  assert.equal((await lstat(original)).mode & 0o777, 0o755);
 });
 
 test('the observed large PNG-to-JPEG preview restores exact PNG bytes and media type under its original paste identity', async () => {

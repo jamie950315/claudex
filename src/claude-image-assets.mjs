@@ -29,6 +29,35 @@ async function checkDirectory(path, label, privateMode = true) {
       || (info.mode & (privateMode ? 0o077 : 0o022)) !== 0) throw new Error(`${label} must be a private owned directory.`);
 }
 
+async function privateNativeProject(path) {
+  const label = 'Native image cache directory';
+  const before = await lstat(path, { bigint: true });
+  const ownedDirectory = info => info.isDirectory() && !info.isSymbolicLink()
+    && info.uid === BigInt(process.getuid());
+  const mode = before.mode & 0o7777n;
+  if (!ownedDirectory(before) || ![0o700n, 0o755n].includes(mode))
+    throw new Error(`${label} must be a private owned directory.`);
+  if (mode === 0o700n) return;
+  // The observed native CLI creates a new project as 0755 under its private
+  // 0700 cache root. Tighten that exact owned directory before capturing an
+  // authenticated pending append; never accept a public root or writable peer.
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const fields = ['dev', 'ino', 'size', 'mode', 'uid', 'mtimeNs', 'ctimeNs'];
+  try {
+    const opened = await file.stat({ bigint: true });
+    const named = await lstat(path, { bigint: true });
+    if (!ownedDirectory(opened) || fields.some(key => before[key] !== opened[key] || opened[key] !== named[key]))
+      throw new Error(`${label} changed before permission hardening.`);
+    await file.chmod(0o700);
+    const after = await file.stat({ bigint: true });
+    const current = await lstat(path, { bigint: true });
+    if (!ownedDirectory(after) || (after.mode & 0o7777n) !== 0o700n
+        || after.dev !== before.dev || after.ino !== before.ino
+        || fields.some(key => after[key] !== current[key]))
+      throw new Error(`${label} changed during permission hardening.`);
+  } finally { await file.close(); }
+}
+
 async function readPrivateFile(path, label) {
   const before = await lstat(path);
   checkFile(before, label);
@@ -74,7 +103,8 @@ async function originalImage({ claudeTempRoot, cwd, sessionId, pasteId, mediaTyp
   const project = join(claudeTempRoot, encoded);
   const session = join(project, sessionId);
   const images = join(session, 'images');
-  for (const directory of [claudeTempRoot, project]) await checkDirectory(directory, 'Native image cache directory');
+  await checkDirectory(claudeTempRoot, 'Native image cache directory');
+  await privateNativeProject(project);
   // The pinned CLI creates these inner directories as 0755. Their private
   // ancestors prevent traversal; still reject other-user writes and symlinks.
   for (const directory of [session, images]) await checkDirectory(directory, 'Native image cache directory', false);
