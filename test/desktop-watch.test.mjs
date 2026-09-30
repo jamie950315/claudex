@@ -384,6 +384,22 @@ test('missing tracked history stays paced per conversation with its saved identi
   assert.deepEqual(f.calls.sync, ['new']); assert.equal(f.state.pending, null);
 });
 
+test('a removed working directory stays paced per conversation with its saved cwd', async () => {
+  const f = await fixture();
+  const removed = () => Object.assign(new Error('Tracked claude history working directory no longer exists; synchronization is paused.'), {
+    code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: 'claude', nativeId: '00000000-0000-4000-8000-000000000098',
+    savedCwd: '/deleted/worktree', conversationId: 'new',
+  });
+  f.bridge.sync = async id => { f.calls.sync.push(id); throw removed(); };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true); assert.equal(pass.synchronization, 'degraded');
+  assert.deepEqual(pass.blockedConversations[0].workingDirectoryUnavailable, {
+    side: 'claude', nativeId: removed().nativeId, savedCwd: '/deleted/worktree', conversationId: 'new',
+  });
+  assert.deepEqual(f.calls.sync, ['new']); assert.equal(f.state.pending, null);
+});
+
 test('missing original during global collection holds the coordinator without restarting or clearing state', async () => {
   const f = await fixture(); let clock = 0, pass;
   f.bridge.collect = async () => { f.calls.collect++; throw missingTrackedHistory(); };
@@ -741,11 +757,35 @@ test('an unavailable new native thread is reported while another source enrolls'
     return { thread: { id: threadId, source: 'vscode' } };
   } }; } } });
   let pass;
+  const existing = join(f.root, 'missing-thread.jsonl');
+  await writeFile(existing, '');
   await f.run({ maxPasses: 2, discover: async (_config, known) => [
-    { side: 'codex', id: 'missing', path: '/missing' }, { side: 'codex', id: 'good', path: '/good' },
+    { side: 'codex', id: 'missing', path: existing }, { side: 'codex', id: 'good', path: '/good' },
   ].filter(source => !known.has(`${source.side}:${source.id}`)), sleep: async () => { pass = await f.status(); } });
   assert.deepEqual(f.calls.track, ['/good']);
   assert.equal(pass.blockedSourceCount, 1);
   assert.match(pass.blockedSources[0].reason, /Referenced Codex history/);
   assert.equal((await f.status()).error, null);
+});
+
+test('a transient thread deleted after discovery is skipped only when its rollout is gone', async () => {
+  const request = async (_method, { threadId }) => {
+    if (threadId === 'transient') throw new Error('thread not loaded: transient');
+    return { thread: { id: threadId, source: 'vscode' } };
+  };
+  const f = await fixture({ runtime: { async codex() { return { request }; } } });
+  let pass;
+  await f.run({ maxPasses: 2, discover: async (_config, known) => [
+    { side: 'codex', id: 'transient', path: join(f.root, 'deleted-rollout.jsonl') }, { side: 'codex', id: 'good', path: '/good' },
+  ].filter(source => !known.has(`${source.side}:${source.id}`)), sleep: async () => { pass = await f.status(); } });
+  assert.deepEqual(f.calls.track, ['/good']);
+  assert.equal(pass.blockedSourceCount, 0);
+  assert.equal((await f.status()).error, null);
+
+  const kept = await fixture({ runtime: { async codex() { return { request }; } } });
+  const present = join(kept.root, 'present-rollout.jsonl');
+  await writeFile(present, '');
+  await assert.rejects(kept.run({ maxPasses: 1, discover: async () => [{ side: 'codex', id: 'transient', path: present }] }),
+    /thread not loaded/);
+  assert.deepEqual(kept.calls.track, []);
 });

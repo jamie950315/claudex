@@ -312,14 +312,25 @@ export class DesktopRuntime {
       // their normal transport, asset, credential or implementation severity.
       if (!['ENOENT', 'ENOTDIR'].includes(error.code) || record.verified !== true || !UUID.test(record.nativeId)
         || !['codex', 'claude'].includes(record.side) || typeof record.path !== 'string' || !isAbsolute(record.path)) throw error;
-      let missing = false;
-      try { await lstat(record.path); }
-      catch (checkError) { if (['ENOENT', 'ENOTDIR'].includes(checkError.code)) missing = true; else throw checkError; }
-      if (!missing) throw error;
-      throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} is unavailable at its saved path; synchronization is paused.`, { cause: error }), {
-        code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
-        savedPath: record.path, conversationId: record.conversationId,
-      });
+      const absent = async path => {
+        try { await lstat(path); return false; }
+        catch (checkError) { if (['ENOENT', 'ENOTDIR'].includes(checkError.code)) return true; throw checkError; }
+      };
+      if (await absent(record.path)) {
+        throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} is unavailable at its saved path; synchronization is paused.`, { cause: error }), {
+          code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
+          savedPath: record.path, conversationId: record.conversationId,
+        });
+      }
+      // A removed working directory (for example a deleted Codex worktree)
+      // holds only this conversation. Never substitute another directory.
+      if (typeof record.cwd === 'string' && isAbsolute(record.cwd) && error.path === record.cwd && await absent(record.cwd)) {
+        throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} working directory no longer exists; synchronization is paused.`, { cause: error }), {
+          code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
+          savedCwd: record.cwd, conversationId: record.conversationId,
+        });
+      }
+      throw error;
     }
   }
 

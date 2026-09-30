@@ -85,21 +85,22 @@ export function parallelToolGraphParents(rows) {
     // between parallel results. Keep it in the native/codec input as inert
     // historical metadata; its command/stdout are never executed or replayed.
     if (rows.slice(start, end + 1).some(row => (authored(row) || row.uuid) && !members.has(row.uuid) && !toolHook(row))) continue;
-    // One streamed response may contain multiple completed tool waves. A later
-    // block must follow the last result only after every earlier call finished.
-    // Validate physical order; never reorder, omit, or choose a native branch.
+    // One streamed response may contain multiple tool waves. The CLI executes
+    // calls while the response is still streaming, so a later block of the same
+    // response (exact request/response identity and contiguous block indices,
+    // checked above) may follow a result while an earlier call is still running;
+    // the model could not have observed that result. Every block must parent
+    // the preceding physical member. Never reorder, omit, or choose a branch.
     const waveParents = new Map(), outstanding = new Set();
-    let previous = first.parentUuid, returning = false;
+    let previous = first.parentUuid;
     for (const row of rows.slice(start, end + 1)) {
       if (!members.has(row.uuid)) continue;
       if (row.type === 'assistant') {
-        if (returning && outstanding.size || row.parentUuid !== previous) { valid = false; break; }
-        returning = false;
+        if (row.parentUuid !== previous) { valid = false; break; }
         const block = row.message.content[0];
         if (block.type === 'tool_use') outstanding.add(block.id);
       } else {
         if (!outstanding.delete(row.message.content[0].tool_use_id)) { valid = false; break; }
-        returning = true;
         waveParents.set(row.uuid, previous);
       }
       previous = row.uuid;

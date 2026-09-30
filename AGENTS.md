@@ -388,6 +388,12 @@ A pending transaction blocks all discovery, new syncs and collection until norma
 verified recovery succeeds; it is never cleared or resent to regain availability.
 Missing tracked transcript paths are explicit history blocks, not repeated
 worker crashes. Preserve the saved native identity/path and pending evidence.
+A removed saved working directory (such as a cleaned-up Codex worktree) is the
+same kind of explicit hold (CLAUDEX_TRACKED_CWD_UNAVAILABLE), never a worker
+crash or a substitute directory; the folder map omits only that owner's row.
+Event-filtered discovery skips a Codex source whose metadata read fails only
+when its exact discovered rollout file is now absent (Desktop deleted a
+transient thread); other metadata failures keep their severity.
 Never scan for same-ID substitutes; only the explicit native registry relocation
 protocol above may adopt a verified new project location without pending work.
 Without pending work, affected syncs are held individually, but global original
@@ -550,11 +556,13 @@ actual competing branches still block; saved semantic prefixes must still match.
 The observed empty-display successful PreToolUse hook attachment may occur
 between results when its tool, native parent, session and pending-result position
 all match. Its historical command/stdout remain inert and are never executed.
-One response may stream later blocks after a completed parallel-tool wave.
-Require contiguous response block indices, identical response identity, exact
-call/result pairing, and every outstanding result before the next wave begins.
-The next block must parent the last result in physical order. Only virtual result
-parents change; early continuations and competing joins remain blocked.
+One response may stream later blocks after earlier tool results. CLI 2.1.284
+persists a later block of the same response after a partial result while another
+call still runs (the model cannot have seen that result). Require contiguous
+response block indices, identical response identity, exact call/result pairing,
+every result before the final join, and each block parenting the preceding
+physical member. Only virtual result parents change; physical order is kept and
+misparented continuations and competing joins remain blocked.
 
 Claude Desktop uses a separate registry. Native handoff adopts the CLI transcript.
 Desktop-owned transcripts must not be replaced or pruned, even when archived.

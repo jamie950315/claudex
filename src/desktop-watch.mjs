@@ -30,6 +30,7 @@ const isUnsupported = error => UNSUPPORTED.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
   || error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
+  || error?.code === 'CLAUDEX_TRACKED_CWD_UNAVAILABLE'
   || error?.code === 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED' || error?.code === 'CLAUDE_RELOCATION_BLOCKED'
   || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
@@ -89,9 +90,14 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let blocked = null;
   const blockedConversations = new Map();
   const deferredBlock = Symbol('deferred history revalidation');
+  const deletedSource = Symbol('deleted discovered source');
   const block = (previous, error, fields) => ({ ...fields, reason: reason(error),
     ...(error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE' ? { historyUnavailable: {
       side: error.side, nativeId: error.nativeId, savedPath: String(error.savedPath).slice(0, 4096),
+      conversationId: error.conversationId ?? null,
+    } } : {}),
+    ...(error?.code === 'CLAUDEX_TRACKED_CWD_UNAVAILABLE' ? { workingDirectoryUnavailable: {
+      side: error.side, nativeId: error.nativeId, savedCwd: String(error.savedCwd).slice(0, 4096),
       conversationId: error.conversationId ?? null,
     } } : {}),
     since: previous?.since ?? now(), lastAttemptAt: now(), retryAt: now() + blockedRetryMs,
@@ -356,7 +362,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 // An allocation's global original/retention guard can identify
                 // another conversation. Keep that coordinator-wide source hold
                 // attached to its actual identity instead of the caller's title.
-                if (['CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED',
+                if (['CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED',
                   'CLAUDE_RELOCATION_BLOCKED'].includes(error?.code)
                   && error.conversationId && error.conversationId !== id) throw error;
                 // No durable intent exists, so other conversations may still
@@ -404,10 +410,20 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 }
                 if (source.side === 'codex') {
                   nativeId ??= await codexSessionId(source.path);
-                  const metadata = (await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(error => {
+                  const read = await codex.request('thread/read', { threadId: nativeId, includeTurns: false }).catch(async error => {
+                    // Desktop can delete a transient thread and its rollout right
+                    // after discovery listed it. Skip only a source whose exact
+                    // discovered file is now absent; it has nothing to enroll.
+                    if (typeof source.path === 'string' && isAbsolute(source.path)
+                      && await lstat(source.path).then(() => false, lstatError => {
+                        if (['ENOENT', 'ENOTDIR'].includes(lstatError.code)) return true;
+                        throw lstatError;
+                      })) return deletedSource;
                     if (/not found|no rollout/i.test(reason(error))) throw new Error('Referenced Codex history is unavailable.');
                     throw error;
-                  }))?.thread;
+                  });
+                  if (read === deletedSource) continue;
+                  const metadata = read?.thread;
                   if (!metadata || metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
                   if (isCodexSubagentSource(metadata.source)) continue;
                 }

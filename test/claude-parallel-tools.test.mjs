@@ -98,11 +98,31 @@ test('one streamed response can continue after a fully joined parallel tool wave
   assert.equal(actual.messages.flatMap(m => m.content).filter(b => b.type === 'tool_result').length, 3);
 });
 
+test('a streamed block may follow a partial result while an earlier call of the same response still runs', () => {
+  // Observed on CLI 2.1.284: call A returns while call B (a wait) is running,
+  // and block 3 of the same API response is persisted after result A.
+  const f = waveFixture(), call = f.get('stream-3');
+  f.rows.splice(f.rows.indexOf(call), 1);
+  f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, call); call.parentUuid = 'result-a';
+  const before = text(f.rows), actual = read(f.rows); assertComplete(actual);
+  const linear = structuredClone(f.rows);
+  linear.find(row => row.uuid === 'result-a').parentUuid = 'stream-2';
+  linear.find(row => row.uuid === 'result-b').parentUuid = 'stream-3';
+  linear.find(row => row.uuid === 'result-c').parentUuid = 'result-b';
+  assert.deepEqual(actual, read(linear));
+  assert.equal(text(f.rows), before);
+  const tools = actual.messages.flatMap(m => m.content).filter(b => ['tool_use', 'tool_result'].includes(b.type));
+  assert.deepEqual(tools.map(b => b.id ?? b.tool_use_id), ['tool-a', 'tool-b', 'tool-a', 'tool-c', 'tool-b', 'tool-c']);
+});
+
 test('streamed waves reject early continuation, alternate joins and changed response identity', () => {
   for (const mutate of [
     f => { f.get('stream-3').parentUuid = 'result-a'; },
     f => { const call = f.get('stream-3'); f.rows.splice(f.rows.indexOf(call), 1);
-      f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, call); call.parentUuid = 'result-a'; },
+      f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, call); },
+    f => { const call = f.get('stream-3'); f.rows.splice(f.rows.indexOf(call), 1);
+      f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, call); call.parentUuid = 'result-a';
+      f.get('result-c').promptId = 'other-prompt'; },
     f => { f.get('stream-3').requestId = 'other-request'; },
     f => { f.get('stream-3').apiBlockIndex = 4; },
     f => { f.get('result-c').promptId = 'other-prompt'; },

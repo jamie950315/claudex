@@ -50,6 +50,16 @@ test('only verified current managed owners produce a deterministic private prese
   assert.equal((await readdir(f.root)).some(name => name.endsWith('.tmp')), false);
 });
 
+test('an owner whose working directory was removed only loses its own folder override', async () => {
+  const f = await fixture();
+  await f.addOwner({ remoteId: 'cse_kept' });
+  const removed = join(f.root, 'removed-worktree');
+  const gone = await f.addOwner({ remoteId: 'cse_removed', cwd: removed });
+  gone.record.cwd = removed; f.state.conversations[gone.record.conversationId].cwd = removed;
+  assert.deepEqual(await f.publish(), { changed: true, entries: 1, deferred: null });
+  assert.deepEqual(JSON.parse(await readFile(f.path, 'utf8')).entries, [{ remoteId: 'cse_kept', canonicalCwd: f.cwd, verified: true }]);
+});
+
 test('an unchanged map is not rewritten even when ledger records are reordered', async () => {
   const f = await fixture();
   await f.addOwner({ remoteId: 'cse_second' }); await f.addOwner({ remoteId: 'cse_first' });

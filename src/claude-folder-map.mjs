@@ -127,7 +127,15 @@ export async function publishClaudeFolderMap({ root, state } = {}) {
       fail('saved owner identity or Remote Control registration does not match its ledger.');
     if (owner.pending != null || owner.reset != null) return { changed: false, entries: null, deferred: 'owner_transition' };
     if (!checkedCwds.has(record.cwd)) {
-      if (await realpath(record.cwd) !== record.cwd || !(await lstat(record.cwd)).isDirectory()) fail('source cwd is not an existing canonical directory.');
+      let canonical;
+      try { canonical = await realpath(record.cwd); }
+      catch (error) {
+        // A removed project directory (for example a deleted worktree) only
+        // loses its own folder override; it does not invalidate other rows.
+        if (['ENOENT', 'ENOTDIR'].includes(error.code)) continue;
+        throw error;
+      }
+      if (canonical !== record.cwd || !(await lstat(record.cwd)).isDirectory()) fail('source cwd is not an existing canonical directory.');
       checkedCwds.add(record.cwd);
     }
     snapshots.push(snapshot);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -82,6 +82,28 @@ test('missing exact tracked history pauses explicitly without searching or adopt
     const permission = Object.assign(new Error('Permission denied'), { code: 'EACCES' });
     f.runtime.inspectNative = async () => { throw permission; };
     await assert.rejects(f.runtime.inspect({ ...f.record, path: join(dirname(f.record.path), 'missing.jsonl') }), error => error === permission);
+  } finally { await f.runtime.close(); }
+});
+
+test('a removed working directory pauses only that conversation without choosing another directory', async () => {
+  const f = await fixture();
+  try {
+    const before = await readFile(f.record.path, 'utf8');
+    await rm(f.record.cwd, { recursive: true });
+    await assert.rejects(f.runtime.inspect(f.record), error => {
+      assert.equal(error.code, 'CLAUDEX_TRACKED_CWD_UNAVAILABLE');
+      assert.equal(error.side, 'claude'); assert.equal(error.nativeId, f.record.nativeId);
+      assert.equal(error.savedCwd, f.record.cwd); assert.equal(error.conversationId, f.record.conversationId);
+      assert.equal(error.cause.code, 'ENOENT');
+      return true;
+    });
+    await assert.rejects(f.runtime.inspect({ ...f.record, verified: false }), error => error.code === 'ENOENT');
+    // An ENOENT for another path keeps its normal severity even while cwd is absent.
+    const unrelated = Object.assign(new Error('Unrelated native component is unavailable'), { code: 'ENOENT', path: '/nonexistent/component' });
+    f.runtime.inspectNative = async () => { throw unrelated; };
+    await assert.rejects(f.runtime.inspect(f.record), error => error === unrelated);
+    assert.equal(await readFile(f.record.path, 'utf8'), before);
+    assert.deepEqual(f.calls, { owner: 0, codex: 0 });
   } finally { await f.runtime.close(); }
 });
 
