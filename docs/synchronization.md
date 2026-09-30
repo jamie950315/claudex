@@ -183,7 +183,10 @@ For a Codex original or a later turn in an owned continuation, a native `localIm
 current authoritative rollout's embedded input image even when its old attachment
 file is missing. Recovery requires the complete native/API user item, thread and
 turn identities, a unique earlier user response, exact text, and ordered image
-wrappers with matching paths to agree. After native rollover, previously verified
+wrappers with matching paths to agree. Mixed local attachments and inline images
+keep their native order. Inline bytes remain those in the full API item and exact
+persisted user completion; a resized model-input image never replaces them.
+After native rollover, previously verified
 image-bearing rollout origins may also supply images inside the saved canonical
 checkpoint. Their exact turn/item/message positions and full checkpoint digest
 must still match; new image messages require current-rollout evidence. The ledger

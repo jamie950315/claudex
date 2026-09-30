@@ -776,6 +776,10 @@ one earlier embedded user response, exact text, and image wrapper path/number/or
 agreement before a closed turn. Keep image descriptors as inert metadata and
 validate the recovered data URI and converted-history budget. Never read API
 image paths, fetch URLs, search history_base files or silently choose a candidate.
+Mixed local attachments and inline images retain their exact native order. Inline
+bytes come from the full API item and must match the translated persisted user
+completion; validate the normalized model-input image without substituting its
+possibly resized bytes for the inline original.
 This preserves native persisted model-input bytes, not proven unresized uploads.
 Owned bootstraps must still be inline authenticated checkpoints before hydration;
 only subsequent native inputs can use this recovery path. Packet authentication,

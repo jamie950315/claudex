@@ -137,6 +137,56 @@ test('missing local files recover exact native embedded images after two stable 
   assert.equal(f.item.content[1].type, 'localImage');
 });
 
+function addInlineImage(f) {
+  const url = `data:image/png;base64,${Buffer.from('Native inline image').toString('base64')}`;
+  f.item.content.push({ type: 'image', url, detail: null });
+  f.rawItem.content.push({ type: 'image', image_url: url });
+  f.response.content.push({ type: 'input_image', image_url: url, detail: 'high' });
+  f.response.internal_chat_message_metadata_passthrough.content_item_kinds.push('user.image');
+  return url;
+}
+
+test('mixed local attachments and an inline image preserve exact native bytes and order', async t => {
+  const f = await fixture(t), inline = addInlineImage(f);
+  f.response.content.at(-1).image_url = `data:image/png;base64,${Buffer.from('Native resized inline image').toString('base64')}`;
+  await f.write();
+  const before = await readFile(f.path), exported = await f.run();
+  assert.deepEqual(exported.common.messages[0].content.filter(block => block.type === 'image')
+    .map(block => `data:${block.source.media_type};base64,${block.source.data}`), [...f.urls, inline]);
+  assert.deepEqual(f.openedPaths, [f.path]);
+  assert.deepEqual(await readFile(f.path), before);
+});
+
+test('mixed images reject invalid model images, changed original bytes, aliases, kinds and incomplete turns', async t => {
+  for (const mutate of [
+    f => { f.response.content.at(-1).image_url = 'https://example.invalid/never-fetch.png'; },
+    f => { f.rawItem.content.at(-1).image_url += 'changed'; },
+    f => { f.rawItem.content.at(-1).url = f.rawItem.content.at(-1).image_url; },
+    f => { f.response.internal_chat_message_metadata_passthrough.content_item_kinds.pop(); },
+    f => { [f.response.content[1], f.response.content[7]] = [f.response.content[7], f.response.content[1]]; },
+    f => { f.rows.pop(); },
+  ]) {
+    const f = await fixture(t); addInlineImage(f); mutate(f); await f.write();
+    await assert.rejects(f.run(), /local image recovery/);
+  }
+});
+
+test('a closed failed turn retains mixed images as history before a later completed reply', async t => {
+  const f = await fixture(t), inline = addInlineImage(f);
+  f.turns[0].status = 'failed';
+  f.turns[0].error = { message: 'Native authentication failed' };
+  f.rows.at(-1).payload.error = { message: 'Native authentication failed' };
+  f.turns.push({ id: randomUUID(), status: 'completed', itemsView: 'full', startedAt: 102, completedAt: 103,
+    items: [{ type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: 'Later request' }] },
+      { type: 'agentMessage', id: randomUUID(), phase: 'final_answer', text: 'Later completed reply' }] });
+  await f.write();
+  const exported = await f.run({ completedPrefix: true });
+  assert.deepEqual(exported.common.messages[0].content.filter(block => block.type === 'image')
+    .map(block => `data:${block.source.media_type};base64,${block.source.data}`), [...f.urls, inline]);
+  assert.ok(exported.common.messages.some(message => message.content.some(block =>
+    block.type === 'text' && block.text.includes('Native authentication failed'))));
+});
+
 test('local images still reject without an explicit resolver and source mutation stops before raw file access', async t => {
   const f = await fixture(t);
   await assert.rejects(f.run({ resolveLocalImages: undefined }), /unsupported user input/);

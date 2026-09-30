@@ -94,7 +94,9 @@ async function fixture({ receipt = true, persist = true, receiptMutator, beforeR
   };
   const config = { root: join(root, 'state'), conversationId: 'synthetic conversation', cwd: root, claudeHome,
     queryFactory, sdkVersion: CLAUDE_OWNER_SDK_VERSION, claudeVersion: CLAUDE_OWNER_CLI_VERSION,
-    receiptTimeoutMs: 80, onEvent: event => events.push(event) };
+    // Receipt classification needs fixture filesystem I/O to finish under the
+    // full suite. Only intentional missing-receipt cases use the short timeout.
+    receiptTimeoutMs: receipt ? 2000 : 80, onEvent: event => events.push(event) };
   return { root, config, calls, events, emit: event => output.push(event), closeCount: () => closeCount };
 }
 

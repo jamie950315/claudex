@@ -2,6 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual, TextDecoder } from 'node:util';
+import { isInlineBase64 } from './base64.mjs';
 
 export const LOCAL_IMAGE_ROLLOUT_LIMITS = Object.freeze({ maxBytes: 512 * 1024 * 1024, maxRowBytes: 64 * 1024 * 1024, maxRollouts: 256 });
 const defaultIO = { lstat, open, realpath };
@@ -12,13 +13,27 @@ const same = (a, b) => a.dev === b.dev && a.ino === b.ino && a.size === b.size
 const regular = info => info.isFile() && !info.isSymbolicLink() && info.uid === process.getuid();
 const fail = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
 const requestKey = ({ turnId, item }) => JSON.stringify([turnId, item.id]);
+const inlineImage = value => {
+  if (typeof value !== 'string') return false;
+  const prefix = /^data:image\/[a-z0-9.+-]+;base64,/i.exec(value);
+  const data = prefix ? value.slice(prefix[0].length) : '';
+  return !!prefix && isInlineBase64(data) && Buffer.from(data, 'base64').toString('base64') === data;
+};
 
 function translateCompletedItem(item) {
   if (item?.type !== 'UserMessage' || !Array.isArray(item.content)) return null;
   if (Object.hasOwn(item, 'clientId')) fail('native completed user item contains conflicting client identity aliases.');
   const result = { ...item, type: 'userMessage', clientId: Object.hasOwn(item, 'client_id') ? item.client_id : null,
-    content: item.content.map(input => input?.type === 'local_image'
-      ? { ...input, type: 'localImage', ...(!Object.hasOwn(input, 'detail') ? { detail: null } : {}) } : input) };
+    content: item.content.map(input => {
+      if (input?.type === 'local_image')
+        return { ...input, type: 'localImage', ...(!Object.hasOwn(input, 'detail') ? { detail: null } : {}) };
+      if (input?.type !== 'image') return input;
+      if (Object.hasOwn(input, 'url') || typeof input.image_url !== 'string')
+        fail('native completed image contains conflicting or unavailable URL identity.');
+      const image = { ...input, url: input.image_url, ...(!Object.hasOwn(input, 'detail') ? { detail: null } : {}) };
+      delete image.image_url;
+      return image;
+    }) };
   delete result.client_id;
   return result;
 }
@@ -37,9 +52,23 @@ function candidateImages(payload, request, activeTurn, contextTurn) {
       || Object.hasOwn(metadata, 'create_time') && (typeof metadata.create_time !== 'number' || !Number.isFinite(metadata.create_time))
       || !keys(content[0], ['type', 'text'])) fail('image response provenance does not match its native turn.');
   const inputs = item.content.slice(1), kinds = ['user.text'], images = [];
-  if (content.length !== 1 + inputs.length * 3) fail('image response count does not match the native user item.');
+  if (content.length !== 1 + inputs.reduce((count, input) => count + (input.type === 'localImage' ? 3 : 1), 0))
+    fail('image response count does not match the native user item.');
+  let cursor = 1;
   for (let index = 0; index < inputs.length; index++) {
-    const [start, image, end] = content.slice(1 + index * 3, 4 + index * 3);
+    if (inputs[index].type === 'image') {
+      const image = content[cursor++];
+      if (!keys(image, ['type', 'image_url', 'detail']) || image.type !== 'input_image'
+          || !['high', 'original'].includes(image.detail) || !inlineImage(image.image_url))
+        fail('inline image response does not match the native user item.');
+      // The native model input can resize an inline image. Preserve the API's
+      // original bytes, authenticated by the exact completed user item below;
+      // never replace them with this normalized model-input image.
+      kinds.push('user.image');
+      continue;
+    }
+    const [start, image, end] = content.slice(cursor, cursor + 3);
+    cursor += 3;
     if (!keys(start, ['type', 'text']) || start.type !== 'input_text'
         || start.text !== `<image name=[Image #${index + 1}] path="${inputs[index].path}">`
         || !keys(image, ['type', 'image_url', 'detail']) || image.type !== 'input_image' || !['high', 'original'].includes(image.detail)
@@ -81,8 +110,9 @@ function createSingleRolloutImageResolver({ path, threadId, maxBytes = LOCAL_IMA
       if (typeof turnId !== 'string' || !turnId || item?.type !== 'userMessage' || typeof item.id !== 'string' || !item.id
           || byId.has(item.id) || !Array.isArray(item.content) || item.content.length < 2
           || item.content[0]?.type !== 'text' || typeof item.content[0].text !== 'string'
-          || item.content.slice(1).some(input => input?.type !== 'localImage' || typeof input.path !== 'string'
-            || !input.path || /["\r\n]/.test(input.path)))
+          || item.content.slice(1).some(input => input?.type === 'localImage'
+            ? typeof input.path !== 'string' || !input.path || /["\r\n]/.test(input.path)
+            : input?.type !== 'image' || !inlineImage(input.url)))
         fail('unsupported or ambiguous native local-image request shape.');
       const state = { request, candidate: null, completion: false, started: false, closed: false, lastUserCompletion: -1 };
       byId.set(item.id, state);
