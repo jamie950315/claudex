@@ -716,9 +716,9 @@ unchanged. Do not use a prestarted WS_URL override: it loses Desktop app-tools
 injection. The native CODEX_CLI_PATH launcher is the intended activation path;
 never restart active user work. Login window restoration can start Desktop
 before LaunchAgents, bypassing the launcher; src/codex-desktop-relaunch.mjs then
-quits (never kills) and background-reopens that exact process once, only when
-the override is active, the user is idle and Codex shows no turn or rollout
-activity. WS clients share the backend and can retire idle
+quits (never kills) and background-reopens that exact process once, immediately
+when the override is active and no Codex turn is running (user activity does
+not delay it). WS clients share the backend and can retire idle
 owned projections immediately (native isolated proof). The CLI's raw proxy is
 not compatible with the WS listener. Native socket aliases need strict UID,
 private-directory, inode and target validation, not blanket symlink following.

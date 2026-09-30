@@ -9,9 +9,9 @@ const execute = promisify(execFile);
 
 /** macOS may restore Codex Desktop before login releases LaunchAgents, so it
  * starts without the Claudex CODEX_CLI_PATH launcher and never reads it later.
- * This repair restarts that exact Desktop process once, only while the user and
- * Codex are both idle. It never force-quits, never retries the same process and
- * never touches native histories; synchronization resumes via the launcher.
+ * This repair restarts that exact Desktop process once as soon as no Codex turn
+ * is running. It never force-quits, never retries the same process and never
+ * touches native histories; synchronization resumes via the launcher.
  */
 export function bundleOf(binary) {
   const index = typeof binary === 'string' ? binary.indexOf('.app/Contents/') : -1;
@@ -55,7 +55,7 @@ async function recentRollout(codexHome, since, now) {
 }
 
 export function createDesktopRelaunch({ root, codexHome, run = execute, now = () => Date.now(),
-  userIdleMs = 600_000, codexQuietMs = 600_000, intervalMs = 60_000, quitTimeoutMs = 60_000, sleep = delay }) {
+  codexQuietMs = 60_000, intervalMs = 15_000, quitTimeoutMs = 60_000, sleep = delay }) {
   const recordPath = join(root, 'desktop-relaunch.json'), statusPath = join(root, 'desktop-relaunch-status.json');
   let last = null;
   const report = async value => {
@@ -82,9 +82,6 @@ export function createDesktopRelaunch({ root, codexHome, run = execute, now = ()
     const record = await readJSON(recordPath, null);
     if (record?.pid === desktop.pid && record.startedAt === startedAt)
       return report({ ...desktop, state: 'relaunch-failed', outcome: record.outcome });
-    const idle = Number((await text('/usr/sbin/ioreg', ['-c', 'IOHIDSystem', '-d', '4']))
-      .match(/"HIDIdleTime" = (\d+)/)?.[1] ?? NaN) / 1e6;
-    if (!(idle >= userIdleMs)) return report({ ...desktop, waiting: 'user activity' });
     // Hook phases older than this Desktop process cannot describe a live turn.
     const inbox = await readJSON(join(root, 'sync-events', 'inbox.json'), { entries: {} });
     if (Object.values(inbox.entries ?? {}).some(entry => entry.side === 'codex' && entry.kind === 'started' && entry.at >= startedAt)

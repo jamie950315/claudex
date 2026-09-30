@@ -12,7 +12,7 @@ const BINARY = `${BUNDLE}/Contents/Resources/codex-cli/CodexCLI.app/Contents/Mac
 const START = 'Wed Sep 30 01:12:44 2026';
 const deadPid = () => spawnSync(process.execPath, ['-e', '']).pid;
 
-async function fixture(t, { pid = deadPid(), shim, children = 'native', idleSeconds = 3600, entries = {} } = {}) {
+async function fixture(t, { pid = deadPid(), shim, children = 'native', entries = {} } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-relaunch-')));
   const codexHome = join(root, 'codex');
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -30,7 +30,6 @@ async function fixture(t, { pid = deadPid(), shim, children = 'native', idleSeco
     if (command === '/bin/ps' && args[0] === '-axo') return out(`  ${pid}     1 ${MAIN}\n  999 ${pid} ${child}\n`);
     if (command === '/bin/ps') return out(START);
     if (command === '/bin/launchctl') return out(shim ?? join(root, 'codex-launcher'));
-    if (command === '/usr/sbin/ioreg') return out(`    | |   "HIDIdleTime" = ${idleSeconds * 1e9}\n`);
     return out('');
   };
   let clock = Date.parse('2026-09-30T02:00:00Z');
@@ -48,7 +47,7 @@ test('classifies launcher, bypassed, helper-only and absent Desktop process tree
   assert.equal(classifyDesktop([], options).state, 'not-running');
 });
 
-test('an idle bypassed Desktop is quit gracefully once and reopened in the background', async t => {
+test('a bypassed Desktop is quit gracefully once and reopened in the background without waiting for user idleness', async t => {
   const f = await fixture(t);
   assert.equal((await f.relaunch.check()).state, 'relaunched');
   assert.equal(f.quits(), 1);
@@ -62,10 +61,9 @@ test('a Desktop that declines to quit is never force-killed or retried', async t
   assert.equal(f.quits(), 1); assert.equal(f.opens().length, 0);
 });
 
-test('user activity, live Codex turns, recent rollouts and a missing override defer the relaunch', async t => {
+test('live Codex turns, recent rollouts and a missing override defer the relaunch; user activity does not', async t => {
   const started = Date.parse(START);
   const cases = [
-    [{ idleSeconds: 5 }, 'user activity'],
     [{ entries: { a: { side: 'codex', kind: 'started', at: started + 1 } } }, 'Codex activity'],
     [{ shim: '/elsewhere' }, 'launcher override is not active'],
   ];
@@ -83,7 +81,7 @@ test('user activity, live Codex turns, recent rollouts and a missing override de
   await mkdir(dir, { recursive: true });
   const rollout = join(dir, 'rollout-x.jsonl');
   await writeFile(rollout, '{}\n');
-  const recent = new Date(day.getTime() - 60_000);
+  const recent = new Date(day.getTime() - 10_000);
   await utimes(rollout, recent, recent);
   assert.equal((await f.relaunch.check()).waiting, 'Codex activity');
   assert.equal(f.quits(), 0);
