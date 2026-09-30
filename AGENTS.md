@@ -714,7 +714,11 @@ Shared Codex transport installs for the next normal app start: `bin/claudex-code
 native Desktop args/env, starts a public Unix WS listener, and forwards JSONL
 unchanged. Do not use a prestarted WS_URL override: it loses Desktop app-tools
 injection. The native CODEX_CLI_PATH launcher is the intended activation path;
-never restart active user work. WS clients share the backend and can retire idle
+never restart active user work. Login window restoration can start Desktop
+before LaunchAgents, bypassing the launcher; src/codex-desktop-relaunch.mjs then
+quits (never kills) and background-reopens that exact process once, only when
+the override is active, the user is idle and Codex shows no turn or rollout
+activity. WS clients share the backend and can retire idle
 owned projections immediately (native isolated proof). The CLI's raw proxy is
 not compatible with the WS listener. Native socket aliases need strict UID,
 private-directory, inode and target validation, not blanket symlink following.

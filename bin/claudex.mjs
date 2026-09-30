@@ -19,6 +19,7 @@ import { SyncEventInbox } from '../src/sync-events.mjs';
 import { createSyncEventSource } from '../src/sync-event-source.mjs';
 import { installSyncHooks, inspectSyncHooks } from '../src/sync-hook-install.mjs';
 import { installDesktopLauncher, applyDesktopEnvironment, uninstallDesktopLauncher } from '../src/desktop-install.mjs';
+import { createDesktopRelaunch } from '../src/codex-desktop-relaunch.mjs';
 import { isAllowedCodexVersion, isSupportedCodexVersion } from '../src/codex-versions.mjs';
 import { normalizeVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
 import { closeDesktopSafely } from '../src/desktop-shutdown.mjs';
@@ -236,7 +237,9 @@ async function main() {
         await applyDesktopEnvironment({ root });
         const inbox = await new SyncEventInbox({ root }).initialize();
         events = await createSyncEventSource({ root, runtime, config, inbox });
-        await runDesktopWatch({ root, bridge, runtime, config, events, signal: controller.signal });
+        const relaunch = createDesktopRelaunch({ root, codexHome: runtime.codexHome }).run(controller.signal);
+        try { await runDesktopWatch({ root, bridge, runtime, config, events, signal: controller.signal }); }
+        finally { controller.abort(); await relaunch; }
       } else await withLock(join(root, 'watch.lock'), async () => {
         if (command === 'track') {
           if (!['codex', 'claude'].includes(values.from)) throw new Error('--from must be codex or claude.');

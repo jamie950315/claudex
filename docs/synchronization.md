@@ -50,11 +50,20 @@ node bin/claudex.mjs service install
 ```
 
 Installation enables all-project discovery and configures the native
-`CODEX_CLI_PATH` override for the next normal Codex Desktop start. It never quits
-or restarts a running application. The existing watcher waits without enrolling
-sources until the verified shared backend appears. On subsequent logins it
+`CODEX_CLI_PATH` override for the next normal Codex Desktop start. Installation
+never quits or restarts a running application. The existing watcher waits without
+enrolling sources until the verified shared backend appears. On subsequent logins it
 restores only its own launcher override; a different existing override is never
-overwritten. If the LaunchAgent is already installed, use `service start` after
+overwritten.
+
+macOS can reopen Codex Desktop at login before LaunchAgents run, so that process
+starts without the launcher and never reads the override. The desktop watcher
+detects this exact bypass (a direct native `app-server` child and no launcher
+child) and restarts Codex Desktop once per process: a normal quit request, then a
+background reopen. It waits until the override is active, the user has been idle
+for ten minutes, no Codex hook turn has started since that process launched and
+no recent rollout has been written for ten minutes. A declined quit is never
+forced or retried. The current state is in `desktop-relaunch-status.json`. If the LaunchAgent is already installed, use `service start` after
 stopping its previous instance. No repository selection is needed.
 
 The launcher uses Codex's original signed `cua_node/bin/node` runtime and verifies
