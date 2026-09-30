@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { SyncEventInbox } from '../src/sync-events.mjs';
+import { RECONNECT_ID } from '../src/sync-event-source.mjs';
 import { ChatMailbox } from '../src/chat-mailbox.mjs';
 
 async function fixture(t) {
@@ -73,6 +74,12 @@ test('internal configuration hints use durable exact-revision acknowledgement', 
   assert.equal((await inbox.list())[0].revision, latest.revision);
   await inbox.acknowledge([latest]);
   assert.deepEqual(await inbox.list(), []);
+});
+
+test('acknowledging synthetic retries without an inbox receipt is a no-op', async t => {
+  const inbox = await fixture(t), stored = await inbox.publish(event());
+  await inbox.acknowledge([event({ side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' }), { ...stored, revision: undefined }]);
+  assert.equal((await inbox.list())[0].revision, stored.revision);
 });
 
 test('filesystem notification wakes a sleeping inbox without polling and abort removes listener', async t => {

@@ -313,7 +313,8 @@ export class SyncEventInbox {
       let changed = false;
       for (const value of batch) {
         const event = validateSyncEvent(value), entry = state.entries[keyFor(event)];
-        if (entry?.revision === value.revision && entry.pending) { entry.pending = false; changed = true; }
+        // Synthetic retries (for example reconnect) carry no inbox revision and have no receipt to consume.
+        if (entry && entry.revision === value.revision && entry.pending) { entry.pending = false; changed = true; }
       }
       if (changed) await this.write(state);
     });
