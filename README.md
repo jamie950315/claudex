@@ -148,6 +148,12 @@ through your Claude account; it is not a local-only transport.
 See the [synchronization guide](docs/synchronization.md) for activation, daily use,
 optional folder integration, retention, and recovery.
 
+Desktop `untrack CONVERSATION_ID` stops one enrollment while preserving its native
+histories, checkpoints and assets. `resume-tracking CONVERSATION_ID` verifies and
+restores that enrollment. Both require the owned watcher to be stopped; see
+[history-preserving maintenance](docs/synchronization.md#stop-tracking-while-preserving-history)
+for retention limits and explicit branch repair.
+
 ## Compatibility and verification
 
 Compatibility is feature-specific. Collaboration acceptance does not expand the

@@ -9,6 +9,7 @@ import { publishClaudeFolderMap } from './claude-folder-map.mjs';
 import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mjs';
 import { homedir } from 'node:os';
 import { RECONNECT_ID } from './sync-event-source.mjs';
+import { activeDesktopState, activeDesktopConversationIds, isDesktopTracked } from './desktop-enrollment.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Forked Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)$/i;
@@ -122,6 +123,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     coldHints.clear(); coldObserved.clear(); coldDirty.clear(); activeObserved.clear(); activeDirty.clear();
   };
   const observeActive = async (state, id) => {
+    if (!isDesktopTracked(state.conversations[id])) { activeObserved.delete(id); activeDirty.delete(id); return; }
     if (!usesActiveHints(state, id)) { activeObserved.delete(id); activeDirty.delete(id); return; }
     const hint = await activeActivityHint(state, id);
     if (activeObserved.has(id) && activeObserved.get(id) !== hint) activeDirty.add(id);
@@ -409,8 +411,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             let state = await bridge.status();
             if (state.pending) { clearHints(); await bridge.recover(); }
             state = await bridge.status();
-            checkingConversationCount = Object.keys(state.conversations).length;
-            for (const id of checkedConversations) if (!state.conversations[id]) checkedConversations.delete(id);
+            checkingConversationCount = activeDesktopConversationIds(state).length;
+            for (const id of checkedConversations) if (!state.conversations[id] || !isDesktopTracked(state.conversations[id])) checkedConversations.delete(id);
             const existing = new Set(Object.keys(state.conversations));
             const known = new Set(state.records.map(record => `${record.side}:${record.nativeId}`));
             for (const id of await runtime.ownedNativeIds()) known.add(id);
@@ -472,12 +474,12 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               }
             }
             state = await bridge.status();
-            checkingConversationCount = Object.keys(state.conversations).length;
+            checkingConversationCount = activeDesktopConversationIds(state).length;
             const completedAt = now();
             if (discoveryCompletedAt !== null) maxDiscoveryGapMs = Math.max(maxDiscoveryGapMs, completedAt - discoveryCompletedAt);
             discoveryCompletedAt = completedAt;
             discoveryDurationMs = completedAt - beganAt;
-            return Object.keys(state.conversations).filter(id => !existing.has(id));
+            return activeDesktopConversationIds(state).filter(id => !existing.has(id));
           };
           // A whole foreground sweep can itself take tens of seconds. Discover
           // new work and observe existing active files between operations. One
@@ -493,14 +495,14 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               await sync(id);
             }
             const latest = await bridge.status();
-            for (const id of Object.keys(latest.conversations)) {
+            for (const id of activeDesktopConversationIds(latest)) {
               await observeActive(latest, id);
               const hint = await coldImportHint(latest, id);
               if (coldObserved.has(id) && hint !== coldObserved.get(id)) coldDirty.add(id);
               if (hint) coldObserved.set(id, hint);
               else if (usesActiveHints(latest, id)) coldObserved.delete(id);
             }
-            for (const id of activeDirty) if (!latest.conversations[id]) { activeDirty.delete(id); activeObserved.delete(id); }
+            for (const id of activeDirty) if (!latest.conversations[id] || !isDesktopTracked(latest.conversations[id])) { activeDirty.delete(id); activeObserved.delete(id); }
             const nextDirty = [...new Set([...coldDirty, ...activeDirty])].find(id => id !== nextId && !fresh.includes(id)
               && (!blockedConversations.has(id) || now() >= blockedConversations.get(id).retryAt));
             if (nextDirty && !signal?.aborted) {
@@ -515,10 +517,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const freshIds = new Set(fresh);
             const state = await bridge.status();
             for (const cache of [coldHints, coldObserved, coldDirty, activeObserved, activeDirty, blockedConversations]) {
-              for (const id of cache.keys()) if (!state.conversations[id]) cache.delete(id);
+              for (const id of cache.keys()) if (!state.conversations[id] || !isDesktopTracked(state.conversations[id])) cache.delete(id);
             }
             const dirty = [], active = [], background = [];
-            for (const id of Object.keys(state.conversations)) {
+            for (const id of activeDesktopConversationIds(state)) {
               const hint = await coldImportHint(state, id);
               if (hint && coldObserved.has(id) && coldObserved.get(id) !== hint) coldDirty.add(id);
               if (hint) coldObserved.set(id, hint);
@@ -556,7 +558,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             configurationOnly = eventBatch.length > 0 && eventBatch.every(event => event.kind === 'configuration');
             let state = await bridge.status();
             if (state.pending) { configurationOnly = false; clearHints(); await bridge.recover(); state = await bridge.status(); }
-            await events.observe(eventBatch, state);
+            await events.observe(eventBatch, activeDesktopState(state));
             const relevant = eventBatch.filter(event => !['started', 'configuration'].includes(event.kind));
             const keys = new Set(relevant.map(eventKey));
             const known = new Set(state.records.map(record => `${record.side}:${record.nativeId?.toLowerCase()}`));
@@ -565,13 +567,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             for (const event of relevant) if (event.kind !== 'session'
               && !state.records.some(record => `${record.side}:${record.nativeId?.toLowerCase()}` === eventKey(event)))
               deferEvent(event, event.retryAttempt ?? 0);
-            await events.observe(eventBatch, state);
+            await events.observe(eventBatch, activeDesktopState(state));
             const targets = new Map();
             for (const event of relevant) for (const record of state.records) {
               if (`${record.side}:${record.nativeId?.toLowerCase()}` !== eventKey(event)) continue;
               // Session-start notifications also describe our own snapshot registration.
               if (event.kind === 'session' && known.has(eventKey(event)) && record.managed) continue;
-              if (state.conversations[record.conversationId]) {
+              if (state.conversations[record.conversationId] && isDesktopTracked(state.conversations[record.conversationId])) {
                 const list = targets.get(record.conversationId) ?? [];
                 list.push(event); targets.set(record.conversationId, list);
               }
@@ -589,7 +591,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 for (const event of sourceEvents) if (event.kind !== 'session') deferEvent(event, event.retryAttempt ?? 0);
               }
             }
-            await events.observe(eventBatch, await bridge.status());
+            await events.observe(eventBatch, activeDesktopState(await bridge.status()));
           }
           if (!signal?.aborted && initialSweepCompletedAt === null) initialSweepCompletedAt = now();
           if (!signal?.aborted && broadPass && now() - lastCollection >= 60_000) {

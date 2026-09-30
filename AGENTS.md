@@ -250,11 +250,13 @@ cache filename; preserve earlier resource originals and receipts. It starts at
 module load, independently of folder/sidebar
 subscriptions; a sidebar resource existing on disk is not proof of a running
 consumer. Keep bounded lifecycle/wait-reason diagnostics without message content.
-Native acceptance on the earlier resource verified an idle original Claude chat
-waking and acknowledging once under the same UI/CLI identities. Every new pin
-requires separate live reception acceptance; a cache installation or native
-account check is insufficient. This does not revalidate other frontend
-presentation adapters against the same vendor update.
+Authorized native acceptance on the current pinned resource verifies an idle
+original Claude chat waking through its existing Desktop owner, rendering the
+requested reply and acknowledging once under the same UI/CLI identities. No
+manual prompt or acknowledgement was submitted. Every new pin requires separate
+live reception acceptance; a cache installation or native account check is
+insufficient. This does not revalidate other frontend presentation adapters
+against the same vendor update.
 Shared mailbox claims fence hooks and native wake with exact claim IDs before dispatch;
 only proven pre-dispatch refusal may restore queued state. Unknown dispatch is
 never resent. Serialize wake-manifest snapshots and publication so older metadata
@@ -444,6 +446,22 @@ dependency-anchor and current-side verification and never retires its snapshots
 (they still count toward the backup quota; exceeding it blocks explicitly). Its
 own syncs still verify everything and hold. Full verification resumes when the
 directory exists again. Freezing is deferral, never checkpoint or mutation proof.
+Explicit Desktop `untrack` stops enrollment while retaining canonical history,
+native files, records and content assets. Keep the exact native identities indexed
+so all-project discovery cannot reenroll them. Exclude stopped conversations from
+sync queues, native owners, folder rows and archival actions; retain their managed
+snapshots in retention quotas without retiring them. `resume-tracking` verifies
+the saved originals, anchors and idle current prefixes before restoring enrollment;
+missing directories or independently advanced current sides keep it stopped.
+
+Explicit `split-original` preserves an independently continued superseded,
+unmanaged Claude original as a separate logical conversation. Require exact
+conversation/native/record IDs and an inspected completed checkpoint, the same
+saved working directory, an authenticated shared prefix, an unchanged current
+managed pair, and stable raw-byte and nanosecond identity proofs. Preserve the
+existing pair and every native file; never merge or discard either tail. Move
+only the original's enrollment and save an idempotent split receipt. Its new
+counterpart is created by the subsequent normal guarded synchronization.
 Event-filtered discovery skips a Codex source whose metadata read fails only
 when its exact discovered rollout file is now absent (Desktop deleted a
 transient thread); other metadata failures keep their severity.

@@ -176,9 +176,12 @@ and permission prompts may delay dispatch. A vendor frontend update can require
 bridge adaptation. Bridge unavailability is not delivery and must not be presented
 as successful wake. Its separately pinned asset starts independently of sidebar
 visibility or folder grouping, with a recoverable private installation journal.
-Lifecycle and wait-reason diagnostics contain no message text. An observed native
-acceptance verifies one wake, one native input and a matching ACK in the same
-original Claude conversation; synthetic tests alone do not establish this.
+Lifecycle and wait-reason diagnostics contain no message text or native metadata
+values. Authorized acceptance on the current pinned resource verifies one wake,
+one native input, the rendered requested reply and a matching ACK in the same
+original Claude conversation, without a manually submitted prompt or ACK. Every
+new frontend pin needs separate native reception acceptance; synthetic tests or
+an installed cache alone do not establish this.
 A running tool is not interrupted; a
 message can wait until the current turn ends. SessionEnd never consumes messages.
 Known ended chats may still receive queued messages. Their computed

@@ -3,6 +3,7 @@ import { lstat, open, realpath, rename, unlink } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { hash } from './storage.mjs';
+import { isDesktopTracked } from './desktop-enrollment.mjs';
 
 const MAX_ENTRIES = 4096;
 const MAX_BYTES = 2 * 1024 * 1024;
@@ -103,6 +104,7 @@ export async function publishClaudeFolderMap({ root, state } = {}) {
 
   const rootIdentity = await privateDirectory(root);
   const candidates = state.records.filter(record => object(record) && record.side === 'claude'
+    && isDesktopTracked(state.conversations[record.conversationId])
     && record.managed === true && record.verified === true && record.kind === 'owner' && record.status === 'current');
   if (candidates.length > MAX_ENTRIES) fail('owner count exceeds the 4096-entry limit.');
   const conversationIds = new Set();

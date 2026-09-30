@@ -31,6 +31,7 @@ const { values, positionals } = parseArgs({ args: collaborationRequested ? ['col
   project: { type: 'string', multiple: true }, help: { type: 'boolean' }, watch: { type: 'boolean' },
   'all-projects': { type: 'boolean' },
   'claude-binary': { type: 'string' },
+  'record-id': { type: 'string' }, 'expected-count': { type: 'string' }, 'expected-digest': { type: 'string' },
 } });
 const command = positionals[0] || 'help';
 let root = resolve(values.root || process.env.CLAUDEX_HOME || join(homedir(), '.local', 'share', 'claudex'));
@@ -47,6 +48,9 @@ const help = `Claudex: bounded conversation synchronization and opt-in model col
   claudex gc                      Apply owned-backup retention
   claudex recover                 Resume one interrupted transaction
   claudex archive-original CONVERSATION_ID --id NATIVE_ID    Reconcile one preserved Codex original
+  claudex untrack CONVERSATION_ID  Stop Desktop synchronization; preserve all history
+  claudex resume-tracking CONVERSATION_ID    Verify and restore the saved Desktop enrollment
+  claudex split-original CONVERSATION_ID --id NATIVE_ID --record-id RECORD_ID --expected-count N --expected-digest SHA256
   claudex abort                   Remove one unpublished owned projection
   claudex recover-lock            Clear a dead bridge process lock (never a live one)
   claudex service install|start|stop|status|uninstall    macOS background operation
@@ -225,7 +229,15 @@ async function main() {
     return;
   }
   if (config.mode === 'desktop') {
-    if (!['watch', 'track', 'sync', 'gc', 'recover', 'archive-original'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, recover, and archive-original; owner appends cannot be aborted as disposable files.');
+    if (!['watch', 'track', 'sync', 'gc', 'recover', 'archive-original', 'untrack', 'resume-tracking', 'split-original'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, recover, archive-original, untrack, resume-tracking, and split-original; owner appends cannot be aborted as disposable files.');
+    if (command === 'untrack') {
+      if (!positionals[1]) throw new Error('Supply the logical conversation ID.');
+      // Stopping enrollment is metadata-only, including when its saved cwd is
+      // absent. Refuse a running watcher before acquiring the coordinator lock.
+      return withLock(join(root, 'watch.lock'), async () => {
+        output(await new DesktopBridge({ root, adapters: {}, policy: config.policy }).untrack(positionals[1]));
+      }, { recoverDead: true });
+    }
     const runtime = await new DesktopRuntime({ ...config, root }).initialize();
     const bridge = new DesktopBridge({ root, adapters: runtime.adapters, policy: config.policy });
     const controller = new AbortController();
@@ -251,6 +263,17 @@ async function main() {
         } else if (command === 'archive-original') {
           if (!positionals[1] || !values.id) throw new Error('Supply the logical conversation ID and exact original native ID.');
           output(await bridge.reconcileOriginalArchive(positionals[1], values.id));
+        } else if (command === 'resume-tracking') {
+          if (!positionals[1]) throw new Error('Supply the logical conversation ID.');
+          output(await bridge.resumeTracking(positionals[1]));
+        } else if (command === 'split-original') {
+          const count = Number(values['expected-count']), digest = values['expected-digest'];
+          if (!positionals[1] || !values.id || !values['record-id'] || !values['expected-count']
+            || !Number.isSafeInteger(count) || count < 1 || !/^[a-f0-9]{64}$/.test(digest ?? ''))
+            throw new Error('Supply the logical conversation ID, exact --id and --record-id, and inspected --expected-count / --expected-digest checkpoint.');
+          const { splitDesktopOriginal } = await import('../src/desktop-original-split.mjs');
+          output(await splitDesktopOriginal({ bridge, conversationId: positionals[1], originalNativeId: values.id,
+            originalRecordId: values['record-id'], expectedCheckpoint: { count, digest } }));
         } else output(await bridge[command === 'gc' ? 'collect' : 'recover']());
       });
     } finally {

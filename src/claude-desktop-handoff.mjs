@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { hash } from './storage.mjs';
 import { readDesktopSessionMappings } from './desktop.mjs';
 import { sessionPath } from './claude.mjs';
+import { isDesktopTracked } from './desktop-enrollment.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const REMOTE = /^cse_[A-Za-z0-9_-]{1,200}$/;
@@ -94,6 +95,7 @@ function candidates(state) {
   if (state.pending != null) return [];
   const result = [];
   for (const current of state.records.filter(record => record.side === 'claude' && record.status === 'current'
+    && isDesktopTracked(state.conversations[record.conversationId])
     && record.managed === true && record.verified === true && record.kind === 'owner')) {
     const originals = state.records.filter(record => record.conversationId === current.conversationId && record.side === 'claude'
       && record.status === 'original' && record.managed === false && record.kind === 'original' && record.verified === true);
@@ -158,6 +160,14 @@ async function writeManifest(root, actions, now, anchors = []) {
   }
 }
 
+/** Revoke presentation commands before explicit enrollment maintenance. This
+ * uses only the owned private manifest, never a transcript or native mutation.
+ * A later watcher publication rebuilds associations from active enrollments.
+ */
+export async function revokeClaudeDesktopHandoffActions({ root }) {
+  return { changed: await writeManifest(root, [], Date.now(), []) };
+}
+
 function presentationAnchor(action) {
   return { conversationId: action.conversationId, localSessionId: action.localSessionId,
     nativeId: action.nativeId, replacementNativeId: action.replacement.nativeId,
@@ -184,7 +194,7 @@ async function retainPresentationAnchors({ root, desktopHome, state, anchors }) 
       && record.status === 'current' && record.managed === true && record.kind === 'owner' && record.verified === true);
     const original = state.records.filter(record => record.conversationId === anchor.conversationId && record.side === 'claude'
       && record.status === 'original' && record.managed === false && record.kind === 'original' && record.verified === true);
-    if (conversation?.id !== anchor.conversationId || conversation.cwd !== anchor.cwd || current.length !== 1 || original.length !== 1
+    if (!isDesktopTracked(conversation) || conversation?.id !== anchor.conversationId || conversation.cwd !== anchor.cwd || current.length !== 1 || original.length !== 1
       || current[0].nativeId !== anchor.replacementNativeId || current[0].cwd !== anchor.cwd
       || original[0].nativeId !== anchor.nativeId || original[0].cwd !== anchor.cwd) continue;
     selected.push(anchor);

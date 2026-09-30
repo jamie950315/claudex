@@ -5,6 +5,8 @@ import { privateDirectory, readJSON, writeJSON, withLock } from './storage.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { DEFAULT_POLICY, planRetention } from './retention.mjs';
 import { originalArchiveGuard } from './codex-original-archive-tree.mjs';
+import { isDesktopTracked, validateDesktopEnrollment } from './desktop-enrollment.mjs';
+import { revokeClaudeDesktopHandoffActions } from './claude-desktop-handoff.mjs';
 
 const other = side => side === 'codex' ? 'claude' : 'codex';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -65,6 +67,7 @@ export class DesktopBridge {
     await privateDirectory(this.root);
     const state = await readJSON(join(this.root, 'desktop-state.json'), { version: 2, conversations: {}, records: [], pending: null, audit: [] });
     if (state.version !== 2) throw new Error('Unsupported desktop bridge state version.');
+    validateDesktopEnrollment(state);
     return state;
   }
   async save(state, event) {
@@ -77,6 +80,46 @@ export class DesktopBridge {
     return withLock(join(this.root, 'desktop-operation.lock'), async () => fn(await this.load()), { recoverDead: true });
   }
   status() { return this.load(); }
+  /** Stop only enrollment, without inspecting a possibly missing cwd or
+   * changing any native session. The outer watcher lock belongs to CLI callers.
+   */
+  async untrack(id) {
+    return this.locked(async state => {
+      if (state.pending) throw new Error('Recover the pending desktop handoff before changing tracking.');
+      const conversation = state.conversations[id];
+      if (!conversation) throw new Error('Unknown desktop bridge conversation.');
+      if (!isDesktopTracked(conversation)) return { changed: false, conversationId: id, tracking: 'stopped', historyPreserved: true };
+      await revokeClaudeDesktopHandoffActions({ root: this.root });
+      conversation.tracking = { status: 'stopped', stoppedAt: this.now() };
+      await this.save(state, { event: 'tracking-stopped', conversationId: id });
+      return { changed: true, conversationId: id, tracking: 'stopped', historyPreserved: true };
+    });
+  }
+  async resumeTracking(id) {
+    return this.locked(async state => {
+      if (state.pending) throw new Error('Recover the pending desktop handoff before changing tracking.');
+      const conversation = state.conversations[id];
+      if (!conversation) throw new Error('Unknown desktop bridge conversation.');
+      if (isDesktopTracked(conversation)) return { changed: false, conversationId: id, tracking: 'active' };
+      // Resumption restores the original enrollment. It never selects a new
+      // branch, substitutes a working directory or allocates a replacement.
+      await this.assertOriginalsUnchanged(state, id);
+      const records = state.records.filter(record => record.conversationId === id && record.status === 'current');
+      if (!records.length) throw new Error('Stopped conversation has no saved current native history.');
+      const readings = await readBatches(records, async record => {
+        await this.adapters[record.side].assertIdle(record);
+        const data = await this.inspect(record);
+        if (data.incompleteTail || !readingMatches(data, conversation.canonical))
+          throw new Error('Stopped conversation does not preserve its synchronized prefix; tracking remains stopped.');
+        return data;
+      });
+      if (readings.filter(data => data.common.messages.length > conversation.canonical.count).length > 1)
+        throw new Error('Both stopped sides changed; tracking remains stopped and no branch was selected.');
+      delete conversation.tracking;
+      await this.save(state, { event: 'tracking-resumed', conversationId: id });
+      return { changed: true, conversationId: id, tracking: 'active' };
+    });
+  }
   current(state, id, side) { return state.records.find(record => record.conversationId === id && record.side === side && record.status === 'current'); }
   async inspect(record) {
     const data = await this.adapters[record.side].inspect(record);
@@ -96,6 +139,7 @@ export class DesktopBridge {
     if (!reconcile || state.pending) return;
     for (const record of state.records.filter(record => record.side === 'claude'
       && record.status === 'current' && record.managed === false && record.kind === 'original'
+      && isDesktopTracked(state.conversations[record.conversationId])
       && (!conversationId || record.conversationId === conversationId))) {
       try {
         const proof = await reconcile(record);
@@ -160,13 +204,15 @@ export class DesktopBridge {
    * syncs still fail with an explicit per-conversation hold.
    */
   async frozenConversations(state) {
-    const frozen = new Set();
+    const frozen = new Set(Object.entries(state.conversations)
+      .filter(([, conversation]) => !isDesktopTracked(conversation)).map(([id]) => id));
     // Only native adapters can observe working directories; synthetic adapters
     // without this capability never freeze a conversation.
     const probe = ['codex', 'claude'].map(side => this.adapters[side]?.workingDirectoryAbsent).find(Boolean);
     if (!probe) return frozen;
     const absent = new Map();
     for (const [id, conversation] of Object.entries(state.conversations)) {
+      if (frozen.has(id)) continue;
       const cwds = [conversation.cwd, ...state.records.filter(record => record.conversationId === id).map(record => record.cwd)]
         .filter(cwd => typeof cwd === 'string' && isAbsolute(cwd));
       for (const cwd of new Set(cwds)) {
@@ -180,15 +226,21 @@ export class DesktopBridge {
   async assertOriginalsUnchanged(state, conversationId, frozen = new Set()) {
     const included = record => conversationId ? record.conversationId === conversationId : !frozen.has(record.conversationId);
     for (const record of state.records.filter(record => record.status === 'dependency-anchor' && included(record))) {
-      await this.assertDependencyAnchor(record);
+      try { await this.assertDependencyAnchor(record); }
+      catch (error) { error.conversationId ??= record.conversationId; throw error; }
     }
     await readBatches(state.records.filter(record => !record.managed && record.status === 'original' && included(record)), async record => {
-      const data = await this.inspect(record);
-      if (data.digest !== record.checkpoint.digest || data.common.messages.length !== record.checkpoint.count) {
-        const current = this.current(state, record.conversationId, record.side);
-        throw new Error(`Superseded original ${record.nativeId} changed; current ${record.side} session is ${current?.nativeId ?? 'unavailable'}. No branch was selected.`);
+      try {
+        const data = await this.inspect(record);
+        if (data.digest !== record.checkpoint.digest || data.common.messages.length !== record.checkpoint.count) {
+          const current = this.current(state, record.conversationId, record.side);
+          throw new Error(`Superseded original ${record.nativeId} changed; current ${record.side} session is ${current?.nativeId ?? 'unavailable'}. No branch was selected.`);
+        }
+        if (data.incompleteTail) throw new Error('A superseded original has an in-progress turn; synchronization postponed.');
+      } catch (error) {
+        error.conversationId ??= record.conversationId;
+        throw error;
       }
-      if (data.incompleteTail) throw new Error('A superseded original has an in-progress turn; synchronization postponed.');
     });
   }
 
@@ -246,6 +298,10 @@ export class DesktopBridge {
     return this.locked(async state => {
       if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
       if (!['codex', 'claude'].includes(source.side)) throw new Error('Invalid source side.');
+      const saved = state.records.find(record => record.side === source.side
+        && (source.nativeId ? record.nativeId === source.nativeId : source.path && record.path === source.path));
+      if (saved && !isDesktopTracked(state.conversations[saved.conversationId]))
+        return { conversationId: saved.conversationId, existing: true, tracking: 'stopped' };
       const data = await this.adapters[source.side].inspect({ ...source, managed: false });
       const common = normalize(data.common); assertComplete(common);
       const existing = state.records.find(record => record.side === source.side && record.nativeId === data.nativeId);
@@ -281,7 +337,8 @@ export class DesktopBridge {
       if (prior || priorTarget || state.conversations[conversationId]) {
         if (prior?.conversationId === conversationId && priorTarget?.conversationId === conversationId
             && priorTarget.importPacket && state.conversations[conversationId]?.discoveryMode === 'cold-import')
-          return { conversationId, existing: true };
+          return { conversationId, existing: true,
+            ...(!isDesktopTracked(state.conversations[conversationId]) ? { tracking: 'stopped' } : {}) };
         throw new Error('Cold-import identity is already tracked by a different enrollment.');
       }
       const from = await this.inspect(source), to = await this.inspect(target);
@@ -311,6 +368,7 @@ export class DesktopBridge {
       if (state.pending) throw new Error('An unfinished desktop handoff must be recovered first.');
       const conversation = state.conversations[id];
       if (!conversation) throw new Error('Unknown desktop bridge conversation.');
+      if (!isDesktopTracked(conversation)) return { changed: false, conversationId: id, tracking: 'stopped' };
       await this.reconcileOriginalRelocations(state, id);
       await this.assertOriginalsUnchanged(state, id);
       const records = ['codex', 'claude'].map(side => this.current(state, id, side)).filter(Boolean);
@@ -417,6 +475,7 @@ export class DesktopBridge {
         && record.kind === 'original' && record.managed === false && record.verified);
       const replacement = this.current(state, conversationId, 'codex'), conversation = state.conversations[conversationId];
       if (!original || !replacement || !conversation) throw new Error('The exact superseded Codex original or its current replacement is missing.');
+      if (!isDesktopTracked(conversation)) throw new Error('Restore the saved tracking enrollment before original archival.');
       if (original.archivedAt) return { changed: false, conversationId, nativeId: original.nativeId };
       await this.verifyOriginalArchiveReplacement(state, original, replacement, conversation.canonical, conversation.title);
       const proof = await this.adapters.codex.prepareOriginalArchiveTree(original);

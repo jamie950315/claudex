@@ -87,6 +87,18 @@ test('stable observations reuse proof for enqueue only and full verification is 
   f.clock(160_000); await f.publish(); assert.equal(f.inspections.length, 4);
 });
 
+test('stopped enrollments revoke cached actions and anchors without inspecting native histories', async () => {
+  const f = await fixture(), pair = await f.add();
+  await f.publish(); assert.equal((await f.manifest()).actions.length, 1);
+  f.state.conversations[pair.conversationId].tracking = { status: 'stopped', stoppedAt: 1 };
+  f.intercept(() => { throw new Error('Stopped native histories must not be read'); });
+  f.inspections.length = 0;
+  const status = await f.publish();
+  assert.equal(status.actions, 0); assert.equal(status.anchors, 0);
+  assert.deepEqual(f.inspections, []);
+  assert.deepEqual((await f.manifest()).actions, []); assert.deepEqual((await f.manifest()).anchors, []);
+});
+
 test('event-scoped publication inspects only the selected conversation while preserving global anchors', async () => {
   const f = await fixture(), first = await f.add(), second = await f.add();
   await f.publish(); await f.publish();

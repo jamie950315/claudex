@@ -233,6 +233,62 @@ its changed history stops synchronization explicitly instead of being silently
 ignored or choosing one branch. Resolve that conflict before further delivery
 or backup collection; neither history is overwritten.
 
+### Stop tracking while preserving history
+
+Stop the owned watcher normally before changing enrollment. In Desktop mode,
+`untrack` accepts the exact logical conversation ID shown by `status`:
+
+```sh
+node bin/claudex.mjs untrack CONVERSATION_ID
+```
+
+This stops synchronization and removes the conversation from folder and Local
+archival presentation. It preserves every native original, generated snapshot,
+logical checkpoint, record and authoritative content asset. Its native identities
+remain excluded from all-project discovery, including after a restart. The command
+refuses a live watcher or pending transaction and revokes existing Local archive
+commands before saving the stopped enrollment. A missing saved working directory
+does not require a substitute directory or native history edits.
+
+Stopped snapshots are retained even if the directory returns. Previous snapshots
+and dependency anchors still count toward the existing backup quota; stopping
+tracking does not grant deletion or hide quota exhaustion. To restore the saved
+enrollment explicitly, stop the watcher and run:
+
+```sh
+node bin/claudex.mjs resume-tracking CONVERSATION_ID
+```
+
+Resumption verifies preserved originals, dependency anchors and current histories
+under their normal identity and lifecycle guards. Missing directories, changed
+prefixes, incomplete turns or independently advanced current branches leave the
+conversation stopped. No branch is selected and no replacement is allocated by
+the tracking command.
+
+### Preserve an independently continued original branch
+
+If a superseded unmanaged Claude original and the current managed pair have both
+continued after the same saved prefix, an explicit `split-original` operation can
+enroll the original as a separate logical conversation. First inspect both branches
+and record the exact completed original checkpoint. With the watcher stopped:
+
+```sh
+node bin/claudex.mjs split-original CONVERSATION_ID --id ORIGINAL_NATIVE_ID \
+  --record-id ORIGINAL_RECORD_ID --expected-count MESSAGE_COUNT --expected-digest SHA256
+```
+
+The operation requires the exact logical, native and ledger record identities and
+the inspected message count and digest. It requires the same saved working
+directory and verifies the original's saved prefix,
+an idle unchanged managed Codex/Claude pair, genuinely independent continuations,
+and stable native bytes before moving only the original's enrollment. Native
+histories and the current pair's canonical checkpoint remain unchanged. A durable
+receipt makes the same request idempotent. Pending work, stopped enrollment,
+uncertain identities, imported originals, non-independent histories or concurrent
+changes refuse the split. This is an explicit preservation repair, not an
+automatic history merge or permission to discard a branch. The returned new
+conversation ID receives its counterpart through normal guarded synchronization.
+
 ### Daily desktop use
 
 1. Work in Codex normally and wait for the current reply to finish.

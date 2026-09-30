@@ -60,6 +60,15 @@ test('an owner whose working directory was removed only loses its own folder ove
   assert.deepEqual(JSON.parse(await readFile(f.path, 'utf8')).entries, [{ remoteId: 'cse_kept', canonicalCwd: f.cwd, verified: true }]);
 });
 
+test('stopped enrollments revoke their folder rows without reading owner metadata', async () => {
+  const f = await fixture(), kept = await f.addOwner({ remoteId: 'cse_kept' }), stopped = await f.addOwner({ remoteId: 'cse_stopped' });
+  await f.publish();
+  f.state.conversations[stopped.record.conversationId].tracking = { status: 'stopped', stoppedAt: 1 };
+  await writeFile(stopped.path, 'Invalid metadata must not be read', { mode: 0o600 });
+  assert.deepEqual(await f.publish(), { changed: true, entries: 1, deferred: null });
+  assert.deepEqual(JSON.parse(await readFile(f.path)).entries, [{ remoteId: kept.owner.remoteId, canonicalCwd: f.cwd, verified: true }]);
+});
+
 test('an unchanged map is not rewritten even when ledger records are reordered', async () => {
   const f = await fixture();
   await f.addOwner({ remoteId: 'cse_second' }); await f.addOwner({ remoteId: 'cse_first' });
