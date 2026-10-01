@@ -903,6 +903,14 @@ delegated request stored as a function output. Only the exact initial
 `codex_app.create_thread` envelope is accepted as that request boundary. Its
 original role and full payload remain quoted historical data; the bridge does
 not fabricate a user message or accept arbitrary assistant-only histories.
+An initial goal can instead be persisted as `goal.internal_context`, which the
+native display API omits. The bridge reads only the authoritative owned rollout
+and requires its exact initial active goal, marked context, thread/turn/project
+identities, all displayed assistant completions and final completion boundary.
+Both API passes must retain the same source inode and goal prefix. The objective
+is preserved as a separately labeled inert historical event; no user message is
+invented and the goal is not executed. Missing proof, altered history or a
+different native shape remains an explicit unsupported source.
 
 For native resized PNG/JPEG previews, the owner verifies the exact original
 against its pending intent and Claude's private input-image cache. It retains

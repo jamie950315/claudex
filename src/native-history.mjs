@@ -4,6 +4,7 @@ import { isInlineBase64 } from './base64.mjs';
 import { assertComplete } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
+import { isNativeInitialGoalRequest } from './native-goal-request.mjs';
 
 export const NATIVE_HISTORY_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
@@ -89,8 +90,9 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   return startedAt ?? previousStart;
 }
 
-async function readPass(client, threadId, limits, completedPrefix) {
+async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal) {
   const turns = []; const ids = new Set(); const cursors = new Set();
+  let initialGoal = null;
   let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null; let hasPriorRequest = false;
   while (true) {
     if (pages >= limits.maxPages) fail('page limit exceeded; no partial export is returned.');
@@ -118,6 +120,15 @@ async function readPass(client, threadId, limits, completedPrefix) {
     if (nextCursor !== null && (typeof nextCursor !== 'string' || !nextCursor)) fail('invalid pagination cursor.');
     if (nextCursor !== null && response.data.length === 0) fail('empty page with a continuation cursor.');
     for (const turn of response.data) {
+      if (!turns.length && object(turn) && turn.status === 'completed' && turn.itemsView === 'full'
+          && Array.isArray(turn.items) && turn.items.some(item => item?.type === 'agentMessage')
+          && !turn.items.some(item => item?.type === 'userMessage') && !isNativeInitialDelegation(turn.items[0]) && resolveInitialGoal) {
+        initialGoal = await resolveInitialGoal(turn, { threadId });
+        if (initialGoal !== null && (!isNativeInitialGoalRequest(initialGoal?.request)
+            || initialGoal.request.threadId !== threadId || initialGoal.request.turnId !== turn.id
+            || !object(initialGoal.sourceIdentity))) fail('invalid initial goal provenance.');
+        hasPriorRequest = initialGoal !== null;
+      }
       previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix, hasPriorRequest, allowInitialDelegation: turns.length === 0 });
       hasPriorRequest ||= turn.items.some(item => item.type === 'userMessage') || turns.length === 0 && isNativeInitialDelegation(turn.items[0]);
       if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
@@ -136,7 +147,9 @@ async function readPass(client, threadId, limits, completedPrefix) {
   if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
   const incompleteTailCount = turns.length - exported.length;
-  return { turns: exported, digest: canonicalDigest(exported), itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
+  return { turns: exported, initialGoal, digest: initialGoal === null ? canonicalDigest(exported)
+    : canonicalDigest(JSON.parse(serialize({ turns: exported, initialGoal: initialGoal.request }))),
+    itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
     bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount };
 }
 
@@ -188,7 +201,11 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
   if (!object(snapshot) || !Array.isArray(snapshot.turns) || !snapshot.turns.length) fail('no completed persisted history is available.');
   if (snapshot.threadId !== undefined && snapshot.threadId !== threadId) fail('snapshot thread identity does not match.');
   if (snapshot.completedPrefix !== undefined && typeof snapshot.completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
-  const ids = new Set(); let previousStart = null; let hasPriorRequest = false;
+  const goal = snapshot.initialGoal?.request;
+  if (snapshot.initialGoal != null && (!isNativeInitialGoalRequest(goal) || goal.threadId !== threadId
+      || goal.turnId !== snapshot.turns[0].id || snapshot.turns[0].items?.some(item => item.type === 'userMessage')))
+    fail('invalid initial goal provenance.');
+  const ids = new Set(); let previousStart = null; let hasPriorRequest = goal !== undefined;
   for (const turn of snapshot.turns) {
     previousStart = validateTurn(turn, previousStart, { completedPrefix: snapshot.completedPrefix === true, hasPriorRequest, allowInitialDelegation: ids.size === 0 });
     hasPriorRequest ||= turn.items.some(item => item.type === 'userMessage') || ids.size === 0 && isNativeInitialDelegation(turn.items[0]);
@@ -196,7 +213,8 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
     ids.add(turn.id);
   }
   if (!responseBoundary(snapshot.turns.at(-1))) fail('snapshot does not end at a completed assistant response.');
-  const messages = [];
+  const messages = goal === undefined ? [] : [{ role: 'assistant', content: [inert('historical event', goal)],
+    timestamp: new Date(goal.goal.createdAt * 1000).toISOString() }];
   for (const turn of snapshot.turns) {
     const messageTimestamp = turn.startedAt == null ? suppliedTimestamp : new Date(turn.startedAt * 1000).toISOString();
     for (const item of turn.items) {
@@ -232,6 +250,7 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
       representation: 'native-persisted-display-history',
       encryptedReasoningRecovered: false,
       toolsReplayed: false,
+      ...(goal === undefined ? {} : { initialRequest: 'verified-native-rollout-goal' }),
       notice: 'Persisted native display history, including historical events as inert data. Encrypted reasoning and internal model context are not reconstructed.',
       digest: snapshot.digest, turnCount: snapshot.turns.length, itemCount: snapshot.itemCount,
     },
@@ -244,14 +263,16 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
 // database access, source transcript writes, or hidden partial-history fallback.
 // Two matching complete reads detect observed changes, not a writer lease. The
 // coordinator still rechecks source identity/checkpoints before publication.
-export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false } = {}) {
+export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal } = {}) {
   if (!client || typeof client.request !== 'function') fail('a native app-server client is required.');
   if (typeof threadId !== 'string' || !threadId) fail('thread identity is required.');
   if (typeof completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
+  if (resolveInitialGoal !== undefined && typeof resolveInitialGoal !== 'function') fail('invalid initial goal resolver.');
   const limits = checkedLimits(inputLimits);
-  const first = await readPass(client, threadId, limits, completedPrefix);
-  const second = await readPass(client, threadId, limits, completedPrefix);
-  if (first.digest !== second.digest) fail('source history changed between complete reads; synchronization paused.');
+  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal);
+  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal);
+  if (first.digest !== second.digest || serialize(first.initialGoal?.sourceIdentity ?? null) !== serialize(second.initialGoal?.sourceIdentity ?? null))
+    fail('source history changed between complete reads; synchronization paused.');
   return { ...first, threadId, turnCount: first.turns.length };
 }
 
@@ -261,10 +282,10 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
-  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix });
+  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal });
   const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
   const common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
   // Key order never changes the serialized byte length of plain JSON values.
@@ -272,5 +293,6 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
   try { encoded = JSON.stringify(common); } catch { fail('invalid JSON history.'); }
   if (Buffer.byteLength(encoded) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
   return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
-    incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount };
+    incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount,
+    nativeMessageOffset: first.initialGoal === null ? 0 : 1 };
 }

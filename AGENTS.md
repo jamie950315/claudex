@@ -884,6 +884,14 @@ output instead of a userMessage. Only its exact initial delegation envelope
 establishes request context; preserve the event's assistant role and full inert
 payload. The same narrow predicate permits its owned Codex checkpoint. Generic
 assistant-only history, arbitrary tool outputs and malformed envelopes still fail.
+An initial native goal may have no API user item. Accept only a stable owned
+authoritative rollout proving the exact initial active goal, marked goal context,
+thread/turn/cwd identities, every API assistant completion and its final boundary.
+Recheck the source inode and goal prefix across both API passes. Preserve the goal
+as inert assistant-role historical data, never a fabricated user prompt or an
+instruction to run inference. Missing, ambiguous or changed proof still blocks.
+Carry the additional canonical message offset into native image evidence and
+include the resolver in packaged engines and cold-verification cache identity.
 
 Claude 2.1.281 stores original input images under its private per-UID temporary
 project/session image cache, but may persist resized previews in JSONL. When an
