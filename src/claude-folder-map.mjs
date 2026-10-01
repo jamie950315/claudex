@@ -7,6 +7,7 @@ import { isDesktopTracked } from './desktop-enrollment.mjs';
 
 const MAX_ENTRIES = 4096;
 const MAX_BYTES = 2 * 1024 * 1024;
+const MAX_UNAVAILABLE_REPORTS = 20;
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const REMOTE_ID = /^cse_[A-Za-z0-9_-]{1,200}$/;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -119,7 +120,9 @@ export async function publishClaudeFolderMap({ root, state } = {}) {
 
   const ownersPath = join(root, 'owners');
   const ownersIdentity = selected.length ? await privateDirectory(ownersPath) : null;
-  const snapshots = [], entries = [], remoteIds = new Set(), checkedCwds = new Set();
+  const snapshots = [], entries = [], remoteIds = new Set(), checkedCwds = new Map();
+  const unavailable = [];
+  let unavailableCount = 0;
   for (const record of selected) {
     const snapshot = await readMetadata(join(ownersPath, `${hash(record.conversationId)}.json`));
     const owner = snapshot.data;
@@ -129,16 +132,22 @@ export async function publishClaudeFolderMap({ root, state } = {}) {
       fail('saved owner identity or Remote Control registration does not match its ledger.');
     if (owner.pending != null || owner.reset != null) return { changed: false, entries: null, deferred: 'owner_transition' };
     if (!checkedCwds.has(record.cwd)) {
-      let canonical;
-      try { canonical = await realpath(record.cwd); }
-      catch (error) {
-        // A removed project directory (for example a deleted worktree) only
-        // loses its own folder override; it does not invalidate other rows.
-        if (['ENOENT', 'ENOTDIR'].includes(error.code)) continue;
-        throw error;
+      let available;
+      try {
+        available = await realpath(record.cwd) === record.cwd && (await lstat(record.cwd)).isDirectory();
+      } catch (error) {
+        if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error;
+        available = false;
       }
-      if (canonical !== record.cwd || !(await lstat(record.cwd)).isDirectory()) fail('source cwd is not an existing canonical directory.');
-      checkedCwds.add(record.cwd);
+      checkedCwds.set(record.cwd, available);
+    }
+    // A removed, renamed (an alias left behind) or replaced project directory only
+    // loses its own folder override. The alias is never followed or adopted.
+    if (!checkedCwds.get(record.cwd)) {
+      unavailableCount++;
+      if (unavailable.length < MAX_UNAVAILABLE_REPORTS)
+        unavailable.push({ conversationId: record.conversationId, reason: 'source cwd is not an existing canonical directory.' });
+      continue;
     }
     snapshots.push(snapshot);
     remoteIds.add(owner.remoteId);
@@ -163,7 +172,8 @@ export async function publishClaudeFolderMap({ root, state } = {}) {
     }
   };
   await recheck();
-  if (previous?.text === text) return { changed: false, entries: entries.length, deferred: null };
+  const report = unavailableCount ? { unavailable, unavailableCount } : {};
+  if (previous?.text === text) return { changed: false, entries: entries.length, deferred: null, ...report };
 
   const temporary = join(root, `.folder-map.${randomUUID()}.tmp`);
   const file = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
@@ -178,7 +188,7 @@ export async function publishClaudeFolderMap({ root, state } = {}) {
     await rename(temporary, path); published = true;
     const directory = await open(root, constants.O_RDONLY | constants.O_NOFOLLOW);
     try { await directory.sync(); } finally { await directory.close(); }
-    return { changed: true, entries: entries.length, deferred: null };
+    return { changed: true, entries: entries.length, deferred: null, ...report };
   } finally {
     await file.close();
     if (!published) {

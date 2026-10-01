@@ -230,8 +230,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           } catch (error) { folderResourceError = reason(error); throw error; }
         }
         if (folderResourceError) throw new Error(folderResourceError);
+        // Rows whose project directory moved or disappeared are omitted, not errors.
         folderProjection = { state: map.deferred ? 'deferred' : 'ready', entries: map.entries,
-          deferred: map.deferred, resource: folderResource, updatedAt: now() };
+          deferred: map.deferred, resource: folderResource, updatedAt: now(),
+          ...(map.unavailableCount ? { unavailableCount: map.unavailableCount, unavailable: map.unavailable } : {}) };
       } catch (error) {
         // Presentation failures remain explicit without interrupting native
         // user work or changing the conversation coordinator's write guards.

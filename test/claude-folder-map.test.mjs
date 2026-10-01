@@ -56,8 +56,30 @@ test('an owner whose working directory was removed only loses its own folder ove
   const removed = join(f.root, 'removed-worktree');
   const gone = await f.addOwner({ remoteId: 'cse_removed', cwd: removed });
   gone.record.cwd = removed; f.state.conversations[gone.record.conversationId].cwd = removed;
-  assert.deepEqual(await f.publish(), { changed: true, entries: 1, deferred: null });
+  assert.deepEqual(await f.publish(), { changed: true, entries: 1, deferred: null, unavailableCount: 1,
+    unavailable: [{ conversationId: gone.record.conversationId, reason: 'source cwd is not an existing canonical directory.' }] });
   assert.deepEqual(JSON.parse(await readFile(f.path, 'utf8')).entries, [{ remoteId: 'cse_kept', canonicalCwd: f.cwd, verified: true }]);
+});
+
+test('a moved project or non-directory cwd only loses its own row and is never followed', async () => {
+  const f = await fixture();
+  await f.addOwner({ remoteId: 'cse_kept' });
+  const renamed = join(f.root, 'renamed-project'), alias = join(f.root, 'old-project'), file = join(f.root, 'not-a-directory');
+  await mkdir(renamed, { mode: 0o700 });
+  await symlink(renamed, alias);
+  await writeFile(file, 'file', { mode: 0o600 });
+  const ids = [];
+  for (const [remoteId, cwd] of [['cse_alias', alias], ['cse_file', file]]) {
+    const owner = await f.addOwner({ remoteId, cwd });
+    owner.record.cwd = cwd; f.state.conversations[owner.record.conversationId].cwd = cwd;
+    ids.push(owner.record.conversationId);
+  }
+  const result = await f.publish();
+  assert.deepEqual({ ...result, unavailable: undefined }, { changed: true, entries: 1, deferred: null, unavailable: undefined, unavailableCount: 2 });
+  assert.deepEqual(result.unavailable.map(item => item.conversationId).sort(), [...ids].sort());
+  assert.ok(result.unavailable.every(item => /not an existing canonical directory/.test(item.reason)));
+  assert.deepEqual(JSON.parse(await readFile(f.path, 'utf8')).entries, [{ remoteId: 'cse_kept', canonicalCwd: f.cwd, verified: true }]);
+  assert.equal((await lstat(alias)).isSymbolicLink(), true);
 });
 
 test('stopped enrollments revoke their folder rows without reading owner metadata', async () => {

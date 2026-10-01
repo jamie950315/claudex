@@ -491,6 +491,10 @@ worker crashes. Preserve the saved native identity/path and pending evidence.
 A removed saved working directory (such as a cleaned-up Codex worktree) is the
 same kind of explicit hold (CLAUDEX_TRACKED_CWD_UNAVAILABLE), never a worker
 crash or a substitute directory; the folder map omits only that owner's row.
+The same applies when the saved cwd is no longer canonical (a renamed project
+leaving a symlink alias) or not a directory: never follow or adopt the alias.
+Omitted rows are reported as bounded folderProjection.unavailable diagnostics
+while the projection stays ready; relocation needs its explicit protocol.
 By user decision such a conversation is frozen: when a native adapter reports
 any of its saved cwds absent, global collection defers its superseded-original,
 dependency-anchor and current-side verification and never retires its snapshots

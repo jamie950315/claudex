@@ -237,6 +237,19 @@ test('opt-in folder maps update during discovery refreshes without adding native
   assert.deepEqual(f.calls.track, ['/new']);
 });
 
+test('moved project rows stay ready presentation diagnostics instead of a folder error', async () => {
+  const f = await fixture(); let pass;
+  const unavailable = [{ conversationId: 'moved', reason: 'source cwd is not an existing canonical directory.' }];
+  await f.run({ maxPasses: 2, config: { folderProjection: { enabled: true, cachePath: '/synthetic-cache' } },
+    publishFolders: async () => ({ changed: true, entries: 3, deferred: null, unavailable, unavailableCount: 1 }),
+    maintainFolders: async () => ({ changed: false }),
+    sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.folderProjection.state, 'ready');
+  assert.equal(pass.folderProjection.entries, 3);
+  assert.equal(pass.folderProjection.unavailableCount, 1);
+  assert.deepEqual(pass.folderProjection.unavailable, unavailable);
+});
+
 test('folder presentation errors are exposed without allocating replacement owners or interrupting sync', async () => {
   const f = await fixture(); let pass;
   await f.run({ maxPasses: 2, config: { folderProjection: { enabled: true } },
