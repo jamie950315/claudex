@@ -85,7 +85,7 @@ export class CodexWebSocketClient extends EventEmitter {
       });
       this.ws.on('message', (data, binary) => this.receive(data, binary));
       const result = await this.request('initialize', {
-        clientInfo: { name: 'claudex', version: '1.0.1' },
+        clientInfo: { name: 'claudex', version: '1.0.2' },
         capabilities: { experimentalApi: true },
       });
       await this.send({ method: 'initialized', params: {} });

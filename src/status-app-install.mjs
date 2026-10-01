@@ -156,7 +156,7 @@ export async function buildStatusApp({ root, appPath, identity, run = execute, s
 <key>CFBundleName</key><string>Claudex Status</string>
 <key>CFBundleDisplayName</key><string>Claudex Status</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.0.1</string><key>CFBundleVersion</key><string>1.0.1</string>
+<key>CFBundleShortVersionString</key><string>1.0.2</string><key>CFBundleVersion</key><string>1.0.2</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string><key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/><key>ClaudexRoot</key><string>${xml(root)}</string>
 `);
