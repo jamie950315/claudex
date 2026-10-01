@@ -276,7 +276,9 @@ async function collaborationProcessesStopped(root, absent, inspectProcesses) {
     if (!Number.isSafeInteger(execution.pid) || execution.pid <= 1) throw new Error('Cannot verify collaboration shutdown: native process identity is missing.');
     if (execution.processInventoryRequired && !execution.ownedProcesses)
       throw new Error('Cannot verify collaboration shutdown: native descendant identities are missing.');
-    if (execution.processInventoryError)
+    // A controller-attested resolution closes only the unrecorded-descendant gap;
+    // the leader, its group and every recorded descendant must still be absent.
+    if (execution.processInventoryError && !(task.status === 'failed' && task.resolution?.processInventoryReconciled === true))
       throw new Error('Cannot verify collaboration shutdown: native process inventory is incomplete.');
     if (execution.ownedProcesses) {
       const proof = await inspectProcesses(execution.ownedProcesses);

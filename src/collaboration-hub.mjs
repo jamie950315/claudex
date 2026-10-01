@@ -491,8 +491,14 @@ export class CollaborationHub extends EventEmitter {
             throw new Error('Recorded native process identity is missing or ambiguous.');
           if (execution.processInventoryRequired && !execution.ownedProcesses)
             throw new Error('Recorded native descendant identities are missing; process absence cannot be established.');
-          if (execution.processInventoryError)
-            throw new Error('Recorded native process inventory is incomplete; descendant absence cannot be established.');
+          // An interrupted inventory cannot prove that unrecorded descendants exited.
+          // Only an explicit controller attestation of that inspection may close it.
+          let processInventoryReconciliation;
+          if (execution.processInventoryError) {
+            if (params.processInventoryReconciled !== true)
+              throw new Error('Recorded native process inventory is incomplete; descendant absence cannot be established without explicit process inventory reconciliation.');
+            processInventoryReconciliation = { notes: text(params.processInventoryNotes, 'process inventory reconciliation notes', 4096) };
+          }
           let ownedProcessInspection;
           if (execution.ownedProcesses) {
             ownedProcessInspection = await this.inspectProcesses(execution.ownedProcesses);
@@ -511,7 +517,8 @@ export class CollaborationHub extends EventEmitter {
             previousRevision: task.revision, inspectedAt: proof.inspectedAt, pid,
             processAbsent: true, groupAbsent: true, resolvedAt: Date.now(), controller: actor.peer,
             ...(ownedProcessInspection ? { ownedProcessInspection } : {}),
-            ...(workspaceReconciliation ? { workspaceReconciled: true, workspaceReconciliation } : {}) };
+            ...(workspaceReconciliation ? { workspaceReconciled: true, workspaceReconciliation } : {}),
+            ...(processInventoryReconciliation ? { processInventoryReconciled: true, processInventoryReconciliation } : {}) };
           task.status = 'failed';
         } else if (method === 'send') {
           text(params.message, 'message');

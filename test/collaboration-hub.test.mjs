@@ -283,7 +283,35 @@ test('an incomplete process inventory never becomes resolution proof after the s
     processInventoryRequired: true, processInventoryError: true, ownedProcesses: [{ pid: 123456, ppid: 1,
       pgid: 123456, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }] } });
   await assert.rejects(hub.dispatch(resolution(hub, task)), /inventory is incomplete/);
+  await assert.rejects(hub.dispatch(resolution(hub, task, { processInventoryReconciled: true })), /process inventory reconciliation notes/);
   assert.equal((await status(hub, task.id)).status, 'uncertain');
+});
+
+test('an attested incomplete inventory resolves only after recorded processes are absent', async t => {
+  let childAbsent = false, calls = 0;
+  const ownedProcesses = [123456, 123457].map((pid, index) => ({ pid, ppid: index ? 123456 : 1,
+    pgid: pid, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }));
+  const { root, hub } = await setup(t, async () => { calls++; return { text: 'Unexpected replay' }; }, {
+    inspectProcessGroup: pid => ({ pid, processAbsent: true, groupAbsent: true, inspectedAt: 123 }),
+    inspectProcesses: records => ({ inspectedAt: 123, processes: records.map((row, index) => ({ ...row, absent: !index || childAbsent })) }),
+  });
+  const task = await uncertainFixture(hub, root, { lastExecution: { generation: 1, pid: 123456,
+    processInventoryRequired: true, processInventoryError: true, ownedProcesses } });
+  const notes = 'No process has a working directory or command line under the task workspace.';
+  const attested = { processInventoryReconciled: true, processInventoryNotes: notes };
+  await assert.rejects(hub.dispatch(resolution(hub, task, attested)), /descendants must all be confirmed absent/);
+  assert.equal((await status(hub, task.id)).status, 'uncertain');
+  childAbsent = true;
+  const request = resolution(hub, task, attested);
+  await hub.dispatch(request);
+  assert.equal((await hub.dispatch(request)).replayed, true);
+  const done = await status(hub, task.id);
+  assert.equal(done.status, 'failed');
+  assert.equal(done.resolution.processInventoryReconciled, true);
+  assert.deepEqual(done.resolution.processInventoryReconciliation, { notes });
+  assert.equal(done.lastExecution.processInventoryError, true);
+  assert.deepEqual(done.lastExecution.ownedProcesses, ownedProcesses);
+  assert.equal(calls, 0);
 });
 
 test('known failure without a native spawn clears only its unused inventory requirement', async t => {

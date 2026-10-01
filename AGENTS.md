@@ -219,6 +219,9 @@ its exit; retire it from the persisted inventory so the 256-record bound covers
 unresolved descendants, not every short-lived test/tool process of a long
 invocation. The leader is never retired, retained identities never change, and
 a reused leader PID or too many concurrently unresolved descendants still fail.
+An interrupted inventory stays uncertain and blocks shutdown verification until
+controller resolve supplies processInventoryReconciled plus nonempty notes, with
+the leader, group and recorded descendants absent; keep the original evidence.
 
 `bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
 Controller-only chat_list/chat_send/chat_status coordinate exact native sessions

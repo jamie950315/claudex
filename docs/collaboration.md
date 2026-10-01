@@ -408,8 +408,10 @@ to regain availability. Completed work remains readable. Cancellation targets on
 the invocation's verified owned processes and does not undo file changes.
 Native tools can create separate process groups. One shared metadata sampler
 records observed same-user descendants through exact ancestry, PID, UID, process
-group and UTC start identity, with at most 256 records per invocation. Individual
-signals recheck those identities. This does not capture every instantaneous fork
+group and UTC start identity. A descendant whose start identity is absent from a
+complete sample has exited and is retired, so the 256-record bound applies to
+descendants that are still unresolved, not to every short-lived test or tool
+process of a long invocation. Individual signals recheck those identities. This does not capture every instantaneous fork
 or provide isolation against hostile same-user processes. Primary-group closure
 remains required. Missing, changed or incomplete inventories retain uncertainty;
 they never authorize replay or a successful shutdown report.
@@ -432,6 +434,15 @@ partial changes and their disposition. This is an explicit controller attestatio
 not an automatic filesystem validation. The receipt preserves these notes and the
 task's exact directory grants. It never deletes files, rolls back edits or bypasses
 the process-absence and revision checks.
+
+An interrupted descendant inventory (for example, one that exceeded its bound)
+cannot prove that unrecorded descendants exited. After inspecting the machine for
+processes still working in the task's directories, the controller may also supply
+`processInventoryReconciled: true` and nonempty `processInventoryNotes` (at most
+4,096 bytes) describing that inspection. The leader, its process group and every
+recorded descendant must still be absent; the receipt keeps the notes and the
+original incomplete inventory. Only a resolved, attested task stops blocking the
+collaboration shutdown check used by Quit.
 
 ## Verification scope
 

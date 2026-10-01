@@ -188,6 +188,23 @@ test('known no-spawn failure permits stopped status while incomplete native inve
   await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
     tasks: { worker: { status: 'uncertain', lastExecution: { pid: 54321, processInventoryError: true } } } }));
   await assert.rejects(controlCollaboration('status', f.options, { ...f.deps, absent: () => true }), /inventory is incomplete/);
+  // An unattested failed resolution, or an attestation on unresolved work, keeps the hold.
+  const ownedProcesses = [{ pid: 54321, ppid: 1, pgid: 54321, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }];
+  for (const task of [{ status: 'failed', resolution: { outcome: 'failed' } },
+    { status: 'uncertain', resolution: { processInventoryReconciled: true } }]) {
+    await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1, tasks: { worker: { ...task,
+      lastExecution: { pid: 54321, processInventoryRequired: true, processInventoryError: true, ownedProcesses } } } }));
+    await assert.rejects(controlCollaboration('status', f.options, { ...f.deps, absent: () => true }), /inventory is incomplete/);
+  }
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1, tasks: { worker: {
+    status: 'failed', resolution: { outcome: 'failed', processInventoryReconciled: true },
+    lastExecution: { pid: 54321, processInventoryRequired: true, processInventoryError: true, ownedProcesses } } } }));
+  let leaderAbsent = false;
+  const deps = { ...f.deps, absent: () => leaderAbsent, inspectProcesses: records => ({ inspectedAt: 123,
+    processes: records.map(row => ({ ...row, absent: leaderAbsent })) }) };
+  assert.equal((await controlCollaboration('status', f.options, deps)).stopped, false);
+  leaderAbsent = true;
+  assert.equal((await controlCollaboration('status', f.options, deps)).stopped, true);
 });
 
 test('new installation journals exact artifact and does not bootstrap again', async () => {
