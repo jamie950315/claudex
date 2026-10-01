@@ -110,8 +110,9 @@ titles require selection. Claude Desktop must remain open with its supported
 bridge loaded, but you do not need to open the recipient chat. Busy work, drafts
 or permission prompts can delay delivery. Ended chats may queue messages for
 resumption; a queued note is not a delivered note. A recipient ACK confirms receipt,
-not completion of the requested action. Claude's wake bridge is version-pinned
-and may need adaptation after a vendor frontend update.
+not completion of the requested action. Claude's renderer adapters follow cached
+frontend deployments through unique structural anchors. Newly installed graphs
+require an idle Claude restart; unsupported structural changes are reported.
 
 See the [collaboration guide](docs/collaboration.md) for the MCP tools, follow-ups,
 cancellation, workspace ownership, and failure handling.

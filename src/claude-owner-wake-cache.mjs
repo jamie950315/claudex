@@ -1,9 +1,6 @@
-import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve, isAbsolute } from 'node:path';
-import { privateDirectory } from './storage.mjs';
-import { inspectFolderCache, replaceFolderCacheSource, sha256 } from './claude-folder-cache.mjs';
-import { ensureClaudeFolderCache } from './claude-folder-install.mjs';
+import { resolve, isAbsolute } from 'node:path';
+import { transformAnchoredOwner } from './claude-frontend-anchors.mjs';
 
 export const OWNER_WAKE_TARGET_URL = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/cc43287c9-6nYyeS-m.js';
 export const OWNER_WAKE_SOURCE_SHA256 = '62d14b5c968d83d64bc392656dafa4a5610409ad9757e168be6b7367a466a35a';
@@ -14,17 +11,19 @@ function canonical(value) {
     throw new Error('Claude owner wake requires canonical absolute paths');
 }
 
-export function buildClaudeOwnerWakeBootstrap({ root, runtimeSource }) {
+export function buildClaudeOwnerWakeBootstrap({ root, runtimeSource, client = { exported: 'Ga', path: './shared-common-mcp-msg-4-EwhHCIE8.js' }, assetName = 'cc43287c9-6nYyeS-m.js' }) {
   canonical(root);
   if (!runtimeSource?.includes('export function createClaudeOwnerWakeRuntime(')) throw new Error('Owner wake runtime source is unavailable');
   const runtime = runtimeSource.replace(/^export /gm, '');
-  // Ga is the native lookup of an already attached user-config stdio client by
+  // The graph resolves the native lookup of an already attached user-config stdio client by
   // exact UUID. directMcpCallTool addresses the separate managed/builtin pool;
   // LocalSessions.mcpCallTool requires a Local session. Neither addresses RC.
-  return `\nimport{Ga as __cldxOwnerWakeClient}from"./shared-common-mcp-msg-4-EwhHCIE8.js";\nconst __cldxOwnerWake=(()=>{${runtime}\nconst local=globalThis["claude.web"]?.LocalSessions;const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded cc43287c9-6nYyeS-m.js");wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return wake})();\n`;
+  return `\nimport{${client.exported} as __cldxOwnerWakeClient}from${JSON.stringify(client.path)};\nconst __cldxOwnerWake=(()=>{${runtime}\nconst local=globalThis["claude.web"]?.LocalSessions;const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded "+${JSON.stringify(assetName)});wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return wake})();\n`;
 }
 
 export function transformClaudeOwnerWakeSource(source, options) {
+  if (options?.bindings) return transformAnchoredOwner(source, options.bindings,
+    buildClaudeOwnerWakeBootstrap({ ...options, client: options.bindings.client }));
   // Exact unique anchors are also exercised with a synthetic component fixture.
   // Code/RC renders o8, not the shared Chat/Cowork FM component. X is the
   // current native session reference, including switches within the same pane.
@@ -41,32 +40,14 @@ export function transformClaudeOwnerWakeSource(source, options) {
 }
 
 export function buildClaudeOwnerWakeSource(source, options) {
-  if (typeof source !== 'string' || sha256(Buffer.from(source)) !== OWNER_WAKE_SOURCE_SHA256)
-    throw new Error('Claude owner wake frontend source is unvalidated');
-  if (!source.includes('Fa as m') || !source.includes('from"./vendor-frame-DjE7Zk5R.js"')
-    || !source.includes('function o8(e){') || !source.includes('var n9=p(o8)')
-    || !source.includes('Br as Et') || !source.includes('from"./shared-common-mcp-msg-4-EwhHCIE8.js"')
-    || !source.includes('submitMessage:e=>void pS(e)'))
-    throw new Error('Claude owner wake native component binding changed');
+  if (!options?.bindings) throw new Error('Claude owner wake frontend source is unvalidated');
   return transformClaudeOwnerWakeSource(source, options);
 }
 
 /** Independent resource-specific recovery journal; earlier folder/chat resources
  * and their originals and receipts remain untouched. No app restart is performed.
  */
-export async function ensureClaudeOwnerWakeCache({ root, home = homedir(), cachePath }) {
+export async function ensureClaudeOwnerWakeCache({ root, home = homedir(), cachePath, graph }) {
   canonical(root); canonical(home);
-  const expected = join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data', OWNER_WAKE_CACHE_FILENAME);
-  if (cachePath !== undefined && cachePath !== expected) throw new Error('Claude owner wake cache path does not match its pinned resource');
-  const stateRoot = join(root, 'ui-owner-wake', OWNER_WAKE_CACHE_FILENAME);
-  await privateDirectory(stateRoot);
-  const runtimeSource = await readFile(new URL('./claude-owner-wake-runtime.mjs', import.meta.url), 'utf8');
-  return ensureClaudeFolderCache({ root: stateRoot, cachePath: expected }, {
-    sourceHash: OWNER_WAKE_SOURCE_SHA256, targetURL: OWNER_WAKE_TARGET_URL,
-    buildCandidate: ({ original }) => {
-      const options = { targetURL: OWNER_WAKE_TARGET_URL };
-      const { source } = inspectFolderCache(original, options);
-      return replaceFolderCacheSource(original, buildClaudeOwnerWakeSource(source, { root, runtimeSource }), options);
-    },
-  });
+  return (await import('./claude-renderer-adapters.mjs')).ensureClaudeRendererAdapter({ root, home, cachePath, graph, adapter: 'ownerWake' });
 }

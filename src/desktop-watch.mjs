@@ -1,4 +1,4 @@
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { lstat, realpath } from 'node:fs/promises';
 import { coldImportHint, coldImportInactive, persistentColdEligible, persistentColdNativeIdentity } from './desktop-watch-hints.mjs';
 import { ColdVerificationCache, captureVerificationFiles } from './cold-verification-cache.mjs';
@@ -12,6 +12,8 @@ import { RECONNECT_ID } from './sync-event-source.mjs';
 import { activeDesktopState, activeDesktopConversationIds, isDesktopTracked } from './desktop-enrollment.mjs';
 import { handleClaudeOwnerWake } from './claude-owner-wake.mjs';
 import { syncEventKey } from './sync-events.mjs';
+import { startClaudeRendererMaintenance } from './claude-renderer-maintenance.mjs';
+import { claudeCacheDirectory } from './claude-frontend-graph.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Forked Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)(?: \[Codex thread [a-f0-9-]+\])?$/i;
@@ -73,6 +75,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   events,
   publishFolders = publishClaudeFolderMap,
   createHandoffPublisher = createClaudeDesktopHandoffPublisher,
+  startRendererMaintenance = startClaudeRendererMaintenance,
   maintainFolders = async options => (await import('./claude-folder-presentation-cache.mjs')).ensureClaudeFolderPresentationCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
   if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
@@ -153,6 +156,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let blockedSourceDiagnostics = new Map();
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
+  let rendererAdapters = null;
+  const autoRenderers = config.rendererAdapters?.enabled !== false && (config.rendererAdapters?.enabled === true
+    || config.folderProjection?.enabled === true && typeof config.folderProjection.cachePath === 'string'
+      && dirname(config.folderProjection.cachePath) === claudeCacheDirectory());
   let localHandoff = null;
   const handoffs = config.desktopLocalHandoff?.enabled === true ? createHandoffPublisher({ root,
     desktopHome: config.desktopHome ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
@@ -178,7 +185,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
     currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
     reusedVerificationCount: reusedConversations.size, fullVerificationCount,
-    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff,
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, rendererAdapters,
     synchronization: blocked || hookBlock ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
     ...blockingStatus(), ...latestFields, blocked: blocked ?? hookBlock };
     const guardHealth = value => value && Object.fromEntries(Object.entries(value)
@@ -230,7 +237,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     if (foldersEnabled) {
       try {
         const map = await publishFolders({ root, state });
-        if (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000) {
+        if (autoRenderers) {
+          folderResource = rendererAdapters?.adapters?.folders ?? null;
+          folderResourceError = folderResource?.status === 'skipped' ? folderResource.reason
+            : rendererAdapters?.state === 'skipped' ? rendererAdapters.reason : null;
+        } else if (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000) {
           lastFolderMaintenance = now();
           try {
             folderResource = await maintainFolders({ root, cachePath: config.folderProjection.cachePath });
@@ -253,8 +264,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     return writeProgress();
   };
   return withLock(join(root, 'watch.lock'), async () => {
-    await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
+    let rendererMaintenance;
     try {
+      if (autoRenderers) rendererMaintenance = await startRendererMaintenance({ root,
+        folders: config.folderProjection?.enabled === true, signal, onStatus: value => { rendererAdapters = value; } });
+      await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
       while (!signal?.aborted && passes++ < maxPasses) {
         const broadPass = !events || eventBatch === null || eventBatch.some(event => event.kind === 'reconnect');
         presentationScope = broadPass ? undefined : [];
@@ -718,6 +732,6 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
       // A busy ClaudeOwner must keep its live handle; closing it can interrupt user work.
       throw error;
-    }
+    } finally { await rendererMaintenance?.close(); }
   }, { recoverDead: true });
 }

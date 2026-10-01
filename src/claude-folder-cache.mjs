@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import * as zlib from 'node:zlib';
+import { transformAnchoredFolder } from './claude-frontend-anchors.mjs';
 
 const { constants, crc32, zstdCompressSync, zstdDecompressSync } = zlib;
 
@@ -38,7 +39,9 @@ export function inspectFolderCache(bytes, { targetURL = FOLDER_TARGET_URL } = {}
       || !bytes.subarray(eof0 - 32, eof0).equals(createHash('sha256').update(key).digest()))
     fail('cache checksum mismatch');
   const decoded = zstdDecompressSync(body, { maxOutputLength: 2 * 1024 * 1024 });
-  return { start, eof1, body, decoded, source: decoded.toString('utf8'), sourceHash: sha256(decoded) };
+  const source = decoded.toString('utf8');
+  if (!Buffer.from(source).equals(decoded)) fail('source is not canonical UTF-8');
+  return { start, eof1, body, metadata, decoded, source, sourceHash: sha256(decoded) };
 }
 
 /** Rebuild the observed cache streams, retaining the key and all unrelated
@@ -99,18 +102,15 @@ export function buildFolderSourceProof(source, overrides) {
 /** Native readFileAtCwd retains Claude's workspace/path policy. The reader is
  * disabled outside Desktop, and only the exact private JSON map is read.
  */
-export function buildDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource = '', anchorSource = '', wakeSource = '', registryRoot }) {
-  if (sha256(Buffer.from(source)) !== FOLDER_SOURCE_SHA256) fail('unvalidated frontend source');
-  if (!source.includes('Nd as Ne') || !source.includes('Ga as m')
-    || !source.includes('from"./shared-common-mcp-msg-0-z_pDg4P7.js"')
-    || !source.includes('from"./vendor-frame-DjE7Zk5R.js"')) fail('native folder imports changed');
-  return transformDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource, registryRoot });
+export function buildDynamicFolderSource(source, options) {
+  if (!options?.bindings) fail('unvalidated frontend source anchors');
+  return transformDynamicFolderSource(source, options);
 }
 
-/** Exact compiled-hook transform, also exercised with a small synthetic module.
- * Production installation always passes the full source hash check above.
+/** Production uses validated AST bindings. The former exact transform remains
+ * available for legacy synthetic hook tests, never for automatic installation.
  */
-export function transformDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource = '', anchorSource = '', wakeSource = '', registryRoot }) {
+export function transformDynamicFolderSource(source, { root, bindings, assetName = 'shared-19-DDVvTIwQ.js', projectionSource, runtimeSource, handoffSource = '', anchorSource = '', wakeSource = '', registryRoot }) {
   if (typeof root !== 'string' || !root.startsWith('/') || /[\0\r\n]/.test(root)) fail('invalid mapping root');
   const projection = projectionSource.replace(/^export /gm, '');
   const runtime = runtimeSource.replace(/^import[^\n]+\n/, '').replace(/^export /gm, '');
@@ -120,12 +120,13 @@ export function transformDynamicFolderSource(source, { root, projectionSource, r
   if ((handoff || wake) && (typeof registryRoot !== 'string' || !registryRoot.startsWith('/') || /[\0\r\n]/.test(registryRoot)))
     fail('native handoffs require a canonical Desktop registry root');
   const begin = source.indexOf('function _K('), end = source.indexOf('function vK(', begin);
-  if (begin < 0 || end < begin || source.split('function _K(').length !== 2
-    || source.split('function vK(').length !== 2) fail('project-key function changed');
+  if (!bindings && (begin < 0 || end < begin || source.split('function _K(').length !== 2
+    || source.split('function vK(').length !== 2)) fail('project-key function changed');
   const original = source.slice(begin, end).replace('function _K(', 'function __cldxNativeProjectKey(');
   const lifecycle = handoff ? `,createHandoff:o=>createClaudeDesktopHandoffRuntime({...o,registryRoot:${JSON.stringify(registryRoot)},readManifest:typeof Ne?.readFileAtCwd==="function"?()=>Ne.readFileAtCwd(${JSON.stringify(root)},"desktop-handoff.json"):null,native:Ne,normalizeAnchor:typeof normalizeClaudeLocalFolderAnchor==="function"?normalizeClaudeLocalFolderAnchor:undefined,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex native handoff] "+e)})` : '';
   const wakeLifecycle = wake ? `,createWake:()=>createClaudeChatWakeRuntime({registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>Ne.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),native:Ne,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake status] "+e)})` : '';
-  const bootstrap = `const __cldx=(()=>{${projection}\n${anchor}\n${handoff}\n${wake}\n${runtime}\nconst runtime=createClaudeFolderRuntime({readMap:typeof Ne?.readFileAtCwd==="function"?()=>Ne.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)${lifecycle}${wakeLifecycle}});console.warn("[Claudex folder mapping] loaded shared-19-DDVvTIwQ.js");return runtime})();`;
+  const bootstrap = `const __cldx=(()=>{${projection}\n${anchor}\n${handoff}\n${wake}\n${runtime}\nconst runtime=createClaudeFolderRuntime({readMap:typeof Ne?.readFileAtCwd==="function"?()=>Ne.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)${lifecycle}${wakeLifecycle}});console.warn("[Claudex folder mapping] loaded "+${JSON.stringify(assetName)});return runtime})();`;
+  if (bindings) return transformAnchoredFolder(source, bindings, bootstrap.replace(/\bNe\b/g, bindings.native));
   let result = source.slice(0, begin) + bootstrap + original
     + 'function _K(e){return __cldx.lookup(e)?.projectKey??__cldxNativeProjectKey(e)}' + source.slice(end);
   const listBegin = result.indexOf('var bK=[];'), listEnd = result.indexOf('function SK(', listBegin);

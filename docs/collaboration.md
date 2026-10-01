@@ -176,32 +176,35 @@ Sending defaults to `wake: true`; this can consume native account allowance.
 untrusted-app input route, inheriting settings. An unloaded original is opened by
 exact native deep link before owner discovery; no CLI writer is created. A busy
 owner refuses before injection and the message stays queued. Claude uses a
-version-pinned renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
+structurally validated renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
 bridge, with exact identity, idle, draft, permission and terminal guards. Setup
 registers that narrow endpoint; loading an upgraded renderer requires an idle
 Claude restart. Claude Desktop must remain open with the bridge loaded, but the
 specific recipient chat does not need to be selected or open. Busy work, drafts
-and permission prompts may delay dispatch. A vendor frontend update can require
-bridge adaptation. Bridge unavailability is not delivery and must not be presented
-as successful wake. Its separately pinned asset starts independently of sidebar
-visibility or folder grouping, with a recoverable private installation journal.
-Lifecycle and wait-reason diagnostics contain no message text or native metadata
-values. Authorized acceptance on a previously pinned resource verified one wake,
-one native input, the rendered requested reply and a matching ACK in the same
-original Claude conversation, without a manually submitted prompt or ACK. Every
-new frontend pin needs separate native reception acceptance; synthetic tests or
-an installed cache alone do not establish this. The current pin is
-`shared-18-C2EdCha1.js`, decoded SHA-256
-`cde0289f1e687e301c1dc7fb8ae632b6591bed5f5a7a5112a84a20797d60affb`,
-cache file `838048883e85ff4b_0`, with an independent journal under
-`ui-chat-wake/838048883e85ff4b_0/ui-folder-compat`. Earlier originals and receipts
-remain unchanged. The formerly installed `shared-18-BYDVwU8Z.js` is absent from
-the current entry's dependency graph. The new pin retains the same LocalSessions
-API and native dispatch guards, but requires separate live reception acceptance.
-After installation and an idle Claude restart, expect
-`[Claudex chat wake] loaded shared-18-C2EdCha1.js` and
-`[Claudex chat wake] started` in `claude.ai-web.log`. Neither line is a message
-receipt or proof of a rendered reply.
+and permission prompts may delay dispatch. The watcher follows the latest fetched
+frontend index/import graph in Claude's HTTP cache and resolves the session-action
+module's LocalSessions import through unique capability and shortcut anchors.
+Unsupported structural changes skip the adapter explicitly, never guess between
+candidates or fall back to an older graph. The whole transformed module passes
+syntax validation before installation. Its independent bootstrap starts at module
+load regardless of sidebar visibility; folders do not embed a second consumer.
+
+Each cache filename has an independent immutable original and prepared/installed
+journal under `ui-chat-wake/<cache filename>/ui-folder-compat`. Earlier originals
+and receipts remain; idempotent reinstall and restore keep their exact bindings.
+The cache watcher acts after writes and cannot guarantee installation before the
+renderer evaluates a newly fetched module. Each newly installed graph therefore
+requires a normal idle Claude restart. No automatic app reload or native owner
+restart is performed. `renderer-adapters-status.json` reports the selected entry,
+installed/skipped adapters, bounded reasons and activation requirements.
+
+Expect `[Claudex chat wake] loaded <asset filename>` and `[Claudex chat wake]
+started` in `claude.ai-web.log`. They prove bootstrap execution, not native receipt
+or a rendered reply. Runtime diagnostics contain no message text or native metadata
+values. Authorized acceptance on an earlier resource verified one wake, one native
+input, the requested rendered reply and matching ACK in the same original chat.
+That remains historical evidence. Every new graph needs separate live reception
+acceptance; syntax, synthetic and copied-cache checks do not establish it.
 A running tool is not interrupted; a
 message can wait until the current turn ends. SessionEnd never consumes messages.
 Known ended chats may still receive queued messages. Their computed

@@ -1,8 +1,8 @@
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { privateDirectory } from './storage.mjs';
-import { FOLDER_CACHE_FILENAME, FOLDER_SOURCE_SHA256, FOLDER_TARGET_URL } from './claude-folder-cache.mjs';
-import { buildClaudeFolderCandidate, ensureClaudeFolderCache, restoreClaudeFolderCache } from './claude-folder-install.mjs';
+import { FOLDER_CACHE_FILENAME } from './claude-folder-cache.mjs';
+import { restoreClaudeFolderCache, snapshotClaudeCache } from './claude-folder-install.mjs';
+import { ensureClaudeRendererAdapter, restoreClaudeFolderGenerations } from './claude-renderer-adapters.mjs';
 
 const LEGACY_FILENAME = '15bc54146dcdb4ce_0';
 const cacheDirectory = home => join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
@@ -18,33 +18,27 @@ export function claudeFolderPresentationCachePath(home = homedir(), savedPath) {
 export function claudeFolderPresentationManifestPath(root, cachePath) {
   const name = basename(cachePath);
   if (name === LEGACY_FILENAME) return join(root, 'ui-folder-compat', 'manifest.json');
-  if (name !== FOLDER_CACHE_FILENAME) throw new Error('Claude folder presentation cache path does not match its pinned resource');
-  return join(root, 'ui-folders', FOLDER_CACHE_FILENAME, 'ui-folder-compat', 'manifest.json');
-}
-
-async function resourceOptions(options) {
-  const { root, cachePath } = options;
-  if (basename(cachePath) !== FOLDER_CACHE_FILENAME) throw new Error('Claude folder presentation cache path does not match its pinned resource');
-  const stateRoot = join(root, 'ui-folders', FOLDER_CACHE_FILENAME);
-  await privateDirectory(stateRoot);
-  return { options: { ...options, root: stateRoot }, dependencies: {
-    sourceHash: FOLDER_SOURCE_SHA256, targetURL: FOLDER_TARGET_URL,
-    buildCandidate: ({ original }) => buildClaudeFolderCandidate({ ...options, original }),
-  } };
+  if (!/^[a-f0-9]{16}_0$/.test(name)) throw new Error('Claude folder presentation cache path does not match its native resource');
+  return join(root, 'ui-folders', name, 'ui-folder-compat', 'manifest.json');
 }
 
 export async function ensureClaudeFolderPresentationCache(options) {
-  const resource = await resourceOptions(options);
-  return ensureClaudeFolderCache(resource.options, resource.dependencies);
+  return ensureClaudeRendererAdapter({ ...options, adapter: 'folders' });
 }
 
 export async function restoreClaudeFolderPresentationCache(options) {
   // Restoring a still-configured legacy installation uses its original bindings.
-  // New installs never upgrade or restore that earlier journal.
-  if (basename(options.cachePath) === LEGACY_FILENAME) return restoreClaudeFolderCache(options, {
-    sourceHash: '01bc6cf8d85b25edda8a396f00e664872a03288f6c06aff03d1aa0f2fa466ebf',
-    targetURL: 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-23-Db0dcGkF.js',
-  });
-  const resource = await resourceOptions(options);
-  return restoreClaudeFolderCache(resource.options, resource.dependencies);
+  // Restore all later owned generations even while a legacy hint is configured.
+  let legacy;
+  if (basename(options.cachePath) === LEGACY_FILENAME) {
+    try {
+      await snapshotClaudeCache(join(options.root, 'ui-folder-compat', 'manifest.json'), 16 * 1024);
+      legacy = await restoreClaudeFolderCache(options, {
+        sourceHash: '01bc6cf8d85b25edda8a396f00e664872a03288f6c06aff03d1aa0f2fa466ebf',
+        targetURL: 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-23-Db0dcGkF.js',
+      });
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  const current = await restoreClaudeFolderGenerations(options);
+  return { ...current, changed: current.changed || legacy?.changed === true, ...(legacy ? { legacy } : {}) };
 }

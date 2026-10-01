@@ -268,7 +268,7 @@ test('missing prerequisite desktop apps do not install services or touch synchro
   assert.equal(await appPrivateJSON(join(root, 'config.json')), null);
 });
 
-test('setup repins enabled legacy folder presentation without reinstalling a live synchronization owner', async t => {
+test('setup enables graph maintenance and updates the legacy folder hint without reinstalling a live synchronization owner', async t => {
   const { root, home, base, setup, events, providers } = await fixture(t, { ownerAllowed: false });
   const cacheDir = join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
   const config = { version: 1, mode: 'desktop', allProjects: true, projects: [], binary: providers.codex.binary,
@@ -278,10 +278,14 @@ test('setup repins enabled legacy folder presentation without reinstalling a liv
   await writeFile(join(root, 'desktop-launcher.json'), JSON.stringify({ launcher: join(base, 'bin', 'claudex-codex.mjs') }), { mode: 0o600 });
   await writeFile(join(root, 'service-install.json'), JSON.stringify({ cli: join(base, 'bin', 'claudex.mjs') }), { mode: 0o600 });
   await setup.setup();
-  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), { ...config,
+  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), { ...config, rendererAdapters: { enabled: true },
     folderProjection: { enabled: true, cachePath: join(cacheDir, FOLDER_CACHE_FILENAME) } });
   assert.ok(events.some(([kind, input]) => kind === 'folders' && input.cachePath === join(cacheDir, FOLDER_CACHE_FILENAME)));
   assert.ok(!events.some(([kind]) => ['desktop', 'service'].includes(kind)));
+
+  await writeFile(join(root, 'config.json'), JSON.stringify({ ...config, rendererAdapters: { enabled: false } }), { mode: 0o600 });
+  await setup.setup();
+  assert.equal((await appPrivateJSON(join(root, 'config.json'))).rendererAdapters.enabled, false);
 
   const disabled = { ...config, folderProjection: { ...config.folderProjection, enabled: false } };
   await writeFile(join(root, 'config.json'), JSON.stringify(disabled), { mode: 0o600 });

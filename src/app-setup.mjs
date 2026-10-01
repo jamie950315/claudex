@@ -290,8 +290,10 @@ export class AppSetup {
             configPath: join(this.home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
             command: this.node,
             args: [this.collaborationCli, 'desktop-wake-mcp', '--root', join(this.root, 'collaboration'), '--peer', 'claude'] });
-          await this.desktopWakeCacheInstall({ root: this.root, home: this.home });
-          await this.desktopOwnerWakeCacheInstall({ root: this.root, home: this.home });
+          const chatCache = await this.desktopWakeCacheInstall({ root: this.root, home: this.home });
+          const ownerCache = await this.desktopOwnerWakeCacheInstall({ root: this.root, home: this.home });
+          if (chatCache?.status === 'skipped' || ownerCache?.status === 'skipped')
+            notes.collaboration = chatCache?.reason ?? ownerCache?.reason;
         } catch (error) { notes.collaboration = safeFailure(error); }
       }
       // Native writer ownership gates only synchronization configuration, not independent collaboration.
@@ -441,12 +443,14 @@ export class AppSetup {
 
   async configureFolderPresentation(config) {
     this.requireWritable();
-    if (config.folderProjection?.enabled === false) return;
+    const disabled = config.folderProjection?.enabled === false;
     const cachePath = claudeFolderPresentationCachePath(this.home, config.folderProjection?.cachePath);
     // Presentation is independently guarded. A cache mismatch cannot prevent the base watcher from being installed.
     try {
-      await this.foldersInstall({ root: this.root, cachePath });
-      const next = { ...config, folderProjection: { enabled: true, cachePath }, desktopLocalHandoff: config.desktopLocalHandoff ?? { enabled: true } };
+      const resource = disabled ? null : await this.foldersInstall({ root: this.root, home: this.home, cachePath });
+      const next = { ...config, rendererAdapters: { enabled: config.rendererAdapters?.enabled !== false },
+        ...(!disabled ? { folderProjection: { enabled: true, cachePath: resource?.cachePath ?? cachePath },
+          desktopLocalHandoff: config.desktopLocalHandoff ?? { enabled: true } } : {}) };
       if (JSON.stringify(await appPrivateJSON(join(this.root, 'config.json'))) !== JSON.stringify(config))
         throw new Error('Synchronization configuration changed during folder setup; it was preserved.');
       if (JSON.stringify(next) !== JSON.stringify(config)) await writeJSON(join(this.root, 'config.json'), next);

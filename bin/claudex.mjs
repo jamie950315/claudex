@@ -59,7 +59,7 @@ const help = `Claudex: bounded conversation synchronization and opt-in model col
   claudex version-policy [strict|warn]    Show or change version-only enforcement
   claudex desktop install         Enable all-project Desktop mode at the next normal app start
   claudex desktop uninstall       Remove the owned next-start override; preserve conversations
-  claudex desktop folders enable|disable|status    Version-pinned Claude folder presentation
+  claudex desktop folders enable|disable|status    Structurally verified Claude folder presentation
   claudex desktop handoffs enable|disable|status   Archive verified Local predecessors using native Claude
   claudex collaboration help       Cross-model work protocol (explicit model execution)
 
@@ -161,6 +161,7 @@ async function main() {
       output({ enabled: config.folderProjection?.enabled === true,
         installation: config.folderProjection?.cachePath
           ? await readJSON(claudeFolderPresentationManifestPath(root, config.folderProjection.cachePath), null) : null,
+        maintenance: await readJSON(join(root, 'renderer-adapters-status.json'), null),
         watcher: (await readJSON(join(root, 'watcher-status.json'), null))?.folderProjection ?? null });
       return;
     }
@@ -188,8 +189,9 @@ async function main() {
         const map = await publishClaudeFolderMap({ root, state });
         if (map.deferred) throw new Error('Complete the pending native operation before enabling folder presentation.');
         const resource = await ensureClaudeFolderPresentationCache({ root, cachePath });
-        await writeJSON(configPath, { ...config, folderProjection: { enabled: true, cachePath } });
-        output({ enabled: true, map, resource, note: 'Restart Claude only when idle once to load the presentation adapter. Subsequent verified owners update through the read-only map without reload.' });
+        if (resource.status === 'skipped') throw new Error(resource.reason);
+        await writeJSON(configPath, { ...config, rendererAdapters: { enabled: true }, folderProjection: { enabled: true, cachePath: resource.cachePath } });
+        output({ enabled: true, map, resource, note: 'The watcher follows cached frontend deployments automatically. Restart Claude only when idle to load each newly installed frontend graph; map changes need no reload.' });
       } else if (positionals[2] === 'disable') {
         const previous = await readJSON(join(root, 'desktop-handoff.json'), null);
         await writeJSON(join(root, 'desktop-handoff.json'), { version: 1, kind: 'claude-local-archive', generatedAt: null,

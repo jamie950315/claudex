@@ -39,11 +39,12 @@ async function syncDirectory(path) {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
-async function snapshot(path, maximum = MAX_CACHE_BYTES) {
+export async function snapshotClaudeCache(path, maximum = MAX_CACHE_BYTES) {
+  await directory(dirname(path));
   const before = await lstat(path, { bigint: true });
   checkFile(before);
   if (before.size <= 0n || before.size > BigInt(maximum)) fail('file size is outside its bound');
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const opened = await file.stat({ bigint: true });
     checkFile(opened);
@@ -63,6 +64,8 @@ async function snapshot(path, maximum = MAX_CACHE_BYTES) {
     return { bytes, hash: sha256(bytes), info: named };
   } finally { await file.close(); }
 }
+
+const snapshot = snapshotClaudeCache;
 
 async function optionalSnapshot(path, maximum) {
   try { return await snapshot(path, maximum); }
@@ -88,7 +91,7 @@ async function stage(path, bytes) {
   return snapshot(path, Math.max(bytes.length, 1));
 }
 
-function validateManifest(value, { root, cachePath, sourceHash }) {
+export function validateClaudeCacheManifest(value, { root, cachePath, sourceHash }) {
   const keys = ['version', 'root', 'cachePath', 'sourceHash', 'originalHash', 'patchedHash', 'previousPatchedHash', 'phase', 'action', 'stagingName'];
   if (!value || Object.getPrototypeOf(value) !== Object.prototype
       || Object.keys(value).sort().join(',') !== keys.sort().join(',') || value.version !== 1
@@ -108,7 +111,7 @@ function parseManifest(data, bindings) {
   let value;
   try { value = JSON.parse(data.bytes.toString('utf8')); }
   catch { fail('malformed manifest'); }
-  return validateManifest(value, bindings);
+  return validateClaudeCacheManifest(value, bindings);
 }
 
 async function writeManifest(path, value, expected) {
@@ -145,16 +148,16 @@ function ownsCurrent(manifest, hash) {
     || manifest.phase === 'prepared' && hash === manifest.previousPatchedHash;
 }
 
-export async function buildClaudeFolderCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource,
+export async function buildClaudeFolderCandidate({ original, root, targetURL, bindings, assetName, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource,
   registryRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
-  const entry = inspectFolderCache(original);
+  const entry = inspectFolderCache(original, { targetURL });
   const projection = projectionSource ?? await readFile(new URL('./claude-folder-projection.mjs', import.meta.url), 'utf8');
   const runtime = runtimeSource ?? await readFile(new URL('./claude-folder-runtime.mjs', import.meta.url), 'utf8');
   const handoff = handoffSource ?? await readFile(new URL('./claude-desktop-handoff-runtime.mjs', import.meta.url), 'utf8');
   const wake = wakeSource ?? await readFile(new URL('./claude-chat-wake-runtime.mjs', import.meta.url), 'utf8');
   const anchor = anchorSource ?? await readFile(new URL('./claude-folder-anchor.mjs', import.meta.url), 'utf8');
   return replaceFolderCacheSource(original, buildDynamicFolderSource(entry.source,
-    { root, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, wakeSource: wake, registryRoot }));
+    { root, bindings, assetName, projectionSource: projection, runtimeSource: runtime, handoffSource: handoff, anchorSource: anchor, wakeSource: wake, registryRoot }), { targetURL });
 }
 
 async function operate(action, options, dependencies) {
@@ -223,14 +226,15 @@ async function operate(action, options, dependencies) {
       patchedHash: action === 'install' ? candidateHash : current.hash === original.hash ? manifest.patchedHash : current.hash,
       previousPatchedHash: null, phase: 'installed', action, stagingName: null };
     if (current.hash === candidateHash) {
+      await dependencies.beforePublish?.({ action, cachePath, manifestPath });
       if (!manifest || JSON.stringify(next) !== JSON.stringify(manifest))
-        await writeManifest(manifestPath, validateManifest(next, bindings), manifestSnapshot);
+        await writeManifest(manifestPath, validateClaudeCacheManifest(next, bindings), manifestSnapshot);
       return { status: action === 'restore' ? 'restored' : 'installed', changed: false, recovered: manifest?.phase === 'prepared',
         cacheHash: candidateHash, originalHash: original.hash };
     }
     next.phase = 'prepared'; next.stagingName = `.claudex-folder-${randomUUID()}.tmp`;
     if (action === 'install' && current.hash !== original.hash) next.previousPatchedHash = current.hash;
-    manifestSnapshot = await writeManifest(manifestPath, validateManifest(next, bindings), manifestSnapshot);
+    manifestSnapshot = await writeManifest(manifestPath, validateClaudeCacheManifest(next, bindings), manifestSnapshot);
     const candidatePath = join(cacheParent, next.stagingName);
     let staged;
     try {
@@ -241,6 +245,7 @@ async function operate(action, options, dependencies) {
       await assertUnchanged(manifestPath, manifestSnapshot, 16 * 1024);
       await assertUnchanged(backupPath, original);
       await assertUnchanged(candidatePath, staged);
+      await dependencies.beforePublish?.({ action, cachePath, manifestPath });
       await rename(candidatePath, cachePath);
       await syncDirectory(cacheParent);
       const published = await snapshot(cachePath);
@@ -250,7 +255,7 @@ async function operate(action, options, dependencies) {
       await checkDirectories();
       await assertUnchanged(cachePath, published);
       next.phase = 'installed'; next.previousPatchedHash = null; next.stagingName = null;
-      await writeManifest(manifestPath, validateManifest(next, bindings), manifestSnapshot);
+      await writeManifest(manifestPath, validateClaudeCacheManifest(next, bindings), manifestSnapshot);
       return { status: action === 'restore' ? 'restored' : 'installed', changed: true, recovered: manifest?.phase === 'prepared',
         cacheHash: candidateHash, originalHash: original.hash };
     } finally {
@@ -260,9 +265,9 @@ async function operate(action, options, dependencies) {
   }, { recoverDead: true });
 }
 
-/** Install/update only the version-locked static UI resource. Test dependencies
- * supply a synthetic source hash and pure builder; production uses the pinned
- * codec and checked-in projection/runtime sources. Never starts native work.
+/** Install/update only a validated static UI resource. The expected hash binds
+ * the discovered immutable original; the caller validates structural bindings
+ * and syntax. Test dependencies can supply a synthetic builder. No native work.
  */
 export function ensureClaudeFolderCache(options, dependencies = {}) {
   return operate('install', options, dependencies);

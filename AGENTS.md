@@ -271,9 +271,9 @@ Without a launcher configuration, discovery uses the native control endpoint.
 Native owner IPC supports untrusted-input
 wake in the original Desktop chat, including deep-link opening of unloaded originals;
 busy/native-owner changes never authorize a second writer. Claude wake uses the
-version-pinned renderer and narrow Desktop MCP claim/receipt endpoint.
-Claude wake has its own pinned frontend asset and recoverable `ui-chat-wake`
-installation journal. New resource pins keep a separate journal under the exact
+structurally validated renderer and narrow Desktop MCP claim/receipt endpoint.
+Claude wake has its own discovered frontend asset and recoverable `ui-chat-wake`
+installation journal. New resources keep a separate journal under the exact
 cache filename; preserve earlier resource originals and receipts. It starts at
 module load, independently of folder/sidebar
 subscriptions; a sidebar resource existing on disk is not proof of a running
@@ -281,7 +281,7 @@ consumer. Keep bounded lifecycle/wait-reason diagnostics without message content
 Authorized native acceptance on an earlier pinned resource verified an idle
 original Claude chat waking through its existing Desktop owner, rendering the
 requested reply and acknowledging once under the same UI/CLI identities. No
-manual prompt or acknowledgement was submitted. Every new pin requires separate
+manual prompt or acknowledgement was submitted. Every new graph requires separate
 live reception acceptance; a cache installation or native account check is
 insufficient. This does not revalidate other frontend presentation adapters
 against the same vendor update.
@@ -778,14 +778,15 @@ when requested; pinning is not automatic and does not merge a Local entry.
 The required sidebar behavior is placement under the same existing local
 project/folder group as the source. Pinning, title prefixes, and a new same-name
 custom group are not substitutes. `desktop folders enable|disable|status` manages
-an opt-in, version-pinned presentation adapter for the observed Claude frontend.
-It patches only one owned HTTP cache resource, preserving an immutable original
+an opt-in, structurally validated presentation adapter for the cached Claude frontend.
+It patches only the uniquely proved sidebar HTTP cache resource, preserving an immutable original
 and a prepared/installed recovery journal under the private root. It does not
 modify ASAR, signatures, login data or writer routing, and never edits native
 session registry files directly. Native archival remains a separate guarded action.
-Unknown source bytes/schema or foreign cache changes fail explicitly. A changed
-frontend asset URL may require revalidation; never claim arbitrary future builds
-are covered. Initial installation/upgrades require an idle Claude app restart
+Missing or ambiguous structural anchors, unsupported cache schemas, transformed
+syntax errors and foreign changes to an installer-owned cache entry fail explicitly.
+Asset URL and whole-source hash changes alone do not require a human re-pin.
+Initial installation and each newly installed graph require an idle Claude app restart
 because the app can retain old resources in memory despite a page reload.
 The watcher publishes only verified current owner RC IDs and canonical cwd to
 private `folder-map.json`. The renderer polls it through the existing guarded
@@ -1171,53 +1172,83 @@ transaction, and a busy refusal keeps the owner. The next delivery, required
 maintenance/recovery or explicit wake restarts it with the same Remote Control
 identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
-The separately pinned Code adapter signals selection/mount from o8's current
-X.id/X.type and native submit through its current-reference getter Oe() before
-early refusals, for native bridge references
-and exact published folder-map RC IDs only, with bounded debounce. The shared
-Chat/Cowork FM component is not the Code RC view. Never await or retry native send.
-It looks up the already attached user-config stdio client by exact UUID through
-Ga in shared-common-mcp-msg-4-EwhHCIE8.js and uses the existing
-claudex-desktop-wake controller endpoint. Require the pinned open MessagePort
-transport and Claudex server identity; native session proxy clients are refused.
-The managed/builtin directMcpCallTool registry does not contain this stdio server.
-Never connect, replace or close a native MCP client, change connector approval,
-borrow a Local session, inspect prompt content or send model input. Its
-independent ui-owner-wake/<cache filename> journal preserves earlier resources.
-Owner-wake inbox keys are separate from completion hints. Under coordinator
-ownership, validate the current tracked pair, stable saved owner registration,
-canonical existing native paths, pending/block/retired/alias/relocation guards and
-app-stop hold, then activate only that normal owner without title reconciliation.
-This path refreshes idle eviction without Codex transport, sync, archival proof
-publication or replaying queued messages; normal native startup validation still
-applies and native RC owns delivery.
-Ignored hints have bounded diagnostics and no automatic recovery/retry. Synthetic
-tests and isolated cache recovery do not establish live renderer reception;
-each new resource pin still requires separate native UI acceptance.
-Promoted recovery reconnects the normal owner even without a cached handle.
+The Code owner-wake adapter resolves the native session component structurally:
+initialSessionId/sessionType, submitMessage/getComposerSnapshot, the asynchronous
+send's waitForImagesReady and its retained current-reference getter. The same
+reference supplies selection and native send; signal submit before early refusals.
+Require unique complete binding relationships, never select the shared Chat/Cowork
+view or a wrapper merely exposing a similar submit interface. Never await or retry
+native send. Resolve the exported exact-UUID lookup by its read-only getState,
+Object.entries(localClients), uuid/client destructuring and exact UUID return.
+Import that already attached user-config stdio client lookup from the current
+reachable module. Preserve the runtime's open MessagePort transport and Claudex
+server identity checks; native session proxy clients are refused. Never connect,
+replace or close a client, change connector approval, borrow a Local session,
+inspect prompt content or send model input. The managed/builtin directMcpCallTool
+pool is separate and must not be used. Independent ui-owner-wake/<cache filename>
+journals preserve earlier originals and receipts.
+Owner-wake inbox keys stay separate from completion hints. All tracked-pair,
+registration, canonical native-path, pending/block/retired/alias/relocation and
+app-stop guards remain unchanged. Owner activation refreshes idle eviction without
+Codex transport, sync, archival proof publication or queued-message replay. Native
+RC owns delivery. Promoted recovery reconnects the normal owner without a cached
+handle. Ignored hints have bounded diagnostics, no automatic wake retry.
 
-The checked frontend entry is index-DaQFBRai.js. Current resource pins are
-owner-wake cc43287c9-6nYyeS-m.js (6ce7062c8d22ac79_0), imported by the
-Code route c11959232-Dt6Kvr8c.js, chat-wake
-shared-18-C2EdCha1.js (838048883e85ff4b_0), and folders
-shared-19-DDVvTIwQ.js (9cebfb8fc5a9f22f_0). That entry does not import the
-formerly patched shared-16-K1Vl3wzJ.js, shared-18-BYDVwU8Z.js or
-shared-23-Db0dcGkF.js. All new pins remain pending live reception acceptance;
-retain earlier native acceptance as historical evidence only. Preserve the earlier
-shared-16-B0kpSitB.js owner-wake journal/original; its bootstrap loaded but its
-FM hooks do not address Code. Each resource
-logs its bounded loaded asset name; owner/chat wake also log started. These
-lines prove bootstrap execution, never native receipt or reconnect completion.
-Owner wake reports API availability, exact stdio lookup/connection and
-selection/submit received, matched,
-ignored, called, accepted/deferred or fixed failure reasons. Never log native
-error/receipt text, IDs, paths or input. Limit duplicate lines to once per second
-and all runtime diagnostics to 64 per thirty seconds; no diagnostic timers/retries.
-Folder generations now use ui-folders/<cache filename>/ui-folder-compat; setup
-and CLI enable migrate only the exact previous supported configuration path
-after installation, preserving older originals/journals and disabled choices.
-The running watcher retains its initial configuration; load the migrated folder
-path on the next normally verified service start, never by killing busy owners.
+src/claude-frontend-graph.mjs discovers the latest fetched index entry from the
+private HTTP cache using verified Chromium HttpResponseInfo response timestamps,
+never filesystem mtime (patches change mtime). Require a unique newest entry and
+its root bootstrap. Follow literal static/re-export/dynamic imports within the
+exact Anthropic assets origin; only reachable cached modules qualify. Missing
+lazy chunks are counted, never fetched or replaced with an older graph. Cache
+recency cannot prove which graph a running renderer has already evaluated.
+Resolve LocalSessions from its globalThis["claude.web"] binding/export/import and
+React hooks from their public getter, definition and export/import relationships.
+The folder adapter requires the unique repoInfo/isScratchWorkspace/environmentId
+project-key function and sidebar sessionStatus/hasActiveSessions/disambiguationText
+aggregation. Retain its native key/label fallback and extend its compiled memo
+cache with the map subscription version. The independent chat-wake adapter uses
+the session-action module's unique optional native forkSession capability check,
+reopenClosed and amber_tributary_lantern_overview_toggle shortcut anchors. Folder
+bootstrap no longer embeds another chat-wake consumer. Every adapter's entire
+transformed module must pass Acorn syntax validation before any cache publication.
+
+src/claude-renderer-maintenance.mjs is owned by the normal Desktop watcher under
+watch.lock. It performs one startup cache pass, then debounces cache-directory
+notifications and serially re-discovers/reapplies all enabled adapters. Exact
+metadata/key hints suppress unchanged JS entries and unrelated HTTP/image writes;
+anonymous notifications still recheck the graph. Hints never authorize patches. Existing
+normal native folder cache configurations opt in; graphical setup records
+rendererAdapters.enabled. An explicit false disables automatic cache maintenance.
+A disabled folder choice stays disabled. Cache maintenance reads no conversation
+histories and does not renew archive intents, advance checkpoints, start owners,
+run inference, restart services or reload apps. The 30-second status heartbeat
+remains status-only. Check app-stop before publication and stop/drain cache work
+before releasing watch.lock. Bounded renderer-adapters-status.json and watcher
+rendererAdapters report matched/installed/skipped assets and activation limits;
+folder status also exposes this maintenance report.
+
+Each resource uses <adapter>/<cache filename>/ui-folder-compat, with adapter
+ui-folders, ui-chat-wake or ui-owner-wake, an immutable original and a
+prepared/installed journal.
+Observed source hashes bind recovery evidence, not a checked-in allowlist.
+Never overwrite foreign changes or prune earlier generations. Re-discovery reads
+validated originals for installed/prepared generations; reinstall is idempotent.
+Restore uses the journal-bound original URL/hash, including older resources.
+The watcher receives notifications after cache writes: it cannot guarantee that a
+new asset is patched before the renderer first evaluates it. A new installation
+is restart-required; unchanged cache is load-not-verified, never proof of live
+reception. The user performs each idle Claude restart; automatic reload/quit is
+forbidden. Unsupported structural/API changes remain explicit skipped adapters.
+
+Each resource logs its bounded loaded asset name; owner/chat wake also log started.
+These lines prove bootstrap execution, never native receipt or owner reconnect.
+Owner wake keeps API availability, exact stdio lookup/connection and selection/
+submit received, matched, ignored, called, accepted/deferred or fixed failure
+reasons. Never log native error/receipt text, IDs, paths or input. Limit duplicate
+lines to once per second and runtime diagnostics to 64 per thirty seconds, without
+diagnostic timers/retries. Synthetic, syntax and copied-cache checks are not live
+renderer acceptance. Earlier native reception evidence remains historical; each
+new graph requires separate live reception acceptance before claiming delivery.
 
 The integrated real SDK/coordinator proof preserves four canonical messages
 through a cold migration, restart and then a six-message next-delta checkpoint;

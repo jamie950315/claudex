@@ -10,14 +10,14 @@ import { join } from 'node:path';
 import { transformDynamicFolderSource, FOLDER_CACHE_FILENAME } from '../src/claude-folder-cache.mjs';
 import { claudeFolderPresentationCachePath, claudeFolderPresentationManifestPath, ensureClaudeFolderPresentationCache } from '../src/claude-folder-presentation-cache.mjs';
 
-test('only the known legacy folder path advances to the new pinned resource', async () => {
+test('legacy folder path remains a setup hint while discovery selects the current resource', async () => {
   const home = '/synthetic/home', directory = join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
   const current = join(directory, FOLDER_CACHE_FILENAME);
   assert.equal(claudeFolderPresentationCachePath(home), current);
   assert.equal(claudeFolderPresentationCachePath(home, join(directory, '15bc54146dcdb4ce_0')), current);
   assert.equal(claudeFolderPresentationCachePath(home, current), current);
   assert.equal(claudeFolderPresentationCachePath(home, '/unknown/cache'), '/unknown/cache');
-  await assert.rejects(ensureClaudeFolderPresentationCache({ root: '/synthetic/state', cachePath: '/unknown/cache' }), /pinned resource/);
+  await assert.rejects(ensureClaudeFolderPresentationCache({ root: '/synthetic/state', cachePath: '/unknown/cache' }), /native resource directory/);
 });
 
 test('CLI folder status reads the configured resource journal without hiding the legacy receipt', async t => {

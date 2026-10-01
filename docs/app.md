@@ -91,7 +91,7 @@ or the user's global Node.js installation.
 - An independent collaboration broker and the `claudex-work` MCP connections.
 - The narrow `claudex-desktop-wake` MCP endpoint and supported Claude frontend
   bridge for authorized messages to existing native chats.
-- A separately pinned conversation adapter that requests reconnection when an
+- A separately validated conversation adapter that requests reconnection when an
   exact managed Claude entry is opened or submitted to. It requires the native
   MCP device grant and a published owner map. Claude RC delivers queued messages;
   this activation does not submit model input or require Codex to be connected.
@@ -155,11 +155,18 @@ to message expiry. Check the message receipt: queued, native acceptance and the
 recipient's ACK are different states. ACK means receipt, not completion of the
 requested action.
 
-The Claude wake bridge is pinned to a verified frontend resource. Loading an
-upgraded bridge requires a normal idle Claude restart; later vendor updates can
-require adaptation. An unavailable bridge is reported, never treated as delivery.
-Each new resource pin has its own recovery journal, retaining earlier resource
-originals and installation receipts.
+The Desktop watcher automatically follows the latest fetched frontend entry and
+its cached import graph for folders, chat wake and owner wake. It resolves unique
+structural bindings, checks transformed module syntax and keeps an immutable
+original plus recovery journal for each cache filename. Earlier originals and
+receipts remain. Missing/ambiguous anchors or foreign cache changes skip that
+adapter explicitly in `renderer-adapters-status.json`; no older graph is guessed.
+
+Cache notifications arrive after writes, so patching cannot be guaranteed before
+first renderer evaluation. Loading each newly installed graph requires a normal
+idle Claude restart. The watcher never reloads/quits Claude or restarts native
+work. A successful cache installation is not proof of renderer reception or
+message delivery. The 30-second history-watcher heartbeat remains status-only.
 See [native-chat messaging](collaboration.md#messages-to-existing-native-chats)
 for supported discovery, delivery and recovery boundaries.
 
