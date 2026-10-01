@@ -278,6 +278,8 @@ test('stopped readers restore bound original images without editing native previ
 
 test('stopped reset generations authenticate lastReset and still guard the retained original', async t => {
   const f = await fixture(t), previousId = randomUUID(), previousPath = sessionPath(f.claudeHome, f.cwd, previousId);
+  // Promotion retains this operation flag in the current ledger record.
+  f.record.contextReset = true;
   const previousText = encodeClaude({ meta: { id: previousId, cwd: f.cwd, timestamp: '2026-09-25T00:00:00Z' }, messages: f.messages }, previousId).text;
   await writeFile(previousPath, previousText, { mode: 0o600 });
   const info = await lstat(previousPath), operationId = 'reset-bootstrap';

@@ -559,7 +559,9 @@ export class DesktopRuntime {
       data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
       return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(path)).size, digest: fingerprint(data.common) };
     }
-    if (record.managed && !this.owners.has(record.conversationId) && !record.contextReset && !record.readResetSourceForOperation)
+    // contextReset survives promotion; only an explicit retained-source
+    // recovery read needs to start an owner. Pending writes recover separately.
+    if (record.managed && !this.owners.has(record.conversationId) && !record.readResetSourceForOperation)
       return this.readStoppedOwner(record, owner => this.inspectClaude(record, owner, { stopped: true }));
     const owner = record.managed ? await this.owner(record.conversationId, record.cwd, record.title,
       { forceNormal: record.verified === true && record.packetVersion === 2 && !record.readResetSourceForOperation }) : null;
