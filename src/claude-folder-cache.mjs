@@ -5,15 +5,16 @@ const { constants, crc32, zstdCompressSync, zstdDecompressSync } = zlib;
 
 const HEADER_MAGIC = 0xfcfb6d1ba7725c30n;
 const FOOTER_MAGIC = 0xf4fa6f45970d41d8n;
-const TARGET_URL = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-23-Db0dcGkF.js';
-export const FOLDER_SOURCE_SHA256 = '01bc6cf8d85b25edda8a396f00e664872a03288f6c06aff03d1aa0f2fa466ebf';
+export const FOLDER_TARGET_URL = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-19-DDVvTIwQ.js';
+export const FOLDER_CACHE_FILENAME = '9cebfb8fc5a9f22f_0';
+export const FOLDER_SOURCE_SHA256 = 'c036136315a82ada3fcca90ea62ed77c5696d49c97509b186364cf0ad9713784';
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = message => { throw new Error(`Claude folder resource: ${message}`); };
 
 /** Strict reader for the observed Chromium simple-cache v5 static JS entry.
  * No HTTP metadata, source code, credentials, or session data is executed.
  */
-export function inspectFolderCache(bytes, { targetURL = TARGET_URL } = {}) {
+export function inspectFolderCache(bytes, { targetURL = FOLDER_TARGET_URL } = {}) {
   if (typeof crc32 !== 'function' || typeof zstdCompressSync !== 'function' || typeof zstdDecompressSync !== 'function')
     fail('this optional adapter requires Node with Zstandard and CRC32 support');
   if (!Buffer.isBuffer(bytes) || bytes.length < 128 || bytes.length > 2 * 1024 * 1024)
@@ -79,16 +80,15 @@ export function buildFolderSourceProof(source, overrides) {
         || !entry.projectKey.startsWith('/') || typeof entry.label !== 'string' || !entry.label.trim())
       fail('invalid exact-session project override');
   }
-  const marker = 'function UP(e){';
+  const marker = 'function _K(e){';
   if (source.split(marker).length !== 2) fail('project-key function changed');
   const lookup = `const __cldxFolders=Object.freeze(${JSON.stringify(overrides)});function __cldxFolder(e){return e.type==="bridge"?__cldxFolders[String(e.id??"").replace(/^cse_/,"session_")]:void 0}`;
   let result = source.replace(marker, `${lookup}${marker}const f=__cldxFolder(e);if(f)return f.projectKey;`);
-  const begin = result.indexOf('var KP=[],'), end = result.indexOf('function JP(', begin);
+  const begin = result.indexOf('var bK=[];'), end = result.indexOf('function SK(', begin);
   if (begin < 0 || end < begin) fail('project-list function changed');
   let list = result.slice(begin, end);
   for (const [before, after] of [
     ['name:a?.name??e', 'name:__cldxFolder(n)?.label??a?.name??e'],
-    ['name:i?.name??e', 'name:__cldxFolder(t)?.label??i?.name??e'],
   ]) {
     if (list.split(before).length !== 2) fail('project label expression changed');
     list = list.replace(before, after);
@@ -101,6 +101,16 @@ export function buildFolderSourceProof(source, overrides) {
  */
 export function buildDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource = '', anchorSource = '', wakeSource = '', registryRoot }) {
   if (sha256(Buffer.from(source)) !== FOLDER_SOURCE_SHA256) fail('unvalidated frontend source');
+  if (!source.includes('Nd as Ne') || !source.includes('Ga as m')
+    || !source.includes('from"./shared-common-mcp-msg-0-z_pDg4P7.js"')
+    || !source.includes('from"./vendor-frame-DjE7Zk5R.js"')) fail('native folder imports changed');
+  return transformDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource, registryRoot });
+}
+
+/** Exact compiled-hook transform, also exercised with a small synthetic module.
+ * Production installation always passes the full source hash check above.
+ */
+export function transformDynamicFolderSource(source, { root, projectionSource, runtimeSource, handoffSource = '', anchorSource = '', wakeSource = '', registryRoot }) {
   if (typeof root !== 'string' || !root.startsWith('/') || /[\0\r\n]/.test(root)) fail('invalid mapping root');
   const projection = projectionSource.replace(/^export /gm, '');
   const runtime = runtimeSource.replace(/^import[^\n]+\n/, '').replace(/^export /gm, '');
@@ -109,26 +119,25 @@ export function buildDynamicFolderSource(source, { root, projectionSource, runti
   const wake = wakeSource.replace(/^export /gm, '');
   if ((handoff || wake) && (typeof registryRoot !== 'string' || !registryRoot.startsWith('/') || /[\0\r\n]/.test(registryRoot)))
     fail('native handoffs require a canonical Desktop registry root');
-  const begin = source.indexOf('function UP('), end = source.indexOf('function WP(', begin);
-  if (begin < 0 || end < begin) fail('project-key function changed');
-  const original = source.slice(begin, end).replace('function UP(', 'function __cldxNativeProjectKey(');
-  const lifecycle = handoff ? `,createHandoff:o=>createClaudeDesktopHandoffRuntime({...o,registryRoot:${JSON.stringify(registryRoot)},readManifest:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"desktop-handoff.json"):null,native:pe,normalizeAnchor:typeof normalizeClaudeLocalFolderAnchor==="function"?normalizeClaudeLocalFolderAnchor:undefined,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex native handoff] "+e)})` : '';
-  const wakeLifecycle = wake ? `,createWake:()=>createClaudeChatWakeRuntime({registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>pe.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),native:pe,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake status] "+e)})` : '';
-  const bootstrap = `const __cldx=(()=>{${projection}\n${anchor}\n${handoff}\n${wake}\n${runtime}\nreturn createClaudeFolderRuntime({readMap:typeof pe?.readFileAtCwd==="function"?()=>pe.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)${lifecycle}${wakeLifecycle}})})();`;
+  const begin = source.indexOf('function _K('), end = source.indexOf('function vK(', begin);
+  if (begin < 0 || end < begin || source.split('function _K(').length !== 2
+    || source.split('function vK(').length !== 2) fail('project-key function changed');
+  const original = source.slice(begin, end).replace('function _K(', 'function __cldxNativeProjectKey(');
+  const lifecycle = handoff ? `,createHandoff:o=>createClaudeDesktopHandoffRuntime({...o,registryRoot:${JSON.stringify(registryRoot)},readManifest:typeof Ne?.readFileAtCwd==="function"?()=>Ne.readFileAtCwd(${JSON.stringify(root)},"desktop-handoff.json"):null,native:Ne,normalizeAnchor:typeof normalizeClaudeLocalFolderAnchor==="function"?normalizeClaudeLocalFolderAnchor:undefined,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex native handoff] "+e)})` : '';
+  const wakeLifecycle = wake ? `,createWake:()=>createClaudeChatWakeRuntime({registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>Ne.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),native:Ne,hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake status] "+e)})` : '';
+  const bootstrap = `const __cldx=(()=>{${projection}\n${anchor}\n${handoff}\n${wake}\n${runtime}\nconst runtime=createClaudeFolderRuntime({readMap:typeof Ne?.readFileAtCwd==="function"?()=>Ne.readFileAtCwd(${JSON.stringify(root)},"folder-map.json"):null,onError:e=>console.warn("[Claudex folder mapping] "+e)${lifecycle}${wakeLifecycle}});console.warn("[Claudex folder mapping] loaded shared-19-DDVvTIwQ.js");return runtime})();`;
   let result = source.slice(0, begin) + bootstrap + original
-    + 'function UP(e){return __cldx.lookup(e)?.projectKey??__cldxNativeProjectKey(e)}' + source.slice(end);
-  const listBegin = result.indexOf('var KP=[],'), listEnd = result.indexOf('function JP(', listBegin);
-  if (listBegin < 0 || listEnd < listBegin) fail('project-list function changed');
+    + 'function _K(e){return __cldx.lookup(e)?.projectKey??__cldxNativeProjectKey(e)}' + source.slice(end);
+  const listBegin = result.indexOf('var bK=[];'), listEnd = result.indexOf('function SK(', listBegin);
+  if (listBegin < 0 || listEnd < listBegin || result.split('var bK=[];').length !== 2
+    || result.split('function SK(').length !== 2) fail('project-list function changed');
   let list = result.slice(listBegin, listEnd);
-  const subscribe = 'const __cldxVersion=R(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);__cldx.setRows(e,__cldxNativeProjectKey);';
+  const subscribe = 'const __cldxVersion=m(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);__cldx.setRows(e,__cldxNativeProjectKey);';
   for (const [before, after] of [
-    ['function(e,t,n){let r=L(11)', `function(e,t,n){${subscribe}let r=L(12)`],
+    ['function xK(e,t,n){let r=Q(11)', `function xK(e,t,n){${subscribe}let r=Q(12)`],
     ['if(r[0]!==s||r[1]!==c||r[2]!==e||r[3]!==i)', 'if(r[0]!==s||r[1]!==c||r[2]!==e||r[3]!==i||r[11]!==__cldxVersion)'],
     ['r[0]=s,r[1]=c,r[2]=e,r[3]=i,r[4]=l', 'r[0]=s,r[1]=c,r[2]=e,r[3]=i,r[4]=l,r[11]=__cldxVersion'],
-    ['function(e,t="recent",n=KP){let{data:r}=bn()', `function(e,t="recent",n=KP){${subscribe}let{data:r}=bn()`],
-    ['},[e,i,t,n])}', '},[e,i,t,n,__cldxVersion])}'],
     ['name:a?.name??e', 'name:__cldx.lookup(n)?.label??a?.name??e'],
-    ['name:i?.name??e', 'name:__cldx.lookup(t)?.label??i?.name??e'],
   ]) {
     if (list.split(before).length !== 2) fail('project hook expression changed');
     list = list.replace(before, after);

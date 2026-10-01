@@ -186,11 +186,22 @@ bridge adaptation. Bridge unavailability is not delivery and must not be present
 as successful wake. Its separately pinned asset starts independently of sidebar
 visibility or folder grouping, with a recoverable private installation journal.
 Lifecycle and wait-reason diagnostics contain no message text or native metadata
-values. Authorized acceptance on the current pinned resource verifies one wake,
+values. Authorized acceptance on a previously pinned resource verified one wake,
 one native input, the rendered requested reply and a matching ACK in the same
 original Claude conversation, without a manually submitted prompt or ACK. Every
 new frontend pin needs separate native reception acceptance; synthetic tests or
-an installed cache alone do not establish this.
+an installed cache alone do not establish this. The current pin is
+`shared-18-C2EdCha1.js`, decoded SHA-256
+`cde0289f1e687e301c1dc7fb8ae632b6591bed5f5a7a5112a84a20797d60affb`,
+cache file `838048883e85ff4b_0`, with an independent journal under
+`ui-chat-wake/838048883e85ff4b_0/ui-folder-compat`. Earlier originals and receipts
+remain unchanged. The formerly installed `shared-18-BYDVwU8Z.js` is absent from
+the current entry's dependency graph. The new pin retains the same LocalSessions
+API and native dispatch guards, but requires separate live reception acceptance.
+After installation and an idle Claude restart, expect
+`[Claudex chat wake] loaded shared-18-C2EdCha1.js` and
+`[Claudex chat wake] started` in `claude.ai-web.log`. Neither line is a message
+receipt or proof of a rendered reply.
 A running tool is not interrupted; a
 message can wait until the current turn ends. SessionEnd never consumes messages.
 Known ended chats may still receive queued messages. Their computed

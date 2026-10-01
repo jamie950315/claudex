@@ -278,7 +278,7 @@ cache filename; preserve earlier resource originals and receipts. It starts at
 module load, independently of folder/sidebar
 subscriptions; a sidebar resource existing on disk is not proof of a running
 consumer. Keep bounded lifecycle/wait-reason diagnostics without message content.
-Authorized native acceptance on the current pinned resource verifies an idle
+Authorized native acceptance on an earlier pinned resource verified an idle
 original Claude chat waking through its existing Desktop owner, rendering the
 requested reply and acknowledging once under the same UI/CLI identities. No
 manual prompt or acknowledgement was submitted. Every new pin requires separate
@@ -1188,6 +1188,21 @@ Ignored hints have bounded diagnostics and no automatic recovery/retry. Syntheti
 tests and isolated cache recovery do not establish live renderer reception;
 each new resource pin still requires separate native UI acceptance.
 Promoted recovery reconnects the normal owner even without a cached handle.
+
+The checked frontend entry is index-DaQFBRai.js. Current resource pins are
+owner-wake shared-16-B0kpSitB.js (9b3f1b6cc4f6eba0_0), chat-wake
+shared-18-C2EdCha1.js (838048883e85ff4b_0), and folders
+shared-19-DDVvTIwQ.js (9cebfb8fc5a9f22f_0). That entry does not import the
+formerly patched shared-16-K1Vl3wzJ.js, shared-18-BYDVwU8Z.js or
+shared-23-Db0dcGkF.js. All new pins remain pending live reception acceptance;
+retain earlier native acceptance as historical evidence only. Each resource
+logs its bounded loaded asset name; owner/chat wake also log started. These
+lines prove bootstrap execution, never native receipt or reconnect completion.
+Folder generations now use ui-folders/<cache filename>/ui-folder-compat; setup
+and CLI enable migrate only the exact previous supported configuration path
+after installation, preserving older originals/journals and disabled choices.
+The running watcher retains its initial configuration; load the migrated folder
+path on the next normally verified service start, never by killing busy owners.
 
 The integrated real SDK/coordinator proof preserves four canonical messages
 through a cold migration, restart and then a six-message next-delta checkpoint;

@@ -10,7 +10,7 @@ import { ensureClaudeFolderCache, restoreClaudeFolderCache } from '../src/claude
 
 function cacheFixture() {
   const source = `export const sample=${JSON.stringify(randomBytes(8000).toString('hex'))};`;
-  const key = Buffer.from('1/0/https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-23-Db0dcGkF.js');
+  const key = Buffer.from('1/0/https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-19-DDVvTIwQ.js');
   const header = Buffer.alloc(24);
   header.writeBigUInt64LE(0xfcfb6d1ba7725c30n); header.writeUInt32LE(5, 8); header.writeUInt32LE(key.length, 12);
   const body = zstdCompressSync(Buffer.from(source));

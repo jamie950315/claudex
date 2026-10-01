@@ -53,18 +53,19 @@ test('renderer bounds activation attempts and reports native grant refusal witho
 
 test('pinned component transformation signals on mount and native send without inspecting or changing input', async () => {
   const runtimeSource = await readFile(new URL('../src/claude-owner-wake-runtime.mjs', import.meta.url), 'utf8');
-  const fixtureSource = 'function xM(e){return e.sessionId}async function submit(c,L,ee){let U;U=await L.onSend(ee);return U}';
+  const fixtureSource = 'function FM(e){return e.sessionId}async function submit(c,L,ee){let U;U=await L.onSend(ee);return U}';
   const source = transformClaudeOwnerWakeSource(fixtureSource, { root: '/private/claudex', runtimeSource });
-  const calls = [], effects = [], events = [];
+  const calls = [], effects = [], events = [], diagnostics = [];
   const context = { globalThis: { 'claude.web': {
     LocalSessions: { readFileAtCwd: async (...args) => { calls.push(args); return { contents: JSON.stringify({ version: 1,
       entries: [{ remoteId: 'cse_open', canonicalCwd: '/synthetic/project', verified: true },
         { remoteId: 'cse_send', canonicalCwd: '/synthetic/project', verified: true }] }) }; } },
     LocalAgentModeSessions: { directMcpCallTool: async (...args) => { events.push(args); return { structuredContent: { accepted: true } }; } },
-  } }, v: (effect, deps) => { effects.push(deps); effect(); }, window: { addEventListener() {} }, console: { warn() {} },
+  } }, h: (effect, deps) => { effects.push(deps); effect(); }, window: { addEventListener() {} }, console: { warn: line => diagnostics.push(line) },
     Date, capture: null };
   runInNewContext(source, context);
-  context.xM({ sessionId: 'unrelated-native-id', conversationUuid: 'session_open' });
+  assert.deepEqual(diagnostics, ['[Claudex owner wake] loaded shared-16-B0kpSitB.js', '[Claudex owner wake] started']);
+  context.FM({ sessionId: 'unrelated-native-id', conversationUuid: 'session_open' });
   const input = { prompt: 'Private native input' }, native = { onSend: async value => { assert.equal(value, input); return 'queued by Claude'; } };
   assert.equal(await context.submit('session_send', native, input), 'queued by Claude');
   await new Promise(resolve => setImmediate(resolve));

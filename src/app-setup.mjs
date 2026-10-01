@@ -17,7 +17,7 @@ import { callCollaboration } from './collaboration-transport.mjs';
 import { installDesktopLauncher } from './desktop-install.mjs';
 import { installService, controlService } from './service.mjs';
 import { inspectServiceStart } from './service-supervisor.mjs';
-import { ensureClaudeFolderCache } from './claude-folder-install.mjs';
+import { claudeFolderPresentationCachePath, ensureClaudeFolderPresentationCache } from './claude-folder-presentation-cache.mjs';
 import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { installAppLogin } from './app-login.mjs';
@@ -60,7 +60,7 @@ export class AppSetup {
     run = execute, platform = process.platform, discover = discoverProviders, ensure = ensureProviders,
     collaborationInstall = installCollaboration, collaborationControl = controlCollaboration, desktopInstall = installDesktopLauncher,
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
-    foldersInstall = ensureClaudeFolderCache, collaborationCall = callCollaboration, desktopWakeInstall = installClaudeDesktopWake,
+    foldersInstall = ensureClaudeFolderPresentationCache, collaborationCall = callCollaboration, desktopWakeInstall = installClaudeDesktopWake,
     desktopWakeCacheInstall = ensureClaudeChatWakeCache, desktopOwnerWakeCacheInstall = ensureClaudeOwnerWakeCache,
     interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath, readOnly = false } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
@@ -414,6 +414,7 @@ export class AppSetup {
       // Reopening a fully configured app is inspection, not a request to stop live owners.
       await this.syncHooksInstall({ root: this.root, codexHome: config.codexHome, claudeHome: config.claudeHome,
         nodePath: this.node, hookPath: join(this.engineRoot, 'bin', 'claudex-sync-hook.mjs') });
+      if (config.folderProjection?.enabled === true) await this.configureFolderPresentation(config);
       return;
     }
     const lease = await this.ownership(this.root, { includeSupervisor: true });
@@ -433,15 +434,23 @@ export class AppSetup {
     await writeJSON(path, config);
     await this.syncHooksInstall({ root: this.root, codexHome: config.codexHome, claudeHome: config.claudeHome,
       nodePath: this.node, hookPath: join(this.engineRoot, 'bin', 'claudex-sync-hook.mjs') });
-    const cachePath = config.folderProjection?.cachePath ?? join(this.home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data', '15bc54146dcdb4ce_0');
+    await this.configureFolderPresentation(config);
+    await this.serviceInstall({ root: this.root, cli: this.cli, node: this.node, home: this.home,
+      path: `${join(this.runtimeDirectory, 'bin')}:/usr/bin:/bin` }, { run: this.nativeRun });
+  }
+
+  async configureFolderPresentation(config) {
+    this.requireWritable();
+    if (config.folderProjection?.enabled === false) return;
+    const cachePath = claudeFolderPresentationCachePath(this.home, config.folderProjection?.cachePath);
     // Presentation is independently guarded. A cache mismatch cannot prevent the base watcher from being installed.
     try {
       await this.foldersInstall({ root: this.root, cachePath });
-      config = { ...config, folderProjection: { enabled: true, cachePath }, desktopLocalHandoff: { enabled: true } };
-      await writeJSON(path, config);
+      const next = { ...config, folderProjection: { enabled: true, cachePath }, desktopLocalHandoff: config.desktopLocalHandoff ?? { enabled: true } };
+      if (JSON.stringify(await appPrivateJSON(join(this.root, 'config.json'))) !== JSON.stringify(config))
+        throw new Error('Synchronization configuration changed during folder setup; it was preserved.');
+      if (JSON.stringify(next) !== JSON.stringify(config)) await writeJSON(join(this.root, 'config.json'), next);
     } catch { /* inspect reports waiting; never substitute or patch an unknown frontend. */ }
-    await this.serviceInstall({ root: this.root, cli: this.cli, node: this.node, home: this.home,
-      path: `${join(this.runtimeDirectory, 'bin')}:/usr/bin:/bin` }, { run: this.nativeRun });
   }
 
   async login(provider) {

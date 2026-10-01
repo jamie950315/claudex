@@ -157,8 +157,10 @@ async function main() {
       return;
     }
     if (positionals[1] === 'folders' && positionals[2] === 'status') {
+      const { claudeFolderPresentationManifestPath } = await import('../src/claude-folder-presentation-cache.mjs');
       output({ enabled: config.folderProjection?.enabled === true,
-        installation: await readJSON(join(root, 'ui-folder-compat', 'manifest.json'), null),
+        installation: config.folderProjection?.cachePath
+          ? await readJSON(claudeFolderPresentationManifestPath(root, config.folderProjection.cachePath), null) : null,
         watcher: (await readJSON(join(root, 'watcher-status.json'), null))?.folderProjection ?? null });
       return;
     }
@@ -177,15 +179,15 @@ async function main() {
       output({ enabled, note: 'The next watcher verifies complete replacements before publishing expiring native archive intents. Original transcripts and worktrees are retained.' });
     } else if (positionals[1] === 'folders') {
       if (config.mode !== 'desktop' || process.platform !== 'darwin') throw new Error('Claude folder presentation requires macOS Desktop mode.');
-      const { ensureClaudeFolderCache, restoreClaudeFolderCache } = await import('../src/claude-folder-install.mjs');
+      const { claudeFolderPresentationCachePath, ensureClaudeFolderPresentationCache, restoreClaudeFolderPresentationCache } = await import('../src/claude-folder-presentation-cache.mjs');
       const { publishClaudeFolderMap } = await import('../src/claude-folder-map.mjs');
-      const cachePath = config.folderProjection?.cachePath
-        ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data', '15bc54146dcdb4ce_0');
+      const cachePath = positionals[2] === 'disable' && config.folderProjection?.cachePath
+        ? config.folderProjection.cachePath : claudeFolderPresentationCachePath(homedir(), config.folderProjection?.cachePath);
       if (positionals[2] === 'enable') {
         const state = await new DesktopBridge({ root, adapters: {} }).status();
         const map = await publishClaudeFolderMap({ root, state });
         if (map.deferred) throw new Error('Complete the pending native operation before enabling folder presentation.');
-        const resource = await ensureClaudeFolderCache({ root, cachePath });
+        const resource = await ensureClaudeFolderPresentationCache({ root, cachePath });
         await writeJSON(configPath, { ...config, folderProjection: { enabled: true, cachePath } });
         output({ enabled: true, map, resource, note: 'Restart Claude only when idle once to load the presentation adapter. Subsequent verified owners update through the read-only map without reload.' });
       } else if (positionals[2] === 'disable') {
@@ -194,7 +196,7 @@ async function main() {
           expiresAt: null, anchorsUpdatedAt: Date.now(), actions: [], anchors: previous?.anchors ?? [] });
         await publishClaudeFolderMap({ root, state: { version: 2, conversations: {}, records: [], pending: null } });
         await writeJSON(configPath, { ...config, folderProjection: { enabled: false, cachePath }, desktopLocalHandoff: { enabled: false } });
-        const resource = await restoreClaudeFolderCache({ root, cachePath });
+        const resource = await restoreClaudeFolderPresentationCache({ root, cachePath });
         output({ enabled: false, resource, note: 'Map cleared and original cache resource restored; restart Claude only when idle to fully unload the presentation adapter.' });
       } else throw new Error('Use desktop folders enable, disable, or status.');
     } else if (positionals[1] === 'install') {

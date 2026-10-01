@@ -73,7 +73,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   events,
   publishFolders = publishClaudeFolderMap,
   createHandoffPublisher = createClaudeDesktopHandoffPublisher,
-  maintainFolders = async options => (await import('./claude-folder-install.mjs')).ensureClaudeFolderCache(options) }) {
+  maintainFolders = async options => (await import('./claude-folder-presentation-cache.mjs')).ensureClaudeFolderPresentationCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
   if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
   if (!Number.isInteger(coldValidationMs) || coldValidationMs < 1) throw new Error('Invalid cold-import validation interval.');

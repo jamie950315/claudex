@@ -9,7 +9,7 @@ test('wake bootstrap starts on module load independently of sidebar subscription
     wakeSource: 'export function createClaudeChatWakeRuntime(options) { capture(options); return {start(){ record("start") },stop(){record("stop")}}; }'
   });
   let options, unload;
-  runInNewContext(source, { Ve: native, capture: value => { options = value; }, record: value => events.push(value),
+  runInNewContext(source, { Ge: native, capture: value => { options = value; }, record: value => events.push(value),
     document: { querySelectorAll: () => [] }, window: { addEventListener: (name, fn, settings) => {
       assert.equal(name, 'beforeunload'); assert.equal(settings.once, true); unload = fn;
     } }, console: { warn() {} } });
@@ -24,7 +24,7 @@ test('wake bootstrap preserves any unsent text and refuses noncanonical roots', 
     wakeSource: 'export function createClaudeChatWakeRuntime(options) { capture(options); return {start(){},stop(){}}; }'
   });
   let options;
-  runInNewContext(source, { Ve: {}, capture: value => { options = value; },
+  runInNewContext(source, { Ge: {}, capture: value => { options = value; },
     document: { querySelectorAll: () => [{ textContent: 'unsent draft' }] },
     window: { addEventListener() {} }, console: { warn() {} } });
   assert.equal(options.hasDraft(), true);

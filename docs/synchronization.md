@@ -432,12 +432,22 @@ mapping while the interface remains open, with the continuation in the original
 This is a **version-pinned presentation compatibility patch**, not an official
 Claude folder-assignment API. It updates one Zstandard-compressed HTTP cache
 resource, with validated stream checksums, exact source hash and anchor checks,
-an immutable backup and a recovery journal under `ui-folder-compat`. It does not
+an immutable backup and a recovery journal under
+`ui-folders/9cebfb8fc5a9f22f_0/ui-folder-compat`. Earlier resource journals and
+originals are preserved. It does not
 modify the signed app or credentials, or directly edit session registries or
 transcripts. Optional native archival is the separate guarded action below. Node must
 provide Zstandard and CRC32 support. The checked frontend asset is
-`shared-23-Db0dcGkF.js`, original decoded SHA-256
-`01bc6cf8d85b25edda8a396f00e664872a03288f6c06aff03d1aa0f2fa466ebf`.
+`shared-19-DDVvTIwQ.js`, cache file `9cebfb8fc5a9f22f_0`, original decoded SHA-256
+`c036136315a82ada3fcca90ea62ed77c5696d49c97509b186364cf0ad9713784`.
+Setup and `desktop folders enable` advance the exact previously supported
+`15bc54146dcdb4ce_0` configuration path after successful installation. Unknown
+custom resource names are refused; failed installation preserves the previous configuration.
+Explicitly disabled folders and native handoffs stay disabled during setup.
+The watcher retains its configuration for its current run; after deployment and
+successful path migration, restart it only through the normal verified service
+shutdown/start workflow so it reads the new resource path. Do not terminate busy
+native owners to apply this presentation update.
 Claude app/web frontend updates or cache eviction may require revalidation and
 reinstallation; unknown assets are not patched automatically. Status reports
 map/resource readiness, not which version a running renderer has loaded.
@@ -488,18 +498,48 @@ Rejected hints are consumed with bounded status diagnostics, without recovery or
 automatic retry. Hints wait for the watcher's current operation boundary; this
 does not guarantee a reconnect deadline during long native operations.
 
-The checked conversation asset is `shared-16-K1Vl3wzJ.js`, decoded SHA-256
-`a8631d08b9ab2cab19855096c45edabf0ba285056d54a3e9b1b78e1c8abf9d42`,
-cache file `70ba0ff6d79ee87d_0`. Its immutable original and recovery journal live
-under `ui-owner-wake/70ba0ff6d79ee87d_0/ui-folder-compat`, independently of the
+The checked conversation asset is `shared-16-B0kpSitB.js`, decoded SHA-256
+`f5d9a99fb6e529da64678dd22b3220fa205cda58b3a34761bbbf9751c241c6cb`,
+cache file `9b3f1b6cc4f6eba0_0`. Its immutable original and recovery journal live
+under `ui-owner-wake/9b3f1b6cc4f6eba0_0/ui-folder-compat`, independently of the
 folder and chat-wake resources. Exact source, unique component/submit anchors,
 cache checksums and installer ownership must match; unknown bytes fail explicitly.
 A normal idle Claude restart is needed to load an installed patch. Cache eviction
 or a vendor update requires revalidation. A cleared/unavailable folder map disables
 these hints even when the resource remains installed.
 
+The frontend entry `index-DaQFBRai.js` references this resource and the new folder
+and chat-wake resources. It does not reference the previously patched
+`shared-16-K1Vl3wzJ.js`, `shared-18-BYDVwU8Z.js` or `shared-23-Db0dcGkF.js`.
+Those files can still match their installed journals while having no effect on
+this frontend. Source/cache validity alone must not be reported as renderer
+reception. The native direct MCP call remains `(serverName, toolName, args)`;
+the old generic MCP attach warning is not evidence that this adapter executed.
+
+After deploying the updated bundle, the coordinator installs with:
+
+```sh
+/Applications/Claudex.app/Contents/Resources/runtime/bin/node \
+  /Applications/Claudex.app/Contents/Resources/engine/bin/claudex-app.mjs setup \
+  --root "$HOME/.local/share/claudex"
+```
+
+Then restart Claude only at an idle boundary. In
+`~/Library/Logs/Claude/claude.ai-web.log`, expect
+`[Claudex owner wake] loaded shared-16-B0kpSitB.js`,
+`[Claudex owner wake] started`,
+`[Claudex chat wake] loaded shared-18-C2EdCha1.js`,
+`[Claudex chat wake] started`, and
+`[Claudex folder mapping] loaded shared-19-DDVvTIwQ.js`.
+These bounded lines contain no session IDs or input text. A refused native grant,
+unavailable map/API or rejected receipt is reported separately. Opening an evicted
+managed conversation should then produce an owner-wake MCP call and increase
+`watcher-status.json.ownerWake.handled`/`woken`; verify the same native/RC identity
+and actual reconnect. Submitting user input is a separate authorized live check.
+
 Automated acceptance is synthetic, with an isolated real-cache install/recovery
-check and no inference. Live reception remains unverified for this new pin:
+check and no inference. Live owner-wake, folder and chat-wake reception remain
+unverified for these new pins:
 confirm native device approval, opening an evicted owner and submitting a queued
 message with Codex unavailable, same RC/native identities, app-stop refusal and
 subsequent idle eviction. Cache installation alone is not that acceptance.

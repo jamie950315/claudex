@@ -145,7 +145,7 @@ function ownsCurrent(manifest, hash) {
     || manifest.phase === 'prepared' && hash === manifest.previousPatchedHash;
 }
 
-async function defaultCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource,
+export async function buildClaudeFolderCandidate({ original, root, projectionSource, runtimeSource, handoffSource, anchorSource, wakeSource,
   registryRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
   const entry = inspectFolderCache(original);
   const projection = projectionSource ?? await readFile(new URL('./claude-folder-projection.mjs', import.meta.url), 'utf8');
@@ -196,7 +196,7 @@ async function operate(action, options, dependencies) {
     if (original && inspectCache(original.bytes).sourceHash !== sourceHash) fail('original source binding changed');
     let candidate;
     if (action === 'install') {
-      candidate = await (dependencies.buildCandidate ?? defaultCandidate)({ ...options, original: Buffer.from(original?.bytes ?? current.bytes) });
+      candidate = await (dependencies.buildCandidate ?? buildClaudeFolderCandidate)({ ...options, original: Buffer.from(original?.bytes ?? current.bytes) });
       inspectCache(candidate);
       if (sha256(candidate) === (original?.hash ?? current.hash)) fail('candidate did not change the original resource');
     } else candidate = original.bytes;

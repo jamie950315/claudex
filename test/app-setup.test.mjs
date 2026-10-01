@@ -5,6 +5,7 @@ import { tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 import { AppSetup, appPrivateJSON } from '../src/app-setup.mjs';
 import { readAppStopState } from '../src/app-stop-state.mjs';
+import { FOLDER_CACHE_FILENAME } from '../src/claude-folder-cache.mjs';
 
 const readyProviders = (base, versions = {}) => ({
   codex: { binary: join(base, 'codex'), app: join(base, 'Codex.app'), version: versions.codex ?? 'codex-cli 0.155.0-alpha.16.4' },
@@ -265,6 +266,35 @@ test('missing prerequisite desktop apps do not install services or touch synchro
   assert.equal(report.components.find(row => row.id === 'claude-desktop').state, 'missing');
   assert.ok(!events.some(([kind]) => ['collaboration', 'desktop', 'service', 'folders'].includes(kind)));
   assert.equal(await appPrivateJSON(join(root, 'config.json')), null);
+});
+
+test('setup repins enabled legacy folder presentation without reinstalling a live synchronization owner', async t => {
+  const { root, home, base, setup, events, providers } = await fixture(t, { ownerAllowed: false });
+  const cacheDir = join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
+  const config = { version: 1, mode: 'desktop', allProjects: true, projects: [], binary: providers.codex.binary,
+    claudeBinary: providers.claude.binary, folderProjection: { enabled: true, cachePath: join(cacheDir, '15bc54146dcdb4ce_0') },
+    desktopLocalHandoff: { enabled: false } };
+  await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  await writeFile(join(root, 'desktop-launcher.json'), JSON.stringify({ launcher: join(base, 'bin', 'claudex-codex.mjs') }), { mode: 0o600 });
+  await writeFile(join(root, 'service-install.json'), JSON.stringify({ cli: join(base, 'bin', 'claudex.mjs') }), { mode: 0o600 });
+  await setup.setup();
+  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), { ...config,
+    folderProjection: { enabled: true, cachePath: join(cacheDir, FOLDER_CACHE_FILENAME) } });
+  assert.ok(events.some(([kind, input]) => kind === 'folders' && input.cachePath === join(cacheDir, FOLDER_CACHE_FILENAME)));
+  assert.ok(!events.some(([kind]) => ['desktop', 'service'].includes(kind)));
+
+  const disabled = { ...config, folderProjection: { ...config.folderProjection, enabled: false } };
+  await writeFile(join(root, 'config.json'), JSON.stringify(disabled), { mode: 0o600 });
+  events.length = 0; await setup.setup();
+  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), disabled);
+  assert.ok(!events.some(([kind]) => kind === 'folders'));
+
+  await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  setup.foldersInstall = async () => { throw new Error('Unvalidated frontend'); };
+  await setup.setup();
+  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), config);
+  setup.readOnly = true;
+  await assert.rejects(setup.configureFolderPresentation(config), /Read-only application inspection/);
 });
 
 test('native account inspection preserves the OS username without forwarding API credentials', async t => {
