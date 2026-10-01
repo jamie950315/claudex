@@ -1171,8 +1171,10 @@ transaction, and a busy refusal keeps the owner. The next delivery, required
 maintenance/recovery or explicit wake restarts it with the same Remote Control
 identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
-The separately pinned conversation adapter signals component selection/mount and
-native submit for exact published folder-map RC IDs only, with bounded debounce.
+The separately pinned Code adapter signals selection/mount from o8's current
+X.id/X.type and native submit before early refusals, for native bridge references
+and exact published folder-map RC IDs only, with bounded debounce. The shared
+Chat/Cowork FM component is not the Code RC view. Never await or retry native send.
 It uses sessionless LocalAgentModeSessions.directMcpCallTool and the existing
 claudex-desktop-wake controller endpoint, preserving native device approval;
 never borrow a Local session, inspect prompt content or send model input. Its
@@ -1190,14 +1192,21 @@ each new resource pin still requires separate native UI acceptance.
 Promoted recovery reconnects the normal owner even without a cached handle.
 
 The checked frontend entry is index-DaQFBRai.js. Current resource pins are
-owner-wake shared-16-B0kpSitB.js (9b3f1b6cc4f6eba0_0), chat-wake
+owner-wake cc43287c9-6nYyeS-m.js (6ce7062c8d22ac79_0), imported by the
+Code route c11959232-Dt6Kvr8c.js, chat-wake
 shared-18-C2EdCha1.js (838048883e85ff4b_0), and folders
 shared-19-DDVvTIwQ.js (9cebfb8fc5a9f22f_0). That entry does not import the
 formerly patched shared-16-K1Vl3wzJ.js, shared-18-BYDVwU8Z.js or
 shared-23-Db0dcGkF.js. All new pins remain pending live reception acceptance;
-retain earlier native acceptance as historical evidence only. Each resource
+retain earlier native acceptance as historical evidence only. Preserve the earlier
+shared-16-B0kpSitB.js owner-wake journal/original; its bootstrap loaded but its
+FM hooks do not address Code. Each resource
 logs its bounded loaded asset name; owner/chat wake also log started. These
 lines prove bootstrap execution, never native receipt or reconnect completion.
+Owner wake reports API availability and selection/submit received, matched,
+ignored, called, accepted/deferred or fixed failure reasons. Never log native
+error/receipt text, IDs, paths or input. Limit duplicate lines to once per second
+and all runtime diagnostics to 64 per thirty seconds; no diagnostic timers/retries.
 Folder generations now use ui-folders/<cache filename>/ui-folder-compat; setup
 and CLI enable migrate only the exact previous supported configuration path
 after installation, preserving older originals/journals and disabled choices.

@@ -472,11 +472,14 @@ Disabling folders also disables native Local handoffs.
 ### Activating a disconnected managed owner
 
 Graphical setup installs a separate pinned conversation adapter alongside the
-existing `claudex-desktop-wake` MCP endpoint. When the conversation component
-mounts or changes identity, or its native submit callback runs, the adapter checks
+existing `claudex-desktop-wake` MCP endpoint. When the Code component
+mounts or changes its current session reference, or its native submit callback runs, the adapter checks
 the fresh private `folder-map.json` for that exact RC identity. Only verified
 published IDs qualify; titles, unrelated sessions and prompt content are never
-used. Requests are debounced for five seconds per identity and bounded to sixteen
+used. Only native `bridge` session references qualify; their `session_` ID is
+normalized to the published `cse_` ID. The submit signal runs before native early
+refusals, without awaiting, replacing or retrying the native send.
+Requests are debounced for five seconds per identity and bounded to sixteen
 identities in a thirty-second window. There is no periodic owner keepalive.
 
 The identity-only `claudex_desktop_owner_wake` tool uses Claude's sessionless
@@ -498,23 +501,30 @@ Rejected hints are consumed with bounded status diagnostics, without recovery or
 automatic retry. Hints wait for the watcher's current operation boundary; this
 does not guarantee a reconnect deadline during long native operations.
 
-The checked conversation asset is `shared-16-B0kpSitB.js`, decoded SHA-256
-`f5d9a99fb6e529da64678dd22b3220fa205cda58b3a34761bbbf9751c241c6cb`,
-cache file `9b3f1b6cc4f6eba0_0`. Its immutable original and recovery journal live
-under `ui-owner-wake/9b3f1b6cc4f6eba0_0/ui-folder-compat`, independently of the
+The checked Code asset is `cc43287c9-6nYyeS-m.js`, decoded SHA-256
+`62d14b5c968d83d64bc392656dafa4a5610409ad9757e168be6b7367a466a35a`,
+cache file `6ce7062c8d22ac79_0`. Its immutable original and recovery journal live
+under `ui-owner-wake/6ce7062c8d22ac79_0/ui-folder-compat`, independently of the
 folder and chat-wake resources. Exact source, unique component/submit anchors,
 cache checksums and installer ownership must match; unknown bytes fail explicitly.
 A normal idle Claude restart is needed to load an installed patch. Cache eviction
 or a vendor update requires revalidation. A cleared/unavailable folder map disables
 these hints even when the resource remains installed.
 
-The frontend entry `index-DaQFBRai.js` references this resource and the new folder
-and chat-wake resources. It does not reference the previously patched
+The Code route `c11959232-Dt6Kvr8c.js` imports this asset. Its `o8` component
+provides the current `X.id` and `X.type`; the shared Chat/Cowork `FM` component's
+`conversationUuid` is not the Code RC view. The earlier
+`shared-16-B0kpSitB.js` owner-wake bootstrap can load successfully while its
+hooks never run for Code. Preserve its resource journal and immutable original;
+the new pin uses a separate journal. The frontend entry `index-DaQFBRai.js`
+also loads the current folder and chat-wake resources, but not the previously patched
 `shared-16-K1Vl3wzJ.js`, `shared-18-BYDVwU8Z.js` or `shared-23-Db0dcGkF.js`.
 Those files can still match their installed journals while having no effect on
 this frontend. Source/cache validity alone must not be reported as renderer
 reception. The native direct MCP call remains `(serverName, toolName, args)`;
-the old generic MCP attach warning is not evidence that this adapter executed.
+the old generic MCP attach warning is not evidence that this adapter executed
+or that the replacement MCP connection is unavailable. Check the subsequent
+`initialize`/`tools/list` and the exact `claudex_desktop_owner_wake` `tools/call`.
 
 After deploying the updated bundle, the coordinator installs with:
 
@@ -524,20 +534,31 @@ After deploying the updated bundle, the coordinator installs with:
   --root "$HOME/.local/share/claudex"
 ```
 
-Then restart Claude only at an idle boundary. In
+Then restart Claude only at an idle boundary and open a managed conversation in Code. In
 `~/Library/Logs/Claude/claude.ai-web.log`, expect
-`[Claudex owner wake] loaded shared-16-B0kpSitB.js`,
+`[Claudex owner wake] loaded cc43287c9-6nYyeS-m.js`,
 `[Claudex owner wake] started`,
+`[Claudex owner wake] native APIs map=available mcp=available`,
 `[Claudex chat wake] loaded shared-18-C2EdCha1.js`,
 `[Claudex chat wake] started`, and
 `[Claudex folder mapping] loaded shared-19-DDVvTIwQ.js`.
-These bounded lines contain no session IDs or input text. A refused native grant,
-unavailable map/API or rejected receipt is reported separately. Opening an evicted
-managed conversation should then produce an owner-wake MCP call and increase
+These lines prove only bootstrap execution. The Code asset may load lazily;
+the earlier shared-16 bootstrap's lines are not acceptance of the new Code pin.
+Selection should then report `signal selection received`, `matched published`,
+`called` and `accepted` under the same prefix. Submit uses `signal submit`;
+an overlapping signal reports `ignored pending` or `ignored debounced`.
+Unpublished or non-RC sessions report `ignored unpublished` or `ignored non-rc-session`.
+Failures report fixed stage labels such as `map-read-failed`, `map-invalid`,
+`mcp-api-unavailable`, `mcp-not-connected`, `mcp-grant-refused`,
+`mcp-call-failed` or `receipt-invalid`; known broker refusals report `deferred`
+with a bounded reason. Diagnostics never include session IDs, paths, native error
+text or input content. Repeated lines are limited to once per second and all
+runtime diagnostics to 64 lines per thirty seconds, without timers or retries.
+Opening an evicted managed conversation should produce an owner-wake MCP call and increase
 `watcher-status.json.ownerWake.handled`/`woken`; verify the same native/RC identity
 and actual reconnect. Submitting user input is a separate authorized live check.
 
-Automated acceptance is synthetic, with an isolated real-cache install/recovery
+Automated acceptance is synthetic, with an isolated real-cache installation
 check and no inference. Live owner-wake, folder and chat-wake reception remain
 unverified for these new pins:
 confirm native device approval, opening an evicted owner and submitting a queued
