@@ -48,7 +48,7 @@ export class ColdVerificationCache {
     const path = join(this.directory, `${id}.json`);
     const before = await lstat(path, { bigint: true });
     if (!privateFile(before) || before.size <= 0n || before.size > BigInt(MAX_FILE)) return null;
-    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
       if (!same(verificationFileIdentity(before), verificationFileIdentity(await file.stat({ bigint: true })))) return null;
       const text = await file.readFile('utf8');

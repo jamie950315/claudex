@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, chmod, readFile, writeFile, lstat, symlink, rename, rm } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { createRequire, syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ColdVerificationCache, captureVerificationFiles } from '../src/cold-verification-cache.mjs';
@@ -115,4 +117,25 @@ test('asset symlinks and failed authenticated reads cannot produce reusable obse
   await rename(asset, `${asset}.original`); await symlink(`${asset}.original`, asset);
   assert.equal(await cache.load(id, data.signature, data.context), null);
   await assert.rejects(captureVerificationFiles(() => loadContextArchive({ root, archive })));
+});
+
+test('a cache file replaced by a FIFO after inspection is a miss without waiting for a writer', { timeout: 5000 }, async t => {
+  const { cache, data, path } = await fixture(t);
+  const promises = createRequire(import.meta.url)('node:fs/promises');
+  const original = promises.lstat;
+  const restore = () => { promises.lstat = original; syncBuiltinESMExports(); };
+  t.after(restore);
+  // Swap the inspected regular file for a FIFO between lstat() and open().
+  promises.lstat = async (target, options) => {
+    const stat = await original(target, options);
+    if (target === path) {
+      restore();
+      await rm(path);
+      assert.equal(spawnSync('mkfifo', ['-m', '600', path]).status, 0);
+    }
+    return stat;
+  };
+  syncBuiltinESMExports();
+  assert.equal(await cache.load(id, data.signature, data.context), null);
+  assert.ok((await lstat(path)).isFIFO());
 });
