@@ -542,3 +542,21 @@ test('native archival rebinds only images proven at the authoritative relocated 
   await writeFile(current.path, current.rows.map(row => JSON.stringify(row)).join('\n') + '\n');
   await assert.rejects(f.runtime.inspect(f.record), /retained rollout image evidence is missing/);
 });
+
+test('an interrupted image turn closes with its exact turn_aborted event', async t => {
+  const f = await fixture(t);
+  const nextTurn = randomUUID();
+  // The interrupted turn is followed by another native turn.
+  f.rows[6] = { type: 'event_msg', payload: { type: 'turn_aborted', turn_id: f.turnId, reason: 'interrupted', started_at: 100, completed_at: 101 } };
+  f.rows.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: nextTurn } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: nextTurn, last_agent_message: 'Next' } });
+  await f.write();
+  const found = await f.resolver()([{ turnId: f.turnId, item: f.item }], { maxBytes: 1 << 20, threadId: f.threadId });
+  assert.equal(found.size, 1);
+  for (const change of [{ turn_id: randomUUID() }, { reason: 'replaced' }]) {
+    f.rows[6] = { type: 'event_msg', payload: { type: 'turn_aborted', turn_id: f.turnId, reason: 'interrupted', ...change } };
+    await f.write();
+    await assert.rejects(f.resolver()([{ turnId: f.turnId, item: f.item }], { maxBytes: 1 << 20, threadId: f.threadId }),
+      /different identity|did not close/);
+  }
+});

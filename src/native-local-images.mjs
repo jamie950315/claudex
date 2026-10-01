@@ -173,7 +173,10 @@ function createSingleRolloutImageResolver({ path, threadId, maxBytes = LOCAL_IMA
           found.set(requestKey(state.request), state.candidate.images);
         }
         for (const candidate of byTurn.get(activeTurn) ?? []) candidate.lastUserCompletion = index;
-      } else if (row.type === 'event_msg' && payload?.type === 'task_complete') {
+      } else if (row.type === 'event_msg' && (payload?.type === 'task_complete'
+        // An interrupted turn closes with turn_aborted; the API reports it as
+        // an interrupted closed turn. Its persisted user input is unchanged.
+        || payload?.type === 'turn_aborted' && payload.reason === 'interrupted')) {
         if (byTurn.has(activeTurn)) {
           if (payload.turn_id !== activeTurn) fail('native image turn completion has a different identity.');
           for (const state of byTurn.get(activeTurn)) state.closed = true;

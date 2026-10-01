@@ -884,6 +884,8 @@ required when the exact requested images are already completely proven by the
 authoritative/retained sources and the saved canonical checkpoint still matches;
 an origin still needed for any image remains mandatory. Image-free reads do not
 probe obsolete paths. Existing conflicting evidence is never ignored.
+An image turn may close with its exact turn_aborted (reason interrupted) event
+instead of task_complete; the API reports it as an interrupted closed turn.
 Require exact translated completed-item
 equality with the full API item, matching thread/turn/context/passthrough IDs,
 one earlier embedded user response, exact text, and image wrapper path/number/order
