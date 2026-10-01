@@ -198,8 +198,13 @@ export class DesktopRuntime {
       await entry.owner.reconcileDisplayTitle?.(title);
       return entry.owner;
     }
-    const saved = this.contextMode === 'archive'
-      ? await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null) : null;
+    const stored = await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null);
+    // An owner is bound to its saved directory string. A project renamed and
+    // left as an alias cannot host it again; only a verified move replaces it.
+    if (stored?.cwd === cwd && await realpath(cwd) !== cwd)
+      throw Object.assign(new Error(`Claude owner working directory ${cwd} is now an alias of another directory; synchronization is paused until the project move is verified.`), {
+        code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: 'claude', nativeId: stored.sessionId, savedCwd: cwd, conversationId });
+    const saved = this.contextMode === 'archive' ? stored : null;
     if (forceNormal && saved?.reset) throw new Error('A pending native context reset must be restored before a normal owner starts.');
     const maintenanceOnly = !forceNormal && Boolean(saved?.remoteId);
     const settings = { root: this.root, conversationId, cwd, claudeHome: this.claudeHome, title,
@@ -394,6 +399,17 @@ export class DesktopRuntime {
     return (await readJSON(this.retiredOwnerPath(record), null))?.sessionId === record.nativeId;
   }
 
+  /** An owner whose saved directory became an alias of another directory can
+   * no longer start. Until a verified move retires it, it is read from disk
+   * only, like a retired owner. */
+  async ownerStranded(record) {
+    if (record.side !== 'claude' || !record.managed || record.kind !== 'owner' || typeof record.cwd !== 'string') return false;
+    const entry = this.owners.get(record.conversationId);
+    if (entry && !entry.error && entry.owner.status().sessionId === record.nativeId) return false;
+    try { return await realpath(record.cwd) !== record.cwd; }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false; throw error; }
+  }
+
   /** Read a retired owner's transcript without starting any owner process. */
   async inspectRetiredOwner(record) {
     const retired = await readJSON(this.retiredOwnerPath(record), null)
@@ -408,7 +424,9 @@ export class DesktopRuntime {
     const parsed = decodeCompletedOwnedClaudeHistory({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
       key: this.key, resolveArchive, resetBootstrap: retired.lastReset ?? undefined, versionPolicy: this.versionPolicy });
     assertComplete(parsed.common);
-    parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd).catch(() => parsed.common.meta.cwd);
+    // Like originals, the saved directory string is kept even when it is an alias.
+    if (parsed.common.meta.cwd !== record.cwd)
+      parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd).catch(() => parsed.common.meta.cwd);
     if (parsed.common.meta.id !== record.nativeId) throw new Error('Retired Claude owner identity changed.');
     return { ...parsed, nativeId: record.nativeId, path, bytes: data.bytes, digest: fingerprint(parsed.common) };
   }
@@ -451,7 +469,8 @@ export class DesktopRuntime {
   }
 
   async inspectNative(record) {
-    if (record.side === 'claude' && (record.retiredOwner || record.managed && await this.ownerRetired(record)))
+    if (record.side === 'claude' && (record.retiredOwner || record.managed
+      && (await this.ownerRetired(record) || await this.ownerStranded(record))))
       return this.inspectRetiredOwner(record);
     if (record.side === 'claude' && record.relocation) {
       const proof = await this.relocatedClaudeHistory(record);
@@ -628,7 +647,7 @@ export class DesktopRuntime {
     const needsImages = record.packetVersion === 2 && record.imageProjectionVersion !== 1
       && data?.common?.messages && hasProjectedImages(data.common.messages);
     if (record.side === 'codex') return needsImages && record.kind === 'snapshot' ? 'images' : false;
-    if (record.side !== 'claude' || await this.ownerRetired(record)) return false;
+    if (record.side !== 'claude' || await this.ownerRetired(record) || await this.ownerStranded(record)) return false;
     const owner = await this.owner(record.conversationId, record.cwd, record.title);
     if (record.packetVersion !== 2) {
       if (!owner.status().coldResetEligible) throw new Error('Inline context migration requires a fresh cold native owner; active input channels were preserved.');
@@ -750,10 +769,15 @@ export class DesktopRuntime {
   async assertIdle(record) {
     importedClaudeOriginal(record);
     if (record.side === 'claude') {
-      // A retired owner has no process left to receive input.
+      // A retired or stranded owner has no process left to receive input.
       if (record.retiredOwner || record.managed && await this.ownerRetired(record)) {
         if (this.owners.get(record.conversationId)?.owner.status().sessionId === record.nativeId)
           throw new Error('Retired Claude owner is still running.');
+        return;
+      }
+      if (record.managed && await this.ownerStranded(record)) {
+        if (await this.workingDirectoryAbsent(join(this.root, 'owners', `${hash(record.conversationId)}.json.lock`)) === false)
+          throw new Error('Claude owner is still locked by a running process.');
         return;
       }
       if (!record.managed) {

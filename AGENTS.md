@@ -448,6 +448,10 @@ preserved original (unchanged, verified, idle) and the new owner is created
 normally. Claude reads keep the saved cwd string when the transcript records
 exactly it, so a renamed directory left as an alias is not misread as a move;
 the directory must still resolve, and any other recorded cwd is canonicalized.
+An owner is bound to its saved cwd string: once that directory is an alias of
+another, starting it is a per-conversation CLAUDEX_TRACKED_CWD_UNAVAILABLE hold
+(never a worker crash), and the move proof reads it from disk like a retired
+owner, requiring its state lock to be absent.
 
 A native transcript file changing between successful handoff inspections is a
 revoked, deferred Desktop archival attempt, not a synchronization failure. Return

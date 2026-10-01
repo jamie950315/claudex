@@ -136,3 +136,37 @@ test('a Claude history recorded in a renamed project keeps its saved directory i
     assert.equal(moved.common.meta.cwd, f.newCwd);
   } finally { await f.runtime.close(); }
 });
+
+test('an owner whose saved directory became an alias is held and read from disk without starting', async () => {
+  const f = await fixture();
+  try {
+    const conversationId = randomUUID(), sessionId = randomUUID();
+    const owners = join(f.root, 'state', 'owners');
+    await mkdir(owners, { recursive: true, mode: 0o700 });
+    const statePath = join(owners, `${hash(conversationId)}.json`);
+    await writeFile(statePath, JSON.stringify({ version: 1, conversationId, cwd: f.oldCwd, sessionId, pending: null }), { mode: 0o600 });
+    const target = { id: randomUUID(), conversationId, side: 'claude', kind: 'owner', managed: true, verified: true,
+      status: 'current', nativeId: sessionId, cwd: f.oldCwd, path: join(f.root, 'claude', `${sessionId}.jsonl`) };
+    assert.equal(await f.runtime.ownerStranded(target), false);
+    await rename(f.oldCwd, f.newCwd); await symlink(f.newCwd, f.oldCwd);
+    assert.equal(await f.runtime.ownerStranded(target), true);
+    await assert.rejects(f.runtime.owner(conversationId, f.oldCwd, 'Moved'), error => {
+      assert.equal(error.code, 'CLAUDEX_TRACKED_CWD_UNAVAILABLE');
+      assert.equal(error.conversationId, conversationId); assert.equal(error.savedCwd, f.oldCwd);
+      return true;
+    });
+    const read = [];
+    f.runtime.inspectRetiredOwner = async record => { read.push(record.nativeId); return { nativeId: record.nativeId }; };
+    assert.equal((await DesktopRuntime.prototype.inspectNative.call(f.runtime, target)).nativeId, sessionId);
+    assert.deepEqual(read, [sessionId]);
+    await f.runtime.assertIdle(target);
+    assert.equal(await f.runtime.needsMaintenance(target, {}), false);
+    await writeFile(`${statePath}.lock`, 'held', { mode: 0o600 });
+    await assert.rejects(f.runtime.assertIdle(target), /still locked/);
+    await rename(`${statePath}.lock`, join(f.root, 'released.lock'));
+    await f.runtime.plan('claude', { conversationId, common: { meta: { cwd: f.newCwd }, messages: [] },
+      title: 'Moved', target, relocation: true });
+    assert.deepEqual(f.started.map(item => item.cwd), [f.newCwd]);
+    assert.ok((await readdir(join(owners, 'retired'))).includes(`${hash(conversationId)}-${sessionId}.json`));
+  } finally { await f.runtime.close(); }
+});
