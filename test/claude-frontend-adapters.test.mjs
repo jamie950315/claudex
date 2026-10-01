@@ -9,17 +9,18 @@ import { frontendBuild, writeFrontend, cacheBytes } from './fixtures/claude-fron
 import { discoverClaudeFrontend } from '../src/claude-frontend-graph.mjs';
 import { syntax, nodes, folderAnchors, chatAnchors, ownerAnchors } from '../src/claude-frontend-anchors.mjs';
 import { inspectFolderCache, buildDynamicFolderSource } from '../src/claude-folder-cache.mjs';
-import { buildClaudeChatWakeSource } from '../src/claude-chat-wake-cache.mjs';
+import { buildClaudeChatWakeSource, ensureClaudeChatWakeCache } from '../src/claude-chat-wake-cache.mjs';
 import { buildClaudeOwnerWakeSource } from '../src/claude-owner-wake-cache.mjs';
 import { ensureClaudeRendererAdapters, ensureClaudeRendererAdapter, restoreClaudeRendererAdapter } from '../src/claude-renderer-adapters.mjs';
 import { startClaudeRendererMaintenance } from '../src/claude-renderer-maintenance.mjs';
-import { restoreClaudeFolderPresentationCache } from '../src/claude-folder-presentation-cache.mjs';
+import { ensureClaudeFolderPresentationCache, restoreClaudeFolderPresentationCache } from '../src/claude-folder-presentation-cache.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
+import { patchContracts } from './fixtures/claude-frontend-contracts.mjs';
 
-async function fixture(t, tag = 'a') {
+async function fixture(t, tag = 'a', options = {}) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'claudex-frontend-')));t.after(()=>rm(base,{recursive:true,force:true}));
   const root=join(base,'state'),home=join(base,'home');await mkdir(root,{mode:0o700});await mkdir(home,{mode:0o700});
-  const build=frontendBuild(tag, tag === 'b' ? 17 : 11),resources=await writeFrontend(home,build);
+  const build=frontendBuild(tag, tag === 'b' ? 17 : 11, options),resources=await writeFrontend(home,build);
   return {base,root,home,build,resources};
 }
 const sourceOf = async resource => inspectFolderCache(await readFile(resource.path),{targetURL:resource.url}).source;
@@ -50,7 +51,7 @@ test('each adapter rejects missing and ambiguous anchors; invalid transformed sy
     // Repeated declaration identifiers are renamed so ambiguity is structural,
     // not merely the JavaScript parser rejecting a duplicate binding.
     const fn = syntax(target.source).body.find(n => n.type === 'FunctionDeclaration' && n.id.name === (adapter === 'folders' ? 'groupa' : 'viewa'));
-    const duplicate = adapter === 'chatWake' ? ';let duplicateCapability=La?.forkSession!==void 0;'
+    const duplicate = adapter === 'chatWake' ? `import{Nativea as duplicateNative}from"./${f.build.names.native}";let duplicateCapability=duplicateNative?.forkSession!==void 0;`
       : target.source.slice(fn.start,fn.end).replace(fn.id.name,'duplicateComponent');
     assert.throws(()=>probe(target.source+duplicate,localGraph),/missing or ambiguous/);
   }
@@ -105,4 +106,58 @@ test('app-stop hold prevents maintenance and pre-publication writes; closing dra
 
 test('normal Desktop watcher owns maintenance and drains it without extra history or heartbeat work',async t=>{
   const f=await fixture(t),order=[];await runDesktopWatch({root:f.root,bridge:{status:async()=>({version:2,conversations:{},records:[],pending:null}),discover:async()=>{},collect:async()=>{}},runtime:{codex:async()=>({request:async()=>({})}),ownedNativeIds:async()=>new Set()},config:{rendererAdapters:{enabled:true}},maxPasses:1,pollMs:0,discover:async()=>[],writeStatus:async()=>{},startRendererMaintenance:async options=>{order.push('start');options.onStatus({state:'ready'});return{close:async()=>order.push('drained')}}});assert.deepEqual(order,['start','drained']);
+});
+
+for (const compilerBuild of [true, false]) test(`conditional bindings preserve both branches; active compiler=${compilerBuild}`,async t=>{
+  const f=await fixture(t,'a',{variants:true}),graph=await discoverClaudeFrontend(f);
+  assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));
+  assert.equal(graph.adapters.folders.bindings.variants.length,2);assert.equal(graph.adapters.ownerWake.bindings.variants.length,2);
+  const result=await ensureClaudeRendererAdapters({...f,graph});assert.ok(Object.values(result.adapters).every(a=>a.status==='installed'));
+  for(const adapter of ['folders','chatWake','ownerWake'])patchContracts[adapter](await sourceOf(f.resources[adapter]),graph.adapters[adapter].target.source,graph.adapters[adapter].bindings);
+  let contents=JSON.stringify({version:1,entries:[{remoteId:'cse_owned',canonicalCwd:'/synthetic/project',verified:true}]}),poll;
+  const cache=[];let deps,saved;const context={compilerBuild,La:{readFileAtCwd:async()=>({contents})},memoa:()=>cache,suba:(subscribe,get)=>{subscribe(()=>{});return get()},dataa:()=>({data:null}),
+    useMemoa:(fn,next)=>{if(!deps||next.some((d,i)=>d!==deps[i])){saved=fn();deps=next}return saved},setTimeout:fn=>{poll=fn;return 1},clearTimeout(){},console:{warn(){}}};
+  const projectionSource=await readFile(new URL('../src/claude-folder-projection.mjs',import.meta.url),'utf8'),runtimeSource=await readFile(new URL('../src/claude-folder-runtime.mjs',import.meta.url),'utf8');
+  const folder=buildDynamicFolderSource(graph.adapters.folders.target.source,{root:f.root,bindings:graph.adapters.folders.bindings,projectionSource,runtimeSource});
+  runInNewContext(withoutImports(folder),context);
+  const rows=[{id:'session_owned',type:'bridge',repoInfo:{name:'remote'},sessionStatus:'idle',timestamp:0},{id:'local_original',type:'local',cwd:'/synthetic/project',repoInfo:{name:'project'},sessionStatus:'idle',timestamp:0}];context.groupa(rows);await new Promise(r=>setImmediate(r));
+  assert.equal(context.groupa(rows)[0].key,'/synthetic/project');contents=JSON.stringify({version:1,entries:[]});await poll();assert.equal(context.groupa(rows)[0].key,'remote');
+  const effects=[],signals=[],ownerContext={compilerBuild,eventa:fn=>fn,effecta:fn=>effects.push(fn),__cldxOwnerWakeClient:()=>{},globalThis:{},capture:v=>signals.push(v),
+    images:{waitForImagesReady:async()=>{}},nativeSend:(text,options,ref)=>({text,options,ref}),window:{addEventListener(){}},console:{warn(){}}};
+  const b=graph.adapters.ownerWake.bindings,owner=buildClaudeOwnerWakeSource(graph.adapters.ownerWake.target.source,{root:f.root,bindings:b,
+    runtimeSource:'export function createClaudeOwnerWakeRuntime(){return{start(){},stop(){},signal(...v){capture(v)}}}'});
+  runInNewContext(withoutImports(owner),ownerContext);const view=ownerContext.viewa({initialSessionId:'session_owned',sessionType:'bridge'});effects[0]();
+  assert.equal(await view.dispatch('private',{blocked:true}),'blocked');assert.deepEqual(JSON.parse(JSON.stringify(signals)),[['session_owned','selection','bridge'],['session_owned','submit','bridge']]);
+  const plain=graph.adapters.folders.target.source.replace('return useMemoa(()=>','return unsupportedMemo(()=>');
+  assert.throws(()=>folderAnchors(plain,{get:p=>graph.modules.get(new URL(p,graph.adapters.folders.target.url).href)}),/missing or ambiguous/);
+});
+
+test('repeated capability reads retain one native binding; another native binding refuses',async t=>{
+  const f=await fixture(t),graph=await discoverClaudeFrontend(f),target=graph.adapters.chatWake.target;
+  const lookup={get:p=>graph.modules.get(new URL(p,target.url).href)};
+  assert.equal(chatAnchors(target.source+';let repeated=La?.forkSession!==void 0;',lookup).native,'La');
+  assert.throws(()=>chatAnchors(target.source+`import{Nativea as otherNative}from"./${f.build.names.native}";let second=otherNative?.forkSession!==void 0;`,lookup),/missing or ambiguous/);
+});
+
+test('shared folder/chat resources have one atomic journal, recover, disable folders and restore',async t=>{
+  const f=await fixture(t,'a',{variants:true,shared:true}),graph=await discoverClaudeFrontend(f);
+  assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));assert.equal(graph.adapters.folders.target.url,graph.adapters.chatWake.target.url);
+  await assert.rejects(ensureClaudeRendererAdapter({...f,adapter:'folders',graph,sharedResourceMode:'combined'},{afterReplace(){throw new Error('synthetic crash')}}),/synthetic crash/);
+  let result=await ensureClaudeRendererAdapters(f);assert.equal(result.adapters.folders.recovered,true);assert.equal(result.adapters.chatWake.sharedResource,true);
+  let source=await sourceOf(f.resources.folders);assert.equal(source.split('[Claudex chat wake] loaded').length,2);assert.equal(source.split('[Claudex folder mapping] loaded').length,2);
+  assert.deepEqual(await readdir(join(f.root,'ui-folders')), [f.resources.folders.filename]);await assert.rejects(readdir(join(f.root,'ui-chat-wake')),e=>e.code==='ENOENT');
+  result=await ensureClaudeRendererAdapters(f);assert.ok(Object.values(result.adapters).every(a=>a.status==='installed'&&!a.changed));
+  result=await ensureClaudeRendererAdapters({...f,folders:false});assert.equal(result.adapters.folders.status,'disabled');assert.equal(result.adapters.chatWake.status,'installed');
+  source=await sourceOf(f.resources.folders);assert.ok(!source.includes('[Claudex folder mapping] loaded'));assert.ok(source.includes('[Claudex chat wake] loaded'));
+  await restoreClaudeRendererAdapter({...f,adapter:'chatWake',cachePath:f.resources.chatWake.path});assert.deepEqual(await readFile(f.resources.folders.path),f.resources.folders.bytes);
+  await ensureClaudeRendererAdapters(f);await restoreClaudeRendererAdapter({...f,adapter:'folders',cachePath:f.resources.folders.path});assert.deepEqual(await readFile(f.resources.folders.path),f.resources.folders.bytes);
+});
+
+test('normal setup entry points compose shared resources and preserve the explicit folder choice',async t=>{
+  const f=await fixture(t,'a',{shared:true});
+  const enabled=await ensureClaudeChatWakeCache({...f,folders:true});assert.equal(enabled.status,'installed');
+  assert.ok((await sourceOf(f.resources.folders)).includes('[Claudex folder mapping] loaded'));
+  const folder=await ensureClaudeFolderPresentationCache(f);assert.equal(folder.status,'installed');assert.equal(folder.changed,false);
+  const disabled=await ensureClaudeChatWakeCache({...f,folders:false});assert.equal(disabled.status,'installed');
+  const source=await sourceOf(f.resources.chatWake);assert.ok(source.includes('[Claudex chat wake] loaded'));assert.ok(!source.includes('[Claudex folder mapping] loaded'));
 });

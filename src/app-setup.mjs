@@ -290,7 +290,9 @@ export class AppSetup {
             configPath: join(this.home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
             command: this.node,
             args: [this.collaborationCli, 'desktop-wake-mcp', '--root', join(this.root, 'collaboration'), '--peer', 'claude'] });
-          const chatCache = await this.desktopWakeCacheInstall({ root: this.root, home: this.home });
+          const rendererConfig = await appPrivateJSON(join(this.root, 'config.json'));
+          const chatCache = await this.desktopWakeCacheInstall({ root: this.root, home: this.home,
+            folders: rendererConfig?.folderProjection?.enabled !== false });
           const ownerCache = await this.desktopOwnerWakeCacheInstall({ root: this.root, home: this.home });
           if (chatCache?.status === 'skipped' || ownerCache?.status === 'skipped')
             notes.collaboration = chatCache?.reason ?? ownerCache?.reason;

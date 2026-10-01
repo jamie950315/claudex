@@ -1,0 +1,113 @@
+import assert from 'node:assert/strict';
+import { syntax, nodes, member } from '../../src/claude-frontend-anchors.mjs';
+
+// This validator parses static vendor bytes. It never evaluates a frontend
+// module. Locations, raw literal spellings and harmless empty statements do
+// not affect the contract; all other AST nodes remain part of the comparison.
+export function astValue(value) {
+  if (Array.isArray(value)) return value.filter(n => n?.type !== 'EmptyStatement').map(astValue);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).filter(([k]) => !['start', 'end', 'raw'].includes(k))
+    .map(([k, v]) => [k, astValue(v)]));
+}
+const functionsFor = (ast, name) => {
+  const declared = ast.body.find(n => n.type === 'FunctionDeclaration' && n.id.name === name);
+  if (declared) return [declared];
+  const d = ast.body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations).find(n => n.id.name === name);
+  if (!d) return [];
+  return d.init.type === 'ConditionalExpression' ? [d.init.consequent, d.init.alternate] : [d.init];
+};
+const only = (values, label) => { assert.equal(values.length, 1, label); return values[0]; };
+const isSignal = n => n.type === 'CallExpression' && member(n.callee, 'signal') && n.callee.object.name === '__cldxOwnerWake';
+const expression = s => astValue(syntax(s).body[0].expression);
+const squashDeclarations = f => {
+  const body = [];
+  for (const s of f.body.body.filter(n => n.type !== 'EmptyStatement')) {
+    if (s.type === 'VariableDeclaration' && body.at(-1)?.type === s.type && body.at(-1).kind === s.kind)
+      body.at(-1).declarations.push(...s.declarations);
+    else body.push(s);
+  }
+  f.body.body = body; return astValue(f);
+};
+
+export function ownerPatchContract(source, original, b) {
+  const ast = syntax(source), orig = syntax(original), patched = functionsFor(ast, b.componentBinding);
+  const variants = b.variants ?? [b]; assert.equal(patched.length, variants.length);
+  const contract = [];
+  for (const [i, v] of variants.entries()) {
+    const f = patched[i], signals = nodes(f, isSignal);
+    assert.equal(signals.length, 2, 'exact selection and submit calls');
+    const select = only(signals.filter(n => n.arguments[1]?.value === 'selection'), 'selection signal');
+    const submit = only(signals.filter(n => n.arguments[1]?.value === 'submit'), 'submit signal');
+    assert.deepEqual(astValue(select), expression(`__cldxOwnerWake.signal(${v.ref}?.id,"selection",${v.ref}?.type)`));
+    assert.deepEqual(astValue(submit), expression('__cldxOwnerWake.signal(ref?.id,"submit",ref?.type)'));
+    const effect = only(f.body.body.filter(n => n.type === 'ExpressionStatement'
+      && n.expression.type === 'CallExpression' && n.expression.callee.name === b.effect && nodes(n, isSignal).length), 'selection effect');
+    assert.deepEqual(astValue(effect.expression.arguments[1]), expression(`[${v.ref}?.id,${v.ref}?.type]`));
+    f.body.body.splice(f.body.body.indexOf(effect), 1);
+    const send = only(nodes(f, n => n.type === 'ArrowFunctionExpression' && n.async && nodes(n, isSignal).includes(submit)), 'native send');
+    const first = send.body.body.shift();
+    assert.equal(first.type, 'BlockStatement', 'submit signals before native early refusals');
+    assert.deepEqual(astValue(first), astValue(syntax(`{const ref=${v.getter}();void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`).body[0]));
+    assert.deepEqual(squashDeclarations(f), squashDeclarations(functionsFor(orig, b.componentBinding)[i]), 'all native component AST retained');
+    contract.push({ ref: v.ref, getter: v.getter, effect: b.effect });
+  }
+  const client = only(ast.body.filter(n => n.type === 'ImportDeclaration' && n.specifiers.some(s => s.local.name === '__cldxOwnerWakeClient')), 'attached client import');
+  assert.equal(client.source.value, b.client.path); assert.equal(client.specifiers[0].imported.name, b.client.exported);
+  const options = only(nodes(ast, n => n.type === 'CallExpression' && n.callee.name === 'createClaudeOwnerWakeRuntime'), 'owner runtime').arguments[0];
+  assert.equal(only(options.properties.filter(p => p.key.name === 'getClient'), 'getClient').value.name, '__cldxOwnerWakeClient');
+  return { variants: contract, client: b.client, options: astValue(options) };
+}
+
+export function chatPatchContract(source, original, b) {
+  assert.ok(source.startsWith(original), 'all vendor source bytes retained');
+  const ast = syntax(source), options = only(nodes(ast, n => n.type === 'CallExpression'
+    && n.callee.name === 'createClaudeChatWakeRuntime'), 'chat runtime').arguments[0];
+  assert.equal(only(options.properties.filter(p => p.key.name === 'native'), 'native binding').value.name, b.native);
+  return astValue(options);
+}
+
+export function folderPatchContract(source, original, b) {
+  const ast = syntax(source), orig = syntax(original);
+  const key = only(ast.body.filter(n => n.type === 'FunctionDeclaration' && n.id.name === '__cldxNativeProjectKey'), 'native key');
+  key.id.name = b.key.id.name;
+  assert.deepEqual(astValue(key), astValue(only(orig.body.filter(n => n.type === 'FunctionDeclaration' && n.id.name === b.key.id.name), 'original key')));
+  const wrapper = only(ast.body.filter(n => n !== key && n.type === 'FunctionDeclaration' && n.id.name === b.key.id.name), 'key wrapper');
+  assert.deepEqual(astValue(wrapper.body.body[0].argument), expression(`__cldx.lookup(${b.key.params[0].name})?.projectKey??__cldxNativeProjectKey(${b.key.params[0].name})`));
+  const variants = b.variants ?? [b], patched = functionsFor(ast, b.groupingBinding), originalVariants = functionsFor(orig, b.groupingBinding);
+  assert.equal(patched.length, variants.length);
+  for (const [i, v] of variants.entries()) {
+    const f = patched[i];
+    const version = f.body.body.shift(), rows = f.body.body.shift();
+    assert.deepEqual(astValue(version), astValue(syntax(`const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);`).body[0]));
+    assert.deepEqual(astValue(rows), astValue(syntax(`__cldx.setRows(${v.rows},__cldxNativeProjectKey);`).body[0]));
+    const mappedLabel = n => n.type === 'ChainExpression' && member(n.expression, 'label')
+      && n.expression.object.type === 'CallExpression' && n.expression.object.callee.object?.name === '__cldx';
+    const label = only(nodes(f, n => n.type === 'Property' && n.key.name === 'name' && nodes(n.value, mappedLabel).length), 'mapped label');
+    const terms = n => n.type === 'LogicalExpression' && n.operator === '??' ? [...terms(n.left), ...terms(n.right)] : [n];
+    assert.deepEqual(terms(label.value).map(astValue), [expression(`__cldx.lookup(${v.row})?.label`), ...terms(v.label.value).map(astValue)]);
+    label.value = structuredClone(v.label.value);
+    if (v.plainMemo) {
+      const deps = only(nodes(f, n => n.type === 'ArrayExpression' && n.elements.some(e => e?.name === '__cldxVersion')), 'useMemo invalidation');
+      assert.equal(deps.elements.pop().name, '__cldxVersion');
+    } else {
+      const memo = only(nodes(f.body.body[0], n => n.type === 'VariableDeclarator' && n.id.name === v.cache), 'compiled cache');
+      assert.equal(memo.init.arguments[0].value, v.size + 1); memo.init.arguments[0].value = v.size;
+      const condition = only(nodes(f, n => n.type === 'IfStatement' && n.test.type === 'LogicalExpression'
+        && n.test.right.type === 'BinaryExpression' && n.test.right.right.name === '__cldxVersion'), 'compiled invalidation');
+      assert.deepEqual(astValue(condition.test.right), expression(`${v.cache}[${v.size}]!==__cldxVersion`)); condition.test = condition.test.left;
+      const writes = nodes(condition.consequent, n => n.type === 'AssignmentExpression' && n.right.name === '__cldxVersion');
+      assert.equal(writes.length, 1); assert.deepEqual(astValue(writes[0].left), expression(`${v.cache}[${v.size}]`));
+      for (const seq of nodes(condition.consequent, n => n.type === 'SequenceExpression')) seq.expressions = seq.expressions.filter(n => !writes.includes(n));
+      condition.consequent.body = condition.consequent.body.filter(n => n.type !== 'ExpressionStatement' || !writes.includes(n.expression));
+    }
+    assert.deepEqual(astValue(f), astValue(originalVariants[i]), 'all native aggregation AST retained');
+  }
+  const opts = only(nodes(ast, n => n.type === 'CallExpression' && n.callee.name === 'createClaudeFolderRuntime'), 'folder runtime').arguments[0];
+  // Only folder behavior is compared. Older monolithic bootstraps also hosted
+  // chat wake; the new adapter intentionally owns that separate consumer.
+  return { wrapper: astValue(wrapper), variants: variants.map(v => ({ rows: v.rows, row: v.row, size: v.size ?? null })),
+    readMap: astValue(only(opts.properties.filter(p => p.key.name === 'readMap'), 'readMap').value) };
+}
+
+export const patchContracts = { folders: folderPatchContract, chatWake: chatPatchContract, ownerWake: ownerPatchContract };

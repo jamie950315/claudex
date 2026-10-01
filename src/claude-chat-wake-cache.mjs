@@ -33,7 +33,13 @@ export function buildClaudeChatWakeSource(source, options) {
  * presentation or depend on a particular sidebar grouping being mounted.
  */
 export async function ensureClaudeChatWakeCache({ root, home = homedir(), cachePath, graph,
+  folders = false,
   registryRoot = join(home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
   canonical(root); canonical(home); canonical(registryRoot);
-  return (await import('./claude-renderer-adapters.mjs')).ensureClaudeRendererAdapter({ root, home, cachePath, graph, registryRoot, adapter: 'chatWake' });
+  graph ??= await (await import('./claude-frontend-graph.mjs')).discoverClaudeFrontend({ root, home });
+  const shared = graph.adapters.folders?.status === 'matched' && graph.adapters.chatWake?.status === 'matched'
+    && graph.adapters.folders.target.url === graph.adapters.chatWake.target.url;
+  return (await import('./claude-renderer-adapters.mjs')).ensureClaudeRendererAdapter({ root, home, cachePath, graph, registryRoot,
+    adapter: shared && folders ? 'folders' : 'chatWake',
+    ...(shared ? { sharedResourceMode: folders ? 'combined' : 'chat-only' } : {}) });
 }

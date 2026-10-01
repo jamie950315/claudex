@@ -33,6 +33,22 @@ const nativeObject = node => {
 };
 const hasMember = (node, key) => nodes(node, n => member(n, key)).length > 0;
 const functions = ast => ast.body.filter(n => n.type === 'FunctionDeclaration');
+// Older real bundles retain compiler and non-compiler implementations under
+// one conditional binding. Both branches must validate; never choose a branch
+// from the host's feature flags or confuse two independent bindings with one.
+function functionBindings(ast) {
+  return ast.body.flatMap(n => {
+    if (n.type === 'FunctionDeclaration') return [{ name: id(n.id), variants: [n] }];
+    if (n.type !== 'VariableDeclaration') return [];
+    return n.declarations.flatMap(d => {
+      if (!id(d.id)) return [];
+      if (d.init?.type === 'FunctionExpression') return [{ name: id(d.id), variants: [d.init] }];
+      const v = d.init;
+      return v?.type === 'ConditionalExpression' && v.consequent.type === 'FunctionExpression'
+        && v.alternate.type === 'FunctionExpression' ? [{ name: id(d.id), variants: [v.consequent, v.alternate] }] : [];
+    });
+  });
+}
 const code = (source, n) => source.slice(n.start, n.end);
 export function applyEdits(source, edits) {
   edits.sort((a, b) => b.start - a.start || b.end - a.end);
@@ -83,33 +99,52 @@ function importedAPI(source, graph, property, native = false) {
 
 export function folderAnchors(source, graph) {
   const ast = syntax(source);
-  const grouping = unique(functions(ast).filter(f => hasMember(f, 'latestTimestamp') && hasMember(f, 'sessionStatus')
-    && nodes(f, n => prop(n, 'hasActiveSessions')).length && nodes(f, n => prop(n, 'disambiguationText')).length), 'sidebar grouping');
-  const label = unique(nodes(grouping, n => prop(n, 'name') && n.value.type === 'LogicalExpression'
-    && n.value.operator === '??' && member(n.value.left, 'name')), 'sidebar label');
-  const rows = id(grouping.params[0]); if (!rows) fail('sidebar rows');
-  const loop = unique(nodes(grouping, n => n.type === 'ForOfStatement' && id(n.right) === rows), 'sidebar row loop');
-  const row = id(loop.left?.declarations?.[0]?.id); if (!row) fail('sidebar row binding');
-  const keyCall = unique(nodes(loop.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
-    && id(n.init.callee) && n.init.arguments.length === 1 && id(n.init.arguments[0]) === row
-    && id(n.id) === id(label.value.right)), 'sidebar project key call');
-  const key = unique(functions(ast).filter(f => id(f.id) === id(keyCall.init.callee)
-    && hasMember(f, 'repoInfo') && hasMember(f, 'isScratchWorkspace') && hasMember(f, 'environmentId')
-    && nodes(f, n => n.type === 'Literal' && n.value === 'bridge').length), 'native project key');
-  const memo = unique(nodes(grouping.body.body[0], n => n.type === 'VariableDeclarator'
-    && n.init?.type === 'CallExpression' && n.init.arguments.length === 1
-    && Number.isInteger(n.init.arguments[0]?.value)), 'sidebar memo cache');
-  const cache = id(memo.id), size = memo.init.arguments[0].value;
-  if (!cache || size < 1 || size > 4096) fail('sidebar memo bound');
-  const store = unique(nodes(grouping, n => n.type === 'AssignmentExpression' && n.operator === '='
-    && n.left.type === 'MemberExpression' && id(n.left.object) === cache && n.left.computed
-    && n.left.property.value === 4), 'sidebar memo result store');
-  const condition = unique(nodes(grouping, n => n.type === 'IfStatement' && n.consequent.type === 'BlockStatement'
-    && n.consequent.start < store.start && n.consequent.end > store.end
-    && [0, 1, 2, 3].every(index => nodes(n.test, t => t.type === 'BinaryExpression' && t.operator === '!=='
-      && t.left.type === 'MemberExpression' && id(t.left.object) === cache && t.left.property.value === index).length === 1)), 'sidebar memo invalidation');
-  if (nodes(key.body, n => n.type === 'CallExpression' && id(n.callee) === id(key.id)).length) fail('recursive project key');
-  return { key, grouping, label, rows, row, memo, cache, size, condition,
+  const plausible = f => hasMember(f, 'latestTimestamp') && hasMember(f, 'sessionStatus')
+    && nodes(f, n => prop(n, 'hasActiveSessions')).length && nodes(f, n => prop(n, 'disambiguationText')).length;
+  const binding = unique(functionBindings(ast).filter(b => b.variants.some(plausible)), 'sidebar grouping binding');
+  if (!binding.variants.every(plausible)) fail('sidebar grouping branches');
+  const variants = binding.variants.map(grouping => {
+    const label = unique(nodes(grouping, n => prop(n, 'name') && n.value.type === 'LogicalExpression'
+      && n.value.operator === '??' && member(n.value.left, 'name')), 'sidebar label');
+    const rows = id(grouping.params[0]); if (!rows) fail('sidebar rows');
+    const loop = unique(nodes(grouping, n => n.type === 'ForOfStatement' && id(n.right) === rows), 'sidebar row loop');
+    const row = id(loop.left?.declarations?.[0]?.id); if (!row) fail('sidebar row binding');
+    const keyCall = unique(nodes(loop.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
+      && id(n.init.callee) && n.init.arguments.length === 1 && id(n.init.arguments[0]) === row
+      && id(n.id) === id(label.value.right)), 'sidebar project key call');
+    const key = unique(functions(ast).filter(f => id(f.id) === id(keyCall.init.callee)
+      && hasMember(f, 'repoInfo') && hasMember(f, 'isScratchWorkspace') && hasMember(f, 'environmentId')
+      && nodes(f, n => n.type === 'Literal' && n.value === 'bridge').length), 'native project key');
+    const memos = nodes(grouping.body.body[0], n => n.type === 'VariableDeclarator'
+      && n.init?.type === 'CallExpression' && n.init.arguments.length === 1
+      && Number.isInteger(n.init.arguments[0]?.value));
+    if (!memos.length) {
+      // The uncompiled implementation has one useMemo callback over the exact
+      // rows/environment/sort/order dependencies. Add the subscription version
+      // there too, otherwise a map change can leave useMemo's result stale.
+      const memo = unique(nodes(grouping, n => n.type === 'CallExpression' && id(n.callee)
+        && n.arguments.length === 2 && n.arguments[0].type === 'ArrowFunctionExpression'
+        && n.arguments[0].body.type === 'BlockStatement' && n.arguments[0].start < loop.start
+        && n.arguments[0].end > loop.end && n.arguments[1].type === 'ArrayExpression'
+        && n.arguments[1].elements.some(e => id(e) === rows)), 'sidebar uncompiled memo');
+      if (importedAPI(source, graph, 'useMemo').local !== id(memo.callee)) fail('sidebar useMemo binding');
+      return { key, grouping, label, rows, row, plainMemo: memo.arguments[1] };
+    }
+    const memo = unique(memos, 'sidebar memo cache');
+    const cache = id(memo.id), size = memo.init.arguments[0].value;
+    if (!cache || size < 1 || size > 4096) fail('sidebar memo bound');
+    const store = unique(nodes(grouping, n => n.type === 'AssignmentExpression' && n.operator === '='
+      && n.left.type === 'MemberExpression' && id(n.left.object) === cache && n.left.computed
+      && n.left.property.value === 4), 'sidebar memo result store');
+    const condition = unique(nodes(grouping, n => n.type === 'IfStatement' && n.consequent.type === 'BlockStatement'
+      && n.consequent.start < store.start && n.consequent.end > store.end
+      && [0, 1, 2, 3].every(index => nodes(n.test, t => t.type === 'BinaryExpression' && t.operator === '!=='
+        && t.left.type === 'MemberExpression' && id(t.left.object) === cache && t.left.property.value === index).length === 1)), 'sidebar memo invalidation');
+    if (nodes(key.body, n => n.type === 'CallExpression' && id(n.callee) === id(key.id)).length) fail('recursive project key');
+    return { key, grouping, label, rows, row, memo, cache, size, condition };
+  });
+  const key = unique([...new Set(variants.map(v => v.key))], 'sidebar shared native key');
+  return { ...variants[0], key, variants, groupingBinding: binding.name,
     native: importedAPI(source, graph, 'LocalSessions', true).local,
     subscribe: importedAPI(source, graph, 'useSyncExternalStore').local };
 }
@@ -118,12 +153,13 @@ export function chatAnchors(source, graph) {
   const native = importedAPI(source, graph, 'LocalSessions', true);
   // The mount-independent wake belongs to the session-action module, not an
   // arbitrary module that happens to read a file. The native capability check
-  // is a unique optional forkSession binding in that module.
+  // uses one uniquely imported native binding. Older compiler/non-compiler
+  // action branches repeat the capability read; no patch targets that read.
   const ast = syntax(source);
-  unique(nodes(ast, n => n.type === 'BinaryExpression' && n.operator === '!=='
+  const capabilities = nodes(ast, n => n.type === 'BinaryExpression' && n.operator === '!=='
     && n.right.type === 'UnaryExpression' && n.right.operator === 'void' && n.right.argument.value === 0
-    && member(n.left, 'forkSession') && unwrap(n.left).optional === true
-    && id(unwrap(n.left).object) === native.local), 'native fork capability');
+    && member(n.left, 'forkSession') && unwrap(n.left).optional === true).map(n => id(unwrap(n.left).object));
+  if (unique([...new Set(capabilities)], 'native fork capability binding') !== native.local) fail('native fork capability import');
   return { native: native.local };
 }
 
@@ -153,32 +189,47 @@ function attachedClientExport(module) {
 
 export function ownerAnchors(source, graph) {
   const ast = syntax(source);
-  const component = unique(functions(ast).filter(f => nodes(f, n => prop(n, 'submitMessage')).length
+  const plausible = f => nodes(f, n => prop(n, 'submitMessage')).length
     && nodes(f, n => prop(n, 'getComposerSnapshot')).length && nodes(f, n => prop(n, 'sessionType')).length
-    && nodes(f, n => prop(n, 'initialSessionId')).length && hasMember(f, 'waitForImagesReady')), 'Code session component');
-  const selections = nodes(component, n => n.type === 'VariableDeclarator' && n.init?.type === 'LogicalExpression'
-    && n.init.operator === '??' && n.init.right.type === 'Literal' && n.init.right.value === null
-    && member(n.init.left, 'id') && id(unwrap(n.init.left).object));
-  const submit = unique(nodes(component, n => prop(n, 'submitMessage')), 'Code imperative submit');
-  const submitCall = unique(nodes(submit.value, n => n.type === 'CallExpression' && id(n.callee)), 'Code submit callback');
-  const wrapper = unique(nodes(component, n => n.type === 'VariableDeclarator' && id(n.id) === id(submitCall.callee)
-    && n.init?.type === 'CallExpression' && id(n.init.callee)
-    && n.init.arguments.length === 1 && id(n.init.arguments[0])), 'Code retained submit wrapper');
-  const send = unique(nodes(component, n => n.type === 'AssignmentExpression' && id(n.left) === id(wrapper.init.arguments[0])
-    && n.right.type === 'ArrowFunctionExpression' && n.right.async && n.right.body.type === 'BlockStatement'), 'Code async send');
-  const identities = [];
-  for (const selection of selections) {
-    const ref = id(unwrap(selection.init.left).object);
-    const callbacks = nodes(component, n => n.type === 'ArrowFunctionExpression' && !n.async && !n.params.length && id(n.body) === ref);
-    const names = callbacks.flatMap(fn => nodes(component, n => n.type === 'AssignmentExpression' && n.right === fn && id(n.left)).map(n => id(n.left)));
-    for (const getter of nodes(component, n => n.type === 'VariableDeclarator' && id(n.id)
-      && n.init?.type === 'CallExpression' && id(n.init.callee) === id(wrapper.init.callee) && n.init.arguments.length === 1
-      && names.includes(id(n.init.arguments[0])))) {
-      if (nodes(send.right.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
-        && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter });
+    && nodes(f, n => prop(n, 'initialSessionId')).length && hasMember(f, 'waitForImagesReady');
+  const binding = unique(functionBindings(ast).filter(b => b.variants.some(plausible)), 'Code session component binding');
+  if (!binding.variants.every(plausible)) fail('Code session component branches');
+  const variants = binding.variants.map(component => {
+    const selections = nodes(component, n => n.type === 'VariableDeclarator' && n.init?.type === 'LogicalExpression'
+      && n.init.operator === '??' && n.init.right.type === 'Literal' && n.init.right.value === null
+      && member(n.init.left, 'id') && id(unwrap(n.init.left).object));
+    const submit = unique(nodes(component, n => prop(n, 'submitMessage')), 'Code imperative submit');
+    const submitCall = unique(nodes(submit.value, n => n.type === 'CallExpression' && id(n.callee)), 'Code submit callback');
+    const wrapper = unique(nodes(component, n => n.type === 'VariableDeclarator' && id(n.id) === id(submitCall.callee)
+      && n.init?.type === 'CallExpression' && id(n.init.callee)
+      && n.init.arguments.length === 1), 'Code retained submit wrapper');
+    const callbacks = arg => {
+      if (arg?.type === 'ArrowFunctionExpression') return [arg];
+      if (!id(arg)) return [];
+      return nodes(component, n => n.type === 'AssignmentExpression' && id(n.left) === id(arg)
+        || n.type === 'VariableDeclarator' && id(n.id) === id(arg))
+        .map(n => n.right ?? n.init).filter(n => n?.type === 'ArrowFunctionExpression');
+    };
+    const send = unique(callbacks(wrapper.init.arguments[0]), 'Code retained send callback');
+    if (!send.async || send.body.type !== 'BlockStatement' || !hasMember(send, 'waitForImagesReady')) fail('Code async send');
+    const identities = [];
+    for (const selection of selections) {
+      const ref = id(unwrap(selection.init.left).object);
+      for (const getter of nodes(component, n => n.type === 'VariableDeclarator' && id(n.id)
+        && n.init?.type === 'CallExpression' && id(n.init.callee) === id(wrapper.init.callee) && n.init.arguments.length === 1
+        && (n.init.arguments[0].type === 'ArrowFunctionExpression' || id(n.init.arguments[0])))) {
+        const readers = callbacks(getter.init.arguments[0]).filter(cb => !cb.async && !cb.params.length && id(cb.body) === ref);
+        if (!readers.length) continue;
+        unique(readers, 'Code reference reader callback');
+        if (nodes(send.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
+          && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter });
+      }
     }
-  }
-  const { ref, getter } = unique(identities, 'Code selection and native send identity');
+    const { ref, getter } = unique(identities, 'Code selection and native send identity');
+    return { component, ref, getter: id(getter.id), send,
+      selectionEnd: unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
+        && n.declarations.includes(getter)), 'Code getter declaration').end };
+  });
   const lookupMatches = [];
   for (const imp of ast.body.filter(n => n.type === 'ImportDeclaration')) {
     const module = graph.get(imp.source.value);
@@ -186,28 +237,31 @@ export function ownerAnchors(source, graph) {
     const exported = attachedClientExport(module);
     if (exported) lookupMatches.push({ path: imp.source.value, exported });
   }
-  return { component, ref, getter: id(getter.id), send: send.right,
-    selectionEnd: unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
-      && n.declarations.includes(getter)), 'Code getter declaration').end,
+  return { ...variants[0], variants, componentBinding: binding.name,
     effect: importedAPI(source, graph, 'useEffect').local,
     client: unique(lookupMatches, 'Code attached stdio lookup module') };
 }
 
 export function transformAnchoredFolder(source, b, bootstrap) {
   const name = id(b.key.id), param = id(b.key.params[0]); if (!param) fail('native key argument');
+  const variants = b.variants ?? [b];
   return applyEdits(source, [
     insert(b.key.start, bootstrap), replace(b.key.id, '__cldxNativeProjectKey'),
     insert(b.key.end, `function ${name}(${param}){return __cldx.lookup(${param})?.projectKey??__cldxNativeProjectKey(${param})}`),
-    insert(b.grouping.body.start + 1, `const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);__cldx.setRows(${b.rows},__cldxNativeProjectKey);`),
-    replace(b.memo.init.arguments[0], String(b.size + 1)),
-    replace(b.condition.test, `(${code(source, b.condition.test)})||${b.cache}[${b.size}]!==__cldxVersion`),
-    insert(b.condition.consequent.end - 1, `;${b.cache}[${b.size}]=__cldxVersion;`),
-    replace(b.label.value, `__cldx.lookup(${b.row})?.label??${code(source, b.label.value)}`),
+    ...variants.flatMap(v => [
+      insert(v.grouping.body.start + 1, `const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);__cldx.setRows(${v.rows},__cldxNativeProjectKey);`),
+      ...(v.plainMemo ? [insert(v.plainMemo.end - 1, ',__cldxVersion')] : [
+        replace(v.memo.init.arguments[0], String(v.size + 1)),
+        replace(v.condition.test, `(${code(source, v.condition.test)})||${v.cache}[${v.size}]!==__cldxVersion`),
+        insert(v.condition.consequent.end - 1, `;${v.cache}[${v.size}]=__cldxVersion;`),
+      ]),
+      replace(v.label.value, `__cldx.lookup(${v.row})?.label??${code(source, v.label.value)}`),
+    ]),
   ]);
 }
 export function transformAnchoredOwner(source, b, bootstrap) {
-  return applyEdits(source, [insert(b.selectionEnd,
-    `;${b.effect}(()=>{void __cldxOwnerWake.signal(${b.ref}?.id,"selection",${b.ref}?.type)},[${b.ref}?.id,${b.ref}?.type]);`),
-  insert(b.send.body.start + 1, `{const ref=${b.getter}();void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`),
+  return applyEdits(source, [...(b.variants ?? [b]).flatMap(v => [insert(v.selectionEnd,
+    `;${b.effect}(()=>{void __cldxOwnerWake.signal(${v.ref}?.id,"selection",${v.ref}?.type)},[${v.ref}?.id,${v.ref}?.type]);`),
+  insert(v.send.body.start + 1, `{const ref=${v.getter}();void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`)]),
   insert(source.length, bootstrap)]);
 }

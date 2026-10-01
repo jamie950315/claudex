@@ -162,6 +162,13 @@ original plus recovery journal for each cache filename. Earlier originals and
 receipts remain. Missing/ambiguous anchors or foreign cache changes skip that
 adapter explicitly in `renderer-adapters-status.json`; no older graph is guessed.
 
+Older builds can retain two implementations under one conditional binding; both
+must validate and are patched. When folders and chat actions share a cache entry,
+the all-adapter installer publishes their complete combined patch once, with one
+original and recovery journal under `ui-folders/<cache filename>/ui-folder-compat`.
+Disabling folders retains only chat wake. Restoring a shared entry removes both
+adapters from that entry; separate resource journals remain independent.
+
 Cache notifications arrive after writes, so patching cannot be guaranteed before
 first renderer evaluation. Loading each newly installed graph requires a normal
 idle Claude restart. The watcher never reloads/quits Claude or restarts native
@@ -192,6 +199,17 @@ tests native layout without invoking the backend; it is not deployment evidence.
 `--diagnose` reads the same bounded health report used by the menu bar.
 `--ui-language <locale>` overrides the language only with `--inspect-only` or
 `--ui-smoke`; these modes do not persist the language preference.
+
+From a developer checkout, run `node dev/verify-claude-frontend-builds.mjs` to
+check every locally available cached entry graph and renderer original journal.
+Optional `--home`, `--root` and `--report` specify source locations and a metadata
+report outside live state. The script uses temporary cache copies and the real
+installer/watcher, checks syntax with `node --check`, compares native AST/wiring
+with historical hand-pin transforms, and lists exact missing assets and failures.
+Current runtime code is supplied to both transforms; this does not attest to an
+older installed runtime or live renderer reception. Obsolete owner-wake pins into
+Chat/Cowork fail that comparison explicitly; they are never used to restore the
+superseded channel. The script exits nonzero if any required check fails.
 
 ## Packaging and distribution
 

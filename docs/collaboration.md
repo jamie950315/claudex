@@ -192,6 +192,11 @@ load regardless of sidebar visibility; folders do not embed a second consumer.
 Each cache filename has an independent immutable original and prepared/installed
 journal under `ui-chat-wake/<cache filename>/ui-folder-compat`. Earlier originals
 and receipts remain; idempotent reinstall and restore keep their exact bindings.
+Older folder/action modules can share a physical cache entry. The all-adapter
+installer then publishes one combined resource under the folder journal; a
+shared-resource restore removes both adapters, while disabling folders installs
+chat wake alone. Unique native import bindings may have repeated capability
+reads in compiler branches; no adapter chooses between those branches.
 The cache watcher acts after writes and cannot guarantee installation before the
 renderer evaluates a newly fetched module. Each newly installed graph therefore
 requires a normal idle Claude restart. No automatic app reload or native owner

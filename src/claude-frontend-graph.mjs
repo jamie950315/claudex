@@ -120,7 +120,9 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
   while (pending.length) {
     const url = pending.pop(); if (modules.has(url) || missing.has(url)) continue;
     const resource = inventory.get(url); if (!resource) { missing.add(url); continue; }
-    if (modules.size >= 1024 || missing.size > 2048) fail('import graph exceeds its bound');
+    // Observed September entry graphs retain both compiler branches and reach
+    // 1,171 cached modules. Keep a finite bound covering those real builds.
+    if (modules.size >= 2048 || missing.size > 2048) fail('import graph exceeds its bound');
     const snapshot = await snapshotClaudeCache(resource.path);
     bytes += snapshot.bytes.length; if (bytes > 256 * 1024 * 1024) fail('graph bytes exceed their bound');
     const original = await originalEntry(root, resource.name, { ...snapshot, path: resource.path }, url);

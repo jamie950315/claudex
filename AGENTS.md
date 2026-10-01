@@ -1206,8 +1206,14 @@ React hooks from their public getter, definition and export/import relationships
 The folder adapter requires the unique repoInfo/isScratchWorkspace/environmentId
 project-key function and sidebar sessionStatus/hasActiveSessions/disambiguationText
 aggregation. Retain its native key/label fallback and extend its compiled memo
-cache with the map subscription version. The independent chat-wake adapter uses
-the session-action module's unique optional native forkSession capability check,
+cache with the map subscription version. Older conditional bindings retain a
+compiler and an uncompiled implementation: validate and patch both branches of
+the one exact binding, including useMemo's version dependency; never choose a
+branch from host feature flags. Graphs are bounded to 2,048 cached modules and
+2,048 missing imports (observed older entries reach 1,171 cached modules).
+The independent chat-wake adapter uses the session-action module's unique native
+import binding and optional forkSession capability relationship (older branches
+repeat the same read),
 reopenClosed and amber_tributary_lantern_overview_toggle shortcut anchors. Folder
 bootstrap no longer embeds another chat-wake consumer. Every adapter's entire
 transformed module must pass Acorn syntax validation before any cache publication.
@@ -1230,6 +1236,15 @@ folder status also exposes this maintenance report.
 Each resource uses <adapter>/<cache filename>/ui-folder-compat, with adapter
 ui-folders, ui-chat-wake or ui-owner-wake, an immutable original and a
 prepared/installed journal.
+Older graphs can share one folder/chat resource. The all-adapter installer
+combines both complete transforms in one transaction and owns its immutable
+original/journal under ui-folders/<cache filename>/ui-folder-compat. A disabled
+folder choice installs chat only there. Individual adapter calls refuse a shared
+resource without the explicit combined/chat-only mode. Restoring that shared
+resource restores both transforms; earlier independent journals remain intact.
+Normal graphical chat setup passes the saved folder choice to that shared recipe;
+explicit folder enable selects the combined recipe. Never remove an enabled
+folder patch merely because chat setup runs before synchronization setup.
 Observed source hashes bind recovery evidence, not a checked-in allowlist.
 Never overwrite foreign changes or prune earlier generations. Re-discovery reads
 validated originals for installed/prepared generations; reinstall is idempotent.
@@ -1249,6 +1264,19 @@ lines to once per second and runtime diagnostics to 64 per thirty seconds, witho
 diagnostic timers/retries. Synthetic, syntax and copied-cache checks are not live
 renderer acceptance. Earlier native reception evidence remains historical; each
 new graph requires separate live reception acceptance before claiming delivery.
+
+dev/verify-claude-frontend-builds.mjs is a developer-only static acceptance script.
+It inventories real cached entries and all current/legacy renderer journals,
+validates immutable originals, copies exact import graphs into temporary homes,
+and runs production discovery/installation plus node --check and AST/wiring
+comparison. It compares historical hand-pin transforms with the current runtime
+supplied to both, excluding diagnostic label spelling, and exercises actual
+fs.watch re-application, original/receipt preservation, reinstall and restore.
+It never executes vendor modules, performs inference or mutates live cache/state;
+only metadata reports survive. List exact missing assets and explicit failures.
+Obsolete shared Chat/Cowork owner-wake pins are not equivalent to the required
+Code/attached-stdio design: report their refusal/comparison failure and preserve
+them, never restore directMcpCallTool or the wrong component to pass acceptance.
 
 The integrated real SDK/coordinator proof preserves four canonical messages
 through a cold migration, restart and then a six-message next-delta checkpoint;

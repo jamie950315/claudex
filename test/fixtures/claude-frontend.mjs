@@ -4,22 +4,29 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FRONTEND_ASSET_ROOT, claudeCacheDirectory } from '../../src/claude-frontend-graph.mjs';
 
-export function frontendBuild(tag = 'a', memoSize = 11) {
+export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shared = false } = {}) {
   const names = { entry: `index-${tag}.js`, native: `native-${tag}.js`, react: `vendor-${tag}.js`, client: `mcp-${tag}.js`,
     folders: `sidebar-${tag}.js`, chatWake: `actions-${tag}.js`, ownerWake: `code-${tag}.js` };
   const nativeImport = `import{Native${tag} as L${tag}}from"./${names.native}";`;
   const native = `var A${tag}=globalThis["claude.web"]?.LocalSessions,B${tag}=globalThis["claude.web"]?.LocalAgentModeSessions;export{A${tag} as Native${tag},B${tag} as Agent${tag}};`;
-  const react = `var R${tag}={};var E${tag}=R${tag}.useEffect,S${tag}=R${tag}.useSyncExternalStore;var getters${tag}={useEffect:()=>E${tag},useSyncExternalStore:()=>S${tag}};export{E${tag} as Effect${tag},S${tag} as Subscribe${tag}};`;
+  const react = `var R${tag}={};var E${tag}=R${tag}.useEffect,S${tag}=R${tag}.useSyncExternalStore,U${tag}=R${tag}.useMemo;var getters${tag}={useEffect:()=>E${tag},useSyncExternalStore:()=>S${tag},useMemo:()=>U${tag}};export{E${tag} as Effect${tag},S${tag} as Subscribe${tag},U${tag} as Memo${tag}};`;
   const client = `var M${tag}={};function lookup${tag}(e){let s=M${tag}.getState();for(let[,{uuid:u,client:c}]of Object.entries(s.localClients))if(u===e)return c}export{lookup${tag} as Client${tag}};`;
-  const folders = nativeImport + `import{Subscribe${tag} as sub${tag}}from"./${names.react}";`
+  let folders = nativeImport + `import{Subscribe${tag} as sub${tag},Memo${tag} as useMemo${tag}}from"./${names.react}";`
     + `function key${tag}(e){if(e.isScratchWorkspace)return;let t=e.repoInfo;if(t)return e.type==="local"?e.cwd:e.type==="bridge"&&e.environmentId?e.environmentId+":"+t.name:t.name}`
     + `var empty${tag}=[];function group${tag}(rows${tag},t,n){let cache${tag}=memo${tag}(${memoSize}),sort${tag}=t===void 0?"recent":t,a=n===void 0?empty${tag}:n,{data:o}=data${tag}(),env${tag}=o?.environments,order${tag}=Array.isArray(a)?a:empty${tag},out${tag};`
     + `if(cache${tag}[0]!==env${tag}||cache${tag}[1]!==order${tag}||cache${tag}[2]!==rows${tag}||cache${tag}[3]!==sort${tag}){let map=new Map;for(let row${tag} of rows${tag}){let k${tag}=key${tag}(row${tag});if(!k${tag})continue;let running=row${tag}.sessionStatus==="running",stamp=new Date(row${tag}.timestamp).getTime(),repo=row${tag}.repoInfo;map.set(k${tag},{name:repo?.name??k${tag},hasActive:running,latestTimestamp:stamp})}out${tag}=[];for(let[k,e]of map)out${tag}.push({key:k,name:e.name,hasActiveSessions:e.hasActive,disambiguationText:null,latestTimestamp:e.latestTimestamp});cache${tag}[0]=env${tag},cache${tag}[1]=order${tag},cache${tag}[2]=rows${tag},cache${tag}[3]=sort${tag},cache${tag}[4]=out${tag}}else out${tag}=cache${tag}[4];return out${tag}}`;
   const chatWake = nativeImport + `function actions${tag}(){let enabled=L${tag}?.forkSession!==void 0;shortcut("amber_tributary_lantern_overview_toggle");return enabled?"reopenClosed":null}`;
-  const ownerWake = `import{Effect${tag} as effect${tag}}from"./${names.react}";import{Client${tag}}from"./${names.client}";`
+  let ownerWake = `import{Effect${tag} as effect${tag}}from"./${names.react}";import{Client${tag}}from"./${names.client}";`
     + `function view${tag}(e){let{initialSessionId:s,sessionType:type}=e;let ref${tag}=s?{id:s,type}:null,id${tag}=ref${tag}?.id??null,reader${tag};reader${tag}=()=>ref${tag};let current${tag}=event${tag}(reader${tag}),send${tag};send${tag}=async(text,options)=>{if(options?.blocked)return "blocked";await images.waitForImagesReady();let selected${tag}=current${tag}();return nativeSend(text,options,selected${tag})};let dispatch${tag}=event${tag}(send${tag});return{submitMessage:e=>void dispatch${tag}(e),getComposerSnapshot:()=>({}),dispatch:dispatch${tag}}}`;
-  const entry = Object.values(names).filter(f => f !== names.entry).map(f => `import"./${f}";`).join('') + 'document.getElementById("root");';
-  const sources = { entry, native, react, client, folders, chatWake, ownerWake };
+  if (variants) {
+    folders = folders.replace(`function group${tag}(`, `var group${tag}=compilerBuild?function(`)
+      + `:function(rows${tag},t,n){return useMemo${tag}(()=>{let map=new Map;for(let row${tag} of rows${tag}){let k${tag}=key${tag}(row${tag}),repo=row${tag}.repoInfo;if(!k${tag})continue;map.set(k${tag},{name:repo?.name??k${tag},hasActive:row${tag}.sessionStatus==="running",latestTimestamp:row${tag}.timestamp})}let out=[];for(let[k,e]of map)out.push({key:k,name:e.name,hasActiveSessions:e.hasActive,disambiguationText:null,latestTimestamp:e.latestTimestamp});return out},[rows${tag},t,n])};`;
+    ownerWake = ownerWake.replace(`function view${tag}(e){`, `var view${tag}=compilerBuild?function(e){`)
+      + `:function(e){let{initialSessionId:s,sessionType:type}=e;let ref${tag}=s?{id:s,type}:null,id${tag}=ref${tag}?.id??null;let current${tag}=event${tag}(()=>ref${tag});let dispatch${tag}=event${tag}(async(text,options)=>{if(options?.blocked)return "blocked";await images.waitForImagesReady();let selected${tag}=current${tag}();return nativeSend(text,options,selected${tag})});return{submitMessage:e=>void dispatch${tag}(e),getComposerSnapshot:()=>({}),dispatch:dispatch${tag}}};`;
+  }
+  if (shared) { names.chatWake = names.folders; folders += chatWake.replace(nativeImport, ''); }
+  const entry = [...new Set(Object.values(names).filter(f => f !== names.entry))].map(f => `import"./${f}";`).join('') + 'document.getElementById("root");';
+  const sources = { entry, native, react, client, folders, chatWake: shared ? folders : chatWake, ownerWake };
   return { names, sources, tag };
 }
 export function cacheBytes(url, source, fetchedAt) {
@@ -41,6 +48,8 @@ export async function writeFrontend(home, build, fetchedAt = Date.now() - 10000)
   const resources = {};
   for (const [kind, name] of Object.entries(build.names)) {
     const url = FRONTEND_ASSET_ROOT + name, filename = createHash('sha256').update(url).digest('hex').slice(0,16) + '_0',path=join(directory,filename);
+    const existing = Object.values(resources).find(r => r.url === url);
+    if (existing) { resources[kind] = existing; continue; }
     const bytes = cacheBytes(url, build.sources[kind], fetchedAt);await writeFile(path,bytes,{mode:0o600});resources[kind]={path,bytes,url,filename};
   }
   return resources;

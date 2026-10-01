@@ -67,6 +67,7 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.ok(events.some(([kind]) => kind === 'sync-hooks'));
   assert.ok(events.some(([kind, input]) => kind === 'desktop-wake' && input.args.includes('desktop-wake-mcp')));
   assert.ok(events.some(([kind]) => kind === 'desktop-wake-cache'));
+  assert.equal(events.find(([kind]) => kind === 'desktop-wake-cache')[1].folders, true);
   assert.ok(events.some(([kind]) => kind === 'desktop-owner-wake-cache'));
   assert.equal(report.version, 1);
   assert.equal(report.allProjects, true);
@@ -292,6 +293,7 @@ test('setup enables graph maintenance and updates the legacy folder hint without
   events.length = 0; await setup.setup();
   assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), disabled);
   assert.ok(!events.some(([kind]) => kind === 'folders'));
+  assert.equal(events.find(([kind]) => kind === 'desktop-wake-cache')[1].folders, false);
 
   await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
   setup.foldersInstall = async () => { throw new Error('Unvalidated frontend'); };

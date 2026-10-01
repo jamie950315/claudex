@@ -23,7 +23,7 @@ export function claudeFolderPresentationManifestPath(root, cachePath) {
 }
 
 export async function ensureClaudeFolderPresentationCache(options) {
-  return ensureClaudeRendererAdapter({ ...options, adapter: 'folders' });
+  return ensureClaudeRendererAdapter({ ...options, adapter: 'folders', sharedResourceMode: 'combined' });
 }
 
 export async function restoreClaudeFolderPresentationCache(options) {
