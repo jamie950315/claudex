@@ -63,19 +63,21 @@ async function fixture(packetVersion = 2) {
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, encodeClaude({ meta: { id: nativeId, cwd, timestamp: '2026-09-25T00:00:00.000Z' }, messages: [{ role: 'user', content }] }, nativeId).text);
   const ownerState = join(runtime.root, 'owners', `${hash(conversationId)}.json`);
-  await writeJSON(ownerState, { version: 1, sessionId: nativeId, remoteId: 'cse_synthetic' });
+  await writeJSON(ownerState, { version: 1, conversationId, cwd, claudeHome, sessionId: nativeId, remoteId: 'cse_synthetic' });
   return { runtime, record, calls, ownerState };
 }
 
-test('a verified archived current owner resumes directly with normal user settings', async () => {
+test('a verified archived current owner stays stopped until normal activation', async () => {
   const f = await fixture();
   try {
     await f.runtime.inspect(f.record);
+    assert.equal(await f.runtime.needsMaintenance(f.record), false);
+    assert.equal(f.calls.length, 0);
+    await f.runtime.activateNormalOwner(f.record);
     assert.equal(f.calls[0].settings.deferRemoteConnection, false);
     assert.equal(f.calls[0].settings.title, 'Synthetic profile');
     assert.equal(f.calls[0].settings.newSessionTitle, 'Synthetic profile');
     assert.equal(f.record.title, 'Synthetic profile');
-    await f.runtime.needsMaintenance(f.record);
     assert.equal(f.calls.length, 1);
     assert.equal(f.calls[0].closed, false);
     assert.equal(f.calls[0].connected, 1);
@@ -86,6 +88,11 @@ test('an inline owner remains private until a verified migration is promoted', a
   const f = await fixture(1);
   try {
     await f.runtime.inspect(f.record);
+    assert.equal(f.calls.length, 0);
+    assert.equal(await f.runtime.needsMaintenance(f.record), true);
+    assert.equal(f.calls.length, 0);
+    await f.runtime.plan('claude', { conversationId: f.record.conversationId, common: { meta: { cwd: f.record.cwd } },
+      title: f.record.title, target: f.record, contextReset: true });
     assert.equal(f.calls[0].settings.deferRemoteConnection, true);
     assert.equal(f.calls[0].settings.connectAfterReset, false);
     assert.equal(await f.runtime.needsMaintenance(f.record), true);
@@ -106,7 +113,8 @@ test('promoted recovery starts the normal owner even when the runtime has no cac
 test('a pending reset cannot be launched under normal settings even with a stale promoted record', async () => {
   const f = await fixture();
   try {
-    await writeJSON(f.ownerState, { version: 1, sessionId: f.record.nativeId, remoteId: 'cse_synthetic', reset: { phase: 'restoring' } });
+    await writeJSON(f.ownerState, { version: 1, conversationId: f.record.conversationId, cwd: f.record.cwd,
+      claudeHome: f.runtime.claudeHome, sessionId: f.record.nativeId, remoteId: 'cse_synthetic', reset: { phase: 'restoring' } });
     await assert.rejects(f.runtime.inspect(f.record), /pending native context reset/);
     assert.equal(f.calls.length, 0);
   } finally { await f.runtime.close(); }

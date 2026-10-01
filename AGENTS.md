@@ -627,7 +627,13 @@ tombstone flush. Restoring an old context never revives a failed proof.
 During startup/reconnection reconciliation, between complete cold operations,
 refresh discovery and changed work after two
 seconds, not the entire unchanged foreground queue. Every managed owner retains
-its regular full lifecycle check once per pass; changed owners are prioritized.
+its full lifecycle check once per pass; changed owners are prioritized. Running
+Claude owners use live lifecycle state. Stopped current owners use matched saved
+state under the native writer lock and stable transcript reads, without starting a
+process. Pending appends/resets require explicit recovery. Preserve archive,
+image restoration and retained-generation checks. Idle assertions and maintenance
+discovery must not start an owner; actual reset plans still require a fresh cold
+native owner. Reconcile legacy display titles only when an owner runs for work.
 Discovery and new deliveries also refresh between individual foreground syncs,
 using their own clock; a long active-owner sweep must not block new enrollment.
 Stable file/lifecycle observations also prioritize changed existing conversations
@@ -1161,8 +1167,9 @@ Owners start on demand and each keeps a native Claude process (~300 MB). The
 watcher closes an owner unused for claudeOwnerIdleSeconds (config.json, default
 900, bounds 60..86400) while it waits for events: only idle, unblocked owners
 with no pending/reset/background work, never while the ledger has a pending
-transaction, and a busy refusal keeps the owner. The next read or delivery
-restarts it with the same Remote Control identity; while closed, its Desktop
+transaction, and a busy refusal keeps the owner. The next delivery, required
+maintenance/recovery or explicit wake restarts it with the same Remote Control
+identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
 The separately pinned conversation adapter signals component selection/mount and
 native submit for exact published folder-map RC IDs only, with bounded debounce.

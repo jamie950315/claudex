@@ -205,7 +205,7 @@ export class DesktopRuntime {
       if (reconcileTitle) await entry.owner.reconcileDisplayTitle?.(title);
       return entry.owner;
     }
-    const stored = await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null);
+    const stored = await ClaudeOwner.readSavedState(join(this.root, 'owners', `${hash(conversationId)}.json`));
     // An owner is bound to its saved directory string. A project renamed and
     // left as an alias cannot host it again; only a verified move replaces it.
     if (stored?.cwd === cwd && await realpath(cwd) !== cwd)
@@ -401,9 +401,9 @@ export class DesktopRuntime {
     if (record.side !== 'claude' || !record.managed || record.kind !== 'owner') return false;
     if (this.owners.get(record.conversationId)?.owner.status().sessionId === record.nativeId) return false;
     // The replacement may already own the per-conversation state path.
-    const current = await readJSON(join(this.root, 'owners', `${hash(record.conversationId)}.json`), null);
+    const current = await ClaudeOwner.readSavedState(join(this.root, 'owners', `${hash(record.conversationId)}.json`));
     if (current?.sessionId === record.nativeId) return false;
-    return (await readJSON(this.retiredOwnerPath(record), null))?.sessionId === record.nativeId;
+    return (await ClaudeOwner.readSavedState(this.retiredOwnerPath(record)))?.sessionId === record.nativeId;
   }
 
   /** An owner whose saved directory became an alias of another directory can
@@ -442,6 +442,11 @@ export class DesktopRuntime {
     if (typeof cwd !== 'string' || !isAbsolute(cwd)) return false;
     try { await lstat(cwd); return false; }
     catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return true; throw error; }
+  }
+
+  async readStoppedOwner(record, read) {
+    return ClaudeOwner.readStopped({ root: this.root, conversationId: record.conversationId, cwd: record.cwd,
+      claudeHome: this.claudeHome, sessionId: record.nativeId, path: record.path, versionPolicy: this.versionPolicy }, read);
   }
 
   async inspect(record) {
@@ -488,7 +493,7 @@ export class DesktopRuntime {
       const { record: ignored, relocationProof: evidence, ...data } = proof;
       return data;
     }
-    const importPacket = importedClaudeOriginal(record);
+    importedClaudeOriginal(record);
     if (record.side === 'codex') {
       let nativeId = record.nativeId;
       if (!nativeId) {
@@ -554,10 +559,17 @@ export class DesktopRuntime {
       data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
       return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(path)).size, digest: fingerprint(data.common) };
     }
-    let path = record.path; let owner; let retainedData;
-    if (record.managed) {
-      owner = await this.owner(record.conversationId, record.cwd, record.title,
-        { forceNormal: record.verified === true && record.packetVersion === 2 && !record.readResetSourceForOperation });
+    if (record.managed && !this.owners.has(record.conversationId) && !record.contextReset && !record.readResetSourceForOperation)
+      return this.readStoppedOwner(record, owner => this.inspectClaude(record, owner, { stopped: true }));
+    const owner = record.managed ? await this.owner(record.conversationId, record.cwd, record.title,
+      { forceNormal: record.verified === true && record.packetVersion === 2 && !record.readResetSourceForOperation }) : null;
+    return this.inspectClaude(record, owner);
+  }
+
+  async inspectClaude(record, owner, { stopped = false } = {}) {
+    const importPacket = importedClaudeOriginal(record);
+    let path = record.path, retainedData;
+    if (owner) {
       if (owner.status().blocked) throw new Error(owner.status().blocked);
       if (owner.status().sessionId !== record.nativeId) {
         if (!record.readResetSourceForOperation) throw new Error('Native Claude owner identity changed.');
@@ -567,6 +579,7 @@ export class DesktopRuntime {
     }
     path = await this.safePath(path, this.claudeHome);
     const data = retainedData ?? (owner ? await owner.inspectTranscript() : await snapshot(path));
+    if (stopped) owner.inspectRemoteIdentity(data);
     const packetHistory = record.managed || importPacket;
     const resolveArchive = packetHistory ? await prepareArchiveResolver({ root: this.root,
       contents: data.rows.filter(row => row.type === 'user').map(row => row.message?.content),
@@ -630,8 +643,11 @@ export class DesktopRuntime {
         if (contextReset || contextRefresh || target?.cwd === common.meta.cwd) throw new Error('Invalid Claude owner relocation plan.');
         await this.retireOwner(target);
       }
-      const owner = await this.owner(conversationId, common.meta.cwd, title);
+      const owner = await this.owner(conversationId, common.meta.cwd, title,
+        { forceNormal: !contextReset && target?.verified === true && target.packetVersion === 2 });
       const status = owner.status();
+      if (contextReset && !status.coldResetEligible)
+        throw new Error('Inline context migration requires a fresh cold native owner; active input channels were preserved.');
       if (relocation && (status.sessionId === target.nativeId || status.pending || status.reset))
         throw new Error('Relocated Claude owner did not start as a new native session.');
       if (!relocation && target?.managed && target.nativeId !== status.sessionId) throw new Error('Existing Claude owner does not match the tracked identity.');
@@ -656,6 +672,10 @@ export class DesktopRuntime {
       && data?.common?.messages && hasProjectedImages(data.common.messages);
     if (record.side === 'codex') return needsImages && record.kind === 'snapshot' ? 'images' : false;
     if (record.side !== 'claude' || await this.ownerRetired(record) || await this.ownerStranded(record)) return false;
+    if (!this.owners.has(record.conversationId)) {
+      await this.readStoppedOwner(record, () => {});
+      return record.packetVersion !== 2 ? true : needsImages ? 'images' : false;
+    }
     const owner = await this.owner(record.conversationId, record.cwd, record.title);
     if (record.packetVersion !== 2) {
       if (!owner.status().coldResetEligible) throw new Error('Inline context migration requires a fresh cold native owner; active input channels were preserved.');
@@ -813,6 +833,10 @@ export class DesktopRuntime {
       }
       if (!record.managed) {
         if ((await this.inspect(record)).incompleteTail) throw new Error('Claude turn is still running.');
+        return;
+      }
+      if (!this.owners.has(record.conversationId)) {
+        await this.readStoppedOwner(record, () => {});
         return;
       }
       const owner = await this.owner(record.conversationId, record.cwd, record.title);
@@ -1121,7 +1145,7 @@ export class DesktopRuntime {
   }
   // An idle owner keeps a native Claude process (hundreds of MB) only so its
   // Remote Control entry stays connected. Owners are started on demand by the
-  // next read or delivery, so one unused for ownerIdleMs is closed.
+  // next delivery, maintenance/recovery or wake, so one unused for ownerIdleMs is closed.
   idleOwner(entry) {
     if (entry.error) return false;
     const status = entry.owner.status();

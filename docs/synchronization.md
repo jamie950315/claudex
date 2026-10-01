@@ -181,13 +181,19 @@ Raw and converted histories must both fit the byte budget. Exceeding a limit
 reports the source thread ID and stops that operation without retry, truncation,
 fallback, or weakening authentication and canonical-history checks.
 
-Each synchronized Claude conversation is served by a background Claude Code
-process while Claudex reads or delivers to it. A process unused for
-`claudeOwnerIdleSeconds` (default 900; 60 through 86400) is closed while the
-watcher waits for events, unless it is busy or a handoff is pending. The next
-synchronization starts it again with the same Remote Control identity; while it
-is closed, that conversation's Claude Desktop entry is not connected. With the
-pinned owner activation adapter loaded, opening or submitting to an exact managed
+Managed Claude owners start only for delivery, required maintenance/recovery or
+an explicit owner wake. Startup/reconnection verification, idle assertions and
+maintenance discovery do not start stopped current owners. They validate matched
+saved state under the native writer lock (live foreign locks refuse the read), use
+stable no-follow transcript snapshots and retain archive, image restoration and
+preserved-generation checks. Unfinished tails remain withheld; pending appends
+or resets require recovery. Already-running owners retain their live checks.
+A process unused for `claudeOwnerIdleSeconds` (default 900; 60 through 86400) is
+closed while the watcher waits for events, unless it is busy or a handoff is pending. The next
+delivery or required maintenance/recovery starts it again with the same Remote
+Control identity; while it is closed, that conversation's Claude Desktop entry
+is not connected. With the pinned owner activation adapter loaded, opening or
+submitting to an exact managed
 entry can also reconnect that owner without a Codex connection (see below).
 
 Codex Desktop stores a screenshot of the browser or app surface with every
@@ -390,7 +396,8 @@ merge. This is the same Local-to-Remote-Control transition described above.
 
 New managed Remote Control entries use the **original conversation title**,
 matching Codex generations. Existing owned names with the previous
-`[Claudex]` prefix are migrated through the live owner's native rename API.
+`[Claudex]` prefix are migrated through the live owner's native rename API when
+it starts for work; verification alone never starts an owner to rename it.
 The durable migration journal and native transcript proof prevent an ambiguous
 rename from silently succeeding or being sent again. Unrelated manual names
 are preserved, including on Remote Control reconnection. No standalone helper

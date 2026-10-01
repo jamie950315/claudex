@@ -54,12 +54,38 @@ function alive(pid) {
   catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; }
 }
 
+const sameSnapshot = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink']
+  .every(key => a[key] === b[key]);
+
+async function readOwnerJSON(path) {
+  const named = await lstat(path, { bigint: true });
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await file.stat({ bigint: true });
+    if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n
+        || (before.mode & 0o777n) !== 0o600n || !sameSnapshot(named, before))
+      throw new Error('Claude owner metadata must be a stable private owned regular file.');
+    const buffer = Buffer.alloc(Number(before.size) + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const { bytesRead } = await file.read(buffer, length, buffer.length - length, length);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    const after = await file.stat({ bigint: true }), current = await lstat(path, { bigint: true });
+    if (length !== Number(before.size) || !sameSnapshot(before, after) || !sameSnapshot(after, current))
+      throw new Error('Claude owner metadata changed while being read.');
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, length));
+    return { state: JSON.parse(text), identity: after, text };
+  } finally { await file.close(); }
+}
+
 async function acquireLock(path) {
   let file;
   try { file = await open(path, 'wx', 0o600); }
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
-    const old = await readJSON(path);
+    const { state: old, identity: original, text } = await readOwnerJSON(path);
     if (alive(old.pid) || old.childPid && alive(old.childPid)) throw new Error('Claude owner is already running; refusing a second writer.');
     // One reaper at a time. A crash during reaping remains explicit, not an
     // invitation to race another process or discard an uncertain live owner.
@@ -67,8 +93,11 @@ async function acquireLock(path) {
     try { await link(path, claim); }
     catch { throw new Error('Claude owner recovery is already claimed; inspect the owner lock.'); }
     try {
-      const current = await lstat(path), claimed = await lstat(claim);
-      if (current.ino !== claimed.ino || current.dev !== claimed.dev) throw new Error('Claude owner lock changed during recovery.');
+      const current = await lstat(path, { bigint: true }), claimed = await lstat(claim, { bigint: true });
+      if (current.ino !== original.ino || current.dev !== original.dev
+          || current.ino !== claimed.ino || current.dev !== claimed.dev
+          || (await readFile(claim, 'utf8')) !== text
+          || alive(old.pid) || old.childPid && alive(old.childPid)) throw new Error('Claude owner lock changed during recovery.');
       await unlink(path);
       file = await open(path, 'wx', 0o600);
     } finally { await unlink(claim); }
@@ -83,7 +112,7 @@ async function acquireLock(path) {
   return {
     setChild(pid) { identity.childPid = pid; save(); },
     async release() {
-      const current = await readJSON(path);
+      const { state: current } = await readOwnerJSON(path);
       if (current.nonce !== identity.nonce) throw new Error('Claude owner lock changed before release.');
       await file.close();
       await unlink(path);
@@ -139,6 +168,45 @@ function appendUuid(sessionId, operationId) {
 
 /** The sole SDK writer for a stable local session and its Desktop Remote Control view. */
 export class ClaudeOwner {
+  static async readSavedState(path) {
+    try { return (await readOwnerJSON(path)).state; }
+    catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  }
+
+  /** Hold the native writer lock for a process-free read. Never register,
+   * reconcile pending work, load the SDK, or expose an external input channel.
+   */
+  static async readStopped({ root, conversationId, cwd, claudeHome, sessionId, path, versionPolicy }, read) {
+    const owner = new ClaudeOwner({ root, conversationId, cwd, claudeHome, versionPolicy });
+    const directory = join(owner.root, 'owners'), before = await lstat(directory, { bigint: true });
+    if (!before.isDirectory() || before.uid !== BigInt(process.getuid()) || (before.mode & 0o077n) !== 0n
+        || await realpath(directory) !== directory) throw new Error('Claude owner directory must be canonical, private and owned.');
+    owner.statePath = join(directory, `${hash(conversationId)}.json`);
+    const lock = await acquireLock(`${owner.statePath}.lock`);
+    try {
+      const saved = await readOwnerJSON(owner.statePath);
+      owner.state = saved.state;
+      if (!owner.state || owner.state.version !== 1 || owner.state.conversationId !== conversationId
+          || !UUID.test(sessionId) || owner.state.sessionId !== sessionId || owner.state.cwd !== cwd
+          || owner.state.claudeHome !== claudeHome || await realpath(cwd) !== cwd
+          || await realpath(claudeHome) !== claudeHome || path !== sessionPath(claudeHome, cwd, sessionId))
+        throw new Error('Stored Claude owner state identity does not match its record.');
+      if (owner.state.blocked) throw new Error(owner.state.blocked);
+      if (owner.state.reset) throw new Error('A pending native context reset requires owner recovery before process-free inspection.');
+      if (owner.state.pending) throw new Error('A pending native append requires owner recovery before process-free inspection.');
+      if (owner.state.remoteId && !REMOTE_ID.test(owner.state.remoteId)) throw new Error('Invalid saved native remote identity.');
+      if (owner.state.displayTitle !== undefined && (typeof owner.state.displayTitle !== 'string' || !owner.state.displayTitle.trim()))
+        throw new Error('Saved Claude owner display title must be nonempty text.');
+      owner.transcriptPath = path;
+      const result = await read(owner);
+      const after = await lstat(directory, { bigint: true });
+      if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode || before.uid !== after.uid
+          || await realpath(directory) !== directory || !sameSnapshot(saved.identity, await lstat(owner.statePath, { bigint: true })))
+        throw new Error('Stored Claude owner state changed during inspection.');
+      return result;
+    } finally { await lock.release(); }
+  }
+
   static async open(options) {
     const owner = new ClaudeOwner(options);
     await owner.start();
@@ -245,11 +313,7 @@ export class ClaudeOwner {
       if (!transcript.exists && (this.state.remoteId || this.state.lastAppend || this.state.registration === 'registered')) {
         throw new Error('The owned native transcript is missing; refusing an empty restart of its existing remote identity.');
       }
-      const remoteIds = new Set(transcript.rows.filter(row => row.type === 'bridge-session' && row.sessionId === this.state.sessionId)
-        .map(row => row.bridgeSessionId));
-      if ([...remoteIds].some(id => !REMOTE_ID.test(id)) || remoteIds.size > 1) throw new Error('Native remote identity is invalid or ambiguous.');
-      const recoveredId = [...remoteIds][0];
-      if (this.state.remoteId && recoveredId && this.state.remoteId !== recoveredId) throw new Error('Native and saved remote identities disagree.');
+      const recoveredId = this.inspectRemoteIdentity(transcript);
       if (!this.state.remoteId && recoveredId) { this.state.remoteId = recoveredId; this.state.registration = 'registered'; await this.save(); }
       if (this.state.registration === 'registering' && !this.state.remoteId) throw new Error('Remote registration outcome is unknown; refusing to allocate another remote conversation.');
       if (this.state.pending) await this.reconcilePending(transcript);
@@ -369,6 +433,17 @@ export class ClaudeOwner {
     const rows = await restoreImageAssets({ root: this.root, rows: data.rows,
       bindings: this.state.imageBindings === undefined ? {} : this.state.imageBindings });
     return { ...data, rows, text: rows === data.rows ? data.text : rows.map(row => JSON.stringify(row)).join('\n') + '\n', exists: true };
+  }
+
+  inspectRemoteIdentity(transcript) {
+    const remoteIds = new Set(transcript.rows.filter(row => row.type === 'bridge-session' && row.sessionId === this.state.sessionId)
+      .map(row => row.bridgeSessionId));
+    if ([...remoteIds].some(id => !REMOTE_ID.test(id)) || remoteIds.size > 1) throw new Error('Native remote identity is invalid or ambiguous.');
+    const recoveredId = [...remoteIds][0];
+    if (this.state.remoteId && recoveredId && this.state.remoteId !== recoveredId) throw new Error('Native and saved remote identities disagree.');
+    if (this.state.registration === 'registering' && !this.state.remoteId && !recoveredId)
+      throw new Error('Remote registration outcome is unknown; refusing to allocate another remote conversation.');
+    return recoveredId;
   }
 
   async inspectResetSource(operationId, sessionId) {
