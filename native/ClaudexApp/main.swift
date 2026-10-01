@@ -58,6 +58,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var claudeEffortPicker: NSPopUpButton!
     private var codexEffortDraft: String?
     private var claudeEffortDraft: String?
+    private var permissionPicker: NSPopUpButton!
+    private var permissionDraft: String?
     private var modelMessage: NSTextField!
     private var modelSaveButton: NSButton!
     private var modelReloadButton: NSButton!
@@ -156,6 +158,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         claudeModelDraft = claudeModelField?.stringValue
         codexEffortDraft = codexEffortPicker?.selectedItem?.representedObject as? String
         claudeEffortDraft = claudeEffortPicker?.selectedItem?.representedObject as? String
+        permissionDraft = permissionPicker?.selectedItem?.representedObject as? String
         Localization.shared.select(code, persist: !inspectOnly && !uiSmoke)
         let visible = window.isVisible
         let frame = window.frame
@@ -531,6 +534,24 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             modelSection.addArrangedSubview(row)
             row.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
         }
+        let permissionRow = NSStackView()
+        permissionRow.orientation = .horizontal
+        permissionRow.spacing = 10
+        permissionRow.addArrangedSubview(label("Sub-agent permission", size: 12, weight: .medium))
+        let picker = NSPopUpButton()
+        let selectedPermission = permissionDraft ?? modelSettings?.defaultPermission ?? ""
+        for (value, title) in zip(ModelSettings.permissions, ["Read only", "Workspace write", "Full access"]) {
+            picker.addItem(withTitle: L(title))
+            picker.lastItem?.representedObject = value
+            if value == selectedPermission { picker.select(picker.lastItem) }
+        }
+        picker.setAccessibilityLabel(L("Sub-agent permission"))
+        permissionRow.addArrangedSubview(picker)
+        permissionPicker = picker
+        modelSection.addArrangedSubview(permissionRow)
+        let permissionHelp = wrapping("Applies to new top-level tasks. Full access runs Codex and Claude workers without a sandbox or permission prompts and loads your own settings, plugins and hooks, like a normal agent. Explicit read-only requests stay read-only.", size: 11, color: .secondaryLabelColor)
+        modelSection.addArrangedSubview(permissionHelp)
+        permissionHelp.widthAnchor.constraint(equalTo: modelSection.widthAnchor).isActive = true
         let modelActions = NSStackView()
         modelActions.orientation = .horizontal
         modelActions.spacing = 10
@@ -876,6 +897,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .openCodex, .openClaude: return "Open app"
         case .retry: return "Retry"
         case .diagnostics: return "Diagnostics"
+        case .resolveUncertain: return "Resolve…"
         }
     }
 
@@ -887,6 +909,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .openClaude: return 4
         case .retry: return 5
         case .diagnostics: return 6
+        case .resolveUncertain: return 7
         }
     }
 
@@ -899,7 +922,40 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case 3: openCodex(nil)
         case 4: openClaude(nil)
         case 5: run(.setup)
+        case 7: confirmResolveUncertain()
         default: break
+        }
+    }
+
+    private func confirmResolveUncertain() {
+        guard !busy && !stopping && !inspectOnly && !uiSmoke else { return }
+        let alert = NSAlert()
+        alert.messageText = L("Close unconfirmed collaboration tasks?")
+        alert.informativeText = L("Claudex could not confirm that these tasks stopped. Continue only if no agent from them is still working. Their file changes are kept and nothing is rerun. Tasks whose processes are still running stay open.")
+        alert.addButton(withTitle: L("Close tasks"))
+        alert.addButton(withTitle: L("Cancel"))
+        showSetup(nil)
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn else { return }
+            self.busy = true
+            self.render()
+            self.runner.resolveUncertain { [weak self] result in
+                guard let self else { return }
+                self.busy = false
+                let summary = NSAlert()
+                switch result {
+                case .success(let outcome):
+                    summary.messageText = LF("Closed %@ task(s).", String(outcome.resolved))
+                    summary.informativeText = outcome.failed.isEmpty ? "" : LF("%@ task(s) stay open:", String(outcome.failed.count))
+                        + "\n" + outcome.failed.map { LD($0.error) }.joined(separator: "\n")
+                case .failure(let error):
+                    summary.messageText = L("Could not close the tasks")
+                    if case .engineMessage(let detail) = error { summary.informativeText = LD(detail) }
+                }
+                summary.addButton(withTitle: L("OK"))
+                summary.beginSheetModal(for: self.window)
+                self.run(.inspect)
+            }
         }
     }
 
@@ -923,6 +979,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         claudeModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
         codexEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
         claudeEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
+        permissionPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings?.defaultPermission != nil
         modelMessage?.stringValue = L(modelMessageKey)
         if let detail = modelErrorDetail { modelMessage?.stringValue += "\n" + L("Diagnostic details:") + "\n" + detail }
         if let code = modelErrorCode {
@@ -930,7 +987,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         }
         scheduleWindowFit()
     }
-    private func loadModels(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil) {
+    private func loadModels(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil, permission: String? = nil) {
         guard !uiSmoke && !modelBusy && !stopping else { return }
         let saving = codex != nil
         guard !saving || !inspectOnly else { return }
@@ -939,7 +996,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         modelErrorCode = nil
         modelMessageKey = saving ? "Saving model defaults…" : "Loading model defaults…"
         updateModelControls()
-        runner.models(codex: codex, claude: claude, codexEffort: codexEffort, claudeEffort: claudeEffort) { [weak self] result in
+        runner.models(codex: codex, claude: claude, codexEffort: codexEffort, claudeEffort: claudeEffort, permission: permission) { [weak self] result in
             guard let self else { return }
             self.modelBusy = false
             switch result {
@@ -949,6 +1006,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 self.claudeModelDraft = nil
                 self.codexEffortDraft = nil
                 self.claudeEffortDraft = nil
+                self.permissionDraft = nil
+                if let index = ModelSettings.permissions.firstIndex(of: settings.defaultPermission ?? "") { self.permissionPicker.selectItem(at: index) }
                 self.codexEffortPicker.selectItem(at: ([""] + ModelSettings.codexEfforts).firstIndex(of: settings.defaultEfforts?.codex ?? "") ?? 0)
                 self.claudeEffortPicker.selectItem(at: ([""] + ModelSettings.claudeEfforts).firstIndex(of: settings.defaultEfforts?.claude ?? "") ?? 0)
                 self.codexModelField.stringValue = settings.defaultModels.codex ?? ""
@@ -983,7 +1042,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         }
         loadModels(codex: codex, claude: claude,
                    codexEffort: codexEffortPicker.selectedItem?.representedObject as? String ?? "",
-                   claudeEffort: claudeEffortPicker.selectedItem?.representedObject as? String ?? "")
+                   claudeEffort: claudeEffortPicker.selectedItem?.representedObject as? String ?? "",
+                   permission: modelSettings?.defaultPermission == nil ? nil : permissionPicker.selectedItem?.representedObject as? String)
     }
     @objc private func toggleDetails(_ sender: NSButton) {
         advancedExpanded.toggle()

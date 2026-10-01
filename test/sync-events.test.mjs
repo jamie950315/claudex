@@ -158,9 +158,9 @@ test('malformed lock evidence remains untouched rather than being retried or rem
   assert.equal(await readFile(inbox.lock, 'utf8'), 'malformed');
 });
 
-async function hook(inbox, payload, provider = 'claude') {
+async function hook(inbox, payload, provider = 'claude', env = process.env) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, ['bin/claudex-sync-hook.mjs', '--root', inbox.root, '--provider', provider]);
+    const child = spawn(process.execPath, ['bin/claudex-sync-hook.mjs', '--root', inbox.root, '--provider', provider], { env });
     let stdout = '', stderr = '';
     child.stdout.on('data', value => { stdout += value; });
     child.stderr.on('data', value => { stderr += value; });
@@ -234,4 +234,16 @@ test('hook ignores subagents and unknown hooks; completed native input stores no
   assert.doesNotMatch(await readFile(inbox.path, 'utf8'), /secret/);
   assert.equal((await hook(inbox, { hook_event_name: 'UserPromptSubmit', session_id })).code, 0);
   assert.equal((await inbox.list())[0].kind, 'started');
+});
+
+test('collaboration workers load user hooks without enrolling, waking or messaging themselves', async t => {
+  const inbox = await fixture(t), session_id = randomUUID();
+  const mailbox = new ChatMailbox({ root: join(inbox.root, 'collaboration', 'chat-mailbox') });
+  const env = { ...process.env, CLAUDEX_COLLABORATION_WORKER: '1' };
+  for (const hook_event_name of ['SessionStart', 'UserPromptSubmit', 'Stop'])
+    assert.deepEqual(await hook(inbox, { hook_event_name, session_id, cwd: inbox.root }, 'codex', env), { code: 0, stdout: '', stderr: '' });
+  assert.deepEqual(await inbox.list(), []);
+  assert.deepEqual(await mailbox.list(), []);
+  assert.equal((await hook(inbox, { hook_event_name: 'Stop', session_id, cwd: inbox.root }, 'codex')).code, 0);
+  assert.equal((await inbox.list()).length, 1);
 });

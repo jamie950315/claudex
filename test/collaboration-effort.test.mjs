@@ -29,7 +29,7 @@ test('effort defaults update atomically, preserve model settings and freeze task
   assert.equal((await call('status', { taskId: started.taskId })).effort, 'high');
   assert.equal((await call('status', { taskId: started.taskId, view: 'summary' })).effort, 'high');
   assert.equal((await call('start', input)).replayed, true);
-  assert.deepEqual(await call('models'), { defaultModels: { codex: 'chosen', claude: null }, defaultEfforts: { codex: 'low', claude: 'max' } });
+  assert.deepEqual(await call('models'), { defaultModels: { codex: 'chosen', claude: null }, defaultEfforts: { codex: 'low', claude: 'max' }, defaultPermission: 'read-only' });
   await assert.rejects(call('models', { defaultModels: { codex: 'wrong', claude: null }, defaultEfforts: { codex: 'low', claude: 'ultra' } }), /Unsupported/);
   assert.equal((await call('models')).defaultModels.codex, 'chosen');
   for (const effort of [null, 'xhigh']) {

@@ -403,3 +403,39 @@ test('native token usage is normalized, kept on failures and dropped when malfor
     { type: 'turn.completed', usage: { input_tokens: 'many', output_tokens: 1 } }]);
   assert.equal((await runner(malformed)({ provider: 'codex', cwd: process.cwd(), prompt: 'Done.' })).usage, null);
 });
+
+test('full-access workers run without sandbox or prompts, load user config and avoid the controller MCP', async () => {
+  const done = [{ type: 'thread.started', thread_id: 'codex-session' },
+    { type: 'item.completed', item: { type: 'agent_message', text: 'Done.' } }, { type: 'turn.completed' }];
+  const mcp = { command: '/usr/bin/node', args: ['server.mjs'], env: { CLAUDEX_WORK_TOKEN: 'private' } };
+  for (const registered of [true, false]) {
+    const fake = fakeSpawn(done);
+    const probes = [];
+    const run = createNativeCollaborationRunner({ spawnImpl: fake.spawnImpl, groupAliveImpl: () => false,
+      controllerMcpRegistered: async command => { probes.push(command); return registered; } });
+    await run({ provider: 'codex', cwd: process.cwd(), prompt: 'Do it.', permission: 'full-access', mcp });
+    const { args, options } = fake.calls[0];
+    assert.deepEqual(probes, ['codex']);
+    assert.equal(args.includes('--ignore-user-config'), false);
+    assert.equal(args[args.indexOf('--sandbox') + 1], 'danger-full-access');
+    assert.ok(args.includes('approval_policy="never"'));
+    assert.equal(args.includes('mcp_servers.claudex-work.enabled=false'), registered);
+    assert.ok(args.some(arg => arg.startsWith('mcp_servers.claudex.command=')));
+    assert.equal(options.env.CLAUDEX_COLLABORATION_WORKER, '1');
+  }
+  const claude = fakeSpawn([{ type: 'result', is_error: false, result: 'Implemented.' }]);
+  await createNativeCollaborationRunner({ spawnImpl: claude.spawnImpl, groupAliveImpl: () => false })({
+    provider: 'claude', cwd: process.cwd(), prompt: 'Do it.', permission: 'full-access', mcp });
+  const args = claude.calls[0].args;
+  for (const flag of ['--dangerously-skip-permissions', '--no-session-persistence', '--mcp-config']) assert.ok(args.includes(flag), flag);
+  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'mcp__claudex-work');
+  for (const flag of ['--restricted', '--strict-mcp-config', '--tools', '--permission-mode']) assert.equal(args.includes(flag), false, flag);
+  assert.equal(claude.calls[0].options.env.CLAUDEX_COLLABORATION_WORKER, '1');
+  // Sandboxed levels keep the isolated profile.
+  const sandboxed = fakeSpawn(done);
+  await createNativeCollaborationRunner({ spawnImpl: sandboxed.spawnImpl, groupAliveImpl: () => false,
+    controllerMcpRegistered: async () => { throw new Error('must not probe'); } })({
+    provider: 'codex', cwd: process.cwd(), prompt: 'Do it.', permission: 'workspace-write' });
+  assert.ok(sandboxed.calls[0].args.includes('--ignore-user-config'));
+  assert.equal(sandboxed.calls[0].args[sandboxed.calls[0].args.indexOf('--sandbox') + 1], 'workspace-write');
+});

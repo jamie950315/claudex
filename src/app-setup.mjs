@@ -116,7 +116,7 @@ export class AppSetup {
 
   async collaborationRequest(method, params = {}) {
     if (this.readOnly && (method !== 'list' && method !== 'models'
-      || method === 'models' && (params.defaultModels !== undefined || params.defaultEfforts !== undefined)))
+      || method === 'models' && (params.defaultModels !== undefined || params.defaultEfforts !== undefined || params.defaultPermission !== undefined)))
       this.requireWritable();
     const root = join(this.root, 'collaboration');
     try {
@@ -139,12 +139,37 @@ export class AppSetup {
     return this.collaborationRequest('list');
   }
 
-  async models(defaultModels, defaultEfforts) {
-    if (defaultModels !== undefined || defaultEfforts !== undefined) this.requireWritable();
+  async models(defaultModels, defaultEfforts, defaultPermission) {
+    if (defaultModels !== undefined || defaultEfforts !== undefined || defaultPermission !== undefined) this.requireWritable();
     return this.collaborationRequest('models', {
       ...(defaultModels === undefined ? {} : { defaultModels }),
       ...(defaultEfforts === undefined ? {} : { defaultEfforts }),
+      ...(defaultPermission === undefined ? {} : { defaultPermission }),
     });
+  }
+
+  /** The user's confirmation in the app is the operator attestation for work the
+   * broker could not prove stopped. Live processes still refuse; nothing reruns. */
+  async resolveUncertain() {
+    this.requireWritable();
+    const broker = await this.collaborationRequest('list');
+    const attestation = 'The user confirmed in the Claudex app that no worker from this task is still running.';
+    let resolved = 0;
+    const failed = [];
+    for (const summary of broker?.uncertainTasks ?? []) {
+      try {
+        const task = await this.collaborationRequest('status', { taskId: summary.id });
+        if (task.status !== 'uncertain') continue;
+        const execution = task.active ?? task.lastExecution;
+        await this.collaborationRequest('resolve', { taskId: task.id, revision: task.revision, outcome: 'failed',
+          requestId: `app-resolve-${task.id}-${task.revision}`, reason: 'Closed from the Claudex app after an unknown native outcome. Nothing was rerun.',
+          ...(task.permission === 'read-only' ? {} : { workspaceReconciled: true,
+            reconciliationNotes: `${attestation} Any file changes it made were kept for review.` }),
+          ...(execution?.processInventoryError ? { processInventoryReconciled: true, processInventoryNotes: attestation } : {}) });
+        resolved++;
+      } catch (error) { failed.push({ taskId: summary.id, error: safeFailure(error) }); }
+    }
+    return { resolved, failed };
   }
 
   async inspect({ providers, notes = {} } = {}) {
@@ -183,11 +208,14 @@ export class AppSetup {
     }
     try {
       const broker = await this.collaborationStatus();
+      const writable = ['workspace-write', 'full-access'].includes(broker?.limits?.defaultPermission);
       rows.push(component('collaboration', 'Cross-model collaboration', !broker ? 'missing' : broker.blockedByUncertainWork ? 'blocked'
-        : broker.limits?.allowWrite && broker.limits?.defaultPermission === 'workspace-write' ? 'ready' : 'waiting',
+        : broker.limits?.allowWrite && writable ? 'ready' : 'waiting',
       !broker ? 'The background broker and MCP connections will be configured automatically.' : broker.blockedByUncertainWork
-        ? 'Uncertain native work needs inspection. No input will be resent.' : broker.limits?.defaultPermission === 'workspace-write'
-          ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.', broker?.blockedByUncertainWork ? 'diagnostics' : 'retry'));
+        ? 'Some collaboration tasks could not be confirmed stopped. Only related work waits; other work continues. Close them after checking that no agent from them is still running.'
+        : broker.limits?.defaultPermission === 'full-access' ? 'Sub-agents run with full access: no sandbox or permission prompts. All projects are available.'
+          : writable ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.',
+      broker?.blockedByUncertainWork ? 'resolve-uncertain' : 'retry'));
     } catch (error) { rows.push(component('collaboration', 'Cross-model collaboration', 'blocked', safeFailure(error), 'retry')); }
     try {
       const config = await appPrivateJSON(join(this.root, 'config.json'));

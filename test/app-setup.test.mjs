@@ -331,12 +331,42 @@ test('actual runtime faults expose their exact reasons instead of generic setup 
   }
 });
 
-test('uncertain collaboration work opens diagnostics instead of retrying setup', async t => {
+test('uncertain collaboration work offers confirmed resolution instead of retrying setup', async t => {
   const { setup } = await fixture(t);
   setup.collaborationStatus = async () => ({ blockedByUncertainWork: true });
   const row = (await setup.inspect()).components.find(item => item.id === 'collaboration');
   assert.equal(row.state, 'blocked');
-  assert.equal(row.action, 'diagnostics');
+  assert.equal(row.action, 'resolve-uncertain');
+  assert.match(row.detail, /Only related work waits/);
+});
+
+test('app resolution attests only after confirmation and keeps refusals for live work', async t => {
+  const { setup } = await fixture(t);
+  const calls = [];
+  const tasks = {
+    a: { id: 'a', status: 'uncertain', revision: 3, permission: 'full-access', lastExecution: { processInventoryError: true } },
+    b: { id: 'b', status: 'uncertain', revision: 2, permission: 'read-only', lastExecution: {} },
+  };
+  setup.collaborationRequest = async (method, params) => {
+    calls.push({ method, params });
+    if (method === 'list') return { uncertainTasks: [{ id: 'a' }, { id: 'b' }] };
+    if (method === 'status') return tasks[params.taskId];
+    if (params.taskId === 'b') throw new Error('Recorded native process and process group must both be confirmed absent.');
+    return { status: 'failed' };
+  };
+  const result = await setup.resolveUncertain();
+  assert.equal(result.resolved, 1);
+  assert.deepEqual(result.failed.map(item => item.taskId), ['b']);
+  const resolve = calls.find(call => call.method === 'resolve' && call.params.taskId === 'a').params;
+  assert.equal(resolve.outcome, 'failed');
+  assert.equal(resolve.revision, 3);
+  assert.equal(resolve.workspaceReconciled, true);
+  assert.equal(resolve.processInventoryReconciled, true);
+  assert.match(resolve.processInventoryNotes, /confirmed in the Claudex app/);
+  const readOnly = calls.find(call => call.method === 'resolve' && call.params.taskId === 'b').params;
+  assert.equal(readOnly.workspaceReconciled, undefined);
+  setup.readOnly = true;
+  await assert.rejects(setup.resolveUncertain());
 });
 
 test('a re-signed Claude app blocks only Claude Desktop integration and never starts setup work', async t => {

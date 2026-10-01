@@ -30,6 +30,7 @@ enum ComponentAction: String, Decodable {
     case openClaude = "open-claude"
     case retry
     case diagnostics
+    case resolveUncertain = "resolve-uncertain"
 }
 
 struct SetupComponent: Decodable {
@@ -119,9 +120,11 @@ struct ModelSettings: Decodable {
     }
     let defaultModels: Defaults
     let defaultEfforts: Defaults?
+    let defaultPermission: String?
 
     static let codexEfforts = ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
     static let claudeEfforts = ["low", "medium", "high", "xhigh", "max"]
+    static let permissions = ["read-only", "workspace-write", "full-access"]
 
     static func parse(_ data: Data) throws -> ModelSettings {
         let settings = try JSONDecoder().decode(ModelSettings.self, from: data)
@@ -134,6 +137,7 @@ struct ModelSettings: Decodable {
         for (effort, supported) in [(settings.defaultEfforts?.codex, codexEfforts), (settings.defaultEfforts?.claude, claudeEfforts)] {
             guard effort == nil || supported.contains(effort!) else { throw SetupParseError.invalid }
         }
+        guard settings.defaultPermission == nil || permissions.contains(settings.defaultPermission!) else { throw SetupParseError.invalid }
         return settings
     }
 }
@@ -169,6 +173,15 @@ enum SetupProcessError: Error {
     }
 }
 
+struct ResolveResult: Decodable {
+    struct Failure: Decodable {
+        let taskId: String
+        let error: String
+    }
+    let resolved: Int
+    let failed: [Failure]
+}
+
 struct StopResult: Decodable {
     let stopped: Bool
     let detail: String?
@@ -197,13 +210,24 @@ final class SetupRunner {
     }
 
     func models(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil,
-                completion: @escaping (Result<ModelSettings, SetupProcessError>) -> Void) {
+                permission: String? = nil, completion: @escaping (Result<ModelSettings, SetupProcessError>) -> Void) {
         var arguments = ["models"]
         if let codex, let claude { arguments += ["--codex-model", codex, "--claude-model", claude] }
         if let codexEffort, let claudeEffort { arguments += ["--codex-effort", codexEffort, "--claude-effort", claudeEffort] }
+        if let permission { arguments += ["--default-permission", permission] }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<ModelSettings, SetupProcessError> in
                 do { return .success(try ModelSettings.parse(data)) }
+                catch { return .failure(.invalidResponse) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func resolveUncertain(completion: @escaping (Result<ResolveResult, SetupProcessError>) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.executeData(["resolve-uncertain"]).flatMap { data -> Result<ResolveResult, SetupProcessError> in
+                do { return .success(try JSONDecoder().decode(ResolveResult.self, from: data)) }
                 catch { return .failure(.invalidResponse) }
             }
             DispatchQueue.main.async { completion(result) }
@@ -282,7 +306,7 @@ final class SetupRunner {
         group.wait()
         if tooLarge { return .failure(.excessiveOutput) }
         guard process.terminationStatus == 0 else {
-            if ["models", "stop", "stop-status"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
+            if ["models", "stop", "stop-status", "resolve-uncertain"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
                let detail = response["error"] as? String, !detail.isEmpty, detail.count <= 2_000 {
                 return .failure(.engineMessage(detail))
             }

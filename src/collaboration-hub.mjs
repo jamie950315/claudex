@@ -5,7 +5,7 @@ import { isAbsolute, join } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, publishExclusive } from './storage.mjs';
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
-import { resolveCollaborationWorkspace, revalidateWorkspace } from './collaboration-workspace.mjs';
+import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
@@ -47,6 +47,12 @@ function requestId(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new Error('A stable requestId is required.');
   return value;
 }
+// Ordered from least to most authority. full-access runs native tools without a
+// sandbox or permission prompts, by explicit controller choice.
+export const COLLABORATION_PERMISSIONS = ['read-only', 'workspace-write', 'full-access'];
+const permissionRank = value => COLLABORATION_PERMISSIONS.indexOf(value);
+const AUTO_RESOLVE_INTERVAL_MS = 30_000;
+
 const USAGE_FIELDS = ['inputTokens', 'cacheReadInputTokens', 'cacheWriteInputTokens', 'outputTokens', 'reasoningOutputTokens'];
 
 // Native token accounting is optional evidence: an invalid report is dropped, never
@@ -108,7 +114,7 @@ function inspectExitedProcessGroup(pid) {
 
 /** A single durable work graph. Delegation adds an edge; handoff changes its owner. */
 export class CollaborationHub extends EventEmitter {
-  constructor({ root, run, mcp, allowWrite = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
+  constructor({ root, run, mcp, allowWrite = false, allowFullAccess = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     inspectProcessGroup = inspectExitedProcessGroup, inspectProcesses = inspectOwnedProcesses, chatTitleResolver = enrichChatTitles,
     nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null } = {}) {
@@ -118,20 +124,36 @@ export class CollaborationHub extends EventEmitter {
     if (!isAbsolute(root ?? '') || typeof run !== 'function') throw new Error('Absolute root and native runner are required.');
     if (typeof inspectProcessGroup !== 'function') throw new Error('Process-group inspector must be a function.');
     if (typeof inspectProcesses !== 'function') throw new Error('Owned-process inspector must be a function.');
-    if (!['read-only', 'workspace-write'].includes(defaultPermission)
-      || defaultPermission === 'workspace-write' && !allowWrite) throw new Error('Default permission exceeds broker authorization.');
+    if (permissionRank(defaultPermission) < 0
+      || permissionRank(defaultPermission) > (allowFullAccess ? 2 : allowWrite ? 1 : 0)) throw new Error('Default permission exceeds broker authorization.');
     for (const [name, value, max] of [['maxWorkers', maxWorkers, 64], ['maxDepth', maxDepth, 8],
       ['maxSteps', maxSteps, 100], ['maxTasks', maxTasks, 10000], ['maxRequests', maxRequests, 100000],
       ['maxStateBytes', maxStateBytes, 128 * 1024 * 1024]]) {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
     }
-    Object.assign(this, { root, run, mcp, allowWrite, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, inspectProcessGroup, inspectProcesses });
+    Object.assign(this, { root, run, mcp, allowWrite: allowWrite || allowFullAccess, allowFullAccess, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, inspectProcessGroup, inspectProcesses });
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
     this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
     this.chatTitleResolver = chatTitleResolver;
     this.nativeChatDiscovery = nativeChatDiscovery;
     this.chatWake = chatWake;
     this.claudeWakeManifest = claudeWakeManifest;
+  }
+
+  // The controller's saved default is its explicit authorization for that level;
+  // installation flags remain the floor of what the broker accepts.
+  effectiveDefaultPermission(state = this.state) { return state.defaultPermission ?? this.defaultPermission; }
+
+  permissionCeiling(state = this.state) {
+    return Math.max(this.allowFullAccess ? 2 : this.allowWrite ? 1 : 0, permissionRank(this.effectiveDefaultPermission(state)));
+  }
+
+  checkPermission(permission, parent, state = this.state) {
+    if (permissionRank(permission) < 0) throw new Error('Unsupported permission.');
+    if (permissionRank(permission) > this.permissionCeiling(state)
+      || parent && permissionRank(permission) > permissionRank(parent.permission))
+      throw new Error(permission === 'full-access' ? 'Full access is not authorized by the broker or parent.'
+        : 'Workspace writes are not authorized by the broker or parent.');
   }
 
   async initialize() {
@@ -161,6 +183,8 @@ export class CollaborationHub extends EventEmitter {
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
+    if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
+      throw new Error('Malformed default collaboration permission.');
     for (const [id, task] of Object.entries(this.state.tasks)) {
       for (const execution of [task.active, task.lastExecution]) if (execution?.ownedProcesses !== undefined)
         validateOwnedProcesses(execution.ownedProcesses);
@@ -184,7 +208,7 @@ export class CollaborationHub extends EventEmitter {
         || task.messages.some(message => !message || typeof message.text !== 'string' || typeof message.kind !== 'string')
         || (task.status === 'running' && (!task.active || !/^[a-f0-9]{64}$/.test(task.active.tokenHash ?? '')
           || task.active.generation !== task.generation || !Number.isSafeInteger(task.active.messageCount)))
-        || !['read-only', 'workspace-write'].includes(task.permission)) throw new Error('Malformed collaboration task.');
+        || permissionRank(task.permission) < 0) throw new Error('Malformed collaboration task.');
     }
     await this.mutate(state => {
       state.defaultModels ??= { codex: null, claude: null };
@@ -198,7 +222,90 @@ export class CollaborationHub extends EventEmitter {
         }
       }
     });
+    await this.autoResolveUncertain();
+    // Proof failures are expected while processes still run; the next pass rechecks.
+    this.autoResolveTimer = setInterval(() => {
+      this.autoResolveUncertain().then(count => { if (count) this.schedule(); }, () => {});
+    }, AUTO_RESOLVE_INTERVAL_MS);
+    this.autoResolveTimer.unref?.();
     return this;
+  }
+
+  /** Shared evidence that an uncertain invocation and everything it recorded exited.
+   * Throws with the specific missing proof; never replays or edits work. */
+  async exitProof(state, task, { inventoryAttested = false } = {}) {
+    const descendants = Object.values(state.tasks).filter(candidate => {
+      let cursor = candidate;
+      while (cursor) { if (cursor.id === task.id) return true; cursor = state.tasks[cursor.parentId]; }
+      return false;
+    });
+    if (descendants.some(candidate => this.running.has(candidate.id))) throw new Error('An in-memory native worker is still active.');
+    if (descendants.some(candidate => candidate.id !== task.id && !['completed', 'failed', 'cancelled'].includes(candidate.status)))
+      throw new Error('Resolve or finish descendant work first.');
+    // A crash can leave a newer active generation beside an older receipt.
+    // Only the newest invocation's identity can prove that its work stopped.
+    const execution = task.active ?? task.lastExecution;
+    const pid = execution?.pid;
+    if (!Number.isSafeInteger(pid) || pid <= 1 || execution?.generation !== task.generation)
+      throw new Error('Recorded native process identity is missing or ambiguous.');
+    if (execution.processInventoryRequired && !execution.ownedProcesses)
+      throw new Error('Recorded native descendant identities are missing; process absence cannot be established.');
+    if (execution.processInventoryError && !inventoryAttested)
+      throw new Error('Recorded native process inventory is incomplete; descendant absence cannot be established.');
+    let ownedProcessInspection;
+    if (execution.ownedProcesses) {
+      ownedProcessInspection = await this.inspectProcesses(execution.ownedProcesses);
+      if (!Array.isArray(ownedProcessInspection?.processes)
+        || ownedProcessInspection.processes.length !== execution.ownedProcesses.length
+        || !Number.isSafeInteger(ownedProcessInspection.inspectedAt) || ownedProcessInspection.inspectedAt <= 0
+        || ownedProcessInspection.processes.some((record, index) => record.absent !== true
+          || ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => record[key] !== execution.ownedProcesses[index][key])))
+        throw new Error('Recorded native descendants must all be confirmed absent.');
+    }
+    const proof = await this.inspectProcessGroup(pid);
+    if (proof?.pid !== pid || proof.processAbsent !== true || proof.groupAbsent !== true
+      || !Number.isSafeInteger(proof.inspectedAt) || proof.inspectedAt <= 0)
+      throw new Error('Recorded native process and process group must both be confirmed absent.');
+    return { pid, proof, ownedProcessInspection };
+  }
+
+  /** Close uncertain work as failed once every recorded process is proven gone.
+   * Nothing is replayed; writable work is flagged for review instead of blocking. */
+  async autoResolveUncertain() {
+    if (this.closed || !Object.values(this.state.tasks).some(task => task.status === 'uncertain')) return 0;
+    const resolved = await this.mutate(async state => {
+      let count = 0;
+      for (let changed = true; changed;) {
+        changed = false;
+        // Deepest first so a parent can follow its resolved children in one pass.
+        const uncertain = Object.values(state.tasks).filter(task => task.status === 'uncertain').sort((a, b) => b.depth - a.depth);
+        for (const task of uncertain) {
+          let evidence;
+          try { evidence = await this.exitProof(state, task); } catch { continue; }
+          task.resolution = { outcome: 'failed', automatic: true,
+            reason: 'Every recorded native process was confirmed exited after an unknown outcome. Nothing was replayed.',
+            previousStatus: task.status, previousError: task.error, previousRevision: task.revision,
+            inspectedAt: evidence.proof.inspectedAt, pid: evidence.pid, processAbsent: true, groupAbsent: true, resolvedAt: Date.now(),
+            ...(evidence.ownedProcessInspection ? { ownedProcessInspection: evidence.ownedProcessInspection } : {}),
+            ...(task.permission !== 'read-only' ? { workspaceReviewRecommended: true } : {}) };
+          task.status = 'failed';
+          task.error = task.permission === 'read-only' ? task.error
+            : `${task.error ?? 'Native execution outcome was unknown.'} Its workspace may contain partial changes; review them before relying on it.`.slice(0, 2048);
+          task.revision++; task.updatedAt = Date.now();
+          this.deliverToParent(state, task);
+          count++; changed = true;
+        }
+      }
+      return count;
+    });
+    return resolved;
+  }
+
+  /** Unknown work blocks only its own task tree and work that shares its access. */
+  blockedByUncertain(state, candidate) {
+    const root = task => { let cursor = task; while (cursor?.parentId && state.tasks[cursor.parentId]) cursor = state.tasks[cursor.parentId]; return cursor?.id; };
+    return Object.values(state.tasks).some(task => task.status === 'uncertain'
+      && (root(task) === root(candidate) || task.permission !== 'read-only' && workspacesConflict(task, candidate)));
   }
 
   serialized(fn) {
@@ -390,17 +497,21 @@ export class CollaborationHub extends EventEmitter {
     }
     if (method === 'models') {
       if (actor.task) throw new Error('Only the controller may manage default models.');
-      if (Object.keys(params).some(key => !['defaultModels', 'defaultEfforts'].includes(key))) throw new Error('Invalid model settings parameters.');
+      if (Object.keys(params).some(key => !['defaultModels', 'defaultEfforts', 'defaultPermission'].includes(key))) throw new Error('Invalid model settings parameters.');
+      const updatePermission = Object.hasOwn(params, 'defaultPermission');
+      if (updatePermission && permissionRank(params.defaultPermission) < 0) throw new Error('defaultPermission must be read-only, workspace-write or full-access.');
       const update = Object.hasOwn(params, 'defaultModels');
       const selected = update ? defaultModels(params.defaultModels) : null;
       const updateEfforts = Object.hasOwn(params, 'defaultEfforts');
       const selectedEfforts = updateEfforts ? defaultEfforts(params.defaultEfforts) : null;
-      if ((update || updateEfforts) && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
+      if ((update || updateEfforts || updatePermission) && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
       return this.mutate(state => {
         if (this.actor(envelope, state).task) throw new Error('Only the controller may manage default models.');
         if (update) state.defaultModels = selected;
         if (updateEfforts) state.defaultEfforts = selectedEfforts;
-        return { defaultModels: copy(state.defaultModels), defaultEfforts: copy(state.defaultEfforts) };
+        if (updatePermission) state.defaultPermission = params.defaultPermission;
+        return { defaultModels: copy(state.defaultModels), defaultEfforts: copy(state.defaultEfforts),
+          defaultPermission: this.effectiveDefaultPermission(state) };
       });
     }
     if (method === 'status') {
@@ -412,8 +523,13 @@ export class CollaborationHub extends EventEmitter {
       });
       return { tasks: tasks.map(task => ({ id: task.id, parentId: task.parentId, owner: task.owner, status: task.status,
         revision: task.revision, updatedAt: task.updatedAt, ...taskPresentation(task) })),
-        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.allowWrite, defaultPermission: this.defaultPermission, defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
-        blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain') };
+        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.permissionCeiling() >= 1,
+          allowFullAccess: this.permissionCeiling() >= 2, defaultPermission: this.effectiveDefaultPermission(),
+          defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
+        blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain'),
+        uncertainTasks: Object.values(this.state.tasks).filter(task => task.status === 'uncertain').slice(0, 20)
+          .map(task => ({ id: task.id, owner: task.owner, permission: task.permission, cwd: task.cwd, error: task.error,
+            revision: task.revision, updatedAt: task.updatedAt })) };
     }
     if (method === 'wait') {
       if (params.view !== undefined && !['full', 'summary'].includes(params.view)) throw new Error('Invalid task view.');
@@ -445,11 +561,10 @@ export class CollaborationHub extends EventEmitter {
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
-    let workspace;
+    let workspace, startPermission;
     if (method === 'start') {
-      const permission = params.permission ?? actor.task?.permission ?? this.defaultPermission;
-      if (permission === 'workspace-write' && (!this.allowWrite || actor.task?.permission === 'read-only'))
-        throw new Error('Workspace writes are not authorized by the broker or parent.');
+      const permission = startPermission = params.permission ?? actor.task?.permission ?? this.effectiveDefaultPermission();
+      this.checkPermission(permission, actor.task);
       workspace = await resolveCollaborationWorkspace({ cwd: params.cwd, projectRoot: params.projectRoot,
         readOnlyDirs: params.readOnlyDirs, writableDirs: params.writableDirs,
         permission, parent: actor.task });
@@ -470,9 +585,9 @@ export class CollaborationHub extends EventEmitter {
         provider(params.provider); text(params.prompt, 'prompt');
         const selectedModel = params.model === undefined ? state.defaultModels[params.provider] : model(params.model);
         const selectedEffort = params.effort === undefined ? state.defaultEfforts[params.provider] : validateCollaborationEffort(params.provider, params.effort);
-        const permission = params.permission ?? actor.task?.permission ?? this.defaultPermission;
-        if (!['read-only', 'workspace-write'].includes(permission)) throw new Error('Unsupported permission.');
-        if (permission === 'workspace-write' && (!this.allowWrite || actor.task?.permission === 'read-only')) throw new Error('Workspace writes are not authorized by the broker or parent.');
+        // The workspace was resolved for this permission before the transaction.
+        const permission = startPermission;
+        this.checkPermission(permission, actor.task, state);
         if (actor.task && (actor.task.pendingHandoff || actor.task.cancelRequested)) throw new Error('Worker is relinquishing ownership.');
         if (actor.task && Object.values(state.tasks).filter(item => ['ready', 'running'].includes(item.status)).length >= this.maxWorkers)
           throw new Error('Worker capacity reached. Wait for existing children instead of creating a dependency that cannot run.');
@@ -495,7 +610,7 @@ export class CollaborationHub extends EventEmitter {
           if (params.revision !== task.revision) throw new Error('Task revision changed; read status before resolving.');
           const reason = text(params.reason, 'resolution reason', 2048);
           let workspaceReconciliation;
-          if (task.permission === 'workspace-write') {
+          if (task.permission !== 'read-only') {
             if (params.workspaceReconciled !== true)
               throw new Error('Writable uncertain execution requires explicit workspace reconciliation acknowledgement.');
             workspaceReconciliation = {
@@ -504,44 +619,15 @@ export class CollaborationHub extends EventEmitter {
               readOnlyDirs: copy(task.readOnlyDirs ?? []), writableDirs: copy(task.writableDirs ?? []),
             };
           }
-          const descendants = Object.values(state.tasks).filter(candidate => {
-            let cursor = candidate;
-            while (cursor) { if (cursor.id === task.id) return true; cursor = state.tasks[cursor.parentId]; }
-            return false;
-          });
-          if (descendants.some(candidate => this.running.has(candidate.id))) throw new Error('An in-memory native worker is still active.');
-          if (descendants.some(candidate => candidate.id !== task.id && !['completed', 'failed', 'cancelled'].includes(candidate.status)))
-            throw new Error('Resolve or finish descendant work first.');
-          // A crash can leave a newer active generation beside an older receipt.
-          // Only the newest invocation's identity can prove that its work stopped.
-          const execution = task.active ?? task.lastExecution;
-          const pid = execution?.pid;
-          if (!Number.isSafeInteger(pid) || pid <= 1 || execution?.generation !== task.generation)
-            throw new Error('Recorded native process identity is missing or ambiguous.');
-          if (execution.processInventoryRequired && !execution.ownedProcesses)
-            throw new Error('Recorded native descendant identities are missing; process absence cannot be established.');
           // An interrupted inventory cannot prove that unrecorded descendants exited.
           // Only an explicit controller attestation of that inspection may close it.
           let processInventoryReconciliation;
-          if (execution.processInventoryError) {
+          if ((task.active ?? task.lastExecution)?.processInventoryError) {
             if (params.processInventoryReconciled !== true)
               throw new Error('Recorded native process inventory is incomplete; descendant absence cannot be established without explicit process inventory reconciliation.');
             processInventoryReconciliation = { notes: text(params.processInventoryNotes, 'process inventory reconciliation notes', 4096) };
           }
-          let ownedProcessInspection;
-          if (execution.ownedProcesses) {
-            ownedProcessInspection = await this.inspectProcesses(execution.ownedProcesses);
-            if (!Array.isArray(ownedProcessInspection?.processes)
-              || ownedProcessInspection.processes.length !== execution.ownedProcesses.length
-              || !Number.isSafeInteger(ownedProcessInspection.inspectedAt) || ownedProcessInspection.inspectedAt <= 0
-              || ownedProcessInspection.processes.some((record, index) => record.absent !== true
-                || ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => record[key] !== execution.ownedProcesses[index][key])))
-              throw new Error('Recorded native descendants must all be confirmed absent.');
-          }
-          const proof = await this.inspectProcessGroup(pid);
-          if (proof?.pid !== pid || proof.processAbsent !== true || proof.groupAbsent !== true
-            || !Number.isSafeInteger(proof.inspectedAt) || proof.inspectedAt <= 0)
-            throw new Error('Recorded native process and process group must both be confirmed absent.');
+          const { pid, proof, ownedProcessInspection } = await this.exitProof(state, task, { inventoryAttested: Boolean(processInventoryReconciliation) });
           task.resolution = { outcome: 'failed', reason, previousStatus: task.status, previousError: task.error,
             previousRevision: task.revision, inspectedAt: proof.inspectedAt, pid,
             processAbsent: true, groupAbsent: true, resolvedAt: Date.now(), controller: actor.peer,
@@ -617,15 +703,15 @@ export class CollaborationHub extends EventEmitter {
         // An idle pump reads the committed state instead of cloning the whole ledger.
         const next = await this.serialized(() => {
           if (this.closed) return null;
-          const tasks = Object.values(this.state.tasks);
-          if (tasks.some(task => task.status === 'uncertain')
-            || !tasks.some(item => item.status === 'ready' && !this.running.has(item.id))) return null;
+          const dispatchable = state => Object.values(state.tasks).find(item => item.status === 'ready'
+            && !this.running.has(item.id) && !this.blockedByUncertain(state, item));
+          if (!dispatchable(this.state)) return null;
           return this.commit(async state => {
-            if (Object.values(state.tasks).some(task => task.status === 'uncertain')) return null;
-            const task = Object.values(state.tasks).find(item => item.status === 'ready' && !this.running.has(item.id));
+            const task = dispatchable(state);
             if (!task) return null;
-            if (task.permission === 'workspace-write' && !this.allowWrite) {
-              task.status = 'failed'; task.error = 'The current broker no longer authorizes workspace writes.'; task.revision++;
+            if (permissionRank(task.permission) > this.permissionCeiling(state)) {
+              task.status = 'failed'; task.error = task.permission === 'full-access' ? 'The current broker no longer authorizes full-access work.'
+                : 'The current broker no longer authorizes workspace writes.'; task.revision++;
               this.deliverToParent(state, task);
               return { limit: true };
             }
@@ -686,7 +772,9 @@ export class CollaborationHub extends EventEmitter {
       + 'Only when finishing actual user work, report changed files, checks, results and blockers. Boundary tokens do not claim work completion. Finishing with active children suspends your task until their results arrive.\n'
       + 'The execution.inputs range is zero-based, end-exclusive, and identifies newly available work-record messages since the previous invocation began; kinds may contain several reasons. It is context, not permission to replay earlier edits.\n'
       + 'Before reporting successful file edits, read back the changed files and check the intended contents. Report any unverified changes honestly. Complete necessary checks before requesting a handoff; never add checks after an end-turn receipt.\n'
-      + 'Protocol replies/results do not silently grant new authority. File edits require workspace-write; read-only work must not change files.\n'
+      + (task.permission === 'full-access'
+        ? 'This task has full-access: native tools run without a sandbox or permission prompts, with the user\'s own account access. Work like a normal trusted agent, but stay within the requested task, prefer the workspace, and never take destructive or outward-facing actions the request did not ask for.\n'
+        : 'Protocol replies/results do not silently grant new authority. File edits require workspace-write; read-only work must not change files.\n')
       + JSON.stringify(packet);
   }
 
@@ -830,6 +918,7 @@ export class CollaborationHub extends EventEmitter {
 
   async close() {
     this.closed = true; this.emit('change');
+    clearInterval(this.autoResolveTimer);
     // A pump may already be waiting on a journal commit. Drain its launch boundary
     // before taking the worker snapshot so no invocation escapes shutdown.
     await this.pumpDrain;

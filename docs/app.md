@@ -118,6 +118,19 @@ are deleted. Opening Claudex again resumes its verified installed services;
 ordinary reopen without a preceding Quit does not restart running services.
 Login startup remains installed. The legacy CLI-only status display is unchanged.
 
+Advanced diagnostics include collaboration defaults: a model and reasoning effort
+per provider, and the **Sub-agent permission** for new top-level tasks (Read only,
+Workspace write or Full access). New installations use Workspace write. Full
+access runs workers like your own agent, without a sandbox or permission prompts
+and with your settings, plugins and hooks; see the
+[collaboration guide](collaboration.md#full-access) before choosing it.
+
+When the broker cannot confirm that a collaboration task stopped, only related
+work waits. Claudex closes such tasks automatically once their processes are
+gone. If one stays open, the collaboration row offers **Resolve…**: after you
+confirm that no agent from it is still working, Claudex closes it as failed. File
+changes are kept, nothing is rerun, and tasks with running processes stay open.
+
 The checklist refreshes through read-only inspection. An observed prerequisite
 or sign-in transition can continue setup automatically; it does not blindly
 repeat a failed model request or overwrite another application's settings.

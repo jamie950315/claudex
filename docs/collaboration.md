@@ -335,6 +335,27 @@ coordinate shared-file changes explicitly. Children may start while their parent
 is running; use status/wait to collect their results. A parent that ends its turn
 with outstanding children resumes with their durable results after they finish.
 
+### Full access
+
+Permissions are ordered `read-only` < `workspace-write` < `full-access`. A
+full-access worker runs like your own agent: Codex uses `danger-full-access`
+(network, any path, local sockets) and Claude runs with
+`--dangerously-skip-permissions` and all built-in tools, including Bash. Neither
+asks for approval. These workers load your own Codex/Claude settings, plugins, MCP
+servers and hooks (for example RTK), while their sessions stay ephemeral. The
+Claudex sync/chat hook recognizes a worker and records nothing, and the
+`claudex-work` controller connection is disabled inside workers so children stay
+linked to their parent.
+
+Full access is never inferred. Choose it as the default in the app's
+**Sub-agent permission** picker or with
+`claudex collaboration permissions --default full-access`; that saved choice is the
+broker's authorization for the level. An explicit `read-only` request stays
+read-only and a child cannot exceed its parent. Without a sandbox, `readOnlyDirs`
+cannot be enforced, so full-access tasks refuse them. A worker can do anything
+your account can, including deleting files, pushing to remotes and acting on
+untrusted web content; delegate only work you would let an agent do unattended.
+
 ### Project and additional directory access
 
 `claudex_start` resolves `cwd` to the nearest enclosing Git checkout root by
@@ -410,8 +431,12 @@ The bounded wait/socket request timeouts only end the caller's wait, not the wor
 These limits are not a monetary spending guarantee; native account quotas still apply.
 The 64-worker ceiling is not evidence of a 64-worker native load certification.
 
-After a broker crash, in-flight work becomes `uncertain` and blocks new dispatch.
-No native input or pending handoff is replayed. Inspect the last recorded native
+After a broker crash, in-flight work becomes `uncertain`. It blocks only its own
+task tree and work whose directories overlap its writable access (a full-access
+task overlaps everything); unrelated work continues. Every 30 seconds, and at
+startup, the broker closes uncertain work as `failed` once its leader, process
+group and every recorded descendant are confirmed gone; writable work is flagged
+for workspace review. No native input or pending handoff is replayed. Inspect the last recorded native
 process/session and workspace before operator recovery; do not clear the ledger
 to regain availability. Completed work remains readable. Cancellation targets only
 the invocation's verified owned processes and does not undo file changes.

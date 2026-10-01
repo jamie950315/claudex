@@ -52,11 +52,11 @@ test('real broker process serves both MCP peers without starting inference or re
   const execute = promisify(execFile);
   const modelArgs = [cli, 'collaboration', 'models', '--root', root];
   const readModels = await execute(process.execPath, modelArgs);
-  assert.deepEqual(JSON.parse(readModels.stdout), { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null } });
+  assert.deepEqual(JSON.parse(readModels.stdout), { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null }, defaultPermission: 'read-only' });
   const saved = await execute(process.execPath, [...modelArgs, '--codex-model', 'test-codex', '--claude-model', '']);
-  assert.deepEqual(JSON.parse(saved.stdout), { defaultModels: { codex: 'test-codex', claude: null }, defaultEfforts: { codex: null, claude: null } });
+  assert.deepEqual(JSON.parse(saved.stdout), { defaultModels: { codex: 'test-codex', claude: null }, defaultEfforts: { codex: null, claude: null }, defaultPermission: 'read-only' });
   const efforts = await execute(process.execPath, [...modelArgs, '--codex-effort', 'high', '--claude-effort', 'low']);
-  assert.deepEqual(JSON.parse(efforts.stdout), { defaultModels: { codex: 'test-codex', claude: null }, defaultEfforts: { codex: 'high', claude: 'low' } });
+  assert.deepEqual(JSON.parse(efforts.stdout), { defaultModels: { codex: 'test-codex', claude: null }, defaultEfforts: { codex: 'high', claude: 'low' }, defaultPermission: 'read-only' });
   await assert.rejects(execute(process.execPath, [...modelArgs, '--codex-effort', 'high']), /Both provider effort/);
   await assert.rejects(execute(process.execPath, [...modelArgs, '--codex-effort', 'high', '--claude-effort', 'ultra']), /effort/i);
   await assert.rejects(execute(process.execPath, [...modelArgs, '--codex-model', 'partial']), /Both provider/);

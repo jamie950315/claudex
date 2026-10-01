@@ -3,6 +3,8 @@ import { constants } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 const MAX_ROOTS = 16;
+const PERMISSIONS = ['read-only', 'workspace-write', 'full-access'];
+const writes = permission => permission === 'workspace-write' || permission === 'full-access';
 
 export function containsWorkspacePath(root, candidate) {
   const suffix = relative(root, candidate);
@@ -64,6 +66,8 @@ async function projectDirectory(cwd) {
 
 /** Access roots for both scoped tasks and legacy tasks (which retain exact cwd). */
 export function workspaceAccess(task) {
+  // Full access is not confined to directories; it conflicts with every workspace.
+  if (task.permission === 'full-access') return { readRoots: ['/'], writeRoots: ['/'] };
   const primary = task.projectRoot ?? task.cwd;
   const readRoots = [primary, ...(task.readOnlyDirs ?? [])];
   const writeRoots = task.permission === 'workspace-write' ? [primary, ...(task.writableDirs ?? [])] : [];
@@ -72,7 +76,7 @@ export function workspaceAccess(task) {
 
 /** Canonicalize authorization once; children never discover a broader Git root. */
 export async function resolveCollaborationWorkspace({ cwd, projectRoot, readOnlyDirs, writableDirs, permission = 'read-only', parent } = {}) {
-  if (!['read-only', 'workspace-write'].includes(permission)) throw new Error('Unsupported workspace permission.');
+  if (!PERMISSIONS.includes(permission)) throw new Error('Unsupported workspace permission.');
   if (parent) await revalidateWorkspace(parent);
   const requested = await directory(cwd ?? parent?.cwd, 'cwd');
   const primary = projectRoot !== undefined ? await directory(projectRoot, 'projectRoot')
@@ -82,30 +86,33 @@ export async function resolveCollaborationWorkspace({ cwd, projectRoot, readOnly
   const parentAccess = parent && workspaceAccess(parent);
   if (parentAccess && !parentAccess.readRoots.some(root => containsWorkspacePath(root, primary)))
     throw new Error('Child projectRoot exceeds parent directory access.');
-  if (parentAccess && permission === 'workspace-write'
+  if (parentAccess && writes(permission)
       && !parentAccess.writeRoots.some(root => containsWorkspacePath(root, primary)))
     throw new Error('Child workspace-write permission exceeds parent directory access.');
   const inheritedReads = parent?.readOnlyDirs ?? [];
   const inheritedWrites = parent?.writableDirs ?? [];
   let reads = await directories(readOnlyDirs ?? (permission === 'read-only' ? [...inheritedReads, ...inheritedWrites] : inheritedReads), 'readOnlyDirs');
-  const writes = await directories(writableDirs ?? (permission === 'workspace-write' ? inheritedWrites : []), 'writableDirs');
-  if (permission === 'read-only' && writes.length) throw new Error('read-only work cannot request writableDirs.');
-  const writeRoots = permission === 'workspace-write' ? compact([primary, ...writes]) : [];
-  const allRoots = [primary, ...reads, ...writes];
+  const extraWrites = await directories(writableDirs ?? (writes(permission) ? inheritedWrites : []), 'writableDirs');
+  if (permission === 'read-only' && extraWrites.length) throw new Error('read-only work cannot request writableDirs.');
+  // Without a sandbox nothing can enforce a reference-only directory; refuse it.
+  if (permission === 'full-access' && reads.length) throw new Error('full-access work cannot enforce readOnlyDirs; use workspace-write for reference directories.');
+  const writeRoots = writes(permission) ? compact([primary, ...extraWrites]) : [];
+  const allRoots = [primary, ...reads, ...extraWrites];
   if (allRoots.some(root => root === dirname(root))) throw new Error('Filesystem root cannot be a workspace access grant.');
   const home = await realpath(homedir());
-  if (writeRoots.some(root => containsWorkspacePath(root, home))) throw new Error('Workspace write access must not cover the entire home directory.');
+  if (permission === 'workspace-write' && writeRoots.some(root => containsWorkspacePath(root, home)))
+    throw new Error('Workspace write access must not cover the entire home directory.');
   if (reads.some(root => writeRoots.some(write => overlaps(root, write))))
     throw new Error('readOnlyDirs must not overlap a writable workspace directory.');
   if (parentAccess) {
     if (reads.some(root => !parentAccess.readRoots.some(allowed => containsWorkspacePath(allowed, root)))
-        || writes.some(root => !parentAccess.writeRoots.some(allowed => containsWorkspacePath(allowed, root))))
+        || extraWrites.some(root => !parentAccess.writeRoots.some(allowed => containsWorkspacePath(allowed, root))))
       throw new Error('Child directories exceed parent directory access.');
   }
   // The primary read-only scope already grants contained reference directories.
   if (permission === 'read-only') reads = reads.filter(root => !containsWorkspacePath(primary, root));
   return { cwd: primary, projectRoot: primary, readOnlyDirs: reads,
-    writableDirs: writes.filter(root => !containsWorkspacePath(primary, root)) };
+    writableDirs: extraWrites.filter(root => !containsWorkspacePath(primary, root)) };
 }
 
 /** Detect shared reader/writer roots for callers; this does not impose a scheduler lock. */
@@ -117,7 +124,7 @@ export function workspacesConflict(left, right) {
 
 /** Dispatch checks saved canonical grants, never re-detects or expands them. */
 export async function revalidateWorkspace(task) {
-  if (!['read-only', 'workspace-write'].includes(task.permission)) throw new Error('Unsupported workspace permission.');
+  if (!PERMISSIONS.includes(task.permission)) throw new Error('Unsupported workspace permission.');
   if (task.projectRoot !== undefined && task.projectRoot !== task.cwd)
     throw new Error('Saved projectRoot must match the effective working directory.');
   for (const key of ['readOnlyDirs', 'writableDirs']) {
@@ -130,7 +137,8 @@ export async function revalidateWorkspace(task) {
     if (await directory(path, 'Saved workspace directory') !== resolve(path))
       throw new Error('Saved workspace directory changed its canonical identity.');
   }
+  if (task.permission === 'full-access' && task.readOnlyDirs?.length) throw new Error('full-access work cannot enforce readOnlyDirs.');
   const access = workspaceAccess(task);
-  if ((task.readOnlyDirs ?? []).some(root => access.writeRoots.some(write => overlaps(root, write))))
+  if (task.permission !== 'full-access' && (task.readOnlyDirs ?? []).some(root => access.writeRoots.some(write => overlaps(root, write))))
     throw new Error('Saved read-only directories overlap writable access.');
 }

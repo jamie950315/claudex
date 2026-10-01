@@ -9,6 +9,9 @@ import { createOwnedProcessTracker } from './collaboration-processes.mjs';
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
 const MCP_NAME = 'claudex';
+// The user's own controller registration (collaboration install). A worker must
+// use only its injected worker server, or children would lose their parent link.
+export const NATIVE_CONTROLLER_MCP = 'claudex-work';
 const API_KEY_ENV = new Set(['OPENAI_API_KEY', 'CODEX_API_KEY', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
 
 function failure(message, { uncertain = false, cause } = {}) {
@@ -42,13 +45,17 @@ function checkedMcp(mcp) {
   return { command, args, env };
 }
 
-function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs }) {
+function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs, controllerMcpRegistered }) {
+  // full-access runs like the user's own agent: their config, plugins, MCP servers
+  // and hooks load, with no sandbox and no prompts. Other levels stay isolated.
+  const full = permission === 'full-access';
   if (provider === 'codex') {
     const args = [
-      'exec', '--json', '--ephemeral', '--ignore-user-config', '--skip-git-repo-check',
-      '--sandbox', permission === 'workspace-write' ? 'workspace-write' : 'read-only',
+      'exec', '--json', '--ephemeral', ...(full ? [] : ['--ignore-user-config']), '--skip-git-repo-check',
+      '--sandbox', full ? 'danger-full-access' : permission === 'workspace-write' ? 'workspace-write' : 'read-only',
       '-c', 'approval_policy="never"',
     ];
+    if (full && controllerMcpRegistered) args.push('-c', `mcp_servers.${NATIVE_CONTROLLER_MCP}.enabled=false`);
     if (model) args.push('--model', model);
     if (effort != null) args.push('-c', `model_reasoning_effort=${JSON.stringify(effort)}`);
     for (const path of writableDirs) args.push('--add-dir', path);
@@ -63,6 +70,15 @@ function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, 
       args.push('-c', `mcp_servers.${MCP_NAME}.default_tools_approval_mode="approve"`);
     }
     args.push('-');
+    return args;
+  }
+  if (full) {
+    const args = ['-p', '--output-format', 'stream-json', '--verbose', '--no-session-persistence',
+      '--dangerously-skip-permissions', '--disallowedTools', `mcp__${NATIVE_CONTROLLER_MCP}`];
+    if (writableDirs.length) args.push('--add-dir', ...writableDirs);
+    if (model) args.push('--model', model);
+    if (effort != null) args.push('--effort', effort);
+    if (mcp) args.push('--mcp-config', JSON.stringify({ mcpServers: { [MCP_NAME]: { command: mcp.command, args: mcp.args } } }));
     return args;
   }
   const tools = permission === 'workspace-write'
@@ -134,6 +150,21 @@ function decodeEvent(provider, event, result) {
   }
 }
 
+async function codexControllerMcpRegistered(command) {
+  const env = { ...process.env };
+  for (const key of API_KEY_ENV) delete env[key];
+  const child = spawn(command, ['mcp', 'get', NATIVE_CONTROLLER_MCP, '--json'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { if (stdout.length < 65536) stdout += chunk; });
+  child.stderr.on('data', chunk => { if (stderr.length < 4096) stderr += chunk; });
+  const timer = setTimeout(() => child.kill('SIGKILL'), 15000);
+  const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); })
+    .finally(() => clearTimeout(timer));
+  if (code === 0) return JSON.parse(stdout)?.name === NATIVE_CONTROLLER_MCP;
+  if (/No MCP server named/.test(stderr + stdout)) return false;
+  throw new Error(`codex mcp get exited with ${code}.`);
+}
+
 export function createNativeCollaborationRunner({
   spawnImpl = spawn,
   commands = { codex: 'codex', claude: 'claude' },
@@ -144,6 +175,8 @@ export function createNativeCollaborationRunner({
   },
   // Injected synthetic spawns have no OS process identity. Production always tracks descendants.
   processTrackerFactory = spawnImpl === spawn ? createOwnedProcessTracker : null,
+  // Metadata-only native config read; never starts model work.
+  controllerMcpRegistered = spawnImpl === spawn ? codexControllerMcpRegistered : async () => false,
 } = {}) {
   const run = async function runCollaborationNative({
     provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
@@ -156,7 +189,7 @@ export function createNativeCollaborationRunner({
     if (model != null) checkedString(model, 'model');
     try { validateCollaborationEffort(provider, effort); }
     catch (error) { throw failure(error.message); }
-    if (!['read-only', 'workspace-write'].includes(permission)) throw failure('Invalid permission.');
+    if (!['read-only', 'workspace-write', 'full-access'].includes(permission)) throw failure('Invalid permission.');
     if (onEvent != null && typeof onEvent !== 'function') throw failure('onEvent must be a function.');
     const mcp = checkedMcp(rawMcp);
     let canonicalCwd;
@@ -172,8 +205,13 @@ export function createNativeCollaborationRunner({
     if (signal?.aborted) throw failure('Native execution was cancelled before launch.');
 
     const command = checkedString(commands[provider], `${provider} command`, 4096);
-    const args = argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs });
-    const env = { ...process.env, ...mcp?.env };
+    let registered = false;
+    if (provider === 'codex' && permission === 'full-access') {
+      try { registered = await controllerMcpRegistered(command); }
+      catch (cause) { throw failure('Could not read the native Codex MCP configuration before launch.', { cause }); }
+    }
+    const args = argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs, controllerMcpRegistered: registered });
+    const env = { ...process.env, ...mcp?.env, CLAUDEX_COLLABORATION_WORKER: '1' };
     for (const key of API_KEY_ENV) delete env[key];
     for (const key of ['CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID']) delete env[key];
     if (provider === 'claude') {

@@ -24,6 +24,8 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Save both defaults; empty ID uses native default
   claudex collaboration models --codex-effort LEVEL --claude-effort LEVEL
                                                 Save provider efforts; empty uses native default
+  claudex collaboration permissions [--default read-only|workspace-write|full-access]
+                                                Read or save the default permission for new root work
   claudex collaboration request METHOD --peer codex|claude
                                                 Read JSON parameters from stdin
 
@@ -32,7 +34,9 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
 --codex-binary PATH and --claude-binary PATH select explicit native executables.
 Default: ~/.local/share/claudex/collaboration. Requests may start real model work.
 Reads, startup, installation and status never request inference. No API keys are copied.
-Writes require both broker --allow-write and per-task permission: workspace-write.
+Writes require broker authorization (--allow-write, --allow-full-access, or a saved
+controller default) and a task permission of workspace-write or full-access.
+full-access runs native tools without a sandbox or prompts and loads user config.
 Use a dedicated checkout for writable work; the protocol does not merge changes.
 `;
 
@@ -66,7 +70,8 @@ async function serve(root, allowWrite, values) {
   process.umask(0o077);
   root = await privateDirectory(root);
   return withLock(join(root, 'broker.lock'), async () => {
-    const hub = new CollaborationHub({ root, allowWrite, defaultPermission: values['default-permission'] ?? 'read-only',
+    const hub = new CollaborationHub({ root, allowWrite, allowFullAccess: values['allow-full-access'] === true,
+      defaultPermission: values['default-permission'] ?? 'read-only',
       chatWake: prepareCodexChatWake,
       nativeChatDiscovery: params => discoverCodexChats(params, { syncRoot: dirname(root) }),
       claudeWakeManifest: createClaudeChatWakeManifest({ root }),
@@ -100,7 +105,8 @@ async function serve(root, allowWrite, values) {
 
 export async function collaborationMain(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
-    root: { type: 'string' }, peer: { type: 'string' }, 'allow-write': { type: 'boolean' }, help: { type: 'boolean' },
+    root: { type: 'string' }, peer: { type: 'string' }, 'allow-write': { type: 'boolean' }, 'allow-full-access': { type: 'boolean' },
+    help: { type: 'boolean' }, default: { type: 'string' },
     'default-permission': { type: 'string' }, 'codex-binary': { type: 'string' }, 'claude-binary': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
     'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
@@ -139,6 +145,13 @@ export async function collaborationMain(args = process.argv.slice(2)) {
       claude: values['claude-effort'].trim() || null,
     };
     console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'models', params }), null, 2));
+    return;
+  }
+  if (command === 'permissions') {
+    // A saved default is the controller's explicit authorization for that level.
+    const params = values.default === undefined ? {} : { defaultPermission: values.default };
+    const result = await callCollaboration({ root, peer, token, method: 'models', params });
+    console.log(JSON.stringify({ defaultPermission: result.defaultPermission }, null, 2));
     return;
   }
   if (command === 'request') {

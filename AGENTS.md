@@ -205,8 +205,15 @@ owner at a completed native boundary. MCP exposes start/send/handoff/status/wait
 cancel/list through an owner-private Unix socket. Request IDs are idempotent;
 generation capabilities fence old workers. Never launch the next owner before
 the outgoing invocation and its owned process group finish. Never replay an
-uncertain native invocation. In-flight work found after restart becomes uncertain
-and blocks dispatch; preserve its process/session evidence and work record.
+uncertain native invocation. In-flight work found after restart becomes uncertain;
+preserve its process/session evidence and work record. By user decision an
+uncertain task blocks only its own task tree and work whose access overlaps its
+writable roots (full-access overlaps everything), not all dispatch. The broker
+closes it as failed automatically (at startup and every 30 seconds) once the same
+exit proof as controller resolve passes: leader, group and every recorded
+descendant absent with a complete inventory. Writable work is then flagged for
+workspace review in its error and receipt; nothing is replayed. Incomplete
+inventories and live processes stay uncertain until an operator resolves them.
 Native tools may detach into another process group. A shared bounded metadata
 sampler records observed descendants by exact ancestry, PID, UID, PGID and UTC
 start identity; persist those records with each execution. Recheck before every
@@ -288,8 +295,16 @@ This fences protocol operations, not hostile same-UID processes.
 Native execution uses fresh Codex ephemeral exec or Claude nonpersistent print
 sessions with normal account authentication, no copied credentials, no inherited
 API keys, and explicit collaboration MCP configuration. Ordinary sync must not
-enroll this work. These restricted profiles do not inherit arbitrary user tools,
-hooks or model settings. Models use per-provider broker defaults unless overridden
+enroll this work. read-only and workspace-write profiles do not inherit arbitrary
+user tools, hooks or model settings. By user decision, full-access work runs like
+the user's own agent: Codex danger-full-access without --ignore-user-config and
+Claude --dangerously-skip-permissions without --restricted/--strict-mcp-config,
+so user settings, plugins, MCP servers and hooks (such as RTK) load. The user's
+claudex-work controller MCP is disabled in those workers (Codex only when it is
+registered, since disabling an unknown server breaks config loading; Claude via
+--disallowedTools) so children keep their parent link. Every worker carries
+CLAUDEX_COLLABORATION_WORKER=1, and the Claudex sync/chat hook exits without
+recording anything for it. Sessions stay ephemeral. Models use per-provider broker defaults unless overridden
 by the caller; an unset default or explicit null override uses the native CLI
 default. Controller-only `models` requests persist both provider defaults in
 work.json without restarting services. Start and handoff capture the destination
@@ -318,11 +333,14 @@ Expose the requested effort only: native organization caps can affect effective
 effort, including silent Claude stream-json caps. Do not claim effective-budget
 verification merely from argv or task metadata.
 Manual CLI tasks default to read-only. The app enables all projects and task-scoped
-writes by default, using the explicit broker defaultPermission setting. Read-only
-requests and parent restrictions must never elevate. Writes require broker opt-in and task permission;
-children cannot escalate permissions or expand directory grants. Claude permits bounded file
-tools, not Bash. Codex uses its native sandbox. Do not replace these boundaries
-with bypass-permission flags. Writable work needs a caller-selected dedicated
+writes by default, using the explicit broker defaultPermission setting. Permissions
+are ordered read-only < workspace-write < full-access. A controller-saved default
+(models/permissions request or the app picker) is the explicit authorization for
+that level; installation flags remain the floor. Read-only requests and parent
+restrictions must never elevate; children cannot exceed their parent. Sandboxed
+levels keep bounded Claude file tools without Bash and the Codex native sandbox;
+only full-access, chosen explicitly by the user, removes them. full-access refuses
+readOnlyDirs it cannot enforce. New installations keep workspace-write. Writable work needs a caller-selected dedicated
 checkout; this protocol does not create or merge worktrees. Concurrent work in
 the same or overlapping canonical access roots is allowed, including ancestor/
 descendant paths, reference readers and writable parent/child tasks. Callers must
@@ -372,7 +390,9 @@ worker or unresolved descendants. Preserve original error and execution evidence
 with the resolution receipt. Writable uncertainty requires controller attestation
 `workspaceReconciled: true` plus nonempty `reconciliationNotes`, saved with exact
 directory grants in the receipt. This attests to prior workspace inspection, not
-automatic validation or rollback. Queued work may dispatch once the final hold is resolved.
+automatic validation or rollback. full-access uncertainty requires the same
+workspace attestation. The app's Resolve action records the user's in-app
+confirmation as that attestation, still refusing live processes.
 Codex collaboration supports explicitly selected non-Git directories using
 `--skip-git-repo-check`; native sandbox and approval restrictions remain unchanged.
 Only an exact no-stdout, no-session pre-execution Git refusal with a closed process

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, chmod, rm, lstat } from 'node:fs/promises';
+import { mkdtemp, chmod, rm, lstat, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
@@ -79,7 +79,7 @@ test('provider model defaults persist, validate atomically and leave existing wo
   const { root, hub } = await setup(t, async () => ({ text: 'unused' }));
   hub.schedule = () => {};
   const settings = params => hub.dispatch(controller(hub, 'codex', 'models', params));
-  assert.deepEqual(await settings({}), { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null } });
+  assert.deepEqual(await settings({}), { defaultModels: { codex: null, claude: null }, defaultEfforts: { codex: null, claude: null }, defaultPermission: 'read-only' });
   const initial = { defaultModels: { codex: 'codex-default', claude: 'claude-default' } };
   await settings(initial);
   const saved = await lstat(join(root, 'work.json'), { bigint: true });
@@ -914,4 +914,77 @@ test('native token usage is recorded per invocation and totaled by provider with
   assert.deepEqual(task.lastExecution.usage, usage);
   assert.deepEqual(task.usageTotals.codex, { invocations: 2, inputTokens: 2000, cacheReadInputTokens: 1800,
     cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 40 });
+});
+
+test('full-access requires an explicit controller default and never bypasses parent or reference limits', async t => {
+  const { root, hub } = await setup(t, async () => ({ text: 'synthetic done' }), { allowWrite: true, defaultPermission: 'workspace-write' });
+  hub.schedule = () => {};
+  const start = (extra = {}) => hub.dispatch(controller(hub, 'codex', 'start',
+    { provider: 'codex', cwd: root, prompt: 'Work', requestId: randomUUID(), ...extra }));
+  await assert.rejects(start({ permission: 'full-access' }), /Full access is not authorized/);
+  await assert.rejects(hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'root' })), /defaultPermission must be/);
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'full-access' }))).defaultPermission, 'full-access');
+  const list = await hub.dispatch(controller(hub, 'codex', 'list', {}));
+  assert.equal(list.limits.defaultPermission, 'full-access');
+  assert.equal(list.limits.allowFullAccess, true);
+  assert.equal((await status(hub, (await start()).taskId)).permission, 'full-access');
+  assert.equal((await status(hub, (await start({ permission: 'read-only' })).taskId)).permission, 'read-only');
+  const reference = await mkdtemp(join(tmpdir(), 'cldx-reference-'));
+  t.after(() => rm(reference, { recursive: true, force: true }));
+  await assert.rejects(start({ readOnlyDirs: [reference] }), /cannot enforce readOnlyDirs/);
+  assert.throws(() => hub.checkPermission('full-access', { permission: 'workspace-write' }), /Full access is not authorized/);
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'workspace-write' }));
+  await assert.rejects(start({ permission: 'full-access' }), /Full access is not authorized/);
+});
+
+test('uncertain work whose recorded processes exited is closed automatically without replay', async t => {
+  let alive = true, calls = 0;
+  const { root, hub } = await setup(t, async () => { calls++; return { text: 'Unexpected replay' }; }, {
+    allowWrite: true, defaultPermission: 'workspace-write',
+    inspectProcessGroup: pid => ({ pid, processAbsent: !alive, groupAbsent: !alive, inspectedAt: 123 }),
+  });
+  hub.schedule = () => {};
+  const readOnly = await uncertainFixture(hub, root);
+  const writable = await uncertainFixture(hub, root, { permission: 'workspace-write' });
+  assert.equal(await hub.autoResolveUncertain(), 0);
+  assert.equal((await status(hub, readOnly.id)).status, 'uncertain');
+  alive = false;
+  assert.equal(await hub.autoResolveUncertain(), 2);
+  const closed = await status(hub, readOnly.id);
+  assert.equal(closed.status, 'failed');
+  assert.equal(closed.resolution.automatic, true);
+  assert.equal(closed.resolution.workspaceReviewRecommended, undefined);
+  assert.equal(closed.error, readOnly.error);
+  const reviewed = await status(hub, writable.id);
+  assert.equal(reviewed.resolution.workspaceReviewRecommended, true);
+  assert.match(reviewed.error, /may contain partial changes/);
+  assert.equal((await hub.dispatch(controller(hub, 'codex', 'list', {}))).blockedByUncertainWork, false);
+  assert.equal(calls, 0);
+  // Incomplete inventories still need an operator's attested resolution.
+  const incomplete = await uncertainFixture(hub, root, { lastExecution: { generation: 1, pid: 123456,
+    processInventoryRequired: true, processInventoryError: true, ownedProcesses: [{ pid: 123456, ppid: 1,
+      pgid: 123456, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }] } });
+  assert.equal(await hub.autoResolveUncertain(), 0);
+  assert.equal((await status(hub, incomplete.id)).status, 'uncertain');
+});
+
+test('uncertain work blocks only its task tree and overlapping access', async t => {
+  const started = [];
+  const { root, hub } = await setup(t, async ({ cwd }) => { started.push(cwd); return { text: 'done' }; }, {
+    allowWrite: true, defaultPermission: 'workspace-write',
+    inspectProcessGroup: pid => ({ pid, processAbsent: false, groupAbsent: false, inspectedAt: 123 }),
+  });
+  const other = await realpath(await mkdtemp(join(tmpdir(), 'cldx-unrelated-')));
+  await chmod(other, 0o700);
+  t.after(() => rm(other, { recursive: true, force: true }));
+  // Saved tasks always carry canonical directories.
+  await uncertainFixture(hub, root, { permission: 'workspace-write', cwd: await realpath(root) });
+  const blocked = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root, prompt: 'Same place', requestId: 'blocked' }));
+  const free = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: other, prompt: 'Elsewhere', requestId: 'free' }));
+  await until(async () => (await status(hub, free.taskId)).status === 'completed');
+  assert.equal((await status(hub, blocked.taskId)).status, 'ready');
+  assert.deepEqual(started, [other]);
+  const list = await hub.dispatch(controller(hub, 'codex', 'list', {}));
+  assert.equal(list.blockedByUncertainWork, true);
+  assert.equal(list.uncertainTasks.length, 1);
 });

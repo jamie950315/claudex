@@ -13,6 +13,9 @@ async function main() {
     options[args[i]] = args[i + 1];
   }
   if (!['codex', 'claude'].includes(options['--provider'])) throw new Error('Invalid hook provider.');
+  // Delegated collaboration workers load the user's hooks but are not ordinary
+  // conversations: never enroll, wake or message them. Drain input and stop.
+  if (process.env.CLAUDEX_COLLABORATION_WORKER === '1') { for await (const _ of process.stdin); return; }
   const chunks = [];
   let size = 0;
   for await (const chunk of process.stdin) {
