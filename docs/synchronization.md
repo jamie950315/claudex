@@ -181,6 +181,13 @@ Raw and converted histories must both fit the byte budget. Exceeding a limit
 reports the source thread ID and stops that operation without retry, truncation,
 fallback, or weakening authentication and canonical-history checks.
 
+Each synchronized Claude conversation is served by a background Claude Code
+process while Claudex reads or delivers to it. A process unused for
+`claudeOwnerIdleSeconds` (default 900; 60 through 86400) is closed while the
+watcher waits for events, unless it is busy or a handoff is pending. The next
+synchronization starts it again with the same Remote Control identity; while it
+is closed, that conversation's Claude Desktop entry is not connected.
+
 Codex Desktop stores a screenshot of the browser or app surface with every
 Browser Use and computer-use call so its own window can preview the tool. That
 picture is not part of what the model saw (the call's own result keeps any

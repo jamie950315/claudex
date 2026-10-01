@@ -78,12 +78,17 @@ export async function persistentPacketKey(root) {
 /** Native adapters with one long-lived SDK owner per logical Claude session. */
 export class DesktopRuntime {
   constructor({ root, codexHome, claudeHome, desktopHome = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'), claudeBinary = 'claude', clientFactory, ownerFactory, ownerOptions = {}, contextMode = 'inline', versionPolicy = 'strict',
-    nativeHistoryMaxBytes = NATIVE_HISTORY_LIMITS.maxBytes, nativeHistoryPageSize = NATIVE_HISTORY_LIMITS.pageSize, onEvent = () => {} }) {
+    nativeHistoryMaxBytes = NATIVE_HISTORY_LIMITS.maxBytes, nativeHistoryPageSize = NATIVE_HISTORY_LIMITS.pageSize,
+    claudeOwnerIdleSeconds = 900, now = () => Date.now(), onEvent = () => {} }) {
     if (!['inline', 'archive'].includes(contextMode)) throw new Error('Unsupported Desktop context mode.');
     if (!Number.isSafeInteger(nativeHistoryMaxBytes) || nativeHistoryMaxBytes < 1024 || nativeHistoryMaxBytes > 64 * 1024 * 1024)
       throw new Error('nativeHistoryMaxBytes must be an integer from 1024 through 67108864 bytes.');
     if (!Number.isSafeInteger(nativeHistoryPageSize) || nativeHistoryPageSize < 1 || nativeHistoryPageSize > 100)
       throw new Error('nativeHistoryPageSize must be an integer from 1 through 100.');
+    if (!Number.isSafeInteger(claudeOwnerIdleSeconds) || claudeOwnerIdleSeconds < 60 || claudeOwnerIdleSeconds > 86400)
+      throw new Error('claudeOwnerIdleSeconds must be an integer from 60 through 86400.');
+    this.ownerIdleMs = claudeOwnerIdleSeconds * 1000;
+    this.clock = now;
     this.root = resolve(root); this.codexHome = resolve(codexHome); this.claudeHome = resolve(claudeHome);
     this.desktopHome = resolve(desktopHome);
     this.claudeBinary = claudeBinary; this.clientFactory = clientFactory; this.ownerFactory = ownerFactory;
@@ -194,6 +199,7 @@ export class DesktopRuntime {
   async owner(conversationId, cwd, title, { forceNormal = false } = {}) {
     let entry = this.owners.get(conversationId);
     if (entry) {
+      entry.usedAt = this.clock();
       if (entry.error) throw entry.error;
       await entry.owner.reconcileDisplayTitle?.(title);
       return entry.owner;
@@ -213,7 +219,7 @@ export class DesktopRuntime {
       options: { ...this.ownerOptions, pathToClaudeCodeExecutable: this.claudeBinary },
       onEvent: event => this.onEvent({ type: 'claude_notification', conversationId, event }) };
     const owner = this.ownerFactory ? this.ownerFactory(settings) : new ClaudeOwner(settings);
-    entry = { owner, error: null, maintenanceOnly }; this.owners.set(conversationId, entry);
+    entry = { owner, error: null, maintenanceOnly, usedAt: this.clock() }; this.owners.set(conversationId, entry);
     try { await owner.start(); }
     catch (error) { entry.error = error; throw error; } // Retain live handles on a busy startup failure.
     // Presentation reconciliation can observe a native metadata append after
@@ -1089,6 +1095,38 @@ export class DesktopRuntime {
     }
     return known;
   }
+  // An idle owner keeps a native Claude process (hundreds of MB) only so its
+  // Remote Control entry stays connected. Owners are started on demand by the
+  // next read or delivery, so one unused for ownerIdleMs is closed.
+  idleOwner(entry) {
+    if (entry.error) return false;
+    const status = entry.owner.status();
+    return !status.closed && status.nativeState === 'idle' && !status.pending && !status.reset
+      && !status.backgroundTasks?.length && !status.blocked;
+  }
+
+  nextOwnerIdleAt() {
+    let next = Infinity;
+    for (const entry of this.owners.values()) if (this.idleOwner(entry)) next = Math.min(next, entry.usedAt + this.ownerIdleMs);
+    return next;
+  }
+
+  async closeIdleOwners() {
+    const closed = [];
+    for (const [conversationId, entry] of this.owners) {
+      if (!this.idleOwner(entry) || this.clock() - entry.usedAt < this.ownerIdleMs) continue;
+      try { await entry.owner.close(); }
+      catch (error) {
+        // New user work started meanwhile: keep it and retry after it ends.
+        if (/Claude owner is busy/.test(error.message)) { entry.usedAt = this.clock(); continue; }
+        throw error;
+      }
+      if (this.owners.get(conversationId) === entry) this.owners.delete(conversationId);
+      closed.push(conversationId);
+    }
+    return closed;
+  }
+
   async close() {
     // Owners are independent native processes; closing them one after another
     // made shutdown (and a system restart waiting on it) take minutes. A busy

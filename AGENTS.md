@@ -1157,6 +1157,13 @@ and wait for reset idle without classifying the owned lifecycle as user work.
 
 Verified archived current owners resume directly with their normal execution
 profile after restart; pending resets still require deferred cold maintenance.
+Owners start on demand and each keeps a native Claude process (~300 MB). The
+watcher closes an owner unused for claudeOwnerIdleSeconds (config.json, default
+900, bounds 60..86400) while it waits for events: only idle, unblocked owners
+with no pending/reset/background work, never while the ledger has a pending
+transaction, and a busy refusal keeps the owner. The next read or delivery
+restarts it with the same Remote Control identity; while closed, its Desktop
+entry is not connected, like any other owner that has not been started.
 Promoted recovery reconnects the normal owner even without a cached handle.
 
 The integrated real SDK/coordinator proof preserves four canonical messages

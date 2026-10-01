@@ -655,10 +655,21 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             signal?.addEventListener('abort', abortIdle, { once: true });
             if (signal?.aborted) idleStop.abort();
             try {
-              const nextDue = Math.min(...[...deferredEvents.values()].map(value => value.due));
-              eventBatch = await events.wait({ signal: idleStop.signal,
-                ...(Number.isFinite(nextDue) ? { timeoutMs: Math.max(0, nextDue - now()) } : {}) });
-              if (heartbeatError) throw heartbeatError;
+              let ownersHeld = false;
+              for (;;) {
+                const nextDue = Math.min(...[...deferredEvents.values()].map(value => value.due));
+                // Idle Claude owners are closed while waiting; never during a
+                // pending transaction, which must recover with its live owner.
+                const ownerIdleAt = ownersHeld ? Infinity : runtime.nextOwnerIdleAt?.() ?? Infinity;
+                const wake = Math.min(nextDue, ownerIdleAt);
+                eventBatch = await events.wait({ signal: idleStop.signal,
+                  ...(Number.isFinite(wake) ? { timeoutMs: Math.max(0, wake - now()) } : {}) });
+                if (heartbeatError) throw heartbeatError;
+                if (eventBatch.length || idleStop.signal.aborted || nextDue <= now() || ownerIdleAt > now()) break;
+                if ((await bridge.status()).pending) { ownersHeld = true; continue; }
+                await runtime.closeIdleOwners();
+                await writeProgress();
+              }
               const freshKeys = new Set(eventBatch.map(eventKey));
               for (const [key, pending] of deferredEvents) {
                 if (freshKeys.has(key)) deferredEvents.delete(key);

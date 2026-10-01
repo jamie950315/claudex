@@ -415,3 +415,31 @@ test('Claude path-only discovery binds the hook identity before enrollment', asy
   assert.deepEqual(f.calls.track, [nativeId]);
   assert.deepEqual(f.calls.sync, [existing.id, nativeId]);
 });
+
+test('idle waits close unused Claude owners, but never while a transaction is pending', async () => {
+  const f = await fixture();
+  let closes = 0, idleAt = 5000, clock = 0;
+  f.runtime.nextOwnerIdleAt = () => idleAt;
+  f.runtime.closeIdleOwners = async () => { closes++; idleAt = Infinity; return ['conversation']; };
+  // The first idle wait times out at the owner deadline, closes it, then waits
+  // for the next real event without another owner deadline.
+  const timeouts = [];
+  await f.run({ now: () => clock, events: f.eventQueue([
+    options => { timeouts.push(options.timeoutMs); clock += options.timeoutMs; return []; },
+    options => { timeouts.push(options.timeoutMs); return [configurationEvent()]; }]), maxPasses: 2 });
+  assert.equal(closes, 1);
+  assert.deepEqual(timeouts, [5000, undefined]);
+
+  const held = await fixture();
+  let heldCloses = 0;
+  held.state.pending = { operationId: 'pending' };
+  held.bridge.recover = async () => {};
+  held.runtime.nextOwnerIdleAt = () => 0;
+  held.runtime.closeIdleOwners = async () => { heldCloses++; return []; };
+  const heldTimeouts = [];
+  await held.run({ now: () => 10, events: held.eventQueue([
+    options => { heldTimeouts.push(options.timeoutMs); return []; },
+    options => { heldTimeouts.push(options.timeoutMs); return [configurationEvent()]; }]), maxPasses: 2 });
+  assert.equal(heldCloses, 0);
+  assert.deepEqual(heldTimeouts, [0, undefined]);
+});
