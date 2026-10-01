@@ -5,7 +5,7 @@ import { access, appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, re
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
-import { createCodexLocalImageResolver } from '../src/native-local-images.mjs';
+import { createCodexLocalImageResolver, createCodexRolloutLocator } from '../src/native-local-images.mjs';
 import { exportNativeHistory } from '../src/native-history.mjs';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { decodeClaude, encodeClaude } from '../src/claude.mjs';
@@ -466,7 +466,7 @@ test('retained image recovery requires the saved canonical prefix, identity and 
   const changed = await rolloverFixture(t);
   await changed.rollover();
   await assert.rejects(changed.runtime.inspect({ ...changed.record, checkpoint: { ...changed.record.checkpoint, digest: '0'.repeat(64) } }), /verified canonical checkpoint/);
-  await assert.rejects(changed.runtime.inspect({ ...changed.record, verified: false }), /lacks complete|missing/);
+  await assert.rejects(changed.runtime.inspect({ ...changed.record, verified: false }), /lacks complete|missing|invalid history_base reference/);
 
   const outside = await rolloverFixture(t, { owned: true });
   await outside.rollover();
@@ -484,7 +484,7 @@ test('rollover does not read an unverified previous path or replace missing prov
   const f = await rolloverFixture(t);
   await f.rollover();
   await assert.rejects(f.runtime.inspect({ side: 'codex', nativeId: f.threadId, managed: false,
-    path: '/must-not-read/unknown.jsonl' }), /lacks complete/);
+    path: '/must-not-read/unknown.jsonl' }), /lacks complete|invalid history_base reference/);
   await assert.rejects(f.runtime.inspect({ ...f.record, localImageRollouts: f.original.localImageRollouts, verified: false }), /verified canonical checkpoint/);
   await assert.rejects(f.runtime.inspect({ ...f.record, path: '/must-not-read/unknown.jsonl' }), /retained rollout image evidence is missing/);
 });
@@ -559,4 +559,77 @@ test('an interrupted image turn closes with its exact turn_aborted event', async
     await assert.rejects(f.resolver()([{ turnId: f.turnId, item: f.item }], { maxBytes: 1 << 20, threadId: f.threadId }),
       /different identity|did not close/);
   }
+});
+
+async function inheritedFixture(t) {
+  const f = await fixture(t), parentId = f.threadId, segmentId = randomUUID(), forkId = randomUUID();
+  const directory = join(f.codexHome, 'sessions', '2026', '01', '01');
+  await mkdir(directory, { recursive: true });
+  const line = row => JSON.stringify(row) + '\n';
+  const numbered = (rows, start) => rows.map((row, index) => ({ ordinal: start + index, ...row }));
+  const unrelated = turnId => [{ type: 'event_msg', payload: { type: 'task_started', turn_id: turnId } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: turnId, last_agent_message: 'Other' } }];
+  // Parent root: the image turn, then rows the parent wrote after its rollover.
+  const root = numbered([...f.rows, ...unrelated(randomUUID())], 0);
+  const rootPath = join(directory, `rollout-2026-01-01T00-00-00-${parentId}.jsonl`);
+  const rootCut = f.rows.length;
+  const segment = numbered([{ type: 'session_meta', payload: { id: parentId, cwd: f.cwd,
+    history_base: { thread_id: parentId, end_ordinal_exclusive: rootCut,
+      end_byte_offset: root.slice(0, rootCut).reduce((sum, row) => sum + Buffer.byteLength(line(row)), 0) } } },
+  ...unrelated(randomUUID()), ...unrelated(randomUUID())], rootCut);
+  const segmentPath = join(directory, `rollout-2026-01-01T01-00-00-${parentId}_${segmentId}.jsonl`);
+  const forkCut = rootCut + 3;
+  const forkOffset = segment.slice(0, 3).reduce((sum, row) => sum + Buffer.byteLength(line(row)), 0);
+  const forkPath = join(directory, `rollout-2026-01-01T02-00-00-${forkId}.jsonl`);
+  const forkMeta = { id: forkId, cwd: f.cwd, forked_from_id: parentId, forked_from_ordinal_exclusive: forkCut,
+    history_base: { thread_id: segmentId, end_ordinal_exclusive: forkCut, end_byte_offset: forkOffset + 12 } };
+  const save = async () => {
+    await writeFile(rootPath, root.map(line).join(''), { mode: 0o600 });
+    await writeFile(segmentPath, segment.map(line).join(''), { mode: 0o600 });
+    await writeFile(forkPath, line({ type: 'session_meta', payload: forkMeta }), { mode: 0o600 });
+  };
+  await save();
+  const resolve = (options = {}) => createCodexLocalImageResolver({ path: forkPath, threadId: forkId,
+    locateRollout: createCodexRolloutLocator(f.codexHome), ...options })([{ turnId: f.turnId, item: f.item }],
+    { maxBytes: 1 << 20, threadId: forkId });
+  return { ...f, parentId, segmentId, forkId, root, segment, forkMeta, rootPath, segmentPath, forkPath, save, resolve, directory };
+}
+
+test('inherited fork and rollover history recovers images from exact ordinal-bounded segment prefixes', async t => {
+  const f = await inheritedFixture(t);
+  let evidence;
+  const found = await f.resolve({ onResolved: value => { evidence = value; } });
+  assert.deepEqual(found.get(JSON.stringify([f.turnId, f.itemId])).map(image => image.url), f.urls);
+  assert.deepEqual(evidence.localImageRollouts.map(entry => entry.path), [f.rootPath]);
+  // Retained evidence from the inherited segment keeps its exact link later.
+  const again = await f.resolve({ retainedRollouts: evidence.localImageRollouts.map(({ path, requests }) =>
+    ({ path, requests: requests.map(request => ({ ...request, messageIndex: 0 })) })) });
+  assert.equal(again.size, 1);
+  // A parent still writing after the referenced prefix does not change it.
+  f.segment.push({ ordinal: f.segment.at(-1).ordinal + 1, type: 'event_msg', payload: { type: 'task_started', turn_id: randomUUID() } });
+  await f.save();
+  assert.equal((await f.resolve()).size, 1);
+});
+
+test('inherited history refuses mismatched offsets, ordinals, owners and ambiguous segments', async t => {
+  const cases = [
+    [f => { f.forkMeta.history_base.end_byte_offset = 1; }, /byte offset does not match/],
+    [f => { f.forkMeta.forked_from_id = randomUUID(); }, /different thread/],
+    [f => { f.forkMeta.forked_from_ordinal_exclusive++; }, /fork metadata/],
+    [f => { f.root[2].ordinal = 99; }, /contiguous native ordinals/],
+    [async f => { await writeFile(join(f.directory, `rollout-2026-01-02T00-00-00-${f.parentId}_${f.segmentId}.jsonl`), ''); }, /ambiguous/],
+    [async f => { await rename(f.segmentPath, `${f.segmentPath}.moved`); }, /missing/],
+  ];
+  for (const [mutate, expected] of cases) {
+    const f = await inheritedFixture(t);
+    await mutate(f); if (!(await access(f.segmentPath).then(() => false, () => true))) await f.save();
+    await assert.rejects(f.resolve(), expected);
+  }
+  // An image turn the parent wrote only after the fork point is not inherited.
+  const late = await inheritedFixture(t);
+  late.forkMeta.history_base = { thread_id: late.parentId, end_ordinal_exclusive: 1,
+    end_byte_offset: Buffer.byteLength(JSON.stringify(late.root[0]) + '\n') };
+  late.forkMeta.forked_from_ordinal_exclusive = 1;
+  await late.save();
+  await assert.rejects(late.resolve(), /lacks complete/);
 });

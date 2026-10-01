@@ -205,7 +205,11 @@ and never commits later source origins beyond the copied checkpoint. Reads use
 no-follow opens and stable file identity/stat checks across at most 256 exact
 origins, a 512 MiB aggregate scan limit and 64 MiB row limit. Conflicting duplicate
 proofs or partial provenance remain blocked. It never opens the historical image path, fetches a URL or searches
-`history_base` files. MIME/base64 validation and the configured converted-history
+for rollout files. A forked or rolled-over Codex conversation can inherit images
+from earlier rollouts: those are read only through the exact `history_base`
+references the conversation declares, located by their segment ID, limited to
+the referenced rows (by native row ordinal) and checked against the thread they
+belong to. MIME/base64 validation and the configured converted-history
 budget still apply. These are the persisted model-input bytes, not a claim that
 the original upload was unresized. Ambiguous, missing or changed provenance remains
 blocked; the source file is never rewritten.

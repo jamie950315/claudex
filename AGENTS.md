@@ -891,7 +891,19 @@ equality with the full API item, matching thread/turn/context/passthrough IDs,
 one earlier embedded user response, exact text, and image wrapper path/number/order
 agreement before a closed turn. Keep image descriptors as inert metadata and
 validate the recovered data URI and converted-history budget. Never read API
-image paths, fetch URLs, search history_base files or silently choose a candidate.
+image paths, fetch URLs, search for rollout files or silently choose a candidate.
+By user decision, images the current and retained rollouts do not prove may come
+from the declared history_base chain (fork or rollover), nearest segment first.
+Each link is located only by its exact segment ID in the native layout
+(sessions/YYYY/MM/DD or archived_sessions; root <thread>.jsonl or
+<thread>_<segment>.jsonl, exactly one match), and its session_meta must belong
+to the forked_from thread (fork, with matching forked_from_ordinal_exclusive) or
+the same thread (rollover). Rows carry contiguous native ordinals; only rows
+before end_ordinal_exclusive count. Observed end_byte_offset values can land a
+few bytes inside an adjacent row, so the offset must fall within the last
+included or first excluded row. The referenced segment may keep growing; only
+its inode and covered prefix length are rechecked. The source thread_id in those
+rows is the owning thread's, and every image still matches the exact API item.
 Mixed local attachments and inline images retain their exact native order. Inline
 bytes come from the full API item and must match the translated persisted user
 completion; validate the normalized model-input image without substituting its

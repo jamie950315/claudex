@@ -15,7 +15,7 @@ import { inspectNativeSyncHookTrust } from './sync-hook-install.mjs';
 import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
-import { createCodexLocalImageResolver } from './native-local-images.mjs';
+import { createCodexRolloutLocator, createCodexLocalImageResolver } from './native-local-images.mjs';
 import { createNativeGoalRequestResolver } from './native-goal-request.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket, hasProjectedImages } from './context-archive.mjs';
@@ -507,6 +507,7 @@ export class DesktopRuntime {
         ? record.path : undefined;
       let data, imageEvidence;
       const resolveLocalImages = createCodexLocalImageResolver({ path, threadId: nativeId, retainedRollouts, retainedPath,
+        locateRollout: createCodexRolloutLocator(this.codexHome),
         onResolved: evidence => { imageEvidence = evidence; },
         validateRetainedPath: sourcePath => this.safePath(sourcePath, this.codexHome) });
       try {
