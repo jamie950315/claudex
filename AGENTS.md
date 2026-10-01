@@ -346,6 +346,9 @@ but always returns unseen terminal child outcomes to worker callers. Snapshot an
 seenChildren acknowledgement share one serialized mutation; omitted outcomes must
 not be acknowledged. Full output remains default. Persist per-invocation inputs
 {from,to,kinds} for resumption context without replay or permission changes.
+Record normalized native token usage on each finished invocation, including
+failures, and per-provider usageTotals. Drop malformed reports; usage never
+decides success, failure or uncertainty.
 Independent reviews must not concurrently reopen related parent/child tasks unless
 normal child-result propagation is intended; no detached mode is implied.
 

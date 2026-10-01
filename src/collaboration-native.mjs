@@ -86,6 +86,30 @@ function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, 
   return args;
 }
 
+const usageCount = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+
+/** Provider-neutral token usage. inputTokens is every input token processed,
+ * including cache reads and writes; reasoningOutputTokens is part of outputTokens.
+ * Malformed or absent native fields omit usage; it never decides an outcome. */
+export function normalizeNativeUsage(provider, raw, reportedCostUsd) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  let usage;
+  if (provider === 'codex') {
+    usage = { inputTokens: usageCount(raw.input_tokens), cacheReadInputTokens: usageCount(raw.cached_input_tokens ?? 0),
+      cacheWriteInputTokens: usageCount(raw.cache_write_input_tokens ?? 0), outputTokens: usageCount(raw.output_tokens),
+      reasoningOutputTokens: usageCount(raw.reasoning_output_tokens ?? 0) };
+  } else {
+    const uncached = usageCount(raw.input_tokens), read = usageCount(raw.cache_read_input_tokens ?? 0),
+      write = usageCount(raw.cache_creation_input_tokens ?? 0);
+    usage = { inputTokens: uncached === null || read === null || write === null ? null : uncached + read + write,
+      cacheReadInputTokens: read, cacheWriteInputTokens: write, outputTokens: usageCount(raw.output_tokens) };
+  }
+  if (Object.values(usage).some(value => value === null) || usage.cacheReadInputTokens + usage.cacheWriteInputTokens > usage.inputTokens
+    || (usage.reasoningOutputTokens ?? 0) > usage.outputTokens) return null;
+  if (typeof reportedCostUsd === 'number' && Number.isFinite(reportedCostUsd) && reportedCostUsd >= 0) usage.reportedCostUsd = reportedCostUsd;
+  return usage;
+}
+
 function decodeEvent(provider, event, result) {
   if (provider === 'codex') {
     if (event.type === 'thread.started') result.sessionId = event.thread_id;
@@ -105,7 +129,7 @@ function decodeEvent(provider, event, result) {
       if (result.terminal && result.terminal !== terminal) result.conflictingReceipt = true;
       result.terminal = terminal;
       if (typeof event.result === 'string') result.text = event.result;
-      result.usage = event.usage;
+      result.usage = event.usage; result.costUsd = event.total_cost_usd;
     }
   }
 }
@@ -161,12 +185,12 @@ export function createNativeCollaborationRunner({
       usage: undefined, terminal: null, conflictingReceipt: false };
     if (provider === 'claude') args.push('--session-id', result.sessionId);
 
-    return await new Promise((resolve, reject) => {
+    return await new Promise((resolve, rejectRun) => {
       let child;
       try {
         child = spawnImpl(command, args, { cwd: canonicalCwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, detached: true });
       } catch (cause) {
-        reject(failure('Could not start native collaboration process.', { cause }));
+        rejectRun(failure('Could not start native collaboration process.', { cause }));
         return;
       }
       let closed = false;
@@ -345,6 +369,10 @@ export function createNativeCollaborationRunner({
           }
         }
         await eventQueue;
+        // Usage is accounting evidence only; it is attached to both outcomes and
+        // never changes how success, failure or uncertainty is decided.
+        const usage = normalizeNativeUsage(provider, result.usage, result.costUsd);
+        const reject = error => { if (usage && error && typeof error === 'object') error.usage = usage; rejectRun(error); };
         if (!processTrackerFactory) groupClosed = !Number.isSafeInteger(child.pid) || !groupAliveImpl(child.pid);
         if (cancelled && problem && groupClosed) problem.executionUncertain = false;
         if (problem) { reject(problem); return; }
@@ -366,7 +394,7 @@ export function createNativeCollaborationRunner({
           reject(failure(`Native ${provider} execution did not complete successfully${code == null ? '' : ` (exit ${code})`}.`, { uncertain: true }));
           return;
         }
-        resolve({ text: result.text, sessionId: result.sessionId, usage: result.usage });
+        resolve({ text: result.text, sessionId: result.sessionId, usage });
       });
     });
   };

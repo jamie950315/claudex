@@ -5,7 +5,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, mkdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
+import { createNativeCollaborationRunner, normalizeNativeUsage } from '../src/collaboration-native.mjs';
 
 function fakeSpawn(events, exitCode = 0, stderr = '') {
   const calls = [];
@@ -110,7 +110,8 @@ test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP 
   const result = await run({ provider: 'codex', cwd: process.cwd(), prompt: 'Review this.',
     mcp: { command: '/usr/bin/node', args: ['server.mjs'], env: { CLAUDEX_WORK_TOKEN: 'private' } },
     onEvent: (event) => events.push(event.type) });
-  assert.deepEqual(result, { text: 'Done.', sessionId: 'codex-session', usage: { input_tokens: 3, output_tokens: 1 } });
+  assert.deepEqual(result, { text: 'Done.', sessionId: 'codex-session', usage: { inputTokens: 3, cacheReadInputTokens: 0,
+    cacheWriteInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0 } });
   assert.deepEqual(events, ['spawn', 'session', 'thread.started', 'item.completed', 'turn.completed']);
   const call = fake.calls[0];
   assert.equal(call.command, 'codex');
@@ -198,12 +199,14 @@ test('requested effort reaches vendor arguments without changing permissions or 
 test('Claude uses nonpersistent restricted CLI with bounded file tools and explicit MCP', async () => {
   const fake = fakeSpawn([
     { type: 'system', subtype: 'init', session_id: 'claude-session' },
-    { type: 'result', is_error: false, result: 'Implemented.', usage: { input_tokens: 5 } },
+    { type: 'result', is_error: false, result: 'Implemented.', total_cost_usd: 0.0125,
+      usage: { input_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20, output_tokens: 7 } },
   ]);
   const run = runner(fake);
   const result = await run({ provider: 'claude', cwd: process.cwd(), prompt: 'Implement it.',
     permission: 'workspace-write', mcp: { command: '/usr/bin/node', args: ['server.mjs'] } });
-  assert.deepEqual(result, { text: 'Implemented.', sessionId: 'claude-session', usage: { input_tokens: 5 } });
+  assert.deepEqual(result, { text: 'Implemented.', sessionId: 'claude-session', usage: { inputTokens: 125,
+    cacheReadInputTokens: 100, cacheWriteInputTokens: 20, outputTokens: 7, reportedCostUsd: 0.0125 } });
   const call = fake.calls[0];
   assert.equal(call.command, 'claude');
   assert.equal(call.input, 'Implement it.');
@@ -382,4 +385,21 @@ test('production runner reports an absent binary and unavailable cwd as known fa
   assert.deepEqual(events, []);
   await assert.rejects(run({ provider: 'codex', cwd: '/missing/native-cwd-for-test', prompt: 'Never infer' }),
     error => error.executionUncertain === false);
+});
+
+test('native token usage is normalized, kept on failures and dropped when malformed', async () => {
+  assert.deepEqual(normalizeNativeUsage('codex', { input_tokens: 1000, cached_input_tokens: 900, cache_write_input_tokens: 0,
+    output_tokens: 50, reasoning_output_tokens: 20 }), { inputTokens: 1000, cacheReadInputTokens: 900, cacheWriteInputTokens: 0,
+    outputTokens: 50, reasoningOutputTokens: 20 });
+  for (const raw of [null, [], { input_tokens: -1, output_tokens: 1 }, { input_tokens: 1.5, output_tokens: 1 },
+    { input_tokens: 10, cached_input_tokens: 11, output_tokens: 1 }, { input_tokens: 10, output_tokens: 1, reasoning_output_tokens: 2 }])
+    assert.equal(normalizeNativeUsage('codex', raw), null);
+  assert.equal(normalizeNativeUsage('claude', { input_tokens: 1, output_tokens: 1 }, -1).reportedCostUsd, undefined);
+  const failed = fakeSpawn([{ type: 'thread.started', thread_id: 'codex-session' },
+    { type: 'turn.completed', usage: { input_tokens: 40, cached_input_tokens: 30, output_tokens: 4 } }], 1);
+  await assert.rejects(runner(failed)({ provider: 'codex', cwd: process.cwd(), prompt: 'Fail.' }),
+    error => error.executionUncertain === true && error.usage?.inputTokens === 40 && error.usage.outputTokens === 4);
+  const malformed = fakeSpawn([{ type: 'item.completed', item: { type: 'agent_message', text: 'Done.' } },
+    { type: 'turn.completed', usage: { input_tokens: 'many', output_tokens: 1 } }]);
+  assert.equal((await runner(malformed)({ provider: 'codex', cwd: process.cwd(), prompt: 'Done.' })).usage, null);
 });

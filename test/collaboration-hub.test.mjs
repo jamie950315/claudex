@@ -887,3 +887,31 @@ test('process inventories may retire proven-exited descendants but never rewrite
   assert.match(outcomes[4], /changed its saved ownership proof/);
   assert.deepEqual(done.lastExecution.ownedProcesses.map(row => row.pid), [123456, 123458, 123459]);
 });
+
+test('native token usage is recorded per invocation and totaled by provider without changing outcomes', async t => {
+  const usage = { inputTokens: 1000, cacheReadInputTokens: 900, cacheWriteInputTokens: 0, outputTokens: 50, reasoningOutputTokens: 20 };
+  let calls = 0;
+  const { root, hub } = await setup(t, async () => {
+    calls++;
+    if (calls === 2) return { text: 'Second', usage: { inputTokens: -1 } };
+    if (calls === 3) { const error = new Error('Native turn failed'); error.executionUncertain = false; error.usage = usage; throw error; }
+    return { text: 'First', usage };
+  });
+  const started = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root, prompt: 'Count', requestId: 'usage-first' }));
+  let task = await until(async () => { const value = await status(hub, started.taskId); return value.status === 'completed' && value; });
+  assert.deepEqual(task.lastExecution.usage, usage);
+  assert.deepEqual(task.usageTotals, { codex: { invocations: 1, ...usage } });
+  const summary = await hub.dispatch(controller(hub, 'codex', 'status', { taskId: started.taskId, view: 'summary' }));
+  assert.deepEqual(summary.execution.usage, usage);
+  assert.deepEqual(summary.usageTotals.codex.inputTokens, 1000);
+  await hub.dispatch(controller(hub, 'codex', 'send', { taskId: started.taskId, message: 'Again', requestId: 'usage-second' }));
+  task = await until(async () => { const value = await status(hub, started.taskId); return value.status === 'completed' && value.revision > task.revision && value; });
+  assert.equal(task.result.text, 'Second');
+  assert.equal(task.lastExecution.usage, undefined);
+  assert.equal(task.usageTotals.codex.invocations, 1);
+  await hub.dispatch(controller(hub, 'codex', 'send', { taskId: started.taskId, message: 'Fail', requestId: 'usage-third' }));
+  task = await until(async () => { const value = await status(hub, started.taskId); return value.status === 'failed' && value; });
+  assert.deepEqual(task.lastExecution.usage, usage);
+  assert.deepEqual(task.usageTotals.codex, { invocations: 2, inputTokens: 2000, cacheReadInputTokens: 1800,
+    cacheWriteInputTokens: 0, outputTokens: 100, reasoningOutputTokens: 40 });
+});

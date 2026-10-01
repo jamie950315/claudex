@@ -47,6 +47,35 @@ function requestId(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(value)) throw new Error('A stable requestId is required.');
   return value;
 }
+const USAGE_FIELDS = ['inputTokens', 'cacheReadInputTokens', 'cacheWriteInputTokens', 'outputTokens', 'reasoningOutputTokens'];
+
+// Native token accounting is optional evidence: an invalid report is dropped, never
+// allowed to change a task outcome.
+function recordedUsage(usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return null;
+  const recorded = {};
+  for (const key of USAGE_FIELDS) {
+    if (usage[key] === undefined && key === 'reasoningOutputTokens') continue;
+    if (!Number.isSafeInteger(usage[key]) || usage[key] < 0) return null;
+    recorded[key] = usage[key];
+  }
+  if (usage.reportedCostUsd !== undefined) {
+    if (typeof usage.reportedCostUsd !== 'number' || !Number.isFinite(usage.reportedCostUsd) || usage.reportedCostUsd < 0) return null;
+    recorded.reportedCostUsd = usage.reportedCostUsd;
+  }
+  return recorded;
+}
+
+function addUsage(task, provider, usage) {
+  task.usageTotals ??= {};
+  const total = task.usageTotals[provider] ??= { invocations: 0 };
+  total.invocations++;
+  for (const [key, value] of Object.entries(usage)) {
+    const sum = (total[key] ?? 0) + value;
+    if (key === 'reportedCostUsd' ? Number.isFinite(sum) : Number.isSafeInteger(sum)) total[key] = sum;
+  }
+}
+
 function publicTask(task) {
   const result = copy(task);
   if (result.active) delete result.active.tokenHash;
@@ -709,6 +738,8 @@ export class CollaborationHub extends EventEmitter {
       const current = state.tasks[task.id];
       if (current.status !== 'running' || current.active?.generation !== task.generation) throw new Error('Native completion does not match the active generation.');
       const active = current.active;
+      const usage = recordedUsage(failure ? failure.usage : result?.usage);
+      if (usage) { active.usage = usage; addUsage(current, task.owner, usage); }
       if (failure) {
         current.status = failure.executionUncertain === false ? (current.cancelRequested ? 'cancelled' : 'failed') : 'uncertain';
         current.error = String(failure.message ?? 'Native execution failed.').slice(0, 2048);
@@ -779,7 +810,9 @@ export class CollaborationHub extends EventEmitter {
           permission: task.permission, status: task.status, revision: task.revision, generation: task.generation,
           updatedAt: task.updatedAt, cancelRequested: task.cancelRequested, ...taskPresentation(task),
           execution: { generation: task.active?.generation ?? task.lastExecution?.generation ?? task.generation,
-            inputs: copy(task.active?.inputs ?? task.lastExecution?.inputs ?? null) },
+            inputs: copy(task.active?.inputs ?? task.lastExecution?.inputs ?? null),
+            usage: copy(task.active ? null : task.lastExecution?.usage ?? null) },
+          usageTotals: copy(task.usageTotals ?? null),
           changed: task.revision > (baseline ?? afterRevision ?? -1), timedOut };
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }
       }

@@ -88,6 +88,15 @@ requires operator inspection. Request receipts retain their normal idempotency.
 
 `status` and `wait` accept `view: "summary"`; omission keeps the full response.
 Summary responses omit message history and include execution input metadata.
+
+Each finished invocation records the native token usage its CLI reported, when
+the report is well formed: `inputTokens` (all input, including cache reads and
+writes), `cacheReadInputTokens`, `cacheWriteInputTokens`, `outputTokens`, Codex
+`reasoningOutputTokens` (part of output) and Claude's own `reportedCostUsd`. Full
+status keeps it on `lastExecution.usage`; summary status returns it as
+`execution.usage`. `usageTotals` accumulates invocations per provider across
+follow-ups, failures and handoffs. Usage is accounting evidence only; a missing
+or malformed report never changes an outcome, and it is not a billing statement.
 For incremental waits, supply `afterRevision` from the last response. `changed`
 compares against that revision (or the revision at the start of an uncursored
 wait), and `timedOut` records whether the bounded wait timer expired. A caught-up
