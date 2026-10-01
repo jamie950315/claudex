@@ -601,10 +601,14 @@ test('inherited fork and rollover history recovers images from exact ordinal-bou
   const found = await f.resolve({ onResolved: value => { evidence = value; } });
   assert.deepEqual(found.get(JSON.stringify([f.turnId, f.itemId])).map(image => image.url), f.urls);
   assert.deepEqual(evidence.localImageRollouts.map(entry => entry.path), [f.rootPath]);
+  // Inherited images need no earlier checkpoint, unlike retained rollover evidence.
+  assert.deepEqual(evidence.retainedRequests, []);
   // Retained evidence from the inherited segment keeps its exact link later.
-  const again = await f.resolve({ retainedRollouts: evidence.localImageRollouts.map(({ path, requests }) =>
+  let later;
+  const again = await f.resolve({ onResolved: value => { later = value; }, retainedRollouts: evidence.localImageRollouts.map(({ path, requests }) =>
     ({ path, requests: requests.map(request => ({ ...request, messageIndex: 0 })) })) });
   assert.equal(again.size, 1);
+  assert.deepEqual(later.retainedRequests, []);
   // A parent still writing after the referenced prefix does not change it.
   f.segment.push({ ordinal: f.segment.at(-1).ordinal + 1, type: 'event_msg', payload: { type: 'task_started', turn_id: randomUUID() } });
   await f.save();

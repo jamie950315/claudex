@@ -466,7 +466,10 @@ export function createCodexLocalImageResolver({ path, threadId, retainedRollouts
       list.push({ turnId: request.turnId, itemId: request.item.id, messageIndex: request.messageIndex }); rollouts.set(sourcePath, list);
     }
     onResolved({ localImageRollouts: [...rollouts].map(([sourcePath, values]) => ({ path: sourcePath, requests: values })),
-      retainedRequests: requests.filter(request => origins.get(requestKey(request)) !== path),
+      // Images from the declared history_base chain are inherited history the
+      // current rollout itself references, not retained earlier evidence.
+      retainedRequests: requests.filter(request => origins.get(requestKey(request)) !== path
+        && !links?.has(origins.get(requestKey(request)))),
       nativeMessageCount: options.nativeMessageCount });
     return found;
   };
