@@ -40,7 +40,7 @@ test('public Unix WebSocket client initializes exactly and shares a backend with
   t.after(() => Promise.all([a.close(), b.close()]));
   assert.deepEqual(await a.initialize(), { userAgent: 'synthetic' });
   await b.initialize();
-  assert.deepEqual(messages[0], { id: 1, method: 'initialize', params: { clientInfo: { name: 'claudex', version: '1.0.2' }, capabilities: { experimentalApi: true } } });
+  assert.deepEqual(messages[0], { id: 1, method: 'initialize', params: { clientInfo: { name: 'claudex', version: '1.0.3' }, capabilities: { experimentalApi: true } } });
   assert.deepEqual(await a.readThread('one'), { method: 'thread/read', params: { threadId: 'one', includeTurns: true } });
   await a.close();
   assert.equal(wss.clients.size, 1);
