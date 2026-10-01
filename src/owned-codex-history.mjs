@@ -143,9 +143,9 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   return { common, digest: fingerprint(common), importedPackets: 1, operationId: packet.operationId, bootstrapDigest: packet.digest, nativeDigest: snapshot.digest };
 }
 
-export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, resolveLocalImages, ...options }) {
+export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, resolveLocalImages, displayScreenshots, ...options }) {
   const sessionId = options.sessionId ?? options.targetSessionId;
-  const native = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix });
+  const native = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix, displayScreenshots });
   // An immutable checkpoint must still contain its exact inline packet; only
   // later native-authored inputs may use verified native-rollout image recovery.
   const content = bootstrapContent(native.turns[0].items[0]);

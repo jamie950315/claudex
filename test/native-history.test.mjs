@@ -249,3 +249,28 @@ test('a known closed transport remains a transient read failure without exposing
   await assert.rejects(run(source), error => /native transport unavailable/.test(error.message) && !error.message.includes('private'));
   assert.equal(calls, 1);
 });
+
+test('display-only tool surface screenshots are omitted with an explicit record only when requested', async () => {
+  const url = `data:image/jpeg;base64,${Buffer.alloc(30000, 1).toString('base64')}`;
+  const call = () => ({ type: 'mcpToolCall', id: 'call', server: 'node_repl', tool: 'js', status: 'completed',
+    result: { content: [{ type: 'text', text: 'model-visible result' }], structuredContent: null,
+      _meta: { 'codex/toolSurface': { kind: 'browserUse', screenshot: { pageUrl: 'https://example.com', tabId: '3', url } } } } });
+  const native = () => client([page([turn('t1', [user(), call(), answer()])])]);
+  const limits = { maxBytes: 20000 };
+  await assert.rejects(run(native(), { limits }), /byte limit exceeded/);
+  const result = await run(native(), { limits, displayScreenshots: 'omitted' });
+  const text = JSON.stringify(result.common);
+  assert.ok(!text.includes(url.slice(30, 200)));
+  assert.match(text, /display-only tool surface screenshot/);
+  assert.match(text, /model-visible result/);
+  assert.match(text, /https:\/\/example.com/);
+  const kept = await run(native());
+  assert.ok(JSON.stringify(kept.common).includes(url.slice(30, 200)));
+  // Model-visible images and non-data screenshot references are never touched.
+  const other = call(); other.result._meta['codex/toolSurface'].screenshot.url = 'https://example.com/shot.png';
+  other.result.content.push({ type: 'image', mimeType: 'image/png', data: 'AAAA' });
+  const same = await run(client([page([turn('t1', [user(), other, answer()])])]), { displayScreenshots: 'omitted' });
+  assert.match(JSON.stringify(same.common), /shot\.png/);
+  assert.doesNotMatch(JSON.stringify(same.common), /display-only/);
+  await assert.rejects(run(native(), { displayScreenshots: 'yes' }), /invalid display screenshot policy/);
+});

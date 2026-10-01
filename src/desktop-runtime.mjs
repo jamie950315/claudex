@@ -512,8 +512,8 @@ export class DesktopRuntime {
       try {
         data = record.managed
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
-            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages })
-          : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits,
+            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages, displayScreenshots: record.displayScreenshots })
+          : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits, displayScreenshots: record.displayScreenshots,
             resolveLocalImages, resolveInitialGoal: createNativeGoalRequestResolver({ path, threadId: nativeId, cwd }) });
         if (imageEvidence) {
           // An owned bootstrap expands two native items into its authenticated

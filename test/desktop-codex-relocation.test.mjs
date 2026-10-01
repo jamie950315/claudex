@@ -166,3 +166,19 @@ test('a directory change without an adapter-proven move stays an explicit hold',
   assert.deepEqual(await f.bridge.status(), before);
   assert.deepEqual(f.calls.retired, []);
 });
+
+test('new enrollments fix the display screenshot policy for every Codex record they create', async () => {
+  const f = await fixture();
+  const state = await f.bridge.status();
+  assert.equal(state.conversations[f.conversationId].displayScreenshots, 'omitted');
+  assert.equal((await f.current('codex')).displayScreenshots, 'omitted');
+  assert.equal((await f.current('claude')).displayScreenshots, undefined);
+  // A Claude-origin conversation's Codex snapshot keeps the same policy.
+  f.files.set('/claude/local.jsonl', { nativeId: 'claude-local', common: { meta: { cwd: '/old/project' }, messages: turn('local') } });
+  const { conversationId } = await f.bridge.track({ side: 'claude', path: '/claude/local.jsonl' });
+  await f.bridge.sync(conversationId);
+  const after = await f.bridge.status(), snapshot = f.bridge.current(after, conversationId, 'codex');
+  assert.equal(after.conversations[conversationId].displayScreenshots, 'omitted');
+  assert.equal(snapshot.kind, 'snapshot');
+  assert.equal(snapshot.displayScreenshots, 'omitted');
+});

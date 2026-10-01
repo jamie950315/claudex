@@ -309,15 +309,21 @@ export class DesktopBridge {
         && (source.nativeId ? record.nativeId === source.nativeId : source.path && record.path === source.path));
       if (saved && !isDesktopTracked(state.conversations[saved.conversationId]))
         return { conversationId: saved.conversationId, existing: true, tracking: 'stopped' };
-      const data = await this.adapters[source.side].inspect({ ...source, managed: false });
+      // New enrollments omit display-only Codex tool surface screenshots. The
+      // policy is fixed per conversation: existing ones keep their exact
+      // representation so saved checkpoints remain comparable.
+      const representation = { displayScreenshots: 'omitted' };
+      const data = await this.adapters[source.side].inspect({ ...source, managed: false,
+        ...(source.side === 'codex' ? representation : {}) });
       const common = normalize(data.common); assertComplete(common);
       const existing = state.records.find(record => record.side === source.side && record.nativeId === data.nativeId);
       if (existing) return { conversationId: existing.conversationId, existing: true };
       const id = randomUUID();
       const firstText = common.messages.find(message => message.role === 'user')?.content.find(block => block.type === 'text')?.text;
       state.conversations[id] = { id, cwd: common.meta.cwd, title: source.title || common.meta.title || firstText?.split('\n')[0].slice(0, 100) || 'Claudex conversation',
-        canonical: checkpoint(common) };
+        canonical: checkpoint(common), ...representation };
       state.records.push({ id: randomUUID(), conversationId: id, side: source.side, nativeId: data.nativeId,
+        ...(source.side === 'codex' ? representation : {}),
         path: data.path ?? source.path, cwd: common.meta.cwd, managed: false, kind: 'original', verified: true,
         status: 'current', checkpoint: checkpoint(common), bytes: data.bytes ?? 0, createdAt: this.now(),
         ...imageOrigins(source.side, data, checkpoint(common)) });
@@ -467,6 +473,7 @@ export class DesktopBridge {
       if (reuse && (side !== 'claude' || target.kind !== 'owner' || planned.kind !== 'owner')) throw new Error('Only a verified native Claude owner may reuse its identity.');
       if (reuse) await this.adapters[side].assertIdle(target);
       const record = { ...planned, id: reuse ? target.id : randomUUID(), side, conversationId: id, cwd: conversation.cwd,
+        ...(side === 'codex' && conversation.displayScreenshots ? { displayScreenshots: conversation.displayScreenshots } : {}),
         managed: true, status: 'current', verified: false, bytes: 0, createdAt: reuse ? target.createdAt : this.now() };
       if (!record.nativeId || !['owner', 'snapshot'].includes(record.kind)) throw new Error('Invalid native handoff plan.');
       state.pending = { phase: 'prepared', operationId, sourceId: source.id, targetId: target?.id ?? null,

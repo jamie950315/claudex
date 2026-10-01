@@ -181,6 +181,14 @@ Raw and converted histories must both fit the byte budget. Exceeding a limit
 reports the source thread ID and stops that operation without retry, truncation,
 fallback, or weakening authentication and canonical-history checks.
 
+Codex Desktop stores a screenshot of the browser or app surface with every
+Browser Use and computer-use call so its own window can preview the tool. That
+picture is not part of what the model saw (the call's own result keeps any
+model-visible image), yet it can make up most of a long history. Conversations
+enrolled from this version on replace exactly those display screenshots with a
+record of their type, size and SHA-256 hash; everything else is kept. Conversations
+already being synchronized keep their existing representation.
+
 For a Codex original or a later turn in an owned continuation, a native `localImage` may be recovered from the
 current authoritative rollout's embedded input image even when its old attachment
 file is missing. Recovery requires the complete native/API user item, thread and

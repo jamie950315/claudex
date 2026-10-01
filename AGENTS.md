@@ -858,6 +858,14 @@ explicit bounds are 1024..67108864 bytes and 1..100 turns/page. Both original an
 owned native exports enforce the configured raw/converted byte budget. Keep the
 256-page, 25,000-item and 64 MiB transport-frame limits unchanged. Limit errors
 identify the source thread; never add automatic retries, truncation or fallback.
+Codex Desktop attaches a display-only data-URL screenshot at mcpToolCall
+result._meta["codex/toolSurface"].screenshot.url (Browser Use/CUA); it is not
+model input and can be ~90% of a history. Conversations enrolled from now on
+carry displayScreenshots:'omitted' (on the conversation and every Codex record
+it creates), and their reads replace exactly that data URL with an explicit
+{reason,mimeType,bytes,sha256} record before the byte budget. Existing
+conversations keep their exact representation; never apply the policy to a
+conversation whose checkpoints were made without it.
 
 Native Codex localImage recovery for originals and owned continuations reads
 metadata.path's current owned regular rollout. After a native rollover, it may

@@ -28,6 +28,24 @@ function serialize(value) {
 // Hash them directly instead of rebuilding an ordered deep copy.
 function canonicalDigest(value) { return createHash('sha256').update(JSON.stringify(value)).digest('hex'); }
 
+// Codex Desktop attaches a full-page screenshot of the tool surface to each
+// Browser Use/computer-use call for its own UI. It is presentation metadata,
+// not model input (the call's content keeps any model-visible image), and can
+// dominate a history. When requested, it is replaced by an explicit record of
+// what was omitted; nothing else in the item changes.
+const DISPLAY_SCREENSHOT = /^data:(image\/(?:png|jpeg|webp|gif));base64,/;
+export function omitDisplayScreenshots(turns) {
+  for (const turn of turns) for (const item of Array.isArray(turn?.items) ? turn.items : []) {
+    const surface = item?.type === 'mcpToolCall' ? item.result?._meta?.['codex/toolSurface'] : null;
+    const screenshot = object(surface) ? surface.screenshot : null;
+    const match = object(screenshot) && typeof screenshot.url === 'string' ? DISPLAY_SCREENSHOT.exec(screenshot.url) : null;
+    if (!match) continue;
+    surface.screenshot = { ...screenshot, url: null, omitted: { reason: 'display-only tool surface screenshot',
+      mimeType: match[1], bytes: Buffer.byteLength(screenshot.url),
+      sha256: createHash('sha256').update(screenshot.url).digest('hex') } };
+  }
+}
+
 function checkedLimits(input) {
   if (input !== undefined && !object(input)) fail('limits must be an object.');
   const limits = { ...NATIVE_HISTORY_LIMITS, ...input };
@@ -90,7 +108,7 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   return startedAt ?? previousStart;
 }
 
-async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal) {
+async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots) {
   const turns = []; const ids = new Set(); const cursors = new Set();
   let initialGoal = null;
   let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null; let hasPriorRequest = false;
@@ -110,6 +128,7 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
       fail(`thread/turns/list is unavailable or failed${code}; no export was produced.`);
     }
     if (!object(response) || !Array.isArray(response.data)) fail('malformed pagination response.');
+    if (displayScreenshots === 'omitted') omitDisplayScreenshots(response.data);
     const encoded = serialize(response);
     bytes += Buffer.byteLength(encoded);
     if (bytes > limits.maxBytes) fail('byte limit exceeded; no partial export is returned.');
@@ -263,14 +282,15 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
 // database access, source transcript writes, or hidden partial-history fallback.
 // Two matching complete reads detect observed changes, not a writer lease. The
 // coordinator still rechecks source identity/checkpoints before publication.
-export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal } = {}) {
+export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal, displayScreenshots } = {}) {
   if (!client || typeof client.request !== 'function') fail('a native app-server client is required.');
   if (typeof threadId !== 'string' || !threadId) fail('thread identity is required.');
   if (typeof completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
   if (resolveInitialGoal !== undefined && typeof resolveInitialGoal !== 'function') fail('invalid initial goal resolver.');
+  if (displayScreenshots !== undefined && displayScreenshots !== 'omitted') fail('invalid display screenshot policy.');
   const limits = checkedLimits(inputLimits);
-  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal);
-  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal);
+  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots);
+  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots);
   if (first.digest !== second.digest || serialize(first.initialGoal?.sourceIdentity ?? null) !== serialize(second.initialGoal?.sourceIdentity ?? null))
     fail('source history changed between complete reads; synchronization paused.');
   return { ...first, threadId, turnCount: first.turns.length };
@@ -282,10 +302,10 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, displayScreenshots } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
-  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal });
+  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots });
   const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
   const common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
   // Key order never changes the serialized byte length of plain JSON values.
