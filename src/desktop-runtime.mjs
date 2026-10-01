@@ -2,7 +2,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { join, dirname, basename, resolve, sep, isAbsolute } from 'node:path';
-import { lstat, realpath, readFile, access, readdir, open } from 'node:fs/promises';
+import { lstat, realpath, readFile, access, readdir, open, mkdir, rename } from 'node:fs/promises';
 import { createReadStream, constants } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
@@ -115,6 +115,7 @@ export class DesktopRuntime {
       assertDependencyAnchor: record => this.assertDependencyAnchor(record),
     });
     this.adapters.claude.reconcileRelocation = record => this.reconcileClaudeRelocation(record);
+    this.adapters.codex.reconcileRelocation = record => this.reconcileCodexRelocation(record);
   }
   async initialize() {
     this.root = await privateDirectory(this.root);
@@ -316,6 +317,102 @@ export class DesktopRuntime {
   }
 
   /** True only when the exact saved directory is gone, never for other errors. */
+  /** Prove that Codex itself moved an unmanaged original to another project:
+   * the same thread now reports a different canonical directory, and the saved
+   * one is gone or only an alias of the new one. Anything else stays a hold.
+   */
+  async reconcileCodexRelocation(record) {
+    if (record.side !== 'codex' || record.managed !== false || record.kind !== 'original' || record.status !== 'current'
+      || record.verified !== true || !UUID.test(record.nativeId) || typeof record.cwd !== 'string' || !isAbsolute(record.cwd)) return null;
+    // A saved directory that still exists on its own is not a move. Check the
+    // filesystem first so unmoved conversations never need the Codex backend.
+    let previous;
+    try { previous = await realpath(record.cwd); }
+    catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
+    if (previous === record.cwd) return null;
+    const client = await this.codex();
+    const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
+    if (thread.id !== record.nativeId || typeof thread.cwd !== 'string' || !isAbsolute(thread.cwd)) return null;
+    let cwd;
+    try { cwd = await realpath(thread.cwd); } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; }
+    if (cwd === record.cwd || !(await lstat(cwd)).isDirectory()) return null;
+    // An alias must lead to the reported new project, never somewhere else.
+    if (previous !== undefined && previous !== cwd) return null;
+    const data = await this.inspectNative(record);
+    if (data.common.meta.cwd !== cwd) return null;
+    const directory = await lstat(cwd, { bigint: true });
+    const relocation = { version: 1, kind: 'codex-project-move', originCwd: record.relocation?.originCwd ?? record.cwd,
+      previousCwd: record.cwd, previousPath: record.path, previousCwdState: previous === undefined ? 'absent' : 'alias' };
+    return { ...data, record: { ...record, path: data.path, cwd, relocation },
+      relocationProof: { cwd, dev: directory.dev.toString(), ino: directory.ino.toString(), previousCwdState: relocation.previousCwdState } };
+  }
+
+  retiredOwnerPath(record) {
+    return join(this.root, 'owners', 'retired', `${hash(record.conversationId)}-${record.nativeId}.json`);
+  }
+
+  /** Close an owner whose project moved and preserve its state for audit. The
+   * native transcript and its Remote Control entry are kept, never deleted. */
+  async retireOwner(record) {
+    if (record.side !== 'claude' || !record.managed || record.kind !== 'owner' || !record.verified || !UUID.test(record.nativeId))
+      throw new Error('Only a verified managed Claude owner can be retired for a project move.');
+    const entry = this.owners.get(record.conversationId);
+    if (entry && !entry.error) {
+      const status = entry.owner.status();
+      if (status.sessionId !== record.nativeId) throw new Error('Running Claude owner does not match the owner being retired.');
+      if (status.pending || status.reset || status.nativeState !== 'idle' || status.backgroundTasks?.length)
+        throw new Error('Claude owner is busy; its project move waits for an idle boundary.');
+      await entry.owner.close();
+    }
+    if (entry) this.owners.delete(record.conversationId);
+    const statePath = join(this.root, 'owners', `${hash(record.conversationId)}.json`);
+    const retiredPath = this.retiredOwnerPath(record);
+    const saved = await readJSON(statePath, null);
+    // A previous interrupted attempt already retired it; any current state then
+    // belongs to its replacement and is left untouched.
+    if (saved?.sessionId !== record.nativeId && (await readJSON(retiredPath, null))?.sessionId === record.nativeId) return;
+    if (!saved) throw new Error('Claude owner state is missing; its project move cannot be verified.');
+    if (saved.version !== 1 || saved.conversationId !== record.conversationId || saved.sessionId !== record.nativeId
+      || saved.cwd !== record.cwd || saved.pending != null || saved.reset != null)
+      throw new Error('Saved Claude owner state does not match the owner being retired.');
+    if (await this.workingDirectoryAbsent(`${statePath}.lock`) === false)
+      throw new Error('Claude owner is still locked by a running process; it was not retired.');
+    await mkdir(join(this.root, 'owners', 'retired'), { recursive: true, mode: 0o700 });
+    await privateDirectory(join(this.root, 'owners', 'retired'));
+    if (await this.workingDirectoryAbsent(retiredPath) === false) throw new Error('A retired Claude owner state already exists.');
+    await rename(statePath, retiredPath);
+  }
+
+  /** An owner retired by an interrupted project move must never be restarted in
+   * its old directory: its state lives only in the retired area. */
+  async ownerRetired(record) {
+    if (record.side !== 'claude' || !record.managed || record.kind !== 'owner') return false;
+    if (this.owners.get(record.conversationId)?.owner.status().sessionId === record.nativeId) return false;
+    // The replacement may already own the per-conversation state path.
+    const current = await readJSON(join(this.root, 'owners', `${hash(record.conversationId)}.json`), null);
+    if (current?.sessionId === record.nativeId) return false;
+    return (await readJSON(this.retiredOwnerPath(record), null))?.sessionId === record.nativeId;
+  }
+
+  /** Read a retired owner's transcript without starting any owner process. */
+  async inspectRetiredOwner(record) {
+    const retired = await readJSON(this.retiredOwnerPath(record), null)
+      ?? await readJSON(join(this.root, 'owners', `${hash(record.conversationId)}.json`), null);
+    if (!retired || retired.sessionId !== record.nativeId || retired.conversationId !== record.conversationId)
+      throw new Error('Retired Claude owner state is missing or does not match its record.');
+    const path = await this.safePath(record.path, this.claudeHome);
+    const data = await snapshot(path);
+    const resolveArchive = await prepareArchiveResolver({ root: this.root,
+      contents: data.rows.filter(row => row.type === 'user').map(row => row.message?.content),
+      conversationId: record.conversationId, targetSessionId: record.nativeId, key: this.key });
+    const parsed = decodeCompletedOwnedClaudeHistory({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
+      key: this.key, resolveArchive, resetBootstrap: retired.lastReset ?? undefined, versionPolicy: this.versionPolicy });
+    assertComplete(parsed.common);
+    parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd).catch(() => parsed.common.meta.cwd);
+    if (parsed.common.meta.id !== record.nativeId) throw new Error('Retired Claude owner identity changed.');
+    return { ...parsed, nativeId: record.nativeId, path, bytes: data.bytes, digest: fingerprint(parsed.common) };
+  }
+
   async workingDirectoryAbsent(cwd) {
     if (typeof cwd !== 'string' || !isAbsolute(cwd)) return false;
     try { await lstat(cwd); return false; }
@@ -354,7 +451,9 @@ export class DesktopRuntime {
   }
 
   async inspectNative(record) {
-    if (record.relocation) {
+    if (record.side === 'claude' && (record.retiredOwner || record.managed && await this.ownerRetired(record)))
+      return this.inspectRetiredOwner(record);
+    if (record.side === 'claude' && record.relocation) {
       const proof = await this.relocatedClaudeHistory(record);
       if (!proof || proof.path !== record.path || proof.record.cwd !== record.cwd)
         throw Object.assign(new Error('Claude project moved again; verified relocation must complete before synchronization.'), {
@@ -491,12 +590,20 @@ export class DesktopRuntime {
     return { ...proof, nativeId };
   }
 
-  async plan(side, { conversationId, nativeId, common, title, target, contextReset = false, contextRefresh = false }) {
+  async plan(side, { conversationId, nativeId, common, title, target, contextReset = false, contextRefresh = false, relocation = false }) {
     if (side === 'claude') {
+      // A moved project needs a new owner in the new directory; the old one is
+      // retired (closed and preserved) before the replacement starts.
+      if (relocation) {
+        if (contextReset || contextRefresh || target?.cwd === common.meta.cwd) throw new Error('Invalid Claude owner relocation plan.');
+        await this.retireOwner(target);
+      }
       const owner = await this.owner(conversationId, common.meta.cwd, title);
       const status = owner.status();
-      if (target?.managed && target.nativeId !== status.sessionId) throw new Error('Existing Claude owner does not match the tracked identity.');
-      const refresh = !contextReset && this.contextMode === 'archive' && target?.managed
+      if (relocation && (status.sessionId === target.nativeId || status.pending || status.reset))
+        throw new Error('Relocated Claude owner did not start as a new native session.');
+      if (!relocation && target?.managed && target.nativeId !== status.sessionId) throw new Error('Existing Claude owner does not match the tracked identity.');
+      const refresh = !relocation && !contextReset && this.contextMode === 'archive' && target?.managed
         && (contextRefresh || target.imageProjectionVersion !== 1 && hasProjectedImages(common.messages));
       return { nativeId: status.sessionId, path: status.transcriptPath, kind: 'owner', title,
         packetVersion: this.contextMode === 'archive' ? 2 : 1,
@@ -516,7 +623,7 @@ export class DesktopRuntime {
     const needsImages = record.packetVersion === 2 && record.imageProjectionVersion !== 1
       && data?.common?.messages && hasProjectedImages(data.common.messages);
     if (record.side === 'codex') return needsImages && record.kind === 'snapshot' ? 'images' : false;
-    if (record.side !== 'claude') return false;
+    if (record.side !== 'claude' || await this.ownerRetired(record)) return false;
     const owner = await this.owner(record.conversationId, record.cwd, record.title);
     if (record.packetVersion !== 2) {
       if (!owner.status().coldResetEligible) throw new Error('Inline context migration requires a fresh cold native owner; active input channels were preserved.');
@@ -638,6 +745,12 @@ export class DesktopRuntime {
   async assertIdle(record) {
     importedClaudeOriginal(record);
     if (record.side === 'claude') {
+      // A retired owner has no process left to receive input.
+      if (record.retiredOwner || record.managed && await this.ownerRetired(record)) {
+        if (this.owners.get(record.conversationId)?.owner.status().sessionId === record.nativeId)
+          throw new Error('Retired Claude owner is still running.');
+        return;
+      }
       if (!record.managed) {
         if ((await this.inspect(record)).incompleteTail) throw new Error('Claude turn is still running.');
         return;
@@ -931,7 +1044,10 @@ export class DesktopRuntime {
     const directory = join(this.root, 'owners');
     let names;
     try { names = await readdir(directory); } catch (error) { if (error.code === 'ENOENT') return known; throw error; }
-    for (const name of names.filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
+    let retired = [];
+    try { retired = (await readdir(join(directory, 'retired'))).filter(name => /^[a-f0-9]{64}-[a-f0-9-]{36}\.json$/.test(name)).map(name => join('retired', name)); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+    for (const name of [...names.filter(name => /^[a-f0-9]{64}\.json$/.test(name)), ...retired]) {
       const record = await readJSON(join(directory, name));
       if (record.version !== 1 || !UUID.test(record.sessionId)) throw new Error('Invalid persisted native owner identity.');
       known.add(`claude:${record.sessionId}`);

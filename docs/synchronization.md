@@ -1145,6 +1145,15 @@ Moves back to an earlier project root and imported bootstrap originals remain
 guarded rather than guessing which native location is authoritative.
 This does not move project files or rewrite native conversation stores.
 
+Codex conversations are followed the same way when Codex itself moves one to a
+renamed project directory. The saved directory must be gone or be an alias of the
+new one, and the synchronized history must be unchanged. Because a Claude
+conversation is tied to its project directory, Claudex then retires the old
+Claude counterpart (it is closed and kept, including its Desktop entry, which you
+can archive yourself) and creates a new one in the new project with the complete
+history. A saved directory that still exists separately is treated as another
+project and remains paused rather than guessed.
+
 A native no-inference relocation check verified a moved Local original, preserved
 all original transcript bytes, and advanced both sides from 258 to 300 canonical
 messages through one new-project Codex snapshot. The pending transaction completed

@@ -135,19 +135,20 @@ export class DesktopBridge {
    * cannot select between competing histories or reroute an existing operation.
    */
   async reconcileOriginalRelocations(state, conversationId) {
-    const reconcile = this.adapters.claude?.reconcileRelocation;
-    if (!reconcile || state.pending) return;
-    for (const record of state.records.filter(record => record.side === 'claude'
+    if (state.pending) return;
+    for (const record of state.records.filter(record => this.adapters[record.side]?.reconcileRelocation
       && record.status === 'current' && record.managed === false && record.kind === 'original'
       && isDesktopTracked(state.conversations[record.conversationId])
       && (!conversationId || record.conversationId === conversationId))) {
+      const reconcile = this.adapters[record.side].reconcileRelocation;
+      const label = record.side === 'claude' ? 'Claude' : 'Codex';
       try {
         const proof = await reconcile(record);
         if (!proof) continue;
         const conversation = state.conversations[record.conversationId];
         const validate = candidate => {
           if (!candidate?.record || !candidate.common || !conversation || !record.verified)
-            throw relocationGuard('Claude relocation proof is incomplete; saved histories were preserved.');
+            throw relocationGuard(`${label} relocation proof is incomplete; saved histories were preserved.`);
           const relocated = candidate.record;
           const invariant = value => Object.fromEntries(Object.entries(value)
             .filter(([key]) => !['path', 'cwd', 'relocation'].includes(key)));
@@ -155,26 +156,27 @@ export class DesktopBridge {
             || candidate.nativeId !== record.nativeId || candidate.path !== relocated.path
             || typeof relocated.path !== 'string' || typeof relocated.cwd !== 'string'
             || !relocated.relocation || (relocated.path === record.path && relocated.cwd === record.cwd))
-            throw relocationGuard('Claude relocation changed protected identity or lifecycle fields.');
+            throw relocationGuard(`${label} relocation changed protected identity or lifecycle fields.`);
           const common = normalize(candidate.common); assertComplete(common);
           if (common.meta.cwd !== relocated.cwd || !matches(common, conversation.canonical)
             || !isDeepStrictEqual(record.checkpoint, conversation.canonical))
-            throw relocationGuard('Claude relocation does not preserve the synchronized history prefix.');
+            throw relocationGuard(`${label} relocation does not preserve the synchronized history prefix.`);
           if (candidate.incompleteTail)
-            throw new Error('Claude relocation has an in-progress turn; wait for a complete assistant turn.');
+            throw new Error(`${label} relocation has an in-progress turn; wait for a complete assistant turn.`);
           return common;
         };
         const common = validate(proof);
-        const target = this.current(state, record.conversationId, 'codex');
+        const target = this.current(state, record.conversationId, other(record.side));
         if (target) {
-          if (!target.managed || target.kind !== 'snapshot' || !target.verified)
-            throw relocationGuard('Claude relocation requires an unchanged managed Codex snapshot.');
-          await this.adapters.codex.assertIdle(target);
+          const expected = record.side === 'claude' ? 'snapshot' : 'owner';
+          if (!target.managed || target.kind !== expected || !target.verified)
+            throw relocationGuard(`${label} relocation requires an unchanged managed ${record.side === 'claude' ? 'Codex snapshot' : 'Claude owner'}.`);
+          await this.adapters[target.side].assertIdle(target);
           const destination = await this.inspect(target);
           if (destination.incompleteTail || destination.common.messages.length !== conversation.canonical.count
             || destination.digest !== conversation.canonical.digest
             || !isDeepStrictEqual(target.checkpoint, conversation.canonical))
-            throw relocationGuard('Codex changed during Claude relocation; no branch was selected.');
+            throw relocationGuard(`${record.side === 'claude' ? 'Codex' : 'Claude'} changed during ${label} relocation; no branch was selected.`);
         }
         const latest = await reconcile(record);
         const latestCommon = validate(latest);
@@ -184,10 +186,11 @@ export class DesktopBridge {
           || latestCommon.messages.length !== common.messages.length)
           throw new Error('Source history changed between complete reads; relocation waits for a stable boundary.');
         // Atomic ledger update retains checkpoint, original native identity, and
-        // every previous snapshot's original cwd. A normal handoff updates Codex.
+        // every previous record's original cwd. A normal handoff then creates the
+        // other side's replacement in the new project.
         Object.assign(record, latest.record);
         conversation.cwd = record.cwd;
-        await this.save(state, { event: 'claude-original-relocated', conversationId: record.conversationId,
+        await this.save(state, { event: `${record.side}-original-relocated`, conversationId: record.conversationId,
           nativeId: record.nativeId });
       } catch (error) {
         // Global collection can encounter another conversation's migration.
@@ -213,7 +216,8 @@ export class DesktopBridge {
     const absent = new Map();
     for (const [id, conversation] of Object.entries(state.conversations)) {
       if (frozen.has(id)) continue;
-      const cwds = [conversation.cwd, ...state.records.filter(record => record.conversationId === id).map(record => record.cwd)]
+      const cwds = [conversation.cwd, ...state.records.filter(record => record.conversationId === id
+        && record.status !== 'retired-owner').map(record => record.cwd)]
         .filter(cwd => typeof cwd === 'string' && isAbsolute(cwd));
       for (const cwd of new Set(cwds)) {
         if (!absent.has(cwd)) absent.set(cwd, await probe(cwd) === true);
@@ -380,14 +384,16 @@ export class DesktopBridge {
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
       const maintenance = [];
-      const relocatedTarget = readings.find(({ record }) => record.side === 'codex' && record.cwd !== conversation.cwd);
+      const relocatedTarget = readings.find(({ record }) => record.cwd !== conversation.cwd);
       if (relocatedTarget) {
-        const relocatedSource = readings.find(({ record }) => record.side === 'claude' && record.cwd === conversation.cwd
+        const targetSide = relocatedTarget.record.side;
+        const relocatedSource = readings.find(({ record }) => record.side === other(targetSide) && record.cwd === conversation.cwd
           && record.managed === false && record.relocation);
-        if (!relocatedSource || !relocatedTarget.record.managed || relocatedTarget.record.kind !== 'snapshot'
-          || changed.some(entry => entry.record.side === 'codex') || relocatedTarget.data.incompleteTail)
-          throw Object.assign(relocationGuard('Relocated project requires an unchanged managed Codex destination.'), { conversationId: id });
-        maintenance.push({ side: 'codex', kind: 'relocation' });
+        if (!relocatedSource || !relocatedTarget.record.managed
+          || relocatedTarget.record.kind !== (targetSide === 'codex' ? 'snapshot' : 'owner')
+          || changed.some(entry => entry.record.side === targetSide) || relocatedTarget.data.incompleteTail)
+          throw Object.assign(relocationGuard(`Relocated project requires an unchanged managed ${targetSide === 'codex' ? 'Codex' : 'Claude'} destination.`), { conversationId: id });
+        maintenance.push({ side: targetSide, kind: 'relocation' });
       }
       for (const { record, data } of readings) {
         const kind = await this.adapters[record.side].needsMaintenance?.(record, data);
@@ -411,6 +417,8 @@ export class DesktopBridge {
       const side = other(source.side);
       const contextReset = upkeep?.side === side && upkeep.kind === 'reset';
       const contextRefresh = upkeep?.side === side && upkeep.kind === 'images';
+      // A moved Claude owner is replaced by a new owner in the new project.
+      const ownerRelocation = side === 'claude' && upkeep?.side === side && upkeep.kind === 'relocation';
       const target = this.current(state, id, side);
       if (target) await this.adapters[side].assertIdle(target);
       // A visual-only refresh of an already managed snapshot must not acquire
@@ -441,8 +449,10 @@ export class DesktopBridge {
       // Preserve the logical title. After verification, archive the superseded
       // Codex original rather than keeping two same-title active entries.
       const title = conversation.title;
-      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset, contextRefresh });
+      const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset, contextRefresh,
+        ...(ownerRelocation ? { relocation: true } : {}) });
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
+      if (ownerRelocation && (reuse || planned.kind !== 'owner')) throw new Error('A moved Claude owner requires a new native owner.');
       if (contextReset && (side !== 'claude' || !reuse || planned.kind !== 'owner' || planned.contextReset !== true))
         throw new Error('Context migration requires a reusable owned Claude reset plan.');
       if (planned.contextRefresh && (contextReset || side !== 'claude' || !reuse || planned.kind !== 'owner'
@@ -455,7 +465,7 @@ export class DesktopBridge {
         managed: true, status: 'current', verified: false, bytes: 0, createdAt: reuse ? target.createdAt : this.now() };
       if (!record.nativeId || !['owner', 'snapshot'].includes(record.kind)) throw new Error('Invalid native handoff plan.');
       state.pending = { phase: 'prepared', operationId, sourceId: source.id, targetId: target?.id ?? null,
-        archiveOriginalId: originalToArchive?.id ?? null,
+        archiveOriginalId: originalToArchive?.id ?? null, ...(ownerRelocation ? { relocation: true } : {}),
         reuse, record, common, checkpoint: checkpoint(common), previous: reuse && !contextReset ? conversation.canonical : { count: 0, digest: null } };
       await this.save(state, { event: 'prepared', conversationId: id, side });
       return this.finish(state);
@@ -543,9 +553,11 @@ export class DesktopBridge {
       const applied = await driver.operationApplied(pending.record, pending);
       // A new projection does not write the old target. Recheck that target on
       // recovery too: it may have received a competing turn after apply.
+      // The replaced owner of a moved project is retired and read without a process.
+      const priorTarget = target && pending.relocation ? { ...target, retiredOwner: true } : target;
       if (target && (!applied || !pending.reuse)) {
-        await this.adapters[target.side].assertIdle(target);
-        const targetData = await this.inspect(pending.record.contextReset ? { ...target, readResetSourceForOperation: pending.operationId } : target);
+        await this.adapters[target.side].assertIdle(priorTarget);
+        const targetData = await this.inspect(pending.record.contextReset ? { ...target, readResetSourceForOperation: pending.operationId } : priorTarget);
         if (targetData.digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
       }
       if (!applied) await driver.apply(pending.record, pending.common, pending);
@@ -566,8 +578,8 @@ export class DesktopBridge {
       if (!readingMatches(latestSource, pending.checkpoint)) throw new Error('Source changed before promotion; pending evidence was preserved.');
       await this.assertOriginalsUnchanged(state, pending.record.conversationId);
       if (target && !pending.reuse) {
-        await this.adapters[target.side].assertIdle(target);
-        if ((await this.inspect(target)).digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
+        await this.adapters[target.side].assertIdle(priorTarget);
+        if ((await this.inspect(priorTarget)).digest !== target.checkpoint.digest) throw new Error('Destination changed during handoff; no branch was selected.');
       }
       Object.assign(source, { path: latestSource.path ?? source.path, checkpoint: pending.checkpoint, bytes: latestSource.bytes ?? source.bytes,
         ...imageOrigins(source.side, latestSource, pending.checkpoint) });
@@ -577,7 +589,8 @@ export class DesktopBridge {
         state.records[index] = pending.record;
       } else {
         if (target) {
-          target.status = target.managed ? 'previous' : 'original';
+          // A retired owner is preserved permanently, never collected or reused.
+          target.status = pending.relocation && target.kind === 'owner' ? 'retired-owner' : target.managed ? 'previous' : 'original';
           target.retiredAt = this.now();
         }
         state.records.push(pending.record);
@@ -587,7 +600,7 @@ export class DesktopBridge {
       await this.save(state, { event: 'promoted', conversationId: pending.record.conversationId });
     }
     const old = state.records.find(record => record.id === pending.targetId);
-    if (!pending.reuse && old?.managed) {
+    if (!pending.reuse && old?.managed && old.status !== 'retired-owner') {
       if (old.kind !== 'snapshot') throw new Error('A stable native owner cannot be retired as a snapshot.');
       if (old.status === 'dependency-anchor') {
         await this.verifyPromotedPrefix(state, pending);

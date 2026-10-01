@@ -430,6 +430,20 @@ roots. Imported bootstrap originals and ambiguous duplicate paths remain blocked
 Stable relocated reads revalidate the registry and saved prefix without creating
 a Claude writer or editing any native transcript or registry.
 
+By user decision Codex project moves are followed too. Only a current unmanaged
+Codex original qualifies: the saved cwd must be absent or an alias resolving to
+the new directory Codex thread/read reports (an existing independent saved
+directory is another project and stays held; check the filesystem first so
+unmoved conversations never contact the backend), the complete history must keep
+the saved prefix and two reads must agree. The managed Claude owner must be
+idle and unchanged. Claude owners are per conversation and bound to their cwd,
+so the move retires the old owner: close it at an idle boundary, move its state
+to owners/retired/<hash>-<sessionId>.json and mark its record retired-owner (kept
+forever, never collected, read without a process, excluded from freezing). A new
+owner in the new cwd receives the complete history through the normal journaled
+handoff (pending.relocation). Interrupted moves recognize the retired state and
+must never restart the old owner. Its transcript and Remote Control entry remain.
+
 A native transcript file changing between successful handoff inspections is a
 revoked, deferred Desktop archival attempt, not a synchronization failure. Return
 history_changed only after clearing all archive actions and cached proofs; perform
