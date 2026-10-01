@@ -168,8 +168,11 @@ export class DesktopBridge {
         const common = validate(proof);
         const target = this.current(state, record.conversationId, other(record.side));
         if (target) {
-          const expected = record.side === 'claude' ? 'snapshot' : 'owner';
-          if (!target.managed || target.kind !== expected || !target.verified)
+          // A Codex move may also supersede an unmanaged Claude original (for
+          // example a cold-imported pair); it is preserved, never rewritten.
+          const accepted = record.side === 'claude' ? target.managed && target.kind === 'snapshot'
+            : target.managed ? target.kind === 'owner' : target.kind === 'original';
+          if (!accepted || !target.verified)
             throw relocationGuard(`${label} relocation requires an unchanged managed ${record.side === 'claude' ? 'Codex snapshot' : 'Claude owner'}.`);
           await this.adapters[target.side].assertIdle(target);
           const destination = await this.inspect(target);
@@ -389,8 +392,10 @@ export class DesktopBridge {
         const targetSide = relocatedTarget.record.side;
         const relocatedSource = readings.find(({ record }) => record.side === other(targetSide) && record.cwd === conversation.cwd
           && record.managed === false && record.relocation);
-        if (!relocatedSource || !relocatedTarget.record.managed
-          || relocatedTarget.record.kind !== (targetSide === 'codex' ? 'snapshot' : 'owner')
+        const destination = relocatedTarget.record;
+        const replaceable = targetSide === 'codex' ? destination.managed && destination.kind === 'snapshot'
+          : destination.managed ? destination.kind === 'owner' : destination.kind === 'original';
+        if (!relocatedSource || !replaceable
           || changed.some(entry => entry.record.side === targetSide) || relocatedTarget.data.incompleteTail)
           throw Object.assign(relocationGuard(`Relocated project requires an unchanged managed ${targetSide === 'codex' ? 'Codex' : 'Claude'} destination.`), { conversationId: id });
         maintenance.push({ side: targetSide, kind: 'relocation' });
@@ -417,9 +422,9 @@ export class DesktopBridge {
       const side = other(source.side);
       const contextReset = upkeep?.side === side && upkeep.kind === 'reset';
       const contextRefresh = upkeep?.side === side && upkeep.kind === 'images';
-      // A moved Claude owner is replaced by a new owner in the new project.
-      const ownerRelocation = side === 'claude' && upkeep?.side === side && upkeep.kind === 'relocation';
       const target = this.current(state, id, side);
+      // A moved Claude owner is replaced by a new owner in the new project.
+      const ownerRelocation = side === 'claude' && upkeep?.side === side && upkeep.kind === 'relocation' && target?.managed === true;
       if (target) await this.adapters[side].assertIdle(target);
       // A visual-only refresh of an already managed snapshot must not acquire
       // a new archival intent for a legacy preserved original. Its semantic

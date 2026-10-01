@@ -443,6 +443,11 @@ forever, never collected, read without a process, excluded from freezing). A new
 owner in the new cwd receives the complete history through the normal journaled
 handoff (pending.relocation). Interrupted moves recognize the retired state and
 must never restart the old owner. Its transcript and Remote Control entry remain.
+A cold-imported pair's unmanaged Claude original is instead superseded like any
+preserved original (unchanged, verified, idle) and the new owner is created
+normally. Claude reads keep the saved cwd string when the transcript records
+exactly it, so a renamed directory left as an alias is not misread as a move;
+the directory must still resolve, and any other recorded cwd is canonicalized.
 
 A native transcript file changing between successful handoff inspections is a
 revoked, deferred Desktop archival attempt, not a synchronization failure. Return

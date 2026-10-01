@@ -559,7 +559,12 @@ export class DesktopRuntime {
     }
     if (importPacket && !parsed.importedPackets) throw new Error('Imported Claude original is missing its authenticated bootstrap packet.');
     assertComplete(parsed.common);
-    parsed.common.meta.cwd = await realpath(parsed.common.meta.cwd);
+    // The saved directory string identifies the conversation's project even if
+    // that directory was later renamed and left as an alias; only a different
+    // recorded directory is a project change. Resolving it still reports a
+    // removed directory.
+    const resolvedCwd = await realpath(parsed.common.meta.cwd);
+    if (parsed.common.meta.cwd !== record.cwd) parsed.common.meta.cwd = resolvedCwd;
     if (!UUID.test(parsed.common.meta.id)) throw new Error('Claude session identity changed.');
     // Any other mismatch between the file and its rows is not an identity to
     // adopt; it stays an unsupported source rather than a worker crash.

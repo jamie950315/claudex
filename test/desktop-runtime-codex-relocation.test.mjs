@@ -114,3 +114,25 @@ test('retiring an owner preserves its state, never restarts it and starts a new 
     assert.equal(await f.runtime.ownerRetired({ ...target, nativeId: plan.nativeId }), false);
   } finally { await f.runtime.close(); }
 });
+
+test('a Claude history recorded in a renamed project keeps its saved directory instead of the alias target', async () => {
+  const f = await fixture();
+  try {
+    const { encodeClaude, sessionPath } = await import('../src/claude.mjs');
+    const claudeHome = join(f.root, 'claude'), nativeId = randomUUID();
+    const rows = encodeClaude({ meta: { id: nativeId, cwd: f.oldCwd, timestamp: '2026-09-28T00:00:00.000Z' },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Question' }] },
+        { role: 'assistant', content: [{ type: 'text', text: 'Answer' }] }] }, nativeId).rows;
+    const path = sessionPath(claudeHome, f.oldCwd, nativeId);
+    await mkdir(join(path, '..'), { recursive: true });
+    await writeFile(path, rows.map(JSON.stringify).join('\n') + '\n', { mode: 0o600 });
+    const record = { id: randomUUID(), conversationId: randomUUID(), side: 'claude', kind: 'original', managed: false,
+      status: 'current', verified: true, nativeId, cwd: f.oldCwd, path };
+    await rename(f.oldCwd, f.newCwd); await symlink(f.newCwd, f.oldCwd);
+    const inspected = await DesktopRuntime.prototype.inspectNative.call(f.runtime, record);
+    assert.equal(inspected.common.meta.cwd, f.oldCwd);
+    // A different recorded directory is still canonicalized and reported.
+    const moved = await DesktopRuntime.prototype.inspectNative.call(f.runtime, { ...record, cwd: join(f.root, 'other') });
+    assert.equal(moved.common.meta.cwd, f.newCwd);
+  } finally { await f.runtime.close(); }
+});

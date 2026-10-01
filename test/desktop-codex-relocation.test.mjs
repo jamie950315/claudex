@@ -10,9 +10,10 @@ const copy = value => structuredClone(value);
 const turn = n => [{ role: 'user', content: [{ type: 'text', text: `Question ${n}` }] },
   { role: 'assistant', content: [{ type: 'text', text: `Answer ${n}` }] }];
 
-async function fixture() {
+async function fixture({ cold = false } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'claudex-codex-relocation-'));
-  const files = new Map([['/codex/original.jsonl', { nativeId: 'codex-original',
+  const codexId = cold ? randomUUID() : 'codex-original';
+  const files = new Map([['/codex/original.jsonl', { nativeId: codexId,
     common: { meta: { cwd: '/old/project' }, messages: turn(0) } }]]);
   const calls = { writes: 0, retired: [], relocations: 0, applyFailures: 0 };
   const adapters = {};
@@ -56,8 +57,20 @@ async function fixture() {
         originCwd: record.relocation?.originCwd ?? record.cwd, previousCwd: record.cwd } } };
   };
   const bridge = new DesktopBridge({ root, adapters });
-  const { conversationId } = await bridge.track({ side: 'codex', path: '/codex/original.jsonl' });
-  await bridge.sync(conversationId);
+  let conversationId;
+  if (cold) {
+    // A cold-imported pair: two unmanaged originals with equal histories.
+    conversationId = randomUUID();
+    const importId = randomUUID();
+    files.set('/claude/import.jsonl', { ...copy(files.get('/codex/original.jsonl')), nativeId: importId });
+    await bridge.trackImportedPair({ conversationId,
+      source: { side: 'codex', nativeId: codexId, path: '/codex/original.jsonl', managed: false, kind: 'original' },
+      target: { side: 'claude', nativeId: importId, path: '/claude/import.jsonl', managed: false, kind: 'original',
+        importPacket: true, packetVersion: 2, conversationId } });
+  } else {
+    ({ conversationId } = await bridge.track({ side: 'codex', path: '/codex/original.jsonl' }));
+    await bridge.sync(conversationId);
+  }
   const current = async side => bridge.current(await bridge.status(), conversationId, side);
   return { bridge, files, calls, conversationId, current,
     move(cwd = '/new/project', extra = true) {
@@ -90,6 +103,29 @@ test('a Codex project move retires the old Claude owner and creates one in the n
   await f.bridge.collect();
   assert.equal((await f.bridge.status()).records.find(record => record.id === oldOwner.id).status, 'retired-owner');
   assert.ok(f.files.has(oldOwner.path));
+});
+
+test('a Codex move of a cold-imported pair preserves the Claude original and creates an owner in the new project', async () => {
+  const f = await fixture({ cold: true });
+  const original = await f.current('claude'), originalFile = copy(f.files.get(original.path));
+  assert.equal(original.kind, 'original');
+  f.move();
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, true);
+  const state = await f.bridge.status(), owner = await f.current('claude');
+  assert.equal(state.conversations[f.conversationId].cwd, '/new/project');
+  assert.equal((await f.current('codex')).cwd, '/new/project');
+  assert.equal(owner.managed, true);
+  assert.equal(owner.kind, 'owner');
+  assert.equal(owner.cwd, '/new/project');
+  assert.equal(owner.checkpoint.count, 4);
+  const preserved = state.records.find(record => record.id === original.id);
+  assert.equal(preserved.managed, false);
+  assert.equal(preserved.kind, 'original');
+  assert.notEqual(preserved.status, 'current');
+  assert.equal(preserved.cwd, '/old/project');
+  assert.deepEqual(f.files.get(original.path), originalFile);
+  assert.deepEqual(f.calls.retired, []);
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, false);
 });
 
 test('an interrupted owner replacement recovers without restarting the retired owner', async () => {

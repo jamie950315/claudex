@@ -1151,7 +1151,8 @@ new one, and the synchronized history must be unchanged. Because a Claude
 conversation is tied to its project directory, Claudex then retires the old
 Claude counterpart (it is closed and kept, including its Desktop entry, which you
 can archive yourself) and creates a new one in the new project with the complete
-history. A saved directory that still exists separately is treated as another
+history. A cold-imported Claude original is kept unchanged as a preserved original
+in the same way. A saved directory that still exists separately is treated as another
 project and remains paused rather than guessed.
 
 A native no-inference relocation check verified a moved Local original, preserved
