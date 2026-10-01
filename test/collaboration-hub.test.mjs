@@ -933,6 +933,10 @@ test('full-access requires an explicit controller default and never bypasses par
   t.after(() => rm(reference, { recursive: true, force: true }));
   await assert.rejects(start({ readOnlyDirs: [reference] }), /cannot enforce readOnlyDirs/);
   assert.throws(() => hub.checkPermission('full-access', { permission: 'workspace-write' }), /Full access is not authorized/);
+  const full = hub.prompt(await status(hub, (await start()).taskId));
+  assert.match(full, /You have full access/);
+  assert.doesNotMatch(full, /only additional authorized write locations|report the exact need to the controller/);
+  assert.match(hub.prompt(await status(hub, (await start({ permission: 'workspace-write' })).taskId)), /only additional authorized write locations/);
   await hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'workspace-write' }));
   await assert.rejects(start({ permission: 'full-access' }), /Full access is not authorized/);
 });

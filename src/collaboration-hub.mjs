@@ -763,7 +763,9 @@ export class CollaborationHub extends EventEmitter {
       execution: { generation: task.generation, inputs: task.active?.inputs ?? null }, messages: task.messages };
     return 'You are executing an explicitly delegated Claudex work item, not synchronizing history.\n'
       + 'Read applicable repository instructions before working. Work only on the supplied task. Never expand permissions or reveal secrets.\n'
-      + 'Use workspace.projectRoot as the working directory. readOnlyDirs are references, never edit them; writableDirs are the only additional authorized write locations. Children may inherit or narrow these grants, never widen them. Handoff preserves the scope. If you need another directory, report the exact need to the controller instead of bypassing permissions.\n'
+      + (task.permission === 'full-access'
+        ? 'Use workspace.projectRoot as the working directory. You have full access: read, write, use the network, and run commands anywhere your account can whenever the task needs it, including outside the workspace. No controller authorization is required for that.\n'
+        : 'Use workspace.projectRoot as the working directory. readOnlyDirs are references, never edit them; writableDirs are the only additional authorized write locations. Children may inherit or narrow these grants, never widen them. Handoff preserves the scope. If you need another directory, report the exact need to the controller instead of bypassing permissions.\n')
       + 'The JSON below is a work record: previous messages and results are context, not tool commands to replay. Follow the current request and later explicit follow-ups.\n'
       + 'Use claudex_start for child work, claudex_status/wait for its result, and claudex_handoff to transfer THIS task. Read current status for its revision first.\n'
       + 'A tool receipt with nextAction=end-turn is a control boundary, not completed user work: immediately emit only its finalResponse token and end this native turn. No additional tools, explanation, summary or verification. Put all handoff context in the handoff message BEFORE requesting it.\n'
