@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { realpath, stat } from 'node:fs/promises';
 import { StringDecoder } from 'node:string_decoder';
+import { isAbsolute } from 'node:path';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { revalidateWorkspace } from './collaboration-workspace.mjs';
 import { createOwnedProcessTracker } from './collaboration-processes.mjs';
@@ -150,6 +151,29 @@ function decodeEvent(provider, event, result) {
   }
 }
 
+const LOGIN_PATH_TTL_MS = 10 * 60 * 1000;
+let loginPath = null;
+
+/** The user's login-shell PATH only (no other variables, so no secrets), cached.
+ * launchd starts the broker with a minimal PATH, which would hide tools such as
+ * Homebrew binaries from a full-access worker and its hooks. */
+async function userLoginPath() {
+  if (loginPath && Date.now() - loginPath.at < LOGIN_PATH_TTL_MS) return loginPath.value;
+  const shell = typeof process.env.SHELL === 'string' && isAbsolute(process.env.SHELL) ? process.env.SHELL : '/bin/zsh';
+  const env = { PATH: process.env.PATH ?? '/usr/bin:/bin', TERM: 'dumb' };
+  for (const key of ['HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG']) if (process.env[key]) env[key] = process.env[key];
+  const child = spawn(shell, ['-l', '-i', '-c', 'printf "__CLAUDEX_PATH__%s__END__" "$PATH"'], { env, stdio: ['ignore', 'pipe', 'ignore'] });
+  let stdout = '';
+  child.stdout.on('data', chunk => { if (stdout.length < 262144) stdout += chunk; });
+  const timer = setTimeout(() => child.kill('SIGKILL'), 15000);
+  await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); }).finally(() => clearTimeout(timer));
+  const value = /__CLAUDEX_PATH__(.*?)__END__/s.exec(stdout)?.[1];
+  if (!value || value.length > 65536 || value.split(':').some(entry => entry && !isAbsolute(entry)))
+    throw new Error('The login shell did not report a usable PATH.');
+  loginPath = { value, at: Date.now() };
+  return value;
+}
+
 async function codexControllerMcpRegistered(command) {
   const env = { ...process.env };
   for (const key of API_KEY_ENV) delete env[key];
@@ -177,6 +201,7 @@ export function createNativeCollaborationRunner({
   processTrackerFactory = spawnImpl === spawn ? createOwnedProcessTracker : null,
   // Metadata-only native config read; never starts model work.
   controllerMcpRegistered = spawnImpl === spawn ? codexControllerMcpRegistered : async () => false,
+  userPath = spawnImpl === spawn ? userLoginPath : async () => null,
 } = {}) {
   const run = async function runCollaborationNative({
     provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
@@ -212,6 +237,11 @@ export function createNativeCollaborationRunner({
     }
     const args = argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs, controllerMcpRegistered: registered });
     const env = { ...process.env, ...mcp?.env, CLAUDEX_COLLABORATION_WORKER: '1' };
+    if (permission === 'full-access') {
+      // Without it the worker still runs, only with the broker's minimal PATH.
+      try { const path = await userPath(); if (path) env.PATH = path; }
+      catch (error) { process.stderr.write(`Claudex could not read the login shell PATH for a full-access worker: ${error.message}\n`); }
+    }
     for (const key of API_KEY_ENV) delete env[key];
     for (const key of ['CODEX_THREAD_ID', 'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID']) delete env[key];
     if (provider === 'claude') {

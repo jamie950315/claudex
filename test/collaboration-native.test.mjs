@@ -412,7 +412,8 @@ test('full-access workers run without sandbox or prompts, load user config and a
     const fake = fakeSpawn(done);
     const probes = [];
     const run = createNativeCollaborationRunner({ spawnImpl: fake.spawnImpl, groupAliveImpl: () => false,
-      controllerMcpRegistered: async command => { probes.push(command); return registered; } });
+      controllerMcpRegistered: async command => { probes.push(command); return registered; },
+      userPath: async () => registered ? '/opt/homebrew/bin:/usr/bin:/bin' : (() => { throw new Error('no login shell'); })() });
     await run({ provider: 'codex', cwd: process.cwd(), prompt: 'Do it.', permission: 'full-access', mcp });
     const { args, options } = fake.calls[0];
     assert.deepEqual(probes, ['codex']);
@@ -422,6 +423,8 @@ test('full-access workers run without sandbox or prompts, load user config and a
     assert.equal(args.includes('mcp_servers.claudex-work.enabled=false'), registered);
     assert.ok(args.some(arg => arg.startsWith('mcp_servers.claudex.command=')));
     assert.equal(options.env.CLAUDEX_COLLABORATION_WORKER, '1');
+    // A failed login-shell probe keeps the broker PATH instead of refusing work.
+    assert.equal(options.env.PATH, registered ? '/opt/homebrew/bin:/usr/bin:/bin' : process.env.PATH);
   }
   const claude = fakeSpawn([{ type: 'result', is_error: false, result: 'Implemented.' }]);
   await createNativeCollaborationRunner({ spawnImpl: claude.spawnImpl, groupAliveImpl: () => false })({
@@ -434,7 +437,8 @@ test('full-access workers run without sandbox or prompts, load user config and a
   // Sandboxed levels keep the isolated profile.
   const sandboxed = fakeSpawn(done);
   await createNativeCollaborationRunner({ spawnImpl: sandboxed.spawnImpl, groupAliveImpl: () => false,
-    controllerMcpRegistered: async () => { throw new Error('must not probe'); } })({
+    controllerMcpRegistered: async () => { throw new Error('must not probe'); },
+    userPath: async () => { throw new Error('must not read the login shell'); } })({
     provider: 'codex', cwd: process.cwd(), prompt: 'Do it.', permission: 'workspace-write' });
   assert.ok(sandboxed.calls[0].args.includes('--ignore-user-config'));
   assert.equal(sandboxed.calls[0].args[sandboxed.calls[0].args.indexOf('--sandbox') + 1], 'workspace-write');

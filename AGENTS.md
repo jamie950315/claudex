@@ -304,7 +304,10 @@ claudex-work controller MCP is disabled in those workers (Codex only when it is
 registered, since disabling an unknown server breaks config loading; Claude via
 --disallowedTools) so children keep their parent link. Every worker carries
 CLAUDEX_COLLABORATION_WORKER=1, and the Claudex sync/chat hook exits without
-recording anything for it. Sessions stay ephemeral. Models use per-provider broker defaults unless overridden
+recording anything for it. full-access workers take only PATH from the user's
+login shell (cached ten minutes) because launchd's minimal PATH hides tools such
+as Homebrew binaries used by hooks; a failed probe logs and keeps the broker PATH.
+Sessions stay ephemeral. Models use per-provider broker defaults unless overridden
 by the caller; an unset default or explicit null override uses the native CLI
 default. Controller-only `models` requests persist both provider defaults in
 work.json without restarting services. Start and handoff capture the destination

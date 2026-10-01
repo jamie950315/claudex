@@ -342,7 +342,8 @@ full-access worker runs like your own agent: Codex uses `danger-full-access`
 (network, any path, local sockets) and Claude runs with
 `--dangerously-skip-permissions` and all built-in tools, including Bash. Neither
 asks for approval. These workers load your own Codex/Claude settings, plugins, MCP
-servers and hooks (for example RTK), while their sessions stay ephemeral. The
+servers and hooks (for example RTK) and run with your login shell's `PATH`, while
+their sessions stay ephemeral. The
 Claudex sync/chat hook recognizes a worker and records nothing, and the
 `claudex-work` controller connection is disabled inside workers so children stay
 linked to their parent.
