@@ -1090,7 +1090,13 @@ export class DesktopRuntime {
     return known;
   }
   async close() {
-    for (const entry of this.owners.values()) if (!entry.owner.status().closed) await entry.owner.close();
+    // Owners are independent native processes; closing them one after another
+    // made shutdown (and a system restart waiting on it) take minutes. A busy
+    // owner still refuses, after every idle owner has been closed.
+    const results = await Promise.allSettled([...this.owners.values()]
+      .filter(entry => !entry.owner.status().closed).map(entry => entry.owner.close()));
+    const refused = results.find(result => result.status === 'rejected');
+    if (refused) throw refused.reason;
     if (this.client) await this.client.close();
     this.client = null;
   }

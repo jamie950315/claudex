@@ -181,6 +181,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if allowTermination || inspectOnly || uiSmoke { return .terminateNow }
         guard !stopping else { showSetup(nil); return .terminateCancel }
+        // Defer, never cancel: a logout or restart must wait for the services
+        // to stop instead of being aborted by this app.
         stopping = true
         updateRefreshTimer()
         health.headline = nil
@@ -194,7 +196,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         languagePicker.isEnabled = false
         showSetup(nil)
         checkStop(statusOnly: false)
-        return .terminateCancel
+        return .terminateLater
     }
 
     private func checkStop(statusOnly: Bool) {
@@ -213,7 +215,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .success(let result):
                 if result.stopped {
                     self.allowTermination = true
-                    NSApp.terminate(nil)
+                    NSApp.reply(toApplicationShouldTerminate: true)
                 } else {
                     self.healthDetail.stringValue = L("Stopping synchronization and collaboration safely. Waiting for active work to release its resources; do not force quit.")
                     if let detail = result.detail, !detail.isEmpty {
@@ -226,6 +228,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                     }
                 }
             case .failure(let error):
+                NSApp.reply(toApplicationShouldTerminate: false)
                 self.stopping = false
                 self.languagePicker.isEnabled = true
                 self.bindHealthView()

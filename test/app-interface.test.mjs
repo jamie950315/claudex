@@ -89,6 +89,10 @@ test('graphical Quit waits for verified service shutdown and read-only exits byp
   assert.match(source, /runner.stop\(statusOnly: statusOnly\)/);
   assert.match(source, /if result.stopped/);
   assert.match(source, /checkStop\(statusOnly: true\)/);
+  // A logout or restart waits for the drain instead of being cancelled.
+  assert.match(source, /checkStop\(statusOnly: false\)\s*return \.terminateLater/);
+  assert.match(source, /if result\.stopped \{\s*self\.allowTermination = true\s*NSApp\.reply\(toApplicationShouldTerminate: true\)/);
+  assert.match(source, /case \.failure\(let error\):\s*NSApp\.reply\(toApplicationShouldTerminate: false\)/);
   assert.doesNotMatch(source, /Quit Claudex \(service keeps running\)/);
 });
 

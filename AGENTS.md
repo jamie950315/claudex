@@ -104,7 +104,11 @@ the status controller must never create a separate window.
 Graphical Quit (menu, Command-Q and native termination) now stops the owned sync
 and collaboration services and exits only after read-only native ownership/process
 checks confirm shutdown. Keep the UI responsive while draining; never kill user
-native work or report a merely unloaded launchd job as fully stopped. Failures
+native work or report a merely unloaded launchd job as fully stopped.
+applicationShouldTerminate returns terminateLater and replies once the stop is
+verified (false on failure); never terminateCancel a first request, which aborts
+a logout or restart. The runtime closes idle Claude owners concurrently; a busy
+owner still refuses after the idle ones are closed. Failures
 remain visible in the app. Closing the window still only hides it. Persist the
 private app-stop.json hold before stopping; hooks must not record events while
 held. Reopening resumes only exact installed owned services, using a recoverable
