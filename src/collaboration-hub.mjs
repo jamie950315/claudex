@@ -8,6 +8,7 @@ import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
+import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
 
 const providers = ['codex', 'claude'];
@@ -117,7 +118,7 @@ export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, allowFullAccess = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     inspectProcessGroup = inspectExitedProcessGroup, inspectProcesses = inspectOwnedProcesses, chatTitleResolver = enrichChatTitles,
-    nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null } = {}) {
+    nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null, claudeOwnerWake = null } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -138,6 +139,7 @@ export class CollaborationHub extends EventEmitter {
     this.nativeChatDiscovery = nativeChatDiscovery;
     this.chatWake = chatWake;
     this.claudeWakeManifest = claudeWakeManifest;
+    this.claudeOwnerWake = claudeOwnerWake;
   }
 
   // The controller's saved default is its explicit authorization for that level;
@@ -355,6 +357,12 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (method === 'desktop_owner_wake') {
+      if (actor.task || actor.peer !== 'claude' || !this.claudeOwnerWake || this.closed)
+        throw new Error('Native Desktop owner wake endpoint is unavailable.');
+      validateClaudeOwnerWakeRequest(params);
+      return this.claudeOwnerWake(params);
+    }
     if (['desktop_wake_claim', 'desktop_wake_receipt'].includes(method)) {
       if (actor.task || actor.peer !== 'claude' || !this.claudeWakeManifest) throw new Error('Native Desktop wake endpoint is unavailable.');
       const message = await this.chatMailbox.status(params.messageId);

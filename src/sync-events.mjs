@@ -7,11 +7,13 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { withLock } from './storage.mjs';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const KINDS = new Set(['completed', 'idle', 'interrupted', 'session', 'changed', 'reconnect', 'started', 'configuration']);
+const KINDS = new Set(['completed', 'idle', 'interrupted', 'session', 'changed', 'reconnect', 'started', 'configuration', 'owner-wake']);
 const MAX_KEYS = 4096;
 const MAX_BYTES = 4 * 1024 * 1024;
 const owned = stat => stat.uid === process.getuid() && (stat.mode & 0o077) === 0;
-const keyFor = event => `${event.side}:${event.nativeId}`;
+// Owner activation must never replace a completion or streaming-phase receipt.
+export const syncEventKey = event => `${event.side}:${event.nativeId.toLowerCase()}${event.kind === 'owner-wake' ? ':owner-wake' : ''}`;
+const keyFor = syncEventKey;
 const localQueues = new Map();
 const isAlive = pid => { try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; } };
 const sameIdentity = (stat, identity) => stat.dev === identity.dev && stat.ino === identity.ino;
@@ -46,6 +48,12 @@ async function retryableCurrentLock(path) {
 export function validateSyncEvent(value) {
   if (!value || !['codex', 'claude'].includes(value.side) || !UUID.test(value.nativeId) || !KINDS.has(value.kind))
     throw new Error('Invalid synchronization event identity or kind.');
+  if (value.kind === 'owner-wake') {
+    if (value.side !== 'claude' || !/^cse_[A-Za-z0-9_-]{1,200}$/.test(value.remoteId ?? '') || value.turnId !== undefined)
+      throw new Error('Invalid Claude owner wake identity.');
+    return { side: value.side, nativeId: value.nativeId.toLowerCase(), kind: value.kind, remoteId: value.remoteId };
+  }
+  if (value.remoteId !== undefined) throw new Error('Remote identity is only valid for a Claude owner wake.');
   if (value.turnId !== undefined && (typeof value.turnId !== 'string' || !/^[A-Za-z0-9_.:-]{1,160}$/.test(value.turnId)))
     throw new Error('Invalid synchronization event turn identity.');
   return { side: value.side, nativeId: value.nativeId.toLowerCase(), kind: value.kind,

@@ -90,6 +90,85 @@ async function unchangedFile(snapshot) {
   if (!sameSnapshot(snapshot.identity, current)) fail('metadata changed before publication.');
 }
 
+/** Identity-only activation preflight. A published presentation row is only a
+ * hint: bind it again to the current ledger and stable registered owner state.
+ * No native history, transport, model input or registration is touched here.
+ */
+export async function inspectClaudeOwnerWake({ root, state, remoteId }) {
+  if (!REMOTE_ID.test(remoteId ?? '') || state?.version !== 2 || !object(state.conversations) || !Array.isArray(state.records))
+    fail('invalid owner wake request or ledger.');
+  if (state.pending != null) return { ignored: 'pending transaction' };
+  const rootIdentity = await privateDirectory(root);
+  const map = await readMetadata(join(root, 'folder-map.json'), { optional: true });
+  if (!map) return { ignored: 'folder map unavailable' };
+  validateExistingMap(map.data);
+  const row = map.data.entries.find(entry => entry.remoteId === remoteId);
+  if (!row) return { ignored: 'unpublished Remote Control identity' };
+  const candidates = state.records.filter(record => record.side === 'claude' && record.managed === true
+    && record.verified === true && record.kind === 'owner' && record.status === 'current'
+    && !record.retiredOwner && record.cwd === row.canonicalCwd);
+  if (candidates.length > MAX_ENTRIES) fail('owner wake candidate count exceeds its bound.');
+  const ownersPath = join(root, 'owners');
+  const ownersIdentity = candidates.length ? await privateDirectory(ownersPath) : null;
+  const snapshots = [map], matches = [];
+  for (const record of candidates) {
+    if (!UUID.test(record.conversationId) || !UUID.test(record.nativeId)) fail('invalid owner wake ledger identity.');
+    const saved = await readMetadata(join(ownersPath, `${hash(record.conversationId)}.json`), { optional: true });
+    if (!saved) continue; // Retired/missing owners are never recreated by a hint.
+    snapshots.push(saved);
+    if (saved.data.remoteId === remoteId) matches.push({ record, owner: saved.data });
+  }
+  if (matches.length !== 1) return { ignored: 'current owner unavailable or ambiguous' };
+  const { record, owner } = matches[0], conversation = state.conversations[record.conversationId];
+  if (!conversation || conversation.id !== record.conversationId || !isDesktopTracked(conversation))
+    return { ignored: 'conversation is not tracked' };
+  if (conversation.cwd !== record.cwd || owner.version !== 1 || owner.conversationId !== record.conversationId
+    || owner.sessionId !== record.nativeId || owner.cwd !== record.cwd || owner.registration !== 'registered')
+    return { ignored: 'current owner identity changed' };
+  if (owner.blocked || owner.pending != null || owner.reset != null || owner.displayTitleMigration != null)
+    return { ignored: 'owner is blocked or transitioning' };
+  const currentRecords = state.records.filter(item => item.conversationId === record.conversationId && item.status === 'current');
+  if (currentRecords.length !== 2 || ['claude', 'codex'].some(side => currentRecords.filter(item => item.side === side).length !== 1))
+    return { ignored: 'current conversation pair is unavailable or ambiguous' };
+  // Inspect exact current paths and directories only. A saved alias or absent
+  // counterpart may require relocation, which activation cannot reconcile.
+  const nativePaths = [];
+  for (const current of currentRecords) {
+    if (!canonicalCwd(current.cwd) || current.cwd !== conversation.cwd || !isAbsolute(current.path ?? ''))
+      return { ignored: 'current project identity changed' };
+    try {
+      const directory = await lstat(current.cwd, { bigint: true });
+      if (await realpath(current.cwd) !== current.cwd || !directory.isDirectory())
+        return { ignored: 'current project is unavailable or aliased' };
+      const info = await lstat(current.path, { bigint: true });
+      if (!info.isFile() || !own(info) || await realpath(current.path) !== current.path)
+        return { ignored: 'current native history is unavailable or aliased' };
+      nativePaths.push({ current, directory, info });
+    } catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes(error.code)) return { ignored: 'current project or history is unavailable' };
+      throw error;
+    }
+  }
+  const recheck = async () => {
+    await recheckDirectory(root, rootIdentity);
+    if (ownersIdentity) await recheckDirectory(ownersPath, ownersIdentity);
+    for (const snapshot of snapshots) await unchangedFile(snapshot);
+    for (const { current, directory, info } of nativePaths) {
+      const dir = await lstat(current.cwd, { bigint: true }), file = await lstat(current.path, { bigint: true });
+      if (!dir.isDirectory() || !sameFile(directory, dir) || await realpath(current.cwd) !== current.cwd
+        || !file.isFile() || !own(file) || !sameFile(info, file) || await realpath(current.path) !== current.path)
+        fail('current project or native path changed before owner activation.');
+    }
+  };
+  await recheck();
+  return { record, owner, recheck };
+}
+
+export async function readClaudeOwnerWakeLedger(root) {
+  await privateDirectory(root);
+  return (await readMetadata(join(root, 'desktop-state.json'))).data;
+}
+
 /** Publish presentation-only verified owner identities. The caller supplies a
  * DesktopBridge snapshot under its existing coordinator ownership; this helper
  * never reads transcripts, starts an SDK worker, or changes native sessions.

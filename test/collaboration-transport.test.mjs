@@ -86,7 +86,9 @@ test('MCP handoff forwards an explicit model or null and refuses malformed overr
   } }) + '\n'));
   input.end();
   await running;
-  assert.deepEqual(seen.map(request => request.params.model), ['destination-model', null]);
+  // Independent MCP requests may reach the socket in either order.
+  assert.deepEqual(seen.toSorted((a, b) => a.params.requestId.localeCompare(b.params.requestId))
+    .map(request => request.params.model), ['destination-model', null]);
   const rows = content.trim().split('\n').map(JSON.parse);
   assert.equal(rows.filter(row => row.result.isError).length, 4);
 });

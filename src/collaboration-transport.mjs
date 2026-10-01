@@ -7,7 +7,7 @@ const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt']);
+const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -186,6 +186,9 @@ const toolDefinitions = [
   tool('chat_status', 'Read a native-chat coordination message receipt. Offered means hook output prepared, not proven read; acknowledged means the exact recipient emitted its acknowledgement marker, not that requested actions succeeded. No resend or inference.', { messageId: str }, ['messageId']),
 ];
 const desktopWakeTools = [
+  tool('desktop_owner_wake', 'Publish an identity-only activation hint for an exact current Claudex Remote Control owner. No message input, synchronization or inference request.', {
+    remoteId: { type: 'string', minLength: 5, maxLength: 204, pattern: '^cse_[A-Za-z0-9_-]{1,200}$' },
+  }, ['remoteId']),
   tool('desktop_wake_claim', 'Claim one exact pending Claude Desktop peer message. Native renderer bridge only; no arbitrary work execution.', {
     messageId: str, sessionId: str,
   }, ['messageId', 'sessionId']),
@@ -204,6 +207,7 @@ function validateTool(name, args) {
     const field = schema.properties[key];
     if (key === 'effort') validateCollaborationEffort(args.provider, value);
     if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
+    if (name === 'claudex_desktop_owner_wake' && (value.length > field.maxLength || !new RegExp(field.pattern).test(value))) fail(`Invalid ${key}`);
     if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
     if (field.type === 'array' && (!Array.isArray(value) || value.length > field.maxItems

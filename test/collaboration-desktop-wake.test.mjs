@@ -58,7 +58,7 @@ test('Desktop claim is single-use and receipt requires its exact claim without a
   await assert.rejects(request('desktop_wake_receipt', { ...params, claimId: claim.claimId, status: 'accepted', detail: 'duplicate' }), /no longer current/);
 });
 
-test('Desktop MCP exposes only the narrow two tools and refuses arbitrary work', async t => {
+test('Desktop MCP exposes only narrow wake tools and refuses arbitrary work', async t => {
   const root = await mkdtemp(join(tmpdir(), 'cldx-desktop-mcp-'));
   const seen = [];
   const socket = await serveCollaborationSocket({ root, dispatch: async request => { seen.push(request); return { accepted: true }; } });
@@ -68,6 +68,9 @@ test('Desktop MCP exposes only the narrow two tools and refuses arbitrary work',
   const running = runCollaborationMcp({ root, peer: 'claude', token: 'controller', desktopWakeOnly: true, input, output });
   input.write(JSON.stringify({ jsonrpc: '2.0', id: 'list', method: 'tools/list' }) + '\n');
   for (const [id, name, args] of [
+    ['owner', 'claudex_desktop_owner_wake', { remoteId: 'cse_target' }],
+    ['bad-owner', 'claudex_desktop_owner_wake', { remoteId: 'arbitrary' }],
+    ['content', 'claudex_desktop_owner_wake', { remoteId: 'cse_target', message: 'not permitted' }],
     ['claim', 'claudex_desktop_wake_claim', { messageId: 'message', sessionId: 'target' }],
     ['receipt', 'claudex_desktop_wake_receipt', { messageId: 'message', sessionId: 'target', claimId: 'claim', status: 'accepted', detail: 'accepted' }],
     ['work', 'claudex_start', { provider: 'codex', cwd: root, prompt: 'not permitted', requestId: 'start' }],
@@ -75,8 +78,10 @@ test('Desktop MCP exposes only the narrow two tools and refuses arbitrary work',
   ]) input.write(JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }) + '\n');
   input.end(); await running;
   const responses = new Map(contents.trim().split('\n').map(line => { const row = JSON.parse(line); return [row.id, row]; }));
-  assert.deepEqual(responses.get('list').result.tools.map(tool => tool.name), ['claudex_desktop_wake_claim', 'claudex_desktop_wake_receipt']);
-  assert.deepEqual(seen.map(request => request.method).sort(), ['desktop_wake_claim', 'desktop_wake_receipt']);
+  assert.deepEqual(responses.get('list').result.tools.map(tool => tool.name), ['claudex_desktop_owner_wake', 'claudex_desktop_wake_claim', 'claudex_desktop_wake_receipt']);
+  assert.deepEqual(seen.map(request => request.method).sort(), ['desktop_owner_wake', 'desktop_wake_claim', 'desktop_wake_receipt']);
+  assert.equal(responses.get('bad-owner').result.isError, true);
+  assert.equal(responses.get('content').result.isError, true);
   assert.equal(responses.get('work').result.isError, true);
   assert.equal(responses.get('chat').result.isError, true);
 });

@@ -186,7 +186,9 @@ process while Claudex reads or delivers to it. A process unused for
 `claudeOwnerIdleSeconds` (default 900; 60 through 86400) is closed while the
 watcher waits for events, unless it is busy or a handoff is pending. The next
 synchronization starts it again with the same Remote Control identity; while it
-is closed, that conversation's Claude Desktop entry is not connected.
+is closed, that conversation's Claude Desktop entry is not connected. With the
+pinned owner activation adapter loaded, opening or submitting to an exact managed
+entry can also reconnect that owner without a Codex connection (see below).
 
 Codex Desktop stores a screenshot of the browser or app surface with every
 Browser Use and computer-use call so its own window can preview the tool. That
@@ -450,6 +452,51 @@ the exact original cache resource is restored only if the current file remains
 installer-owned. Original conversations and backups are preserved.
 Disabling folders also disables native Local handoffs.
 
+### Activating a disconnected managed owner
+
+Graphical setup installs a separate pinned conversation adapter alongside the
+existing `claudex-desktop-wake` MCP endpoint. When the conversation component
+mounts or changes identity, or its native submit callback runs, the adapter checks
+the fresh private `folder-map.json` for that exact RC identity. Only verified
+published IDs qualify; titles, unrelated sessions and prompt content are never
+used. Requests are debounced for five seconds per identity and bounded to sixteen
+identities in a thirty-second window. There is no periodic owner keepalive.
+
+The identity-only `claudex_desktop_owner_wake` tool uses Claude's sessionless
+`LocalAgentModeSessions.directMcpCallTool` API and its native device grant. An
+unavailable connector or refused approval produces a bounded diagnostic; no
+Local session is borrowed and no alternate transport is attempted. The existing
+Claude controller capability authenticates publication to the private durable
+event inbox. Separate owner-wake keys cannot replace completion/started hints.
+
+The watcher processes the hint under coordinator ownership before checking Codex
+transport. It revalidates a unique current tracked pair, saved RC/native owner
+registration, project and native path identities, and pending, blocked, retired,
+alias, relocation and app-stop guards. It starts or activates that exact owner's
+normal execution profile without title reconciliation, synchronization or archival
+proof renewal, and refreshes its idle timer. Normal native startup validation still
+applies. Claude's own RC connection delivers any native queued user message;
+Claudex submits no message.
+Rejected hints are consumed with bounded status diagnostics, without recovery or
+automatic retry. Hints wait for the watcher's current operation boundary; this
+does not guarantee a reconnect deadline during long native operations.
+
+The checked conversation asset is `shared-16-K1Vl3wzJ.js`, decoded SHA-256
+`a8631d08b9ab2cab19855096c45edabf0ba285056d54a3e9b1b78e1c8abf9d42`,
+cache file `70ba0ff6d79ee87d_0`. Its immutable original and recovery journal live
+under `ui-owner-wake/70ba0ff6d79ee87d_0/ui-folder-compat`, independently of the
+folder and chat-wake resources. Exact source, unique component/submit anchors,
+cache checksums and installer ownership must match; unknown bytes fail explicitly.
+A normal idle Claude restart is needed to load an installed patch. Cache eviction
+or a vendor update requires revalidation. A cleared/unavailable folder map disables
+these hints even when the resource remains installed.
+
+Automated acceptance is synthetic, with an isolated real-cache install/recovery
+check and no inference. Live reception remains unverified for this new pin:
+confirm native device approval, opening an evicted owner and submitting a queued
+message with Codex unavailable, same RC/native identities, app-stop refusal and
+subsequent idle eviction. Cache installation alone is not that acceptance.
+
 ### Native Local predecessor archival
 
 After enabling folders, safely stop the watcher before changing this setting:
@@ -518,8 +565,9 @@ superseded originals, and file identities/timestamps before and after verificati
 The default 60-second expiry makes another full check due. Errors, pending work,
 changed or missing files invalidate those hints. Hints never advance a history checkpoint.
 Once a current managed Remote Control owner exists, normal per-pass inspection
-resumes and its native process remains long-lived; this is not a general owner
-pool or an unlimited-active-session resource guarantee.
+resumes when synchronization needs it. Its process starts on demand and remains
+subject to the idle eviction described above; there is no unlimited-active-session
+resource guarantee.
 
 New conversations, active owners, and changed historical imports are checked
 before unchanged historical imports. During the fair historical-validation sweep,

@@ -91,6 +91,10 @@ or the user's global Node.js installation.
 - An independent collaboration broker and the `claudex-work` MCP connections.
 - The narrow `claudex-desktop-wake` MCP endpoint and supported Claude frontend
   bridge for authorized messages to existing native chats.
+- A separately pinned conversation adapter that requests reconnection when an
+  exact managed Claude entry is opened or submitted to. It requires the native
+  MCP device grant and a published owner map. Claude RC delivers queued messages;
+  this activation does not submit model input or require Codex to be connected.
 - All-project Desktop synchronization using the original OpenAI-signed native
   launcher runtime, not Claudex's own Node binary for that protected integration.
 - Native folder presentation and Local predecessor handoff when the existing

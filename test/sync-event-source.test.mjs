@@ -63,6 +63,20 @@ test('owned no-query receipts and unverified Claude results do not wake synchron
   assert.equal((await source.wait({ timeoutMs: 100 }))[0].kind, 'completed');
 });
 
+test('owner wake revisions remain separate from completion hints and never arm transcripts', async t => {
+  const { root, inbox, source } = await fixture(t), nativeId = randomUUID(), path = join(root, 'synthetic.jsonl');
+  await writeFile(path, 'Synthetic native bytes.');
+  const completion = await inbox.publish({ side: 'claude', nativeId, kind: 'completed' });
+  const wake = await inbox.publish({ side: 'claude', nativeId, kind: 'owner-wake', remoteId: 'cse_synthetic' });
+  assert.deepEqual(await source.current([completion, wake]), [completion, wake]);
+  await source.observe([wake], { records: [{ side: 'claude', nativeId, path, verified: true, status: 'current' }] });
+  assert.equal(source.metrics.armedSources, 0);
+  await source.acknowledge([wake]);
+  assert.deepEqual(await inbox.list(), [completion]);
+  await inbox.publish({ side: 'claude', nativeId, kind: 'owner-wake', remoteId: 'cse_synthetic' });
+  assert.deepEqual(await source.current([completion, wake]), [completion]);
+});
+
 test('only completion-armed trusted transcript changes wake; next turn disarms', async t => {
   const { root, source, traces } = await fixture(t), nativeId = randomUUID(), path = join(root, 'source.jsonl');
   await writeFile(path, 'one');

@@ -39,6 +39,7 @@ async function fixture(t, options = {}) {
     collaborationInstall: async (input, _options) => { events.push(['collaboration', input]); },
     desktopWakeInstall: async input => { events.push(['desktop-wake', input]); },
     desktopWakeCacheInstall: async input => { events.push(['desktop-wake-cache', input]); },
+    desktopOwnerWakeCacheInstall: async input => { events.push(['desktop-owner-wake-cache', input]); },
     desktopInstall: async input => { events.push(['desktop', input]); },
     serviceInstall: async input => { events.push(['service', input]); },
     ownership: async () => ({ allowed: options.ownerAllowed !== false }),
@@ -65,6 +66,7 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.ok(events.some(([kind]) => kind === 'sync-hooks'));
   assert.ok(events.some(([kind, input]) => kind === 'desktop-wake' && input.args.includes('desktop-wake-mcp')));
   assert.ok(events.some(([kind]) => kind === 'desktop-wake-cache'));
+  assert.ok(events.some(([kind]) => kind === 'desktop-owner-wake-cache'));
   assert.equal(report.version, 1);
   assert.equal(report.allProjects, true);
   assert.equal(report.allowWrite, true);

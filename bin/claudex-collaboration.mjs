@@ -3,6 +3,7 @@ import { parseArgs } from 'node:util';
 import { prepareCodexChatWake } from '../src/codex-chat-wake.mjs';
 import { discoverCodexChats } from '../src/native-chat-catalog.mjs';
 import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.mjs';
+import { createClaudeOwnerWakePublisher } from '../src/claude-owner-wake.mjs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +76,7 @@ async function serve(root, allowWrite, values) {
       chatWake: prepareCodexChatWake,
       nativeChatDiscovery: params => discoverCodexChats(params, { syncRoot: dirname(root) }),
       claudeWakeManifest: createClaudeChatWakeManifest({ root }),
+      claudeOwnerWake: createClaudeOwnerWakePublisher({ root: dirname(root) }),
       run: createNativeCollaborationRunner({ commands: { codex: values['codex-binary'] ?? 'codex', claude: values['claude-binary'] ?? 'claude' } }),
       mcp: ({ provider, token }) => ({ command: process.execPath,
         args: [cli, 'mcp', '--root', root, '--peer', provider], env: { CLAUDEX_WORK_TOKEN: token } }) });

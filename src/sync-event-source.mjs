@@ -2,12 +2,12 @@ import { watch } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { lstat, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { validateSyncEvent } from './sync-events.mjs';
+import { validateSyncEvent, syncEventKey } from './sync-events.mjs';
 
 export const RECONNECT_ID = '00000000-0000-4000-8000-000000000001';
 export const CONFIG_ID = '00000000-0000-4000-8000-000000000002';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const keyOf = event => `${event.side}:${event.nativeId.toLowerCase()}`;
+const keyOf = syncEventKey;
 
 // Metadata only suppresses duplicate directory hints. It never proves a native
 // checkpoint or grants permission to skip the coordinator's history checks.

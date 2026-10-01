@@ -10,6 +10,8 @@ import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mj
 import { homedir } from 'node:os';
 import { RECONNECT_ID } from './sync-event-source.mjs';
 import { activeDesktopState, activeDesktopConversationIds, isDesktopTracked } from './desktop-enrollment.mjs';
+import { handleClaudeOwnerWake } from './claude-owner-wake.mjs';
+import { syncEventKey } from './sync-events.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Forked Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)(?: \[Codex thread [a-f0-9-]+\])?$/i;
@@ -85,7 +87,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let hookStatus = null;
   const deferredEvents = new Map();
   const eventWaits = new Map();
-  const eventKey = event => `${event.side}:${event.nativeId}`;
+  const eventKey = syncEventKey;
+  let ownerWake = { handled: 0, woken: 0, ignored: 0, lastReason: null };
   const deferEvent = (event, attempt = 0) => {
     const delays = [250, 1000, 3000];
     if (attempt < delays.length) deferredEvents.set(eventKey(event), { event, attempt: attempt + 1, due: now() + delays[attempt] });
@@ -169,7 +172,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     const hookBlock = hookStatus && !hookStatus.ready ? { scope: 'hooks', reason: hookStatus.reason } : null;
     const progress = { mode: 'desktop', running: true, pid: process.pid,
     scheduler: events ? 'completion-events' : 'activity-interleaved', startedAt, updatedAt: now(),
-    ...(events ? { eventWakeCount, eventSyncCount, lastEventAt, awaitingEvents, eventSources: events.metrics, hookStatus } : {}),
+    ...(events ? { eventWakeCount, eventSyncCount, lastEventAt, awaitingEvents, eventSources: events.metrics, hookStatus, ownerWake } : {}),
     versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, initialSweepCompletedAt,
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
@@ -181,7 +184,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     const guardHealth = value => value && Object.fromEntries(Object.entries(value)
       .filter(([key]) => !['since', 'lastAttemptAt', 'retryAt', 'attempts'].includes(key)));
     const presentationHealth = value => value && { state: value.state, error: value.error, deferred: value.deferred };
-    const health = JSON.stringify({ synchronization: progress.synchronization, awaitingEvents,
+    const health = JSON.stringify({ synchronization: progress.synchronization, awaitingEvents, ownerWake,
       blocked: guardHealth(progress.blocked), blockedConversations: progress.blockedConversations.map(guardHealth),
       waiting: progress.waiting, waitingContexts: progress.waitingContexts,
       blockedSourceCount: progress.blockedSourceCount, blockedSources: progress.blockedSources,
@@ -268,7 +271,21 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         let blockedSourceCount = blockedSourceDiagnostics.size;
         const blockedSources = [...blockedSourceDiagnostics.values()].slice(0, 20);
         let configurationOnly = false;
-        try {
+        let ownerWakeOnly = false;
+        if (events && eventBatch) {
+          eventBatch = await events.current?.(eventBatch) ?? eventBatch;
+          const wakes = eventBatch.filter(event => event.kind === 'owner-wake');
+          for (const event of wakes) {
+            if (signal?.aborted) break;
+            let result;
+            try { result = await handleClaudeOwnerWake({ root, bridge, runtime, event, blocked, blockedConversations }); }
+            catch (error) { result = { ignored: reason(error) }; }
+            ownerWake = { handled: ownerWake.handled + 1, woken: ownerWake.woken + (result.woken ? 1 : 0),
+              ignored: ownerWake.ignored + (result.woken ? 0 : 1), lastReason: result.ignored ?? null };
+          }
+          ownerWakeOnly = wakes.length > 0 && wakes.length === eventBatch.length;
+        }
+        if (!ownerWakeOnly) try {
           // A pending transaction remains the only allowed native operation.
           // Waiting out this backoff does not clear it or allocate a new target.
           if (blocked && now() < blocked.retryAt && !events) throw deferredBlock;
@@ -572,7 +589,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             let state = await bridge.status();
             if (state.pending) { configurationOnly = false; clearHints(); await bridge.recover(); state = await bridge.status(); }
             await events.observe(eventBatch, activeDesktopState(state));
-            const relevant = eventBatch.filter(event => !['started', 'configuration'].includes(event.kind));
+            const relevant = eventBatch.filter(event => !['started', 'configuration', 'owner-wake'].includes(event.kind));
             const keys = new Set(relevant.map(eventKey));
             const known = new Set(state.records.map(record => `${record.side}:${record.nativeId?.toLowerCase()}`));
             if ([...keys].some(key => !known.has(key))) await discoverNew(keys);
@@ -622,7 +639,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             wait(error, { scope: 'coordinator',
               ...conversationContext(state, state.pending?.record?.conversationId ?? error.conversationId) });
             if (events) {
-              const retry = eventBatch?.length ? eventBatch : [{ side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' }];
+              const retry = eventBatch?.length ? eventBatch.filter(event => event.kind !== 'owner-wake') : [{ side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' }];
               for (const event of retry) deferEvent(event, event.retryAttempt ?? 0);
             }
           }
@@ -634,7 +651,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
           } else throw error;
         }
-        await status({ waiting, waitingContexts, blockedSourceCount, blockedSources }, { configurationOnly });
+        // Activation alone keeps the last synchronization report and never
+        // renews archival proofs or performs presentation history inspection.
+        if (ownerWakeOnly) await writeProgress();
+        else await status({ waiting, waitingContexts, blockedSourceCount, blockedSources }, { configurationOnly });
         if (!signal?.aborted && passes < maxPasses) {
           if (events) {
             if (eventBatch) await events.acknowledge(eventBatch);

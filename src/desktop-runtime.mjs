@@ -8,7 +8,8 @@ import { createInterface } from 'node:readline';
 import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
 import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
-import { decodeClaude } from './claude.mjs';
+import { decodeClaude, sessionPath } from './claude.mjs';
+import { readAppStopState } from './app-stop-state.mjs';
 import { FORK_REJECTED, assertClaudeForkPrefix, claudeForkParent } from './claude-fork.mjs';
 import { inspectClaudeProjectRelocation } from './claude-relocation.mjs';
 import { inspectNativeSyncHookTrust } from './sync-hook-install.mjs';
@@ -196,12 +197,12 @@ export class DesktopRuntime {
     } catch (error) { await this.client.close(); this.client = null; throw error; }
   }
 
-  async owner(conversationId, cwd, title, { forceNormal = false } = {}) {
+  async owner(conversationId, cwd, title, { forceNormal = false, reconcileTitle = true } = {}) {
     let entry = this.owners.get(conversationId);
     if (entry) {
       entry.usedAt = this.clock();
       if (entry.error) throw entry.error;
-      await entry.owner.reconcileDisplayTitle?.(title);
+      if (reconcileTitle) await entry.owner.reconcileDisplayTitle?.(title);
       return entry.owner;
     }
     const stored = await readJSON(join(this.root, 'owners', `${hash(conversationId)}.json`), null);
@@ -225,7 +226,7 @@ export class DesktopRuntime {
     // Presentation reconciliation can observe a native metadata append after
     // its successful control receipt. Do not poison an otherwise healthy owner
     // with that transient read; the durable rename intent is checked next time.
-    await owner.reconcileDisplayTitle?.(title);
+    if (reconcileTitle) await owner.reconcileDisplayTitle?.(title);
     return owner;
   }
 
@@ -664,16 +665,17 @@ export class DesktopRuntime {
     return needsImages ? 'images' : false;
   }
 
-  async activateNormalOwner(record) {
+  async activateNormalOwner(record, { reconcileTitle = true } = {}) {
     assertNotImportedOriginalWrite(record);
     const entry = this.owners.get(record.conversationId);
     if (!entry) {
-      const owner = await this.owner(record.conversationId, record.cwd, record.title, { forceNormal: true });
+      const owner = await this.owner(record.conversationId, record.cwd, record.title, { forceNormal: true, reconcileTitle });
       if (owner.status().sessionId !== record.nativeId) throw new Error('Normal owner startup changed the promoted native identity.');
       await owner.connect();
       return;
     }
     if (!entry.maintenanceOnly) {
+      entry.usedAt = this.clock();
       await entry.owner.connect();
       return;
     }
@@ -684,9 +686,31 @@ export class DesktopRuntime {
     // before restoring the original normal user/project settings in a new one.
     await entry.owner.close();
     this.owners.delete(record.conversationId);
-    const owner = await this.owner(record.conversationId, record.cwd, record.title, { forceNormal: true });
+    const owner = await this.owner(record.conversationId, record.cwd, record.title, { forceNormal: true, reconcileTitle });
     if (owner.status().sessionId !== record.nativeId) throw new Error('Normal owner startup changed the promoted native identity.');
     await owner.connect();
+  }
+
+  async wakeClaudeOwner(record, saved) {
+    if (saved.claudeHome !== this.claudeHome || record.path !== sessionPath(this.claudeHome, record.cwd, record.nativeId)
+      || await this.ownerRetired(record) || await this.ownerStranded(record))
+      return { ignored: 'owner is retired, stranded or belongs to another native home' };
+    const entry = this.owners.get(record.conversationId);
+    if (entry) {
+      const status = entry.owner.status();
+      if (entry.error || status.closed || entry.owner.closing || status.blocked || status.pending || status.reset
+        || entry.owner.appendBusy || entry.owner.resetBusy
+        || status.sessionId !== record.nativeId || status.remoteId !== saved.remoteId)
+        return { ignored: 'live owner is blocked, transitioning or changed' };
+    }
+    if ((await readAppStopState(this.root))?.stopped) return { ignored: 'application stopped' };
+    await this.activateNormalOwner(record, { reconcileTitle: false });
+    const active = this.owners.get(record.conversationId);
+    const status = active?.owner.status();
+    if (status?.sessionId !== record.nativeId || status?.remoteId !== saved.remoteId)
+      throw new Error('Claude owner wake changed its native or Remote Control identity.');
+    active.usedAt = this.clock();
+    return { woken: true };
   }
 
   async completePromotion(record) {

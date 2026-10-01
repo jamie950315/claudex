@@ -1164,6 +1164,22 @@ with no pending/reset/background work, never while the ledger has a pending
 transaction, and a busy refusal keeps the owner. The next read or delivery
 restarts it with the same Remote Control identity; while closed, its Desktop
 entry is not connected, like any other owner that has not been started.
+The separately pinned conversation adapter signals component selection/mount and
+native submit for exact published folder-map RC IDs only, with bounded debounce.
+It uses sessionless LocalAgentModeSessions.directMcpCallTool and the existing
+claudex-desktop-wake controller endpoint, preserving native device approval;
+never borrow a Local session, inspect prompt content or send model input. Its
+independent ui-owner-wake/<cache filename> journal preserves earlier resources.
+Owner-wake inbox keys are separate from completion hints. Under coordinator
+ownership, validate the current tracked pair, stable saved owner registration,
+canonical existing native paths, pending/block/retired/alias/relocation guards and
+app-stop hold, then activate only that normal owner without title reconciliation.
+This path refreshes idle eviction without Codex transport, sync, archival proof
+publication or replaying queued messages; normal native startup validation still
+applies and native RC owns delivery.
+Ignored hints have bounded diagnostics and no automatic recovery/retry. Synthetic
+tests and isolated cache recovery do not establish live renderer reception;
+each new resource pin still requires separate native UI acceptance.
 Promoted recovery reconnects the normal owner even without a cached handle.
 
 The integrated real SDK/coordinator proof preserves four canonical messages
