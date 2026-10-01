@@ -702,6 +702,8 @@ const boundedNativeDiscoveryErrors = [
   'Native Codex history export: converted byte limit exceeded; no partial export is returned.',
   'Native Codex history export: a completed turn lacks its final assistant response.',
   'Native Codex history export: a completed turn has no persisted items.',
+  // Runtime limit errors identify the source thread.
+  'Native Codex history export: byte limit exceeded; no partial export is returned. [Codex thread 01a081f2-0600-70d2-a162-24a2b6c8613e]',
   'Forked Claude history belongs to another native session; it was not enrolled.',
 ];
 
