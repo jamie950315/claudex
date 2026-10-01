@@ -707,6 +707,16 @@ authenticated packet already present once in that prefix; it is not replayed.
 Semantic baseline resets require a new boundary after an unchanged saved byte
 prefix; checkpoints advance only on successful promotion. Opaque Codex summaries,
 replacement histories, and general Claude preserved-segment chains remain blocked.
+Native Claude originals (Desktop Local, CLI 2.1.284 /compact) keep their complete
+readable prefix, so a preserved segment there is accepted when its uuids exist
+exactly once before the boundary as a contiguous parent chain ending at the
+logical parent, anchored to the summary and ordered within allUuids (which may
+list unpersisted rows). Their interactive summary may omit queueTranscriptOnly;
+owned histories still require it. Nothing is replayed.
+The Local archival publisher skips an original left in its old project by a
+Codex project move (no same-project continuation); other cwd mismatches fail.
+Watcher status lists each blocked conversation once, even when several held
+callers report the same global guard.
 
 The observed Claude split-response parallel-tool graph is supported without
 choosing a branch: require one request/response/model/session identity, ordered

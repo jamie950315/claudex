@@ -85,15 +85,38 @@ export function claudeCompactionHistory(text, rows, authenticatePreservedPacket)
   let preservedAuthenticatedPackets = 0;
   for (let ordinal = 0; ordinal < boundaries.length; ordinal++) {
     const index = boundaries[ordinal];
-    const { boundary, summary, readable } = claudeSummary(rows, index, boundaries[ordinal + 1], typeof authenticatePreservedPacket === 'function');
+    const { boundary, summary, readable } = claudeSummary(rows, index, boundaries[ordinal + 1], true);
     if (boundary.parentUuid !== null || typeof boundary.logicalParentUuid !== 'string' || !boundary.logicalParentUuid
       || !summary.uuid || summary.sessionId !== boundary.sessionId || summary.cwd !== boundary.cwd
-      || summary.isVisibleInTranscriptOnly !== true || summary.queueTranscriptOnly !== true)
+      || summary.isVisibleInTranscriptOnly !== true || summary.queueTranscriptOnly !== true
+        // A native original's interactive /compact summary is not queued input.
+        && (typeof authenticatePreservedPacket === 'function' || summary.queueTranscriptOnly !== undefined))
       throw new Error('Owned Claude compaction lacks an exact native history link.');
     if (boundary.compactMetadata?.preservedSegment || boundary.compactMetadata?.preservedMessages) {
       const segment = boundary.compactMetadata.preservedSegment, messages = boundary.compactMetadata.preservedMessages;
       const keys = (value, expected) => value && !Array.isArray(value) && typeof value === 'object'
         && Object.keys(value).sort().join(',') === expected;
+      // Without a packet authenticator (a native original), the complete earlier
+      // history is retained, so a preserved segment only references rows that
+      // already exist in that prefix: an exact, contiguous parent chain ending
+      // at the boundary's logical parent and anchored to its summary. Nothing
+      // is replayed or reordered.
+      if (typeof authenticatePreservedPacket !== 'function') {
+        const uuids = messages?.uuids, all = messages?.allUuids;
+        const chain = Array.isArray(uuids) ? uuids.map(uuid => rows.slice(0, index).filter(row => !row.isSidechain && row.uuid === uuid)) : [];
+        if (!keys(segment, 'anchorUuid,headUuid,tailUuid') || !keys(messages, 'allUuids,anchorUuid,uuids')
+          || !Array.isArray(uuids) || !uuids.length || uuids.length > 4096 || !Array.isArray(all) || all.length > 4096
+          || new Set(uuids).size !== uuids.length || uuids.some(uuid => typeof uuid !== 'string' || !uuid)
+          || uuids.some((uuid, n) => all.indexOf(uuid) < (n ? all.indexOf(uuids[n - 1]) + 1 : 0))
+          || segment.headUuid !== uuids[0] || segment.tailUuid !== uuids.at(-1) || boundary.logicalParentUuid !== uuids.at(-1)
+          || segment.anchorUuid !== summary.uuid || messages.anchorUuid !== summary.uuid
+          || chain.some(found => found.length !== 1)
+          || chain.some(([row], n) => n > 0 && row.parentUuid !== uuids[n - 1]))
+          throw new Error('Claude compaction preserved-segment dependencies are unsupported; automatic handoff paused.');
+        summaries.set(summary, { ...summary, message: { ...summary.message,
+          content: `[Imported native compaction summary; complete earlier verified history is retained.]\n${readable}` } });
+        continue;
+      }
       const id = messages?.uuids?.[0];
       const candidates = rows.slice(0, index).filter(row => !row.isSidechain && row.uuid === id);
       // Pinned native /compact can preserve its one trailing no-query packet.

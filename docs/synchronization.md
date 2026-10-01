@@ -810,6 +810,13 @@ This narrow exception does not enable arbitrary preserved segments or opaque
 history. Malformed references, unknown forms and incomplete tails still block
 checkpoint advancement.
 
+Native Claude originals (for example a Desktop Local conversation compacted with
+`/compact`) retain their complete readable history, so a preserved segment there
+only refers to rows that already exist before the boundary. It is accepted when
+those rows appear exactly once, form a contiguous chain ending at the boundary's
+logical parent, and are anchored to its summary; the summary is added as labeled
+text and nothing is replayed.
+
 ## Claude Desktop boundary
 
 The CLI-only watcher targets Claude Code CLI storage, **not the Claude Desktop

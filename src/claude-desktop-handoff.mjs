@@ -102,6 +102,11 @@ function candidates(state) {
     if (!originals.length) continue;
     if (originals.length !== 1) fail('a conversation has ambiguous superseded Claude originals.');
     const original = originals[0], conversation = state.conversations[current.conversationId];
+    // An original superseded by a project move keeps its old project's Local
+    // entry; it is not a same-project continuation and is never archived here.
+    if (object(conversation) && original.cwd !== conversation.cwd && current.cwd === conversation.cwd
+      && state.records.some(record => record.conversationId === current.conversationId && record.status === 'current'
+        && record.relocation?.kind === 'codex-project-move' && record.relocation.originCwd === original.cwd)) continue;
     if (!object(conversation) || !UUID.test(conversation.id) || conversation.id !== current.conversationId
       || !UUID.test(current.nativeId) || !UUID.test(original.nativeId) || current.nativeId === original.nativeId
       || !canonical(conversation.cwd) || original.cwd !== conversation.cwd || current.cwd !== conversation.cwd

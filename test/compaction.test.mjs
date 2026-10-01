@@ -105,3 +105,28 @@ test('native readable compaction crosses a saved checkpoint and resumes both nat
     t.diagnostic(`Native compaction evidence: ${root}`);
   } finally { await native.close(); }
 });
+
+test('a native original retains a /compact preserved segment that only references its existing prefix', () => {
+  const at = { sessionId: id, cwd: '/tmp' };
+  const row = (uuid, parentUuid, type, text, extra = {}) => ({ uuid, parentUuid, type, ...at,
+    message: { role: type, content: [{ type: 'text', text }] }, ...extra });
+  const build = (preservedMessages = { anchorUuid: 'summary', uuids: ['q1', 'a1'], allUuids: ['q1', 'unpersisted', 'a1'] }) => [
+    row('q0', null, 'user', 'First'), row('a0', 'q0', 'assistant', 'One'),
+    row('q1', 'a0', 'user', 'Second'), row('a1', 'q1', 'assistant', 'Two'),
+    { type: 'system', subtype: 'compact_boundary', uuid: 'boundary', parentUuid: null, logicalParentUuid: 'a1', ...at,
+      compactMetadata: { preservedSegment: { headUuid: 'q1', anchorUuid: 'summary', tailUuid: 'a1' }, preservedMessages } },
+    row('summary', 'boundary', 'user', 'Summary text', { isCompactSummary: true, isVisibleInTranscriptOnly: true }),
+    row('q2', 'summary', 'user', 'Third'), row('a2', 'q2', 'assistant', 'Three')];
+  const result = decodeClaude(jsonl(build()), { preserveCompactionHistory: true });
+  assert.deepEqual(result.messages.map(message => message.content[0].text.split('\n').at(-1)),
+    ['First', 'One', 'Second', 'Two', 'Summary text', 'Third', 'Three']);
+  assert.match(result.messages[4].content[0].text, /complete earlier verified history is retained/);
+  // Without full-history retention the segment would be a dependency.
+  assert.throws(() => decodeClaude(jsonl(build())), /preserved-segment/);
+  // A missing, broken or reordered chain is still unsupported.
+  for (const preserved of [{ anchorUuid: 'summary', uuids: ['q1', 'gone'], allUuids: ['q1', 'gone'] },
+    { anchorUuid: 'summary', uuids: ['q0', 'a1'], allUuids: ['q0', 'a1'] },
+    { anchorUuid: 'summary', uuids: ['q1', 'a1'], allUuids: ['a1', 'q1'] },
+    { anchorUuid: 'other', uuids: ['q1', 'a1'], allUuids: ['q1', 'a1'] }])
+    assert.throws(() => decodeClaude(jsonl(build(preserved)), { preserveCompactionHistory: true }), /preserved-segment/);
+});

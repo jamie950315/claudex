@@ -105,8 +105,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     } } : {}),
     since: previous?.since ?? now(), lastAttemptAt: now(), retryAt: now() + blockedRetryMs,
     attempts: Math.min(Number.MAX_SAFE_INTEGER, (previous?.attempts ?? 0) + 1) });
-  const blockingStatus = () => ({ blocked, blockedConversationCount: blockedConversations.size,
-    blockedConversations: [...blockedConversations.values()].slice(0, 20) });
+  // Several held callers can report the same conversation's global guard;
+  // present each actually blocked conversation once.
+  const blockingStatus = () => {
+    const unique = new Map();
+    for (const [id, entry] of blockedConversations) unique.set(entry.conversationId ?? id, entry);
+    return { blocked, blockedConversationCount: unique.size, blockedConversations: [...unique.values()].slice(0, 20) };
+  };
   // Persistent proofs only reuse fully verified, unchanged original pairs.
   // Native owners and mutation/collection guards never consume these proofs.
   const proofCache = verificationCache ?? (runtime.key && runtime.verificationCacheContext

@@ -337,6 +337,19 @@ test('only exact superseded unmanaged originals and promoted verified owners are
   await assert.rejects(f.publish(), /not a promoted continuation/);
 });
 
+test('an original left behind by a Codex project move is skipped, while other cwd mismatches still fail', async () => {
+  const f = await fixture(), pair = await f.add(), moved = join(f.root, 'moved');
+  await mkdir(moved, { mode: 0o700 });
+  // The move happened without new turns; the original keeps its old project.
+  f.state.conversations[pair.conversationId].cwd = moved;
+  pair.current.cwd = moved; pair.original.checkpoint = pair.current.checkpoint;
+  await assert.rejects(f.publish(), /not a promoted continuation/);
+  f.state.records.push({ id: randomUUID(), conversationId: pair.conversationId, nativeId: randomUUID(), side: 'codex',
+    managed: false, verified: true, kind: 'original', status: 'current', cwd: moved,
+    relocation: { version: 1, kind: 'codex-project-move', originCwd: f.cwd, previousCwd: f.cwd } });
+  assert.equal((await f.publish()).actions, 0); assert.equal(f.inspections.length, 0);
+});
+
 test('an ordinary CLI original without a Desktop registry row is not archived', async () => {
   const f = await fixture(), pair = await f.add();
   await rename(pair.registryPath, `${pair.registryPath}.not-a-registry-record`);

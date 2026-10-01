@@ -254,7 +254,9 @@ test('the observed single authenticated no-query tail packet survives native pre
   assert.equal(after.common.meta.compaction.boundaries, 2);
   assert.equal(after.common.meta.compaction.preservedAuthenticatedPackets, 1);
   assert.equal(after.common.messages.length, f.prefix.common.messages.length + 3);
-  assert.throws(() => decodeClaude(textRows(f.rows), { preserveCompactionHistory: true }), /preserved-segment/);
+  // Retained native history may reference the existing row without
+  // authenticating it as a packet; a summary-only decode cannot.
+  assert.equal(decodeClaude(textRows(f.rows), { preserveCompactionHistory: true }).meta.compaction.preservedAuthenticatedPackets, 0);
   assert.throws(() => decodeClaude(textRows(f.rows)), /preserved-segment/);
 });
 
