@@ -214,6 +214,11 @@ individual signal and require both primary-group and recorded-descendant closure
 before releasing ownership. Missing, changed or incomplete inventories retain
 uncertainty. This is evidence for observed descendants, not every transient fork
 or hostile same-user process. Never interpret a changed PGID as process absence.
+A complete sample that no longer contains a descendant's birth identity proves
+its exit; retire it from the persisted inventory so the 256-record bound covers
+unresolved descendants, not every short-lived test/tool process of a long
+invocation. The leader is never retired, retained identities never change, and
+a reused leader PID or too many concurrently unresolved descendants still fail.
 
 `bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
 Controller-only chat_list/chat_send/chat_status coordinate exact native sessions

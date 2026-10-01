@@ -680,9 +680,16 @@ export class CollaborationHub extends EventEmitter {
               current.active.processInventoryError = true;
             } else {
               validateOwnedProcesses(event.ownedProcesses);
+              // The tracker retires descendants only after a complete sample proves
+              // their birth identity absent. The leader and every retained birth
+              // identity must stay exactly as saved.
+              const birth = row => `${row.pid}:${row.startedAt}`;
+              const saved = new Map((current.active.ownedProcesses ?? []).map(row => [birth(row), row]));
+              const leader = current.active.ownedProcesses?.[0];
               if (event.ownedProcesses[0].pid !== current.active.pid
-                || (current.active.ownedProcesses ?? []).some((saved, index) =>
-                  ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => saved[key] !== event.ownedProcesses[index]?.[key])))
+                || leader && ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => leader[key] !== event.ownedProcesses[0][key])
+                || event.ownedProcesses.some(row => saved.has(birth(row))
+                  && ['ppid', 'pgid', 'uid'].some(key => saved.get(birth(row))[key] !== row[key])))
                 throw new Error('Native descendant inventory changed its saved ownership proof.');
               current.active.processInventoryRequired = true;
               current.active.ownedProcesses = copy(event.ownedProcesses);

@@ -836,3 +836,26 @@ test('read-only broker refuses a saved ready writable task before native dispatc
   assert.match(failed.error, /no longer authorizes workspace writes/);
   assert.equal(failed.active, null);
 });
+
+test('process inventories may retire proven-exited descendants but never rewrite retained identities', async t => {
+  const uid = process.getuid(), startedAt = 'Wed Sep 30 20:00:00 2026';
+  const leader = { pid: 123456, ppid: 1, pgid: 123456, uid, startedAt };
+  const child = pid => ({ pid, ppid: 123456, pgid: pid, uid, startedAt });
+  const outcomes = [];
+  const run = async ({ onEvent }) => {
+    await onEvent({ type: 'spawn', pid: 123456 });
+    for (const ownedProcesses of [[leader, child(123457)], [leader, child(123458)],
+      [leader, child(123458), child(123459)], [leader, { ...child(123458), pgid: 999 }], [{ ...leader, pgid: 999 }]])
+      outcomes.push(await onEvent({ type: 'processes', ownedProcesses }).then(() => 'accepted', error => error.message));
+    return { text: 'Inventory checked' };
+  };
+  run.tracksOwnedProcesses = true;
+  const { root, hub } = await setup(t, run);
+  const started = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root,
+    prompt: 'Never infer', requestId: 'retired-descendants' }));
+  const done = await until(async () => { const task = await status(hub, started.taskId); return task.status === 'completed' && task; });
+  assert.deepEqual(outcomes.slice(0, 3), ['accepted', 'accepted', 'accepted']);
+  assert.match(outcomes[3], /changed its saved ownership proof/);
+  assert.match(outcomes[4], /changed its saved ownership proof/);
+  assert.deepEqual(done.lastExecution.ownedProcesses.map(row => row.pid), [123456, 123458, 123459]);
+});

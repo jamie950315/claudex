@@ -98,6 +98,12 @@ export async function createOwnedProcessTracker({ pid, onChange, onError,
         records.push(root);
       }
       const live = new Set(records.filter(row => same(row, current.get(row.pid))).map(row => row.pid));
+      // A descendant whose birth identity is absent from a complete sample has
+      // exited; retire it so the bound covers unresolved processes, not every
+      // short-lived test or tool process of a long invocation. The leader stays.
+      const retained = records.filter((row, index) => index === 0 || live.has(row.pid));
+      const retired = records.length - retained.length;
+      records = retained;
       const added = [];
       for (let changed = true; changed;) {
         changed = false;
@@ -108,7 +114,7 @@ export async function createOwnedProcessTracker({ pid, onChange, onError,
           records.push(row); added.push(row); live.add(row.pid); changed = true;
         }
       }
-      if (added.length || !published) { await onChange?.(structuredClone(records)); published = true; }
+      if (added.length || retired || !published) { await onChange?.(structuredClone(records)); published = true; }
     });
     serial = operation.catch(fail);
     return operation;

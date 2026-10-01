@@ -53,12 +53,53 @@ test('inventory failure cannot prove that recorded native descendants stopped', 
   await tracker.close();
 });
 
-test('a replaced known descendant under the owned tree remains an explicit ownership failure', async () => {
+test('a reused descendant PID is a new birth identity after the recorded one is proven absent', async () => {
   let table = [row(42, 10), row(43, 42)];
-  const tracker = await createOwnedProcessTracker({ pid: 42, monitor: false, readTable: async () => table });
+  const saved = [];
+  const tracker = await createOwnedProcessTracker({ pid: 42, monitor: false, readTable: async () => table,
+    onChange: records => saved.push(records) });
   table = [row(42, 10), row(43, 42, 43, 'Wed Sep 30 20:00:01 2026')];
+  await tracker.refresh();
+  assert.deepEqual(tracker.records.map(row => row.startedAt),
+    ['Wed Sep 30 20:00:00 2026', 'Wed Sep 30 20:00:01 2026']);
+  assert.equal(saved.length, 2);
+  await tracker.close();
+});
+
+test('a reused leader PID under the owned tree remains an explicit ownership failure', async () => {
+  let table = [row(42, 10, 42), row(43, 42, 42)];
+  const tracker = await createOwnedProcessTracker({ pid: 42, monitor: false, readTable: async () => table });
+  table = [row(43, 1, 42), row(42, 43, 42, 'Wed Sep 30 20:00:01 2026')];
   await assert.rejects(tracker.refresh(), /identity changed/);
   await assert.rejects(tracker.close(), /identity changed/);
+});
+
+test('exited descendants retire so a long invocation can exceed the bound sequentially', async () => {
+  // Test runners and tools spawn many short-lived children over one invocation.
+  let table = [row(42, 10)];
+  const saved = [];
+  const tracker = await createOwnedProcessTracker({ pid: 42, monitor: false, readTable: async () => table,
+    onChange: records => saved.push(records) });
+  for (let pid = 1000; pid < 1600; pid++) {
+    table = [row(42, 10), row(pid, 42), row(pid + 10000, pid, pid + 10000)];
+    await tracker.refresh();
+  }
+  assert.deepEqual(tracker.records.map(row => row.pid), [42, 1599, 11599]);
+  assert.ok(saved.every(records => records.length <= 3 && records[0].pid === 42));
+  table = [row(42, 10), row(11599, 1, 11599)];
+  assert.equal(await tracker.stopped(), false);
+  table = [];
+  assert.equal(await tracker.stopped(), true);
+  assert.deepEqual(tracker.records.map(row => row.pid), [42]);
+  await tracker.close();
+});
+
+test('concurrently unresolved descendants remain bounded', async () => {
+  let table = [row(42, 10)];
+  const tracker = await createOwnedProcessTracker({ pid: 42, monitor: false, readTable: async () => table });
+  table = [row(42, 10), ...Array.from({ length: 256 }, (_, index) => row(1000 + index, 42))];
+  await assert.rejects(tracker.refresh(), /exceeded its bound/);
+  await assert.rejects(tracker.close(), /exceeded its bound/);
 });
 
 test('a live recorded identity that changes process group cannot become absence or a new signal target', async () => {
