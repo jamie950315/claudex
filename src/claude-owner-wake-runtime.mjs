@@ -1,7 +1,7 @@
 /** Embedded only in the pinned Code component. Selection and native submit
  * callbacks provide identity, never prompt text. No global input interception.
  */
-export function createClaudeOwnerWakeRuntime({ readMap, callTool, now = Date.now,
+export function createClaudeOwnerWakeRuntime({ readMap, getClient, now = Date.now,
   onError = () => {}, onStatus = () => {} } = {}) {
   let running = false, generation = 0, lastError;
   let diagnosticWindow = now(), diagnosticCount = 0;
@@ -41,7 +41,7 @@ export function createClaudeOwnerWakeRuntime({ readMap, callTool, now = Date.now
     try {
       report('received');
       if (typeof readMap !== 'function') fail(failureReason = 'map-api-unavailable');
-      if (typeof callTool !== 'function') fail(failureReason = 'mcp-api-unavailable');
+      if (typeof getClient !== 'function') fail(failureReason = 'mcp-api-unavailable');
       const read = await readMap();
       if (!read || typeof read.contents !== 'string' || read.contents.length > 2 * 1024 * 1024 || read.isTail)
         fail(failureReason = 'map-unavailable-or-truncated');
@@ -60,11 +60,24 @@ export function createClaudeOwnerWakeRuntime({ readMap, callTool, now = Date.now
       if (!running || ticket !== generation) { report('ignored stale-generation'); return; }
       if (!ids.has(id)) { report('ignored unpublished'); return; }
       report('matched published');
+      report('mcp lookup');
+      failureReason = 'mcp-lookup-failed';
+      const client = getClient('claudex-desktop-wake');
+      // The pinned native stdio attach uses a MessagePort transport. Native
+      // Local/Cowork session proxy clients share this registry but do not have
+      // that transport. Never borrow one, connect a server, or replace a client.
+      const transport = client?.transport;
+      if (!transport || transport._closed !== false || transport.pid !== null || transport.stderr !== null
+        || typeof transport._port?.postMessage !== 'function' || typeof transport._port?.close !== 'function')
+        fail(failureReason = 'mcp-not-connected');
+      if (typeof client.callTool !== 'function' || client.getServerVersion?.()?.name !== 'claudex'
+        || !client.getServerCapabilities?.()?.tools) fail(failureReason = 'mcp-client-unvalidated');
+      report('mcp connected');
+      if (!running || ticket !== generation) { report('ignored stale-generation'); return; }
       failureReason = 'mcp-call-failed';
-      const result = await callTool('claudex-desktop-wake', 'claudex_desktop_owner_wake', { remoteId: id });
+      const result = await client.callTool({ name: 'claudex_desktop_owner_wake', arguments: { remoteId: id } });
       if (result?.isError) {
-        // These are the two exact sessionless native refusals. Other response
-        // text is untrusted, including tool errors; report only a fixed label.
+        // Native response text is untrusted; report only fixed refusal labels.
         const text = result.content?.length === 1 && result.content[0]?.type === 'text' ? result.content[0].text : null;
         failureReason = text === "Server 'claudex-desktop-wake' is not connected" ? 'mcp-not-connected'
           : text === "Access to 'claudex-desktop-wake' was not approved on this device" ? 'mcp-grant-refused' : 'mcp-refused';
@@ -88,6 +101,6 @@ export function createClaudeOwnerWakeRuntime({ readMap, callTool, now = Date.now
   }
   return { signal, start() {
     running = true; generation++; status('started');
-    status(`native APIs map=${typeof readMap === 'function' ? 'available' : 'unavailable'} mcp=${typeof callTool === 'function' ? 'available' : 'unavailable'}`);
+    status(`native APIs map=${typeof readMap === 'function' ? 'available' : 'unavailable'} mcp=${typeof getClient === 'function' ? 'available' : 'unavailable'}`);
   }, stop() { running = false; generation++; } };
 }

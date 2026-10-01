@@ -1172,12 +1172,17 @@ maintenance/recovery or explicit wake restarts it with the same Remote Control
 identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
 The separately pinned Code adapter signals selection/mount from o8's current
-X.id/X.type and native submit before early refusals, for native bridge references
+X.id/X.type and native submit through its current-reference getter Oe() before
+early refusals, for native bridge references
 and exact published folder-map RC IDs only, with bounded debounce. The shared
 Chat/Cowork FM component is not the Code RC view. Never await or retry native send.
-It uses sessionless LocalAgentModeSessions.directMcpCallTool and the existing
-claudex-desktop-wake controller endpoint, preserving native device approval;
-never borrow a Local session, inspect prompt content or send model input. Its
+It looks up the already attached user-config stdio client by exact UUID through
+Ga in shared-common-mcp-msg-4-EwhHCIE8.js and uses the existing
+claudex-desktop-wake controller endpoint. Require the pinned open MessagePort
+transport and Claudex server identity; native session proxy clients are refused.
+The managed/builtin directMcpCallTool registry does not contain this stdio server.
+Never connect, replace or close a native MCP client, change connector approval,
+borrow a Local session, inspect prompt content or send model input. Its
 independent ui-owner-wake/<cache filename> journal preserves earlier resources.
 Owner-wake inbox keys are separate from completion hints. Under coordinator
 ownership, validate the current tracked pair, stable saved owner registration,
@@ -1203,7 +1208,8 @@ shared-16-B0kpSitB.js owner-wake journal/original; its bootstrap loaded but its
 FM hooks do not address Code. Each resource
 logs its bounded loaded asset name; owner/chat wake also log started. These
 lines prove bootstrap execution, never native receipt or reconnect completion.
-Owner wake reports API availability and selection/submit received, matched,
+Owner wake reports API availability, exact stdio lookup/connection and
+selection/submit received, matched,
 ignored, called, accepted/deferred or fixed failure reasons. Never log native
 error/receipt text, IDs, paths or input. Limit duplicate lines to once per second
 and all runtime diagnostics to 64 per thirty seconds; no diagnostic timers/retries.

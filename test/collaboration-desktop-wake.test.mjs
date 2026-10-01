@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { PassThrough } from 'node:stream';
+import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
+import { fileURLToPath } from 'node:url';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { runCollaborationMcp, serveCollaborationSocket } from '../src/collaboration-transport.mjs';
 
@@ -84,4 +87,28 @@ test('Desktop MCP exposes only narrow wake tools and refuses arbitrary work', as
   assert.equal(responses.get('content').result.isError, true);
   assert.equal(responses.get('work').result.isError, true);
   assert.equal(responses.get('chat').result.isError, true);
+});
+
+test('Desktop stdio endpoint stays open through attachment and a separate replacement connection', { timeout: 10_000 }, async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cldx-desktop-attach-'));
+  await writeFile(join(root, 'controller-key'), 'a'.repeat(64) + '\n', { mode: 0o600 });
+  const env = { ...process.env }; delete env.CLAUDEX_WORK_TOKEN; delete env.CLAUDEX_COLLABORATION_WORKER;
+  for (let connection = 0; connection < 2; connection++) {
+    const child = spawn(process.execPath, [fileURLToPath(new URL('../bin/claudex-collaboration.mjs', import.meta.url)),
+      'desktop-wake-mcp', '--root', root, '--peer', 'claude'], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    t.after(() => { if (child.exitCode === null) child.kill('SIGTERM'); });
+    const closed = new Promise((resolve, reject) => { child.once('error', reject); child.once('exit', (code, signal) => resolve({ code, signal })); });
+    const lines = createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    const request = async (id, method, params) => {
+      child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
+      const line = await lines.next(); assert.equal(line.done, false);
+      const response = JSON.parse(line.value); assert.equal(response.id, id); return response.result;
+    };
+    assert.equal((await request(0, 'initialize', { protocolVersion: '2024-11-05' })).serverInfo.name, 'claudex');
+    child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }) + '\n');
+    assert.equal((await request(1, 'tools/list')).tools.length, 3);
+    assert.deepEqual(await request(2, 'ping'), {});
+    assert.equal(child.exitCode, null);
+    child.stdin.end(); assert.deepEqual(await closed, { code: 0, signal: null });
+  }
 });

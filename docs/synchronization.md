@@ -479,15 +479,29 @@ published IDs qualify; titles, unrelated sessions and prompt content are never
 used. Only native `bridge` session references qualify; their `session_` ID is
 normalized to the published `cse_` ID. The submit signal runs before native early
 refusals, without awaiting, replacing or retrying the native send.
+It reads `Oe()`, the native current-reference getter also used by send, rather
+than the submit closure's captured `X`. This keeps a retained callback bound to
+the current selection after a pane/session change.
 Requests are debounced for five seconds per identity and bounded to sixteen
 identities in a thirty-second window. There is no periodic owner keepalive.
 
-The identity-only `claudex_desktop_owner_wake` tool uses Claude's sessionless
-`LocalAgentModeSessions.directMcpCallTool` API and its native device grant. An
-unavailable connector or refused approval produces a bounded diagnostic; no
-Local session is borrowed and no alternate transport is attempted. The existing
+The identity-only `claudex_desktop_owner_wake` tool uses the already attached
+user-config stdio client from the native renderer registry: `Ga` in
+`shared-common-mcp-msg-4-EwhHCIE8.js` looks up its exact UUID
+`claudex-desktop-wake`. Require the pinned open MessagePort transport and the
+Claudex server identity/capabilities. Local/Cowork session proxy clients are
+refused; the adapter never connects, replaces or closes clients or changes
+connector approval. An absent/closed/unvalidated client produces a bounded
+diagnostic without another transport or retry. The existing
 Claude controller capability authenticates publication to the private durable
 event inbox. Separate owner-wake keys cannot replace completion/started hints.
+
+`LocalAgentModeSessions.directMcpCallTool` addresses the separate managed/builtin
+direct registry, which excludes this user-config stdio server. Its
+`mcp-not-connected` refusal precedes device-grant inspection. Calling its
+authorize API cannot attach an unknown stdio server. The chat-wake consumer's
+`LocalSessions.mcpCallTool` reaches the shared stdio pool after checking its own
+Local identity; that identity cannot be borrowed for RC owner activation.
 
 The watcher processes the hint under coordinator ownership before checking Codex
 transport. It revalidates a unique current tracked pair, saved RC/native owner
@@ -521,9 +535,14 @@ also loads the current folder and chat-wake resources, but not the previously pa
 `shared-16-K1Vl3wzJ.js`, `shared-18-BYDVwU8Z.js` or `shared-23-Db0dcGkF.js`.
 Those files can still match their installed journals while having no effect on
 this frontend. Source/cache validity alone must not be reported as renderer
-reception. The native direct MCP call remains `(serverName, toolName, args)`;
-the old generic MCP attach warning is not evidence that this adapter executed
-or that the replacement MCP connection is unavailable. Check the subsequent
+reception. The native stdio client receives
+`callTool({name: "claudex_desktop_owner_wake", arguments: {remoteId}})`.
+In Claude Desktop 2.9939.4, duplicate generic connect requests invoke the native
+launcher, which intentionally closes its previous transport before replacement.
+The observed first-attach warning is accompanied by that native shutdown and a
+successful replacement initialize/list; it is not a Claudex endpoint self-exit.
+The independently connected LocalMcpServerManager pool also remains separate
+from the direct registry. Check the subsequent
 `initialize`/`tools/list` and the exact `claudex_desktop_owner_wake` `tools/call`.
 
 After deploying the updated bundle, the coordinator installs with:
@@ -545,11 +564,13 @@ Then restart Claude only at an idle boundary and open a managed conversation in 
 These lines prove only bootstrap execution. The Code asset may load lazily;
 the earlier shared-16 bootstrap's lines are not acceptance of the new Code pin.
 Selection should then report `signal selection received`, `matched published`,
-`called` and `accepted` under the same prefix. Submit uses `signal submit`;
+`mcp lookup`, `mcp connected`, `called` and `accepted` under the same prefix.
+Submit uses `signal submit`;
 an overlapping signal reports `ignored pending` or `ignored debounced`.
 Unpublished or non-RC sessions report `ignored unpublished` or `ignored non-rc-session`.
 Failures report fixed stage labels such as `map-read-failed`, `map-invalid`,
-`mcp-api-unavailable`, `mcp-not-connected`, `mcp-grant-refused`,
+`mcp-api-unavailable`, `mcp-lookup-failed`, `mcp-not-connected`,
+`mcp-client-unvalidated`, `mcp-grant-refused`,
 `mcp-call-failed` or `receipt-invalid`; known broker refusals report `deferred`
 with a bounded reason. Diagnostics never include session IDs, paths, native error
 text or input content. Repeated lines are limited to once per second and all
@@ -561,7 +582,7 @@ and actual reconnect. Submitting user input is a separate authorized live check.
 Automated acceptance is synthetic, with an isolated real-cache installation
 check and no inference. Live owner-wake, folder and chat-wake reception remain
 unverified for these new pins:
-confirm native device approval, opening an evicted owner and submitting a queued
+confirm the native configured stdio client is attached, opening an evicted owner and submitting a queued
 message with Codex unavailable, same RC/native identities, app-stop refusal and
 subsequent idle eviction. Cache installation alone is not that acceptance.
 
