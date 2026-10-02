@@ -47,6 +47,23 @@ successful build as clean-machine or notarized-release acceptance.
 
 ## Command-line installation
 
+### Optional Claude Mod control pane
+
+On Claude Code **2.1.287 or later**, the optional [native Mod companion](docs/claude-mod.md)
+adds `/claudex` in the terminal and Desktop **Code** tab: context/usage display,
+task and exact-chat lookup, reviewed delegation/follow-up/cancellation, model
+defaults, and durable action receipts. Writes require preview and confirmation.
+It uses the existing broker; it does not replace conversation synchronization,
+MCP, native hooks, or Desktop folder/archive integrations.
+
+Stage it with `node bin/claudex-mod.mjs stage --root /absolute/private/root --output /new/marketplace`,
+then follow the guide's native validation and plugin installation steps. Staging
+does not install or enable it. Native peer delivery remains disabled pending
+separate recipient/ACK acceptance; do not upgrade a running sync runtime merely
+to load the pane. See the [handoff](docs/claude-mod-handoff.md) for deployment gates.
+
+### Source checkout
+
 This remains available for development and manually managed installations.
 
 ```sh

@@ -1,0 +1,21 @@
+{
+  "name": "claudex",
+  "version": "0.1.0",
+  "author": { "name": "Claudex contributors" },
+  "description": "Native Claudex control pane with reviewed operations and exact-session receipt handling.",
+  "userConfig": {
+    "stateRoot": {
+      "type": "string", "title": "Claudex state root",
+      "description": "Canonical private synchronization root. The stage command supplies this path.", "default": ""
+    },
+    "nodeBinary": {
+      "type": "string", "title": "Node executable",
+      "description": "Absolute trusted Node.js executable supplied by the stage command.", "default": ""
+    },
+    "nativeWake": {
+      "type": "boolean", "title": "Enable reviewed native receipt",
+      "description": "After local acceptance, allow a confirmed button to queue a message to an exact native Claude session ID. Existing Stop hooks retain ACK handling.",
+      "default": false
+    }
+  }
+}

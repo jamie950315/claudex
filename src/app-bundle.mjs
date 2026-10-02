@@ -7,9 +7,19 @@ export const APP_ICON_FILE = 'Claudex.icns';
 export const APP_LOCALES = Object.freeze(['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']);
 export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
-  'claudex-sync-hook.mjs',
+  'claudex-sync-hook.mjs', 'claudex-mod.mjs', 'claudex-mod-bridge.mjs',
+]);
+export const ENGINE_PLUGIN_FILES = Object.freeze([
+  'plugins/claudex/.claude-plugin/plugin.json',
+  'plugins/claudex/hooks/hooks.json',
+  'plugins/claudex/hooks/register.mjs',
+  'plugins/claudex/hooks/controller.mjs',
+  'plugins/claudex/tests/native.test.ts',
+  'plugins/claudex/README.md',
+  'plugins/claudex/skills/claudex-workflow/SKILL.md',
 ]);
 export const ENGINE_SRC = Object.freeze([
+  'claude-mod-bridge.mjs', 'claude-mod-install.mjs', 'claude-mod-protocol.mjs', 'claude-mod-storage.mjs',
   'app-setup.mjs', 'app-providers.mjs', 'app-signature-cache.mjs', 'app-login.mjs',
   'base64.mjs', 'bridge.mjs', 'chat-mailbox.mjs', 'chat-titles.mjs', 'claude-desktop-handoff-runtime.mjs', 'claude-desktop-handoff.mjs',
   'codex-chat-wake.mjs', 'native-chat-catalog.mjs', 'claude-chat-wake-manifest.mjs',
@@ -86,7 +96,7 @@ function plist(version) {
   return `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>\n<key>CFBundleIdentifier</key><string>${APP_IDENTIFIER}</string>\n<key>CFBundleExecutable</key><string>ClaudexApp</string>\n<key>CFBundleName</key><string>Claudex</string>\n<key>CFBundleDisplayName</key><string>Claudex</string>\n<key>CFBundleIconFile</key><string>${APP_ICON_FILE}</string>\n<key>CFBundlePackageType</key><string>APPL</string>\n<key>CFBundleShortVersionString</key><string>${xml(version)}</string>\n<key>CFBundleVersion</key><string>${xml(version)}</string>\n<key>LSMinimumSystemVersion</key><string>13.0</string>\n<key>NSHighResolutionCapable</key><true/>\n</dict></plist>\n`;
 }
 
-async function copyAllowed(sourceRoot, engine) {
+export async function copyAllowed(sourceRoot, engine) {
   for (const group of [['bin', ENGINE_BIN], ['src', ENGINE_SRC]]) {
     const [folder, names] = group;
     await mkdir(join(engine, folder), { recursive: true });
@@ -95,6 +105,23 @@ async function copyAllowed(sourceRoot, engine) {
       await requireRegular(source);
       await copyFile(source, join(engine, folder, name));
     }
+  }
+  // Keep plugin templates and their validation fixtures with the packaged
+  // engine so its standalone Mod stager works after the checkout is removed.
+  // This copies a fixed allowlist; it never installs or enables the plugin.
+  for (const name of ENGINE_PLUGIN_FILES) {
+    const source = join(sourceRoot, name);
+    let parent = sourceRoot;
+    for (const part of name.split('/').slice(0, -1)) {
+      parent = join(parent, part);
+      const info = await lstat(parent);
+      if (!info.isDirectory() || info.isSymbolicLink())
+        throw new Error(`Unsafe plugin source directory: ${parent}`);
+    }
+    await requireRegular(source);
+    const destination = join(engine, name);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(source, destination);
   }
   for (const name of ['package.json', 'package-lock.json']) {
     const source = join(sourceRoot, name);

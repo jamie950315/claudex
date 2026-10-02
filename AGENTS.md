@@ -210,6 +210,21 @@ bounded polling harness, not a production fallback.
 
 ## Cross-model collaboration
 
+The optional Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
+in `docs/claude-mod.md`. It requires Claude Code 2.1.287+ independently of sync
+compatibility. Keep its helper packaged through the explicit app/stage allowlists;
+never install it as a setup side effect. `plugins/claudex/hooks/register.mjs` uses
+top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
+property, not an event or function. Run the official strict validator and nine
+native test-kit cases against a staged plugin after UI/API changes, in addition
+to affected Node tests. Native tree tests are not real Desktop painting evidence.
+All controller writes use exact-context prepare/confirm and durable no-replay
+receipts; managed workers cannot borrow controller authority. Clear/end events
+reset and invalidate old controls. Keep `nativeWake` false until independently
+authorized native queue/recipient ACK acceptance; preserve existing MCP, hooks,
+renderer adapters, version policy and live runtimes. No automatic model call,
+permission approval, polling, transcript edit or app restart is introduced.
+
 `collaboration` is an explicit inference-capable work protocol, separate from
 the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable
 work graph: delegation adds a parent edge and handoff transfers the same task's
