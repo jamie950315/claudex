@@ -272,6 +272,19 @@ test('activity, title, registration and file changes during verification cannot 
   }
 });
 
+test('an owner without verified idle state defers archival, revokes authority and requires fresh verification', async () => {
+  const f = await fixture(), pair = await f.add();
+  await f.publish();
+  await appendFile(pair.current.path, 'native metadata\n');
+  f.intercept(async record => { if (record.nativeId === pair.current.nativeId)
+    throw Object.assign(new Error('Owner is not idle'), { code: 'CLAUDEX_HANDOFF_OWNER_NOT_IDLE', conversationId: pair.conversationId }); });
+  assert.equal((await f.publish()).deferred, 'owner_not_idle');
+  assert.deepEqual((await f.manifest()).actions, []);
+  f.intercept(async () => {});
+  assert.equal((await f.publish()).deferred, null);
+  assert.equal((await f.manifest()).actions.length, 1);
+});
+
 test('a history race revokes authority and requires another full verification before archival', async () => {
   const f = await fixture(), pair = await f.add();
   await f.publish();

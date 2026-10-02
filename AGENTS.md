@@ -68,6 +68,10 @@ foreground queue must not hide initial verification of the cold backlog.
 
 Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
 requirements request user action, while normal runtime waits need no setup retry.
+Predecessor archival without a verified idle replacement owner (including an
+evicted owner) is a typed `owner_not_idle` wait after archive intents are revoked,
+not a history conflict or an actionable setup failure. Keep idle verification
+mandatory and do not start owners just to archive; real identity errors still block.
 Keep bounded per-pass waitingContexts with exact known conversation identity,
 title and reason. The main window shows reasons and next steps without opening
 details, and orders non-ready setup rows first. Never infer a missing identity,

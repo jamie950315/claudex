@@ -169,7 +169,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         const owner = runtime.owners?.get(record.conversationId)?.owner;
         const state = owner?.status();
         if (!state || state.nativeState !== 'idle' || state.backgroundTasks?.length || state.pending || state.reset)
-          throw new Error('Claude replacement is active; Local archival is postponed.');
+          throw Object.assign(new Error('Claude replacement has no verified idle owner; Local archival is postponed.'),
+            { code: 'CLAUDEX_HANDOFF_OWNER_NOT_IDLE', conversationId: record.conversationId });
       }
       return data;
     } }) : null;
@@ -230,7 +231,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     if (handoffs) {
       try {
         const result = await handoffs.publish(state, presentationScope === undefined ? {} : { conversationIds: presentationScope });
-        localHandoff = { ...result, state: result.deferred === 'history_changed' ? 'waiting' : 'ready', updatedAt: now() };
+        localHandoff = { ...result, state: ['history_changed', 'owner_not_idle'].includes(result.deferred) ? 'waiting' : 'ready', updatedAt: now() };
       }
       catch (error) { localHandoff = { state: 'error', error: reason(error), updatedAt: now() }; }
     }

@@ -385,9 +385,10 @@ export function createClaudeDesktopHandoffPublisher({ root, desktopHome, inspect
       try {
         const anchors = await retainPresentationAnchors({ root, desktopHome, state, anchors: previousAnchors });
         const changed = await writeManifest(root, [], now(), anchors);
-        if (error.code === 'CLAUDEX_HANDOFF_HISTORY_CHANGED') return {
+        if (['CLAUDEX_HANDOFF_HISTORY_CHANGED', 'CLAUDEX_HANDOFF_OWNER_NOT_IDLE'].includes(error.code)) return {
           changed, actions: 0, anchors: anchors.length, acknowledged: [],
-          deferred: 'history_changed', conversationId: error.conversationId, title: error.title,
+          deferred: error.code === 'CLAUDEX_HANDOFF_OWNER_NOT_IDLE' ? 'owner_not_idle' : 'history_changed',
+          conversationId: error.conversationId, title: error.title,
         };
       }
       catch (revokeError) { throw new AggregateError([error, revokeError], 'Claude Desktop handoff verification and manifest revocation failed.'); }

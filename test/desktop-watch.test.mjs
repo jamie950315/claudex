@@ -39,6 +39,29 @@ async function fixture(overrides = {}) {
   return { root, calls, state, runtime, bridge, discover, run, status };
 }
 
+test('inactive and busy archival owners report waiting while real verification errors remain errors', async () => {
+  for (const mode of ['absent', 'busy', 'conflict']) {
+    const f = await fixture({ bridge: { inspect: async () => {
+      if (mode === 'conflict') throw new Error('Exact native identity conflict');
+      return {};
+    } } });
+    if (mode === 'busy') f.runtime.owners = new Map([['logical', { owner: { status: () => ({ nativeState: 'running' }) } }]]);
+    const statuses = [];
+    await f.run({ maxPasses: 1, discover: async () => [], config: { desktopLocalHandoff: { enabled: true } },
+      writeStatus: async (_path, value) => statuses.push(value),
+      createHandoffPublisher: ({ inspect }) => ({ publish: async () => {
+        try { await inspect({ managed: true, kind: 'owner', conversationId: 'logical' }); }
+        catch (error) {
+          if (error.code === 'CLAUDEX_HANDOFF_OWNER_NOT_IDLE') return { actions: 0, deferred: 'owner_not_idle' };
+          throw error;
+        }
+      } }) });
+    const result = statuses.find(value => value.localHandoff)?.localHandoff;
+    assert.equal(result.state, mode === 'conflict' ? 'error' : 'waiting');
+    if (mode !== 'conflict') assert.equal(result.actions, 0);
+  }
+});
+
 test('restart recovers a pending native operation before discovery or allocation', async () => {
   const f = await fixture();
   f.state.pending = { phase: 'prepared' };
