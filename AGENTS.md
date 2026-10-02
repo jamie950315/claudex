@@ -227,6 +227,13 @@ reset and invalidate old controls. Keep `nativeWake` false until independently
 authorized native queue/recipient ACK acceptance; preserve existing MCP, hooks,
 renderer adapters, version policy and live runtimes. No automatic model call,
 permission approval, polling, transcript edit or app restart is introduced.
+Bounded authorized nativeWake acceptance on 2.1.286/Sonnet 5.5 now verifies one
+production-controller claim, actual session.send queue result, recipient reply
+and real Stop ACK. It used a temporary native command, not a mouse-driven Inbox
+test. SendMessage must be present in the sender's native tool set. An all-tools-
+removed sender was refused and its offered/uncertain evidence was preserved;
+the success used a distinct request, never replay. Untitled/unverified Desktop
+metadata remains refused. Busy/offline/draft cases are not newly certified.
 
 `collaboration` is an explicit inference-capable work protocol, separate from
 the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable

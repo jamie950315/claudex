@@ -308,6 +308,14 @@ A native `isDelivered: true` means the queue accepted the message. It differs fr
 recipient ACK and work completion. The original recipient Stop hook is still
 required to recognize the exact standalone `CLAUDEX_ACK:<messageId>`.
 
+A bounded, user-authorized 2.1.286/Sonnet 5.5 test verified the production
+controller's claim, actual native queue acceptance, recipient reply and Stop ACK.
+The sender must have the native SendMessage tool available; a no-tools profile
+cannot use `session.send`. This is separate from model permission to call tools.
+The complete recipient must also have a verified native Desktop title/identity.
+Busy/offline cases and mouse-driven Inbox acceptance remain separate gates; the
+default remains off. See the exact [validation scope](claude-mod-validation.md).
+
 Some builds or account/session configurations may refuse self-delivery or lack
 reachability to a selected session. Test a second synthetic recipient from a
 separate controller session first. A refusal, missing API, exception, failed

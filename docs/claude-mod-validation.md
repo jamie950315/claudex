@@ -5,8 +5,9 @@ Reviewed on 2026-10-02 against base `eb12d2e`, companion 0.1.1.
 ## Current macOS evidence
 
 Environment: macOS/Apple Silicon, Node v23.11.0; isolated official Claude Code
-2.1.287 native executable from its pinned npm platform package. No model inference
-was performed. Existing runtimes, SDK dependencies and services were preserved.
+2.1.287 native executable from its pinned npm platform package. Initial contract
+validation performed no inference; the later explicitly authorized Sonnet test
+is recorded below. Existing runtimes, SDK dependencies and services were preserved.
 
 | Check | Result | Evidence boundary |
 | --- | --- | --- |
@@ -19,6 +20,7 @@ was performed. Existing runtimes, SDK dependencies and services were preserved.
 | SDK 0.3.286 with actual 2.1.286 runtime and Mod | Initialization and `/claudex` registration passed | Isolated, network denied, no model input, child exited |
 | Native user-scope plugin installation/configuration | Installed, enabled, all options configured | Native CLI receipts and read-back of installed configuration; not painting evidence |
 | Real Desktop Code pane and usage band | Verified by user-supplied pixels and accessibility tree | Actual engine 2.1.286, five pane tabs, broker limits/defaults response, Traditional Chinese app retained |
+| Authorized nativeWake delivery | Native queue acceptance, exact-recipient reply and Stop ACK passed | 2.1.286, Sonnet 5.5, one independent test message through the unchanged production controller |
 | Packaged helper against the existing local broker | Passed | Read-only doctor and task inventory; no inference or mutation |
 | Development-signed Apple Silicon app build | Passed | Explicit packaging, portable Node v24.21.0, nested signing |
 | `codesign --verify --strict --deep` | Passed | Integrity/signature, not notarization or installed acceptance |
@@ -61,10 +63,10 @@ permission approval hook or periodic timer is added.
 
 ## Remaining boundaries
 
-Real terminal painting, new-runtime synchronization, native model work
-from the pane and recipient queue/Stop ACK are not established by these tests.
+Real terminal painting, new-runtime synchronization and model delegation from
+the pane are not established by these tests. Native receipt evidence is scoped below.
 Keep nativeWake off. No app replacement, runtime upgrade, service restart or
-native history mutation was performed. The companion has been installed and
+direct native history editing was performed. The companion has been installed and
 enabled through the native user-scope plugin manager;
 state root, Node executable and nativeWake=false were saved with no unset options.
 The earlier claim that installation must wait for a runtime upgrade was too broad:
@@ -86,6 +88,38 @@ reported success and `/claudex` was reopened; the installer explicitly requested
 a restart to apply changes. Keep that working session intact and load the update
 at its normal native lifecycle boundary. Do not claim the new label painted yet,
 rewrite the old cache in place, or interrupt an owner for a presentation update.
+
+## Authorized nativeWake acceptance
+
+An external, temporary test Mod invoked the unchanged production controller's
+`wakeList`, `previewWake` and `acceptWake` methods, using the installed 0.1.1
+helper and real broker. It called the actual `$.session.send`, not a stub. The
+sender was an independently owned native session; the recipient was opened in
+Desktop through native `--desktop --resume` after its bootstrap process exited.
+Both used `claude-sonnet-5-5`. No original user session was repurposed.
+
+The normal-path case acquired the exact mailbox claim, returned
+`isDelivered: true`, saved an accepted wake receipt, and reached `acknowledged`
+through the recipient's actual Stop hook. Read-only native history inspection
+verified one assistant reply containing the requested nonce and exact standalone
+ACK, with model `claude-sonnet-5-5`. The sender's test command reported zero model
+turns. This verifies native delivery and reply/ACK, not mouse-driven Inbox controls,
+arbitrary delegated work, busy/offline recipients or draft preservation.
+
+Two preconditions were observed. An imported Desktop entry without a native title
+was correctly refused by exact metadata validation; a new test session with its
+title set through native SDK startup passed. Also, removing all sender tools made
+the native API return `isDelivered: false` because it had no SendMessage tool.
+The controller preserved that separate attempt as offered/uncertain without ACK
+or replay. A new, distinct test message with only SendMessage enabled succeeded;
+the earlier claim was not reset or resent. Model file/command tools remained
+unavailable to the sender; the trusted Mod still used its reviewed process API
+for the production helper. Preserve that refusal receipt as evidence.
+
+The persistent nativeWake preference was restored to false through the native
+plugin manager after testing. Existing loaded test sessions can retain their
+prior options until their normal lifecycle boundary; no automatic delivery loop
+was installed. Temporary evidence and exact native IDs stay outside the repository.
 
 Follow [the handoff](claude-mod-handoff.md) and
 [acceptance checklist](claude-mod-acceptance.md). Record the actual target engine;
