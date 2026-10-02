@@ -835,6 +835,24 @@ test('an unavailable new native thread is reported while another source enrolls'
   assert.equal((await f.status()).error, null);
 });
 
+test('a deleted project blocks only the new source while other sources enroll', async () => {
+  const f = await fixture();
+  const track = f.bridge.track;
+  f.bridge.track = async source => {
+    if (source.id === 'missing') throw Object.assign(new Error('Native codex working directory no longer exists; source enrollment is paused.'),
+      { code: 'CLAUDEX_NATIVE_CWD_UNAVAILABLE' });
+    return track(source);
+  };
+  let status;
+  await f.run({ maxPasses: 2, discover: async (_config, known) => [
+    { side: 'codex', id: 'missing', path: '/missing-project-source' }, { side: 'codex', id: 'good', path: '/good' },
+  ].filter(source => !known.has(`${source.side}:${source.id}`)), sleep: async () => { status = await f.status(); } });
+  assert.deepEqual(f.calls.track, ['/good']);
+  assert.equal(status.blockedSourceCount, 1);
+  assert.match(status.blockedSources[0].reason, /working directory no longer exists/);
+  assert.equal((await f.status()).error, null);
+});
+
 test('a transient thread deleted after discovery is skipped only when its rollout is gone', async () => {
   const request = async (_method, { threadId }) => {
     if (threadId === 'transient') throw new Error('thread not loaded: transient');

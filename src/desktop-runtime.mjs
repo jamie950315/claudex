@@ -226,7 +226,8 @@ export class DesktopRuntime {
     const stored = await ClaudeOwner.readSavedState(join(this.root, 'owners', `${hash(conversationId)}.json`));
     // An owner is bound to its saved directory string. A project renamed and
     // left as an alias cannot host it again; only a verified move replaces it.
-    if (stored?.cwd === cwd && await realpath(cwd) !== cwd)
+    if (stored?.cwd === cwd && await this.nativeWorkingDirectory(cwd,
+      { side: 'claude', nativeId: stored.sessionId, conversationId, verified: true }) !== cwd)
       throw Object.assign(new Error(`Claude owner working directory ${cwd} is now an alias of another directory; synchronization is paused until the project move is verified.`), {
         code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: 'claude', nativeId: stored.sessionId, savedCwd: cwd, conversationId });
     const saved = this.contextMode === 'archive' ? stored : null;
@@ -462,6 +463,20 @@ export class DesktopRuntime {
     catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return true; throw error; }
   }
 
+  async nativeWorkingDirectory(cwd, record) {
+    try { return await realpath(cwd); }
+    catch (cause) {
+      if (!['ENOENT', 'ENOTDIR'].includes(cause.code) || typeof cwd !== 'string' || !isAbsolute(cwd)) throw cause;
+      const tracked = record.verified === true;
+      throw Object.assign(new Error(tracked
+        ? `Tracked ${record.side} history ${record.nativeId} working directory no longer exists; synchronization is paused.`
+        : `Native ${record.side} working directory no longer exists; source enrollment is paused.`, { cause }), {
+        code: tracked ? 'CLAUDEX_TRACKED_CWD_UNAVAILABLE' : 'CLAUDEX_NATIVE_CWD_UNAVAILABLE',
+        side: record.side, nativeId: record.nativeId, savedCwd: cwd, conversationId: record.conversationId,
+      });
+    }
+  }
+
   async readStoppedOwner(record, read) {
     return ClaudeOwner.readStopped({ root: this.root, conversationId: record.conversationId, cwd: record.cwd,
       claudeHome: this.claudeHome, sessionId: record.nativeId, path: record.path, versionPolicy: this.versionPolicy }, read);
@@ -524,7 +539,7 @@ export class DesktopRuntime {
       const client = await this.codex();
       const metadata = (await client.request('thread/read', { threadId: nativeId, includeTurns: false })).thread;
       if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
-      const cwd = await realpath(metadata.cwd);
+      const cwd = await this.nativeWorkingDirectory(metadata.cwd, { ...record, nativeId });
       const path = await this.safePath(metadata.path, this.codexHome);
       const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
       const failImageEvidence = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
@@ -623,7 +638,7 @@ export class DesktopRuntime {
     // that directory was later renamed and left as an alias; only a different
     // recorded directory is a project change. Resolving it still reports a
     // removed directory.
-    const resolvedCwd = await realpath(parsed.common.meta.cwd);
+    const resolvedCwd = await this.nativeWorkingDirectory(parsed.common.meta.cwd, record);
     if (parsed.common.meta.cwd !== record.cwd) parsed.common.meta.cwd = resolvedCwd;
     if (!UUID.test(parsed.common.meta.id)) throw new Error('Claude session identity changed.');
     // Any other mismatch between the file and its rows is not an identity to
@@ -926,7 +941,7 @@ export class DesktopRuntime {
     const readMetadata = async () => {
       const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
       if (thread?.id !== record.nativeId || typeof thread.cwd !== 'string' || typeof thread.path !== 'string'
-          || await realpath(thread.cwd) !== record.cwd)
+          || await this.nativeWorkingDirectory(thread.cwd, record) !== record.cwd)
         throw dependencyAnchorGuard('Dependency anchor native identity or working directory changed.');
       if (!['idle', 'notLoaded'].includes(thread.status?.type))
         throw dependencyAnchorGuard('Dependency anchor parent is active or its idle state is unverified.');
@@ -1044,7 +1059,7 @@ export class DesktopRuntime {
     const client = await this.codex();
     const readMetadata = async () => {
       const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
-      if (thread.id !== record.nativeId || !record.cwd || await realpath(thread.cwd) !== record.cwd)
+      if (thread.id !== record.nativeId || !record.cwd || await this.nativeWorkingDirectory(thread.cwd, record) !== record.cwd)
         throw new Error('Codex original identity or working directory changed; it was not archived.');
       if (!['idle', 'notLoaded'].includes(thread.status?.type))
         throw new Error('Codex original is active or its idle state is unverified; it was not archived.');
@@ -1090,7 +1105,7 @@ export class DesktopRuntime {
       throw originalArchiveGuard('Original archive requires a verified independent current Codex replacement.');
     for (const record of [original, replacement]) {
       const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
-      if (thread.id !== record.nativeId || thread.name !== title || await realpath(thread.cwd) !== record.cwd
+      if (thread.id !== record.nativeId || thread.name !== title || await this.nativeWorkingDirectory(thread.cwd, record) !== record.cwd
           || !['idle', 'notLoaded'].includes(thread.status?.type))
         throw originalArchiveGuard('Original archive title, identity, cwd or idle state does not match its replacement.');
     }

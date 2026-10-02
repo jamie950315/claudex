@@ -696,6 +696,10 @@ SHA256, with every subsequent byte unchanged. Preserve actual raw proofs and
 native files; never rebaseline an anchor from canonical message equality alone.
 Missing native paths invalidate persistent cold-cache reuse and proceed to full
 inspection for per-conversation diagnostics, rather than crashing the watcher.
+Native cwd resolution in discovery, tracked inspection, owner startup and archive
+preflight uses typed per-source/per-conversation failures for missing paths.
+Never classify unrelated transport, permission or malformed-metadata errors as
+missing projects, and never automatically untrack a missing project.
 Reuse the verified read returned by assertUnchanged for that snapshot's byte
 count instead of immediately exporting the same history a second time.
 

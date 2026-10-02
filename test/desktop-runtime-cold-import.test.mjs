@@ -97,7 +97,7 @@ test('a removed working directory pauses only that conversation without choosing
       assert.equal(error.cause.code, 'ENOENT');
       return true;
     });
-    await assert.rejects(f.runtime.inspect({ ...f.record, verified: false }), error => error.code === 'ENOENT');
+    await assert.rejects(f.runtime.inspect({ ...f.record, verified: false }), error => error.code === 'CLAUDEX_NATIVE_CWD_UNAVAILABLE');
     // An ENOENT for another path keeps its normal severity even while cwd is absent.
     const unrelated = Object.assign(new Error('Unrelated native component is unavailable'), { code: 'ENOENT', path: '/nonexistent/component' });
     f.runtime.inspectNative = async () => { throw unrelated; };
