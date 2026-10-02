@@ -78,6 +78,7 @@ export async function dispatchModWake(hub, envelope, actor) {
   if (method === 'mod_wake_claim') {
     if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { claimed: false };
     await verifyTarget();
+    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { claimed: false };
     const claim = await hub.chatMailbox.claimWake(params.messageId, { route: 'mod', source });
     hub.emit('chat-wake');
     return claim ? { claimed: true, messageId: claim.messageId, claimId: claim.wake.claimId, context: claim.context } : { claimed: false };
@@ -89,6 +90,10 @@ export async function dispatchModWake(hub, envelope, actor) {
     if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod' || message.wake.state !== 'dispatching'
       || message.expiresAt <= Date.now()) throw new Error('Native Mod dispatch no longer authorized.');
     await verifyTarget();
+    const latest = await hub.chatMailbox.status(params.messageId);
+    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod' || latest.wake?.state !== 'dispatching'
+      || latest.wake.claimId !== params.claimId || !sameContext(latest.wake.source, source)
+      || latest.expiresAt <= Date.now()) throw new Error('Native Mod dispatch no longer authorized.');
     return { ready: true };
   }
   if (method === 'mod_wake_receipt') {

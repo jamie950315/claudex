@@ -1,4 +1,4 @@
-# Claudex native companion, 0.2.1
+# Claudex native companion, 0.2.3
 
 This plugin is staged from the Claudex repository with:
 
@@ -31,6 +31,16 @@ Automatic delivery requires another loaded Mod session with SendMessage. It uses
 bounded event-backed broker waits, not a history sweep. Outcome receipts survive
 helper failures; only their publication is retried, never the native send. Broker
 route changes apply to new messages only. Preserve legacy messages and adapters.
+
+The reviewed macOS installation uses 0.2.3 with nativeWake enabled and the Mod
+primary route. Actual 2.1.286 validation and nine native kit tests passed; an
+automatic listener delivered to a Sonnet 5.5 recipient with a real reply and Stop
+ACK. The new pane also renders in the normally restarted Traditional Chinese
+Desktop. Final Desktop-owned delivery passed after normal broker/Claude restarts;
+all five tabs render in two rows. Busy queue acceptance, exact draft preservation
+and offline rejection without replay were observed separately. These results do
+not certify every native policy or synchronization
+scenario; see the source validation record for the exact boundaries.
 
 The existing MCP tools, synchronization engine, history storage, Desktop
 organization patches, lifecycle hooks, and unloaded-session fallbacks remain in

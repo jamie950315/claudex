@@ -226,15 +226,18 @@ no-replay receipts; managed workers cannot borrow controller authority. In 0.2,
 nativeWake opts a loaded Mod session into automatic delivery of already-authorized
 broker messages. `collaboration native-wake --route mod|renderer` captures the
 route on new wake-enabled Claude messages; legacy messages retain renderer routing.
-Never flip the installed route until native activation acceptance passes. The
-new CLI test processes currently report the rollout switch off. This is not
-evidence that an already-loaded Desktop Mod stopped. Leave the installed
-0.1.1/default route untouched until new native activation acceptance succeeds.
+Never flip an unvalidated installation's route until native activation acceptance
+passes. The reviewed Mac now uses installed 0.2.3 with nativeWake=true and route=mod.
+Actual Desktop Code 2.1.286 strict validation and nine native kit cases pass;
+the historical rollout-off CLI refusal was not reproduced. New installations
+still default off. Normal Claude restart preserves the Traditional Chinese bundle.
 Each loaded eligible session makes one bounded event-backed broker wait, never a
 history sweep. No sender or only the recipient itself means waiting-for-mod;
 do not create a model session or silently fall back. Check SendMessage before
 claiming; verify exact recipient and app-stop again before native dispatch.
-Clear/end fences late callbacks. Unknown sends never retry. Explicit native false
+Clear/end fences late callbacks, including after awaited context reads. Recheck
+broker route, shutdown, claim outcome and expiry after metadata verification.
+Unknown sends never retry. Explicit native false
 is rejected, not requeued through hooks (which could defeat recipient policy).
 Persist outcome receipts before RPC, and recover only idempotent receipt writes.
 Require literal ready:true before dispatch and exact message/claim/source/target,
@@ -243,13 +246,20 @@ Malformed/private storage blocks rather than being discarded. Unavailable target
 metadata must not starve other recipients. Keep existing MCP, hooks, renderer
 adapters, version policy and live runtimes; no permission approval, native store
 editing or automatic app restart is introduced.
-Bounded authorized nativeWake acceptance on 2.1.286/Sonnet 5.5 now verifies one
-production-controller claim, actual session.send queue result, recipient reply
-and real Stop ACK. It used a temporary native command, not a mouse-driven Inbox
-test. SendMessage must be present in the sender's native tool set. An all-tools-
-removed sender was refused and its offered/uncertain evidence was preserved;
-the success used a distinct request, never replay. Untitled/unverified Desktop
-metadata remains refused. Busy/offline/draft cases are not newly certified.
+Bounded authorized automatic nativeWake acceptance on 2.1.286/Sonnet 5.5 verifies
+SDK-owned and Desktop-owned senders, exact claim, real session.send acceptance,
+recipient reply and actual Stop ACK. The final Desktop-owned case passed after
+normal broker/Claude restarts, with one reply and no pending outbox receipt.
+Busy delivery accepted a second message before the first ACK; both ACKs arrived.
+Offline rejection stayed rejected after reopening/restarts without replay. Native
+pixels verify the unsubmitted draft remained and all five 0.2.3 tabs fit two rows.
+Keep the two-row layout for narrow panes. This is not every button flow or policy
+denial scenario or new synchronization-runtime acceptance. Final read-only
+inspection shows collaboration/folders/renderer adapters ready; unfinished-tool
+handoff and predecessor-archival lifecycle waits remain separate, unchanged guards.
+SendMessage and another loaded sender remain required. Preserve earlier manual
+all-tools-removed offered/uncertain evidence; never reset or replay it. Untitled
+or unverified Desktop metadata remains refused.
 
 `collaboration` is an explicit inference-capable work protocol, separate from
 the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable

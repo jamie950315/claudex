@@ -92,7 +92,9 @@ export function register(on, options = {}) {
     const host = () => api($, options);
     const body = [];
     const tabs = ['overview', 'tasks', 'chats', 'compose', 'inbox'];
-    body.push(Box({ flexDirection: 'row', columnGap: 1, children: tabs.map(tab => button(`tab-${tab}`, tab, () => controller.tab(host(), tab))) }));
+    // Desktop split panes can be narrower than the requested terminal columns.
+    for (const row of [tabs.slice(0, 3), tabs.slice(3)])
+      body.push(Box({ flexDirection: 'row', columnGap: 1, children: row.map(tab => button(`tab-${tab}`, tab, () => controller.tab(host(), tab))) }));
     body.push(text(state.busy ? 'Operation in progress. Duplicate submission is disabled.' : usageLine(state.usage)));
     if (options.nativeWake === true) body.push(text(`Automatic native delivery: ${wake.state.status}\n${wake.state.lastOutcome ? shortJSON(wake.state.lastOutcome) : 'Only explicitly wake-enabled broker messages are eligible.'}`));
     if (state.context) body.push(text(`Session ${state.context.sessionId}\n${state.context.cwd}`));

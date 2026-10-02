@@ -161,6 +161,52 @@ test('changed context after the final guard cannot reach the native send', async
   assert.equal(result.reason, 'context_changed'); assert.equal(h.sends(), 0);
   assert.equal(h.calls.at(-1).context.sessionId, source.sessionId);
 });
+test('lifecycle stop during an awaited context read fences both claim and native dispatch', async () => {
+  for (const stopAt of [1, 2, 3]) {
+    const h = host(); let active = true, reads = 0;
+    h.api.context = async () => {
+      if (++reads === stopAt) await Promise.resolve().then(() => { active = false; });
+      return source;
+    };
+    const outcome = await deliverNativeWake(h.api, source, target, id, () => active);
+    assert.equal(h.sends(), 0, `Stopped during context read ${stopAt}`);
+    if (stopAt === 1) assert.equal(h.calls.length, 0);
+    else assert.equal(h.calls.at(-1).status, 'uncertain');
+    assert.match(outcome.reason, /context.changed/);
+  }
+});
+test('broker readiness rechecks authorization after awaited native metadata verification', async t => {
+  for (const revoke of ['route', 'outcome']) {
+    const f = await setup(t); await f.call('native_wake', { route: 'mod' });
+    const m = await f.send(`revoke-${revoke}`);
+    const claim = await f.call('mod_wake_claim', { source, target, messageId: m.messageId });
+    const params = { source, target, messageId: m.messageId, claimId: claim.claimId };
+    let release, started;
+    const verifying = new Promise(resolve => { started = resolve; });
+    f.hub.claudeWakeManifest.verify = async () => {
+      started(); await new Promise(resolve => { release = resolve; }); return { cwd: target.cwd };
+    };
+    const checking = f.call('mod_wake_check', params);
+    await verifying;
+    if (revoke === 'route') await f.call('native_wake', { route: 'renderer' });
+    else await f.call('mod_wake_receipt', { ...params, status: 'uncertain', reason: 'pre_dispatch_stopped' });
+    release();
+    await assert.rejects(checking, /no longer authorized/);
+  }
+});
+test('route revocation during recipient verification does not claim a queued message', async t => {
+  const f = await setup(t); await f.call('native_wake', { route: 'mod' });
+  const m = await f.send('claim-revoked');
+  let release, started;
+  const verifying = new Promise(resolve => { started = resolve; });
+  f.hub.claudeWakeManifest.verify = async () => {
+    started(); await new Promise(resolve => { release = resolve; }); return { cwd: target.cwd };
+  };
+  const claiming = f.call('mod_wake_claim', { source, target, messageId: m.messageId });
+  await verifying; await f.call('native_wake', { route: 'renderer' }); release();
+  assert.equal((await claiming).claimed, false);
+  assert.equal((await f.call('chat_status', { messageId: m.messageId })).state, 'queued');
+});
 test('broker connection failures back off before claim, while unsafe receipt storage blocks', async () => {
   const h = host(); h.api.bridge = async () => { throw new Error('Socket absent'); };
   const p = createNativeWakePump({ enabled: true }); p.start(h.api); h.timers[0].fn(); await tick();

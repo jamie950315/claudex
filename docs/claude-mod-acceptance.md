@@ -5,11 +5,16 @@ This checklist is for the next local Claude Code/Codex agent. Start with
 specified runtime. A written test is not an executed test; a stubbed UI tree is
 not a painted Desktop pane.
 
-## 0.2 automatic main-route gate
+## 0.2.3 automatic main-route gate
 
-This gate supersedes the manual-only deployment sequence below. It is currently
-blocked by the native rollout switch refusing Mod tests/loading. Do not force the
-flag, remove managed settings, or switch the installed route to pass a checklist.
+This gate supersedes the historical manual-only deployment sequence. The reviewed
+Mac has installed 0.2.3 with nativeWake=true and broker route=mod. Actual 2.1.286
+strict validation and nine native kit cases pass without a rollout override.
+Real automatic Sonnet 5.5 acceptance includes SDK-owned and Desktop-owned senders,
+recipient reply/Stop ACK, busy queueing, offline refusal without replay, draft
+preservation and normal restart. See [validation](claude-mod-validation.md) for
+the scoped evidence; this checklist remains a procedure for future installations,
+not a claim that every policy-denial or synchronization scenario was exercised.
 
 1. Run `test/mod-wake.test.mjs` and the affected core/transport tests. Verify full
    regression for these shared persistence/concurrency changes.
@@ -35,20 +40,22 @@ flag, remove managed settings, or switch the installed route to pass a checklist
    records retain their original route and evidence. Never reset claims or rewrite
    native transcripts to make rollback appear successful.
 
-Only then promote automatic nativeWake as the installed primary route. Preserve
-the currently installed 0.1.1/renderer setup until these native gates pass.
+Only promote automatic nativeWake after the applicable native gates pass. Preserve
+the prior working installation until then; retain original route/claim evidence
+and a modern mailbox reader when rolling back.
 
 ## A. Source and synthetic tests (no inference)
 
 1. Confirm the reviewed base, clean worktree and patch hashes. Review all added
    files and the existing `AGENTS.md`. Preserve package/lockfile/runtime policy.
 2. Install the original locked dependencies with `npm ci --ignore-scripts`.
-3. Run `node --test --test-concurrency=4 test/claude-mod-*.test.mjs` in the complete
-   checkout: expect 66 tests with zero failures and **zero skips**. The real
+3. Run affected `test/claude-mod-*.test.mjs` and `test/mod-wake.test.mjs` cases in the
+   complete checkout with no failures or newly skipped cases. The real
    private transport test must execute. Its dispatcher is still a synthetic
    server; it intentionally starts no model runner.
-4. Run the entire existing `npm test`. Compare failures with an untouched base
-   checkout under the same Node/OS, without modifying live native stores.
+4. For shared core/persistence/concurrency changes, run the complete `npm test` or
+   reuse still-valid unchanged core evidence with focused tests for the changed
+   surface. Compare unrelated failures without modifying live native stores.
 5. Recheck the controller key, state and receipt fixtures reject symlinks,
    hardlinks, FIFO, changed file identities, wide permissions and oversized data.
 6. Verify tests cover duplicate click, concurrent commit, reload deduplication,
@@ -90,6 +97,7 @@ Hooks:
 Calls:
   env.get (literal CLAUDEX_COLLABORATION_WORKER)
   session.id, session.cwd, session.usage, session.version, session.send
+  tool.list, clock.after (bounded wait/reconnection scheduling)
   process.run (plugin.root is an intrinsic property, not a call)
   command.register
   ui.invalidate, ui.resolve, ui.open
@@ -100,8 +108,9 @@ The validator may include intrinsic UI element methods or normalized names; audi
 what the actual build prints rather than string-matching this list blindly.
 `session.send` is statically declared even with nativeWake=false. Installation
 therefore grants trusted Mod code this capability; the flag gates this
-implementation's use of it. There should be no prompt.submit, permission approval,
-model.complete, direct fs.write or recurring timer call in the Mod.
+implementation's use of it. There should be no prompt.submit, permission approval, model.complete or direct
+fs.write call in the Mod. tool.list and clock.after are expected for SendMessage
+preflight and bounded event-backed wait/reconnection, not history polling.
 
 Inspect the fixed `process.run` target: the packaged Node helper. Its deeper
 private file/RPC effects must be reviewed in source; the Mod validator's call list
@@ -168,10 +177,11 @@ with read-only tasks. Keep any existing sync watcher and user work unchanged.
    come from its current generation-scoped owner using the latest revision;
    controller drafts do not transfer an unrelated native chat's ownership.
 
-## E. Optional exact-recipient session.send adapter
+## E. Exact-recipient session.send adapter
 
-This gate remains separate and optional. Keep nativeWake=false in ordinary
-installation until all required recipient cases below have actual evidence.
+For an unvalidated installation, keep nativeWake=false until its required
+recipient cases have actual evidence. The reviewed local installation has passed
+the documented automatic-route cases and now enables it explicitly.
 Enabling native receipt can trigger recipient model work and uses account quota.
 
 Create a separate controller session and recipient test session whose real
@@ -186,7 +196,7 @@ Do not fabricate native registry rows, manifest entries, Stop ACKs or transcript
 | Busy recipient | Native peer queue controls delivery; sender draft is unchanged and native work is not interrupted. |
 | Recipient inbound policy refuses/holds | Native policy remains effective. Refusal/exception does not turn an offered message back into queued or cause an automatic retry. Approval-held input is not treated as completed work. |
 | Offline/unreachable/self target | Observe the actual build's result. Preserve unknown/offered receipt states; do not claim generic support for all these cases. |
-| Legacy renderer claims first | Mod sees claimed=false and does not send. |
+| Legacy renderer route | Renderer cannot claim Mod-routed messages; Mod cannot claim legacy renderer-routed messages. |
 | Mod claims first | Original renderer/settings hook cannot consume the same queued item again. |
 | Context change after claim | Preserve original controller/target receipt identities. No delivery is redirected to the newly selected tab/session. |
 | Accepted send, receipt write lost | Preserve the claim and unknown outcome. Inspect real native receipt before any operator-led reconciliation. |
@@ -199,10 +209,10 @@ ACK instrumentation must actually fire for peer-message turns on the tested
 build. If it does not, leave nativeWake disabled and design/test a separate
 origin-verified acknowledgment integration before enabling this path.
 
-The current adapter is explicit refresh and confirm, not an unattended inbox.
-It preserves a refusal as uncertain even when native refusal looks conclusive;
-this conservative first-version policy keeps the existing offered item from
-being delivered by a different consumer without operator reconciliation.
+The automatic listener and explicit Inbox confirmation share the same dispatch
+fence. A literal native false is rejected; an exception or unknown outcome remains
+uncertain. Neither is automatically replayed or handed to another consumer.
+The historical manual-only, all-refusals-uncertain behavior is not current.
 
 ## F. Synchronization compatibility and production deployment
 
@@ -218,16 +228,21 @@ new terminal runtime is not evidence that a Claudex-owned sync process can be
 upgraded. Keep production binaries and SDK dependencies unchanged until this
 gate is resolved.
 
-Install via the local marketplace only after the default-off candidate passes
+Install via the local marketplace only after the candidate passes
 its relevant gates. Inspect installed configuration and stage hashes. Keep the
 existing settings hooks, MCP, folder/archive/activation adapters and services.
 Retire any old adapter only with a documented replacement scope and separate
 migration/rollback proof. The app engine packaging allowlist and resource-copy tests are included in bundle revision 2.
-A development-signed macOS app build is verified; installation and real native
-painting remain separate. Native localization and graphical opt-in setup require
+A development-signed macOS app is installed and the actual Desktop pane has been
+observed; build, installation and painting remain separate evidence.
+Native localization and graphical opt-in setup require
 additional source changes outside this companion's current scope.
 
 ## G. Rollback acceptance
+
+For routing rollback, select renderer for future messages while retaining the
+modern broker. Existing Mod claims and rejected outcomes must not be downgraded,
+rewritten or replayed. No older reader may overwrite the new mailbox format.
 
 Disable/uninstall the companion through the normal plugin lifecycle. Verify the
 original collaboration/sync configuration and native history remain intact.

@@ -6,7 +6,7 @@ export async function deliverNativeWake(api, source, target, messageId, current 
   if (await api.worker()) return { state: 'disabled', reason: 'managed-worker' };
   const tools = await api.tools();
   if (!tools.some(tool => tool.name === 'SendMessage')) return { state: 'waiting', reason: 'missing-SendMessage' };
-  if (!current() || !same(await api.context(), source)) return { state: 'waiting', reason: 'context-changed' };
+  if (!current() || !same(await api.context(), source) || !current()) return { state: 'waiting', reason: 'context-changed' };
   if (same(source, target) || source.sessionId === target.sessionId) return { state: 'waiting', reason: 'another-Mod-session-required' };
   const call = (op, more = {}) => api.bridge({ version: 1, op, context: source, target, messageId, ...more });
   let claim;
@@ -20,12 +20,13 @@ export async function deliverNativeWake(api, source, target, messageId, current 
     return { state: 'uncertain', reason: 'invalid-claim', messageId };
   let status = 'uncertain', reason = 'pre_dispatch_stopped', nativeReason = '';
   try {
-    if (!current() || !same(await api.context(), source)) reason = 'context_changed';
+    if (!current() || !same(await api.context(), source) || !current()) reason = 'context_changed';
     else {
       const guard = await call('wake-check', { claimId: claim.claimId });
       if (guard?.ready !== true) throw new Error('Native dispatch readiness was not confirmed');
       if (typeof claim.context !== 'string' || !claim.context.trim() || claim.context.length > 8192) throw new Error('Invalid native peer context');
-      if (!current() || !same(await api.context(), source)) reason = 'context_changed';
+      // Clear/end may occur while the native context helper itself is suspended.
+      if (!current() || !same(await api.context(), source) || !current()) reason = 'context_changed';
       else {
         reason = 'native_exception';
         const result = await api.sendSession({ to: { sessionId: target.sessionId }, text: claim.context });
