@@ -120,16 +120,32 @@ export function validateRequest(value) {
     doctor: [], read: ['method', 'params'], prepare: ['method', 'params'],
     commit: ['id'], receipt: ['id'], 'wake-peek': ['target'], 'wake-claim': ['messageId', 'target'],
     'wake-receipt': ['messageId', 'claimId', 'status', 'target'],
+    'wake-next': ['excludeIds'], 'wake-check': ['messageId', 'claimId', 'target'],
   }[value.op];
   insist(extras !== undefined, 'UNSUPPORTED_OPERATION', 'Unsupported companion operation.');
-  fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target'].includes(key))]);
+  if (value.op === 'wake-receipt') extras.push('reason');
+  fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason'].includes(key))]);
   const request = { ...value, context: context(value.context) };
   if (value.op.startsWith('wake-')) request.target = context(value.target ?? value.context);
   if (['read', 'prepare'].includes(value.op)) request.params = validateParams(value.method, value.params ?? {}, value.op === 'prepare');
   if (value.id !== undefined) identity(value.id, true);
   if (value.messageId !== undefined) identity(value.messageId, true);
   if (value.claimId !== undefined) identity(value.claimId, true);
-  if (value.op === 'wake-receipt') insist(['accepted', 'uncertain'].includes(value.status));
+  if (value.op === 'wake-receipt') {
+    request.reason ??= value.status === 'accepted' ? 'queued' : 'native_exception';
+    validateWakeOutcome(value.status, request.reason);
+  }
+  if (value.op === 'wake-next') {
+    request.excludeIds ??= [];
+    insist(Array.isArray(request.excludeIds) && request.excludeIds.length <= 64);
+    request.excludeIds.forEach(id => identity(id, true));
+  }
   return request;
 }
 export function sameContext(a, b) { return a.sessionId === b.sessionId && a.cwd === b.cwd; }
+
+export function validateWakeOutcome(status, reason) {
+  insist(status === 'accepted' && reason === 'queued' || status === 'rejected' && reason === 'native_rejected'
+    || status === 'uncertain' && ['native_exception', 'context_changed', 'pre_dispatch_stopped'].includes(reason),
+  'INVALID_RECEIPT', 'Invalid native wake outcome.');
+}

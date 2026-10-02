@@ -79,12 +79,18 @@ function validate(state) {
       || (message.state === 'acknowledged' && !timestamp(message.acknowledgedAt))) fail('invalid message record.');
     if (message.wake !== undefined) {
       const wake = message.wake;
-      if (!wake || typeof wake !== 'object' || !['dispatching', 'accepted', 'uncertain', 'deferred'].includes(wake.state)
+      if (!wake || typeof wake !== 'object' || !['dispatching', 'accepted', 'uncertain', 'deferred', 'rejected'].includes(wake.state)
         || !timestamp(wake.at) || typeof wake.claimId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(wake.claimId)
         || (wake.state !== 'deferred' && !['offered', 'acknowledged'].includes(message.state))) fail('invalid wake record.');
       if (wake.state !== 'dispatching') text(wake.detail, 2048, 'wake detail');
+      if (wake.source !== undefined) {
+        nativeId(wake.source.sessionId); cwd(wake.source.cwd);
+        if (message.wakeRoute !== 'mod') fail('invalid claim source.');
+      }
     }
     messages.set(message.messageId, message);
+    if (message.wakeRoute !== undefined && (!['mod', 'renderer'].includes(message.wakeRoute)
+      || message.targetProvider !== 'claude' || message.wakeRequested !== true)) fail('invalid wake route.');
   }
   for (const receipt of state.receipts) {
     provider(receipt.fromProvider); text(receipt.requestId, 256, 'request ID');
@@ -131,7 +137,7 @@ async function readState(path) {
 const publicMessage = (message, state) => {
   const target = state.chats.find(item => item.chatId === key(message.targetProvider, message.targetSessionId));
   const deliveryStatus = message.state === 'queued'
-    ? (target?.phase === 'ended' ? 'waiting-for-resume' : 'waiting-for-hook')
+    ? (target?.phase === 'ended' ? 'waiting-for-resume' : message.wakeRoute === 'mod' ? 'waiting-for-mod' : 'waiting-for-hook')
     : message.state;
   return structuredClone({ ...message, id: message.messageId, deliveryStatus });
 };
@@ -245,24 +251,28 @@ export class ChatMailbox {
     });
   }
 
-  claimWake(messageId) {
+  claimWake(messageId, { route, source } = {}) {
     nativeId(messageId);
     return this.transaction(false, (state, now) => {
       const message = state.messages.find(item => item.messageId === messageId);
       if (!message || message.state !== 'queued') return null;
+      if (route !== undefined && (message.wakeRoute ?? 'renderer') !== route) return null;
       message.state = 'offered'; message.offeredAt = now;
       message.wake = { state: 'dispatching', claimId: randomUUID(), at: now };
+      if (source) message.wake.source = structuredClone(source);
       return { ...publicMessage(message, state), context: peerContext(message) };
     });
   }
 
   finishWake(messageId, { claimId, state: outcome, detail }) {
     nativeId(messageId); nativeId(claimId); text(detail, 2048, 'wake detail');
-    if (!['accepted', 'uncertain', 'deferred'].includes(outcome)) fail('invalid wake outcome.');
+    if (!['accepted', 'uncertain', 'deferred', 'rejected'].includes(outcome)) fail('invalid wake outcome.');
     return this.transaction(false, (state, now) => {
       const message = state.messages.find(item => item.messageId === messageId);
-      if (!message || message.wake?.state !== 'dispatching' || message.wake.claimId !== claimId) fail('wake claim is no longer current.');
-      message.wake = { state: outcome, claimId, detail, at: now };
+      if (!message || message.wake?.claimId !== claimId) fail('wake claim is no longer current.');
+      if (message.wake.state === outcome && message.wake.detail === detail) return publicMessage(message, state);
+      if (message.wake.state !== 'dispatching') fail('wake claim is no longer current.');
+      message.wake = { ...message.wake, state: outcome, claimId, detail, at: now };
       // Only an adapter-proven rejection before native dispatch permits hook delivery later.
       if (outcome === 'deferred' && message.state === 'offered') {
         message.state = 'queued'; delete message.offeredAt;
@@ -271,10 +281,11 @@ export class ChatMailbox {
     });
   }
 
-  send({ fromProvider, targetProvider, targetSessionId, message, requestId, expiresInMs = 900000, wakeRequested }) {
+  send({ fromProvider, targetProvider, targetSessionId, message, requestId, expiresInMs = 900000, wakeRequested, wakeRoute }) {
     provider(fromProvider); provider(targetProvider); nativeId(targetSessionId); text(message, 1500, 'message'); text(requestId, 256, 'request ID');
     if (!Number.isSafeInteger(expiresInMs) || expiresInMs <= 0 || expiresInMs > 3600000) fail('expiry must be between 1 ms and one hour.');
     if (wakeRequested !== undefined && typeof wakeRequested !== 'boolean') fail('invalid wake request.');
+    if (wakeRoute !== undefined && (!['mod', 'renderer'].includes(wakeRoute) || targetProvider !== 'claude' || wakeRequested !== true)) fail('invalid wake route.');
     const payload = JSON.stringify([targetProvider, targetSessionId, message, expiresInMs, ...(wakeRequested === undefined ? [] : [wakeRequested])]);
     return this.transaction(false, (state, now) => {
       const receipt = state.receipts.find(item => item.fromProvider === fromProvider && item.requestId === requestId);
@@ -286,7 +297,7 @@ export class ChatMailbox {
       if (!target) fail('exact target is not registered.');
       if (state.messages.length >= MAX_ITEMS || state.receipts.length >= MAX_ITEMS) fail('message capacity exhausted.');
       const record = { messageId: randomUUID(), fromProvider, targetProvider, targetSessionId, message, state: 'queued', createdAt: now, expiresAt: now + expiresInMs,
-        ...(wakeRequested === undefined ? {} : { wakeRequested }) };
+        ...(wakeRequested === undefined ? {} : { wakeRequested }), ...(wakeRoute === undefined ? {} : { wakeRoute }) };
       state.messages.push(record);
       state.receipts.push({ fromProvider, requestId, payload, messageId: record.messageId });
       return publicMessage(record, state);

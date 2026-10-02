@@ -1,6 +1,6 @@
 {
   "name": "claudex",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "author": { "name": "Claudex contributors" },
   "description": "Native Claudex control pane with reviewed operations and exact-session receipt handling.",
   "userConfig": {
@@ -13,8 +13,8 @@
       "description": "Absolute trusted Node.js executable supplied by the stage command.", "default": ""
     },
     "nativeWake": {
-      "type": "boolean", "title": "Enable reviewed native receipt",
-      "description": "After local acceptance, allow a confirmed button to queue a message to an exact native Claude session ID. Existing Stop hooks retain ACK handling.",
+      "type": "boolean", "title": "Enable automatic native delivery",
+      "description": "Deliver explicitly wake-enabled broker messages through the official session API when the broker selects the Mod route. Existing Stop hooks retain ACK handling. Unknown outcomes are never resent.",
       "default": false
     }
   }

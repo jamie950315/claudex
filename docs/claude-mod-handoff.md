@@ -3,7 +3,12 @@
 The revision-2 companion based on `eb12d2e` is integrated into this repository.
 Do not reapply the downloaded patch. Read `AGENTS.md`, [the guide](claude-mod.md),
 [acceptance gates](claude-mod-acceptance.md), and [validation](claude-mod-validation.md).
-Plugin version: 0.1.1. Reviewed on 2026-10-02.
+Source plugin version: 0.2.0; installed version: 0.1.1. Reviewed on 2026-10-02.
+
+The automatic native route is implemented but not activated. Start with the
+0.2 section in `claude-mod.md`: the native vendor rollout currently refuses Mod
+loading/testing. Preserve the existing installation while that gate is closed.
+Do not mistake the earlier manual Sonnet acceptance for automatic-loop acceptance.
 
 ## Implemented scope
 
@@ -17,7 +22,8 @@ Plugin version: 0.1.1. Reviewed on 2026-10-02.
 - Default-off `session.send` adapter using the existing atomic mailbox claim.
 - Create-only local marketplace staging and explicit app-engine packaging.
 
-No broker/synchronization/SDK/version-policy changes were needed. History, images,
+Version 0.2 changes broker/mailbox delivery routing and receipts. Task execution,
+synchronization, SDK dependencies and version policy remain unchanged. History, images,
 compaction, native writer ownership, folder/archive adapters and existing hooks
 remain in their original paths. General Chat/Cowork customization is unsupported.
 
@@ -109,6 +115,7 @@ its stage while any session uses it, and retain `mod-companion` receipts/locks.
 Removing the plugin does not cancel accepted work: use normal explicit cancellation
 and verify actual terminal/process evidence. Preserve histories and credentials.
 
-Optional main-CLI/app setup integration, localization, automatic inbox updates and
-new synchronization runtime acceptance are separate changes. This companion
-retains manual refresh/confirmation and bounded permissions.
+Optional graphical setup integration, localization and new synchronization
+runtime acceptance remain separate changes. Version 0.2 adds automatic delivery
+of already-authorized messages; new user-authored operations still require
+preview/confirmation and retain bounded permissions.

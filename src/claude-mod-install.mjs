@@ -8,10 +8,12 @@ const SOURCE = fileURLToPath(new URL('..', import.meta.url));
 export const MOD_STAGE_FILES = [
   'plugins/claudex/.claude-plugin/plugin.json', 'plugins/claudex/hooks/hooks.json',
   'plugins/claudex/hooks/register.mjs', 'plugins/claudex/hooks/controller.mjs',
+  'plugins/claudex/hooks/delivery.mjs',
   'plugins/claudex/tests/native.test.ts', 'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
   'bin/claudex-mod-bridge.mjs', 'src/claude-mod-bridge.mjs',
   'src/claude-mod-storage.mjs', 'src/claude-mod-protocol.mjs',
+  'src/claude-mod-wake-outbox.mjs',
   'src/collaboration-transport.mjs', 'src/collaboration-effort.mjs',
 ];
 function targetOf(file) { return file.startsWith('plugins/claudex/') ? file.slice('plugins/claudex/'.length) : `runtime/${file}`; }

@@ -1,5 +1,6 @@
-/** Host-independent state machine. All host access is supplied by register.mjs.
- * No timer starts models; writes require an explicit preview then confirmation. */
+/** User-facing control state. New operations require preview/confirmation;
+ * delivery.mjs separately handles previously authorized broker messages. */
+import { deliverNativeWake } from './delivery.mjs';
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const message = error => typeof error?.message === 'string' ? error.message : 'Companion operation failed.';
@@ -181,27 +182,13 @@ export function createController({ nativeWake = false } = {}) {
       return run(api, async ticket => {
         if (!same(preview.context, ticket.context)) throw new Error('Session changed; refresh exact pending messages.');
         state.wakePreview = null;
-        const claim = await call(api, ticket, 'wake-claim', { messageId: preview.messageId, target: preview.target });
-        if (claim?.claimed !== true) { state.notice = 'A competing consumer already handled this message.'; return; }
-        if (!uuid.test(claim.claimId ?? '') || claim.messageId !== preview.messageId)
-          throw new Error('Native claim identity is malformed. Preserve the offered message for operator inspection.');
-        let accepted = false;
-        try {
-          if (!await stillBound(api, ticket)) throw new Error('Controller session changed after claim; preserve the offered message.');
-          if (typeof claim.context !== 'string' || !claim.context.trim() || claim.context.length > 8192)
-            throw new Error('Native peer context exceeded its validated bound.');
-          // Explicit target binding removes the active-composer/selected-tab race.
-          // Claude retains its recipient policy, peer origin, and native queue.
-          const delivery = await api.sendSession({ to: { sessionId: preview.target.sessionId }, text: claim.context });
-          accepted = delivery?.isDelivered === true;
-          if (!accepted) throw new Error('Native recipient declined delivery or is unavailable. Preserve the claim; inspect chat_status before any operator-led recovery.');
-        } finally {
-          await call(api, ticket, 'wake-receipt', { messageId: preview.messageId, target: preview.target,
-            claimId: claim.claimId, status: accepted ? 'accepted' : 'uncertain' });
-        }
+        const outcome = await deliverNativeWake(api, ticket.context, preview.target, preview.messageId, () => current(ticket));
         if (current(ticket)) {
-          state.wakes = state.wakes.filter(item => item.messageId !== preview.messageId);
-          state.notice = 'Native recipient queue accepted the message. Recipient ACK and requested-work completion remain separate checks.';
+          if (outcome.state !== 'waiting') state.wakes = state.wakes.filter(item => item.messageId !== preview.messageId);
+          state.notice = outcome.state === 'accepted'
+            ? 'Native recipient queue accepted the message. Recipient ACK and requested-work completion remain separate checks.'
+            : `Native delivery: ${outcome.state} (${outcome.reason}). ${outcome.nativeReason ?? ''} No automatic resend.`;
+          if (['rejected', 'uncertain'].includes(outcome.state)) state.error = state.notice;
           state.tab = 'inbox';
         }
       });

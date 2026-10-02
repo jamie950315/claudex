@@ -210,7 +210,7 @@ bounded polling harness, not a production fallback.
 
 ## Cross-model collaboration
 
-The optional Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
+The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
 not a companion load gate. The installed Desktop 2.1.286 also passed the native
 validator, nine kit tests and no-inference command registration without added
@@ -221,12 +221,25 @@ top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and nine
 native test-kit cases against a staged plugin after UI/API changes, in addition
 to affected Node tests. Native tree tests are not real Desktop painting evidence.
-All controller writes use exact-context prepare/confirm and durable no-replay
-receipts; managed workers cannot borrow controller authority. Clear/end events
-reset and invalidate old controls. Keep `nativeWake` false until independently
-authorized native queue/recipient ACK acceptance; preserve existing MCP, hooks,
-renderer adapters, version policy and live runtimes. No automatic model call,
-permission approval, polling, transcript edit or app restart is introduced.
+User-authored controller writes use exact-context prepare/confirm and durable
+no-replay receipts; managed workers cannot borrow controller authority. In 0.2,
+nativeWake opts a loaded Mod session into automatic delivery of already-authorized
+broker messages. `collaboration native-wake --route mod|renderer` captures the
+route on new wake-enabled Claude messages; legacy messages retain renderer routing.
+Never flip the installed route until native activation acceptance passes. The
+current vendor rollout has disabled Mod loading/testing; leave the installed
+0.1.1/default route untouched while that gate remains closed.
+Each loaded eligible session makes one bounded event-backed broker wait, never a
+history sweep. No sender or only the recipient itself means waiting-for-mod;
+do not create a model session or silently fall back. Check SendMessage before
+claiming; verify exact recipient and app-stop again before native dispatch.
+Clear/end fences late callbacks. Unknown sends never retry. Explicit native false
+is rejected, not requeued through hooks (which could defeat recipient policy).
+Persist outcome receipts before RPC, and recover only idempotent receipt writes.
+Malformed/private storage blocks rather than being discarded. Unavailable target
+metadata must not starve other recipients. Keep existing MCP, hooks, renderer
+adapters, version policy and live runtimes; no permission approval, native store
+editing or automatic app restart is introduced.
 Bounded authorized nativeWake acceptance on 2.1.286/Sonnet 5.5 now verifies one
 production-controller claim, actual session.send queue result, recipient reply
 and real Stop ACK. It used a temporary native command, not a mouse-driven Inbox

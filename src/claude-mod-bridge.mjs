@@ -3,6 +3,7 @@ import { readdir, lstat } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { privateDir, privateJSON, privateRead, writeReceipt, exclusiveAction } from './claude-mod-storage.mjs';
 import { validateRequest, validateParams, sameContext, insist, ModError, identity, context, record } from './claude-mod-protocol.mjs';
+import { createWakeOutbox } from './claude-mod-wake-outbox.mjs';
 const TTL = 10 * 60 * 1000;
 const JOURNAL_LIMIT = 2048;
 const RPC_TIMEOUT = 12000;
@@ -59,30 +60,22 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
     await privateDir(collaborationRoot);
     const raw = await privateRead(join(collaborationRoot, 'controller-key'), { maxBytes: 65 });
     insist(/^[a-f0-9]{64}\n$/.test(raw), 'INVALID_CAPABILITY', 'The controller capability requires inspection.');
-    return rpc({ root: collaborationRoot, peer: 'claude', token: raw.trim(), method, params, timeoutMs: RPC_TIMEOUT });
+    try {
+      return await rpc({ root: collaborationRoot, peer: 'claude', token: raw.trim(), method, params,
+        timeoutMs: method === 'mod_wake_wait' ? 25000 : RPC_TIMEOUT });
+    } catch (error) {
+      if (error.code === 'MOD_TARGET_UNAVAILABLE') throw new ModError(error.code, 'The exact recipient metadata is unavailable or changed.');
+      throw error;
+    }
   }
   async function receipt(id) {
     await privateDir(journalRoot);
     return assertReceipt(await privateJSON(pathFor(id), { maxBytes: 2 * 1024 * 1024 }), id);
   }
-  async function peek(current) {
-    // No transcript or mailbox transaction is read. The broker owns this identity-only manifest.
-    await privateDir(collaborationRoot);
-    try { await privateDir(join(collaborationRoot, 'chat-mailbox')); }
-    catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-    const manifest = await privateJSON(join(collaborationRoot, 'chat-mailbox', 'wake-manifest.json'), { optional: true, maxBytes: 256 * 1024 });
-    if (manifest === null) return [];
-    insist(manifest.version === 1 && Array.isArray(manifest.messages) && manifest.messages.length <= 64,
-      'INVALID_MANIFEST', 'The Desktop wake manifest requires inspection.');
-    const messages = [];
-    for (const item of manifest.messages) {
-      identity(item.messageId, true); identity(item.sessionId, true);
-      insist(Number.isSafeInteger(item.expiresAt) && typeof item.cwd === 'string', 'INVALID_MANIFEST');
-      if (item.sessionId.toLowerCase() === current.sessionId && item.cwd === current.cwd && item.expiresAt > now())
-        messages.push({ messageId: item.messageId, sessionId: item.sessionId, expiresAt: item.expiresAt });
-    }
-    return messages;
-  }
+  const outbox = createWakeOutbox(root, request => requestRpc('mod_wake_receipt', {
+    source: request.context, target: request.target, messageId: request.messageId,
+    claimId: request.claimId, status: request.status, reason: request.reason,
+  }));
   return async function handle(input) {
     insist(!worker, 'MANAGED_WORKER', 'Managed workers retain their generation-scoped MCP capabilities.');
     const request = validateRequest(input);
@@ -106,6 +99,10 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       return publicReceipt(saved);
     }
     // Finishing an already claimed dispatch remains possible after an application stop.
+    if (request.op === 'wake-next' && allowNativeWake) {
+      const recovered = await outbox.recover();
+      if (recovered.remaining) return { state: 'receipt-recovery', messages: [] };
+    }
     if (request.op !== 'wake-receipt') await active();
     if (request.op === 'read') return requestRpc(request.method, request.params);
     if (request.op === 'prepare') {
@@ -172,18 +169,20 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       });
     }
     insist(allowNativeWake, 'NATIVE_WAKE_DISABLED', 'Enable native receipt only after the documented local acceptance checks.');
-    if (request.op === 'wake-peek') return { target: request.target, messages: await peek(request.target) };
-    if (request.op === 'wake-claim') {
-      const matches = await peek(request.target);
-      insist(matches.some(item => item.messageId === request.messageId), 'PENDING_UNAVAILABLE', 'The exact current-session pending message is unavailable. Refresh without replaying a prior claim.');
-      return requestRpc('desktop_wake_claim', { messageId: request.messageId, sessionId: request.target.sessionId });
+    if (request.op === 'wake-next') return requestRpc('mod_wake_wait', { source: request.context, excludeIds: request.excludeIds });
+    if (request.op === 'wake-peek') {
+      const result = await requestRpc('mod_wake_wait', { source: request.context, timeoutMs: 0 });
+      return { target: request.target, messages: result.messages.filter(m => sameContext(m.target, request.target)) };
     }
-    if (request.op === 'wake-receipt') return requestRpc('desktop_wake_receipt', {
-      messageId: request.messageId, sessionId: request.target.sessionId, claimId: request.claimId, status: request.status,
-      detail: request.status === 'accepted'
-        ? 'Native Mods session.send accepted the message into the exact recipient queue; the original Stop hook must verify the recipient ACK and work outcome separately.'
-        : 'Companion native dispatch is uncertain or was abandoned after claim; automatic resend is disabled.',
-    });
+    if (request.op === 'wake-claim') {
+      return requestRpc('mod_wake_claim', { source: request.context, target: request.target, messageId: request.messageId });
+    }
+    if (request.op === 'wake-check') {
+      const result = await requestRpc('mod_wake_check', { source: request.context, target: request.target,
+        messageId: request.messageId, claimId: request.claimId });
+      await active(); return result;
+    }
+    if (request.op === 'wake-receipt') return outbox.record(request);
     throw new ModError('UNSUPPORTED_OPERATION', 'Unsupported operation.');
   };
 }

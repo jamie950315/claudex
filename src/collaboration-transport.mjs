@@ -7,7 +7,7 @@ const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake']);
+const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -77,7 +77,7 @@ export async function serveCollaborationSocket({ root, dispatch }) {
       if (newline !== data.length - 1) { socket.destroy(); return; }
       try {
         const request = validateEnvelope(decode(data.subarray(0, newline)));
-        if (request.method === 'wait') {
+        if (request.method === 'wait' || request.method === 'mod_wake_wait') {
           const controller = new AbortController();
           // Internal connection lifetime only; never read cancellation from the
           // wire or forward it to inference-capable protocol operations.

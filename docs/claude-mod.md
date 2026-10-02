@@ -1,6 +1,70 @@
 # Claude native Mod companion
 
-Status: integrated and regression-tested on macOS; the official Claude Code
+## Version 0.2 automatic-delivery route
+
+Source version 0.2.0 adds an automatic primary route. Deployment is currently
+held because both inspected native runtimes report the vendor rollout switch off.
+The installed 0.1.1 plugin and existing broker route remain unchanged. The earlier
+manual acceptance below is historical evidence, not acceptance of this new loop.
+
+Two opt-ins are distinct: plugin `nativeWake: true` starts its listener, while
+`collaboration native-wake --route mod` selects the route for newly queued Claude
+messages whose `wake` is true. Queue-only messages remain queue-only. No existing
+message is silently rerouted; switching back affects only new messages.
+
+The Mod uses one long-poll helper call per loaded session. The broker wakes that
+call on a new message or route/shutdown event; its twenty-second bounded timeout
+also allows reconnection and lifecycle checks. This reads mailbox metadata, never
+native conversation histories. There is no two-second transcript sweep. An active
+Mod session with SendMessage must exist, distinct from the recipient. Otherwise
+messages report waiting-for-mod; ordinary native hooks remain available when the
+recipient resumes. The feature never starts an extra native model process.
+
+Before taking a claim, check SendMessage and the exact controller context. Claiming
+binds the durable message to that controller and route. Recheck target metadata,
+route, expiry and app-stop before the native API call. Renderer consumers cannot
+take Mod claims, including from stale manifests. Native hooks share the mailbox's
+atomic offer guard; only one consumer can offer the queued message.
+
+After a native result, write an owner-private receipt outbox before contacting
+the broker. Lost responses recover by publishing that same outcome, never by
+calling session.send again. Accepted means queued, not ACK. Explicit false is
+rejected and retained with no retry, because the cause may be recipient policy.
+Exceptions, lifecycle changes after claim and abandoned sends remain uncertain.
+They do not fall back to another transport. Unavailable target metadata is deferred
+without blocking other targets; connection recovery backs off to thirty seconds.
+Unsafe receipt storage stops the listener and remains visible for inspection.
+
+The outbox is `<root>/mod-wake-receipts/`, bounded to 2048 receipts (the broker's
+mailbox limit is lower). Completed outcome records are retained. Keep them and the
+original mailbox when investigating. Never remove a claim to force redelivery.
+
+Activation after native availability returns:
+
+1. Run focused tests, stage 0.2 with `--native-wake`, and run that runtime's strict
+   validator and native test kit. Do not override a vendor/policy refusal.
+2. Update the broker through the normal owned installation path at a safe idle
+   boundary; preserve the installed definition, current work and previous artifact.
+3. Install/configure the staged plugin using its native manager. Open a fresh
+   normal session or use a supported reload, verifying the actual loaded version.
+4. Select `node bin/claudex.mjs collaboration native-wake --route mod` and inspect
+   its status. Run a separately authorized Sonnet canary, checking claim, queue,
+   real reply and Stop ACK. No backend result alone proves completion.
+5. Keep renderer support for legacy messages and other Desktop functions. Route
+   rollback is `native-wake --route renderer`; unresolved Mod messages keep their
+   original route and evidence. Never automatically replay them on rollback.
+
+Rollback here means changing the route while retaining the 0.2 broker, not
+downgrading its data reader. Older brokers do not understand the new rejected
+outcome and do not enforce Mod route fencing. Do not restore an old broker binary
+over a mailbox that has used the Mod route, or rewrite the mailbox to make an
+older version accept it. Preserve the modern reader and all message evidence.
+
+The current renderer is intentionally not uninstalled. Busy, offline, restart and
+failure cases have synthetic coverage; real automatic native acceptance is still
+blocked by vendor availability and must not be claimed from the older manual test.
+
+Historical manual-companion status: integrated and regression-tested on macOS; the official Claude Code
 2.1.287 strict validator and nine native test-kit cases pass. A development-signed
 macOS app build is verified. User-supplied Desktop pixels and accessibility data
 verify the real 2.1.286 pane, usage band and broker response with Traditional
@@ -9,7 +73,7 @@ separate gates. See [validation](claude-mod-validation.md).
 
 Baseline reviewed: `jamie950315/claudex` at
 `eb12d2e1d82624be4b1dc94f8f53e9a6aa85a000` (package version 1.0.3).
-Companion version: 0.1.1. Review date: 2026-10-02.
+Source companion version: 0.2.0; installed manual companion: 0.1.1. Review date: 2026-10-02.
 The supplied revision-2 bundle is integrated with native compiler/API repairs,
 clear/end UI invalidation, and stage source-directory symlink protection.
 
@@ -290,9 +354,11 @@ or mark work resolved simply to make the pane appear healthy.
 
 ## Optional native receipt adapter
 
-Keep `nativeWake` false until `claude-mod-acceptance.md` is completed. This patch
-includes no automatic polling, prompt submission, synthetic SessionStart/Stop,
-permission auto-approval, or background inference.
+Keep `nativeWake` false until the automatic acceptance gate above is completed.
+The Mod never fabricates SessionStart/Stop, approves permissions or submits a
+user prompt. Automatic delivery handles only existing wake-authorized broker
+messages and can cause the recipient's normal model work; that is not free of
+inference. It does not initiate unrelated work or inspect native histories.
 
 When explicitly enabled, Inbox reads only the broker's bounded identity manifest.
 Chats can select another Claude recipient and inspect its pending messages. The
@@ -379,10 +445,11 @@ are deliberately separate from native deployment evidence.
 
 ## App engine packaging in bundle revision 2
 
-`src/app-bundle.mjs` includes both companion commands and all four companion
-runtime modules through its existing explicit allowlists. `ENGINE_PLUGIN_FILES`
-adds seven exact resources: the manifest, hooks declaration, controller and
-register modules, workflow skill, plugin README and native test fixture.
+`src/app-bundle.mjs` includes both companion commands and the companion runtime
+modules through explicit allowlists, including the 0.2 broker route and receipt
+outbox modules. `ENGINE_PLUGIN_FILES` includes eight exact resources: the manifest,
+hooks declaration, controller, register and delivery modules, workflow skill,
+plugin README and native test fixture.
 `copyAllowed` copies only these assets and validates plugin directories from the
 source root downward. A symlinked parent is rejected before inspecting descendants.
 

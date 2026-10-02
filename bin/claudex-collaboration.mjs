@@ -29,6 +29,8 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Read or save the default permission for new root work
   claudex collaboration request METHOD --peer codex|claude
                                                 Read JSON parameters from stdin
+  claudex collaboration native-wake [--route mod|renderer]
+                                                Inspect or select Claude delivery for new messages
 
 --root PATH selects the private collaboration root, not the synchronization root.
 --default-permission read-only|workspace-write selects the policy for new root tasks.
@@ -108,7 +110,7 @@ async function serve(root, allowWrite, values) {
 export async function collaborationMain(args = process.argv.slice(2)) {
   const { values, positionals } = parseArgs({ args, allowPositionals: true, options: {
     root: { type: 'string' }, peer: { type: 'string' }, 'allow-write': { type: 'boolean' }, 'allow-full-access': { type: 'boolean' },
-    help: { type: 'boolean' }, default: { type: 'string' },
+    help: { type: 'boolean' }, default: { type: 'string' }, route: { type: 'string' },
     'default-permission': { type: 'string' }, 'codex-binary': { type: 'string' }, 'claude-binary': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
     'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
@@ -131,6 +133,11 @@ export async function collaborationMain(args = process.argv.slice(2)) {
     return runCollaborationMcp({ root, peer, token, desktopWakeOnly: true });
   }
   if (command === 'status') { console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'list' }), null, 2)); return; }
+  if (command === 'native-wake') {
+    const params = values.route === undefined ? {} : { route: values.route };
+    console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: 'native_wake', params }), null, 2));
+    return;
+  }
   if (command === 'models') {
     const updating = values['codex-model'] !== undefined || values['claude-model'] !== undefined;
     if (updating && (values['codex-model'] === undefined || values['claude-model'] === undefined))

@@ -1,0 +1,101 @@
+import { context, fields, identity, sameContext, validateWakeOutcome } from './claude-mod-protocol.mjs';
+
+/** Controller-only routing. No native invocation is started by a wait or route change. */
+export async function dispatchModWake(hub, envelope, actor) {
+  const { method, params } = envelope;
+  if (actor.task) throw new Error('Only an external controller may use native Mod delivery.');
+  if (method === 'native_wake') {
+    fields(params, ['route']);
+    if (params.route !== undefined) {
+      if (hub.closed || !['mod', 'renderer'].includes(params.route)) throw new Error('Invalid native wake route or stopping broker.');
+      await hub.mutate(state => { state.nativeWakeRoute = params.route; });
+      hub.emit('chat-wake');
+    }
+    return { route: hub.state.nativeWakeRoute ?? 'renderer', waitingModClients: hub.modWaiters,
+      note: 'Route changes affect new messages only. Unknown dispatches never fall back or replay.' };
+  }
+  if (actor.peer !== 'claude' || !hub.claudeWakeManifest) throw new Error('Native Mod endpoint is unavailable.');
+  const source = context(params.source);
+  if (method === 'mod_wake_wait') {
+    fields(params, ['source', 'excludeIds', 'timeoutMs'], ['source']);
+    const excluded = params.excludeIds ?? [], timeout = params.timeoutMs ?? 20000;
+    if (!Array.isArray(excluded) || excluded.length > 64) throw new Error('Invalid excluded message list.');
+    excluded.forEach(id => identity(id, true));
+    if (!Number.isSafeInteger(timeout) || timeout < 0 || timeout > 20000 || hub.modWaiters >= 64)
+      throw new Error('Invalid Mod wait bounds or waiter capacity reached.');
+    const snapshot = async () => {
+      if (hub.closed) return { state: 'stopping', messages: [] };
+      if ((hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { state: 'disabled', messages: [] };
+      const pending = await hub.chatMailbox.pendingWakes(), chats = await hub.chatMailbox.list();
+      const messages = pending.filter(m => m.wakeRoute === 'mod' && m.targetSessionId !== source.sessionId && !excluded.includes(m.messageId))
+        .slice(0, 64).map(m => {
+          const chat = chats.find(c => c.provider === 'claude' && c.sessionId === m.targetSessionId);
+          return { messageId: m.messageId, target: { sessionId: m.targetSessionId, cwd: chat.cwd }, expiresAt: m.expiresAt };
+        });
+      return { state: messages.length ? 'pending' : 'waiting', messages };
+    };
+    hub.modWaiters++;
+    try {
+      if (timeout === 0) return await snapshot();
+      return await new Promise((resolve, reject) => {
+        let done = false, checking = false, again = false;
+        const finish = (error, value) => {
+          if (done) return; done = true; clearTimeout(timer);
+          hub.off('chat-wake', check); hub.off('change', check); envelope.signal?.removeEventListener('abort', aborted);
+          error ? reject(error) : resolve(value);
+        };
+        const aborted = () => finish(null, { state: 'disconnected', messages: [] });
+        const check = async () => {
+          if (done) return;
+          if (checking) { again = true; return; }
+          checking = true;
+          const reading = snapshot(); hub.modReads.add(reading);
+          try { const value = await reading; if (value.state !== 'waiting') finish(null, value); }
+          catch (error) { finish(error); }
+          finally { hub.modReads.delete(reading); checking = false; if (again && !done) { again = false; void check(); } }
+        };
+        const timer = setTimeout(() => finish(null, { state: 'waiting', messages: [] }), timeout);
+        hub.on('chat-wake', check); hub.on('change', check); envelope.signal?.addEventListener('abort', aborted, { once: true });
+        if (envelope.signal?.aborted) aborted(); else void check();
+      });
+    } finally { hub.modWaiters--; }
+  }
+  fields(params, ['source', 'target', 'messageId', 'claimId', 'status', 'reason'], ['source', 'target', 'messageId']);
+  const target = context(params.target); identity(params.messageId, true);
+  const verifyTarget = async () => {
+    try {
+      const mapped = await hub.claudeWakeManifest.verify(target.sessionId);
+      if (mapped.cwd !== target.cwd) throw new Error('Directory changed');
+      return mapped;
+    } catch {
+      const error = new Error('The exact recipient metadata is unavailable or changed. No new dispatch is permitted.');
+      error.code = 'MOD_TARGET_UNAVAILABLE'; throw error;
+    }
+  };
+  const message = await hub.chatMailbox.status(params.messageId);
+  if (message.wakeRoute !== 'mod' || message.targetProvider !== 'claude' || message.targetSessionId !== target.sessionId
+    || message.wakeRequested !== true || source.sessionId === target.sessionId) throw new Error('Native Mod message identity/route mismatch.');
+  if (method === 'mod_wake_claim') {
+    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { claimed: false };
+    await verifyTarget();
+    const claim = await hub.chatMailbox.claimWake(params.messageId, { route: 'mod', source });
+    hub.emit('chat-wake');
+    return claim ? { claimed: true, messageId: claim.messageId, claimId: claim.wake.claimId, context: claim.context } : { claimed: false };
+  }
+  identity(params.claimId, true);
+  if (!message.wake?.source || !sameContext(message.wake.source, source) || message.wake.claimId !== params.claimId)
+    throw new Error('Native Mod claim owner changed.');
+  if (method === 'mod_wake_check') {
+    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod' || message.wake.state !== 'dispatching'
+      || message.expiresAt <= Date.now()) throw new Error('Native Mod dispatch no longer authorized.');
+    await verifyTarget();
+    return { ready: true };
+  }
+  if (method === 'mod_wake_receipt') {
+    validateWakeOutcome(params.status, params.reason);
+    const result = await hub.chatMailbox.finishWake(params.messageId, { claimId: params.claimId, state: params.status,
+      detail: `Native Mod: ${params.reason}. Queue acceptance, recipient ACK and work completion are separate.` });
+    hub.emit('chat-wake'); return result;
+  }
+  throw new Error('Unsupported native Mod operation.');
+}

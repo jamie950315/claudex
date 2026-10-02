@@ -11,6 +11,7 @@ function fixture(options = {}) {
   const controller = createController(options);
   const api = {
     worker: async () => worker, context: async () => ({ ...current }), redraw: () => {},
+    tools: async () => [{ name: 'SendMessage' }],
     usage: async () => ({ context: { percent: 53 }, rateLimits: [{ kind: 'five_hour', percentUsed: 20 }] }),
     version: async () => ({ version: '2.1.287' }), idle: async () => idle,
     prompt: async () => ({ text: draft }),
@@ -135,19 +136,19 @@ test('native receipt has an independent opt-in', async () => {
   assert.equal(f.calls.length, 0); assert.match(f.controller.state.error, /disabled/);
 });
 async function wakeFixture() {
-  const f = fixture({ nativeWake: true }); await f.controller.wakeList(f.api); f.controller.previewWake(f.api, ID); return f;
+  const f = fixture({ nativeWake: true }); await f.controller.wakeList(f.api, OTHER); f.controller.previewWake(f.api, ID); return f;
 }
 test('native queue delivery preserves a busy recipient and existing draft', async () => {
   const f = await wakeFixture(); f.draft('User text'); f.idle(false);
   await f.controller.acceptWake(f.api);
   assert.equal(f.submissions.length, 1);
-  assert.deepEqual(f.submissions[0].to, { sessionId: CTX.sessionId });
+  assert.deepEqual(f.submissions[0].to, { sessionId: OTHER.sessionId });
   assert.equal((await f.api.prompt()).text, 'User text');
 });
 test('successful exact queue delivery records acceptance separately from ACK', async () => {
   const f = await wakeFixture(); await f.controller.acceptWake(f.api);
   assert.equal(f.submissions.length, 1); assert.deepEqual(Object.keys(f.submissions[0]), ['to', 'text']);
-  assert.deepEqual(f.submissions[0].to, { sessionId: CTX.sessionId });
+  assert.deepEqual(f.submissions[0].to, { sessionId: OTHER.sessionId });
   const receipt = f.calls.find(call => call.op === 'wake-receipt');
   assert.equal(receipt.status, 'accepted'); assert.equal(receipt.context.sessionId, CTX.sessionId);
   assert.equal(f.controller.state.wakes.length, 0);
@@ -167,11 +168,11 @@ test('session change after claim preserves uncertainty and original receipt iden
   const receipt = f.calls.find(call => call.op === 'wake-receipt');
   assert.equal(receipt.status, 'uncertain'); assert.equal(receipt.context.sessionId, CTX.sessionId);
 });
-test('native queue rejection records uncertainty and supplies no automatic retry', async () => {
+test('proven native refusal is recorded as rejected without automatic retry', async () => {
   const f = await wakeFixture(); f.api.sendSession = async () => ({ isDelivered: false, reason: 'recipient policy' });
   await f.controller.acceptWake(f.api); await f.controller.acceptWake(f.api);
   assert.equal(f.calls.filter(call => call.op === 'wake-claim').length, 1);
-  assert.equal(f.calls.find(call => call.op === 'wake-receipt').status, 'uncertain');
+  assert.equal(f.calls.find(call => call.op === 'wake-receipt').status, 'rejected');
 });
 test('post-submission receipt error leaves no active submit button', async () => {
   const f = await wakeFixture(), base = f.api.bridge;

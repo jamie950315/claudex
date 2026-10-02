@@ -207,36 +207,31 @@ async function manifest(f, messages) {
   await mkdir(join(f.root, 'collaboration', 'chat-mailbox'), { mode: 0o700 });
   await write(join(f.root, 'collaboration', 'chat-mailbox', 'wake-manifest.json'), { version: 1, messages });
 }
-test('wake peek is identity-only, exact-session, exact-cwd and expiry bounded', async t => {
-  const f = await fixture(t, { allowNativeWake: true });
-  await manifest(f, [
-    { messageId: MESSAGE, sessionId: SESSION, cwd: ctx.cwd, expiresAt: 5000, title: 'Private title', message: 'must not cross peek' },
-    { messageId: CLAIM, sessionId: OTHER, cwd: ctx.cwd, expiresAt: 5000 },
-    { messageId: CLAIM, sessionId: SESSION, cwd: '/other', expiresAt: 5000 },
-    { messageId: CLAIM, sessionId: SESSION, cwd: ctx.cwd, expiresAt: 500 },
-  ]);
-  const before = await readFile(join(f.root, 'collaboration', 'chat-mailbox', 'wake-manifest.json'));
-  const result = await f.handle(make('wake-peek'));
-  assert.deepEqual(result.messages, [{ messageId: MESSAGE, sessionId: SESSION, expiresAt: 5000 }]);
-  assert.equal(JSON.stringify(result).includes('Private'), false); assert.equal(f.calls.length, 0);
-  assert.deepEqual(await readFile(join(f.root, 'collaboration', 'chat-mailbox', 'wake-manifest.json')), before);
+test('wake peek requests the broker and filters exact recipient context', async t => {
+  const target = { sessionId: OTHER, cwd: '/recipient' }, calls = [];
+  const wanted = { messageId: MESSAGE, target, expiresAt: 5000 };
+  const f = await fixture(t, { allowNativeWake: true, rpc: async e => {
+    calls.push(e); return { messages: [wanted, { messageId: CLAIM, target: { ...target, cwd: '/different' }, expiresAt: 5000 }] };
+  } });
+  const result = await f.handle(make('wake-peek', { target }));
+  assert.deepEqual(result.messages, [wanted]);
+  assert.deepEqual(calls[0].params, { source: ctx, timeoutMs: 0 });
 });
 test('wake claims use existing exact-ID broker fencing', async t => {
   const f = await fixture(t, { allowNativeWake: true });
-  await manifest(f, [{ messageId: MESSAGE, sessionId: SESSION, cwd: ctx.cwd, expiresAt: 5000 }]);
-  await f.handle(make('wake-claim', { messageId: MESSAGE }));
-  assert.equal(f.calls[0].method, 'desktop_wake_claim');
-  assert.deepEqual(f.calls[0].params, { messageId: MESSAGE, sessionId: SESSION });
-  await assert.rejects(f.handle(make('wake-claim', { messageId: CLAIM })), { code: 'PENDING_UNAVAILABLE' });
+  const target = { sessionId: OTHER, cwd: '/recipient' };
+  await f.handle(make('wake-claim', { messageId: MESSAGE, target }));
+  assert.equal(f.calls[0].method, 'mod_wake_claim');
+  assert.deepEqual(f.calls[0].params, { source: ctx, target, messageId: MESSAGE });
   assert.equal(f.calls.length, 1);
 });
 test('wake receipt can finish after stop and never forges recipient ACK', async t => {
   const f = await fixture(t, { allowNativeWake: true });
   await write(join(f.root, 'app-stop.json'), { version: 1, stopped: true });
   await f.handle(make('wake-receipt', { messageId: MESSAGE, claimId: CLAIM, status: 'accepted' }));
-  assert.equal(f.calls[0].method, 'desktop_wake_receipt');
+  assert.equal(f.calls[0].method, 'mod_wake_receipt');
   assert.equal(f.calls[0].params.status, 'accepted');
-  assert.equal(f.calls[0].params.detail.includes('must verify'), true);
+  assert.equal(f.calls[0].params.reason, 'queued');
   await assert.rejects(f.handle(make('wake-receipt', { messageId: MESSAGE, claimId: CLAIM, status: 'acknowledged' })));
 });
 test('standalone CLI rejects malformed and oversize input without exposing paths or secrets', async t => {

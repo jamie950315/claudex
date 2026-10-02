@@ -57,6 +57,13 @@ defaults, and durable action receipts. Writes require preview and confirmation.
 It uses the existing broker; it does not replace conversation synchronization,
 MCP, native hooks, or Desktop folder/archive integrations.
 
+Version 0.2 adds opt-in automatic native delivery with explicit per-message routing,
+bounded event-backed waits and durable outcome recovery. Select the primary route
+with `node bin/claudex.mjs collaboration native-wake --route mod` only after the
+native load/acceptance gate passes. `native-wake` without `--route` is read-only.
+The installed route has not been switched: the native vendor rollout currently
+refuses Mod loading/testing. No local setting bypass is applied.
+
 Stage it with `node bin/claudex-mod.mjs stage --root /absolute/private/root --output /new/marketplace`,
 then follow the guide's native validation and plugin installation steps. Staging
 does not install or enable it. Native peer delivery remains disabled pending

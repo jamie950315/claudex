@@ -1,4 +1,5 @@
 import { createController, shortJSON, usageLine, textChunks } from './controller.mjs';
+import { createNativeWakePump } from './delivery.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validPath = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n\0]/u.test(value);
@@ -11,6 +12,8 @@ function api($, options) {
     redraw: () => { $.ui.invalidate('ui.render'); },
     fill: args => $.prompt.fill(args),
     sendSession: args => $.session.send(args),
+    tools: () => $.tool.list(),
+    after: (ms, callback) => $.clock.after(ms, callback),
     bridge: async request => {
       if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker controller access is disabled.');
       if (!validPath(options.stateRoot) || !validPath(options.nodeBinary)) throw new Error('Stage and configure the Claudex companion with canonical root and Node paths.');
@@ -18,12 +21,15 @@ function api($, options) {
       if (!validPath(root)) throw new Error('The native plugin root is unavailable.');
       const reply = await $.process.run([options.nodeBinary, `${root}/runtime/bin/claudex-mod-bridge.mjs`,
         '--root', options.stateRoot, ...(options.nativeWake === true ? ['--native-wake'] : [])], {
-        stdin: JSON.stringify(request), timeoutMs: 20000,
+        stdin: JSON.stringify(request), timeoutMs: request.op === 'wake-next' ? 35000 : 20000,
       });
       if (typeof reply.stdout !== 'string' || reply.stdout.length > 1024 * 1024) throw new Error('Companion output exceeded its bound. Inspect the existing receipt.');
       let decoded;
       try { decoded = JSON.parse(reply.stdout); } catch { throw new Error('Companion response was incomplete. Inspect the existing receipt; preserve uncertainty.'); }
-      if (reply.exitCode !== 0 || decoded.ok !== true) throw new Error(`${decoded.error?.code ?? 'COMPANION_UNAVAILABLE'}: ${decoded.error?.message ?? 'Inspect the companion receipt and broker.'}`);
+      if (reply.exitCode !== 0 || decoded.ok !== true) {
+        const error = new Error(`${decoded.error?.code ?? 'COMPANION_UNAVAILABLE'}: ${decoded.error?.message ?? 'Inspect the companion receipt and broker.'}`);
+        error.code = decoded.error?.code ?? 'COMPANION_UNAVAILABLE'; throw error;
+      }
       return decoded.result;
     },
   };
@@ -31,21 +37,24 @@ function api($, options) {
 
 export function register(on, options = {}) {
   const controller = createController({ nativeWake: options.nativeWake === true });
+  const wake = createNativeWakePump({ enabled: options.nativeWake === true });
   on('session.start', async ($, e, next) => {
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') !== '1') {
       await $.command.register({ name: 'claudex', description: 'Open the Claudex control pane. /claudex receipt UUID inspects an action.', immediate: true });
       await controller.bind(api($, options));
       await controller.refreshUsage(api($, options));
+      wake.start(api($, options));
     }
     return next(e);
   });
   on('classic.SessionStart', async ($, e, next) => {
     // Real settings hooks remain installed and keep their own native registration/ACK work.
     controller.reset();
+    wake.start(api($, options));
     $.ui.invalidate('ui.render');
     return next(e);
   });
-  on('session.end', async ($, e, next) => { controller.reset(); $.ui.invalidate('ui.render'); return next(e); });
+  on('session.end', async ($, e, next) => { controller.reset(); wake.stop(); $.ui.invalidate('ui.render'); return next(e); });
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
     await controller.refreshUsage(api($, options));
@@ -85,6 +94,7 @@ export function register(on, options = {}) {
     const tabs = ['overview', 'tasks', 'chats', 'compose', 'inbox'];
     body.push(Box({ flexDirection: 'row', columnGap: 1, children: tabs.map(tab => button(`tab-${tab}`, tab, () => controller.tab(host(), tab))) }));
     body.push(text(state.busy ? 'Operation in progress. Duplicate submission is disabled.' : usageLine(state.usage)));
+    if (options.nativeWake === true) body.push(text(`Automatic native delivery: ${wake.state.status}\n${wake.state.lastOutcome ? shortJSON(wake.state.lastOutcome) : 'Only explicitly wake-enabled broker messages are eligible.'}`));
     if (state.context) body.push(text(`Session ${state.context.sessionId}\n${state.context.cwd}`));
     if (state.error) body.push(text(`Attention: ${state.error}`));
     if (state.notice) body.push(text(state.notice));
@@ -148,7 +158,7 @@ export function register(on, options = {}) {
       body.push(text('completed = broker request returned. Task completion, delivery, ACK and cancellation exit each require their own status evidence.'));
       if (state.lastReceipt?.id) body.push(button('receipt-refresh', 'Read existing receipt (no dispatch)', () => controller.receipt(host(), state.lastReceipt.id)));
     } else if (state.tab === 'inbox') {
-      body.push(text(options.nativeWake === true ? 'Reviewed exact-recipient native queue delivery enabled. Choose another Claude session from Chats when the runtime declines self-delivery.' : 'Native receipt disabled. Existing hooks/renderer continue delivering messages.'));
+      body.push(text(options.nativeWake === true ? 'Automatic delivery follows the broker route. Manual inspection shares the same claim fence. Another loaded Mod session is needed to send to this session. Queue acceptance is not ACK.' : 'Native Mod delivery disabled in this session. Existing hooks still work; check the broker route for idle delivery.'));
       if (options.nativeWake === true) body.push(button('inbox-refresh', 'Refresh identity-only pending messages', () => controller.wakeList(host())));
       if (state.wakeTarget) body.push(text(`Recipient ${state.wakeTarget.sessionId}\n${state.wakeTarget.cwd}`));
       for (const wake of state.wakes) body.push(button(`wake-${wake.messageId}`, wake.messageId, () => controller.previewWake(host(), wake.messageId)));

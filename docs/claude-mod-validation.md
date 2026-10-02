@@ -1,6 +1,26 @@
 # Claude Mod integration validation
 
-Reviewed on 2026-10-02 against base `eb12d2e`, companion 0.1.1.
+Reviewed on 2026-10-02. Source 0.2.0 is staged for automatic delivery; installed
+0.1.1 remains the previously verified manual implementation.
+
+## Automatic-route validation gate
+
+The 0.2 implementation adds durable per-message routes, source-bound atomic
+claims, event-backed waits, lifecycle fences, SendMessage preflight, native
+refusal classification and receipt-only recovery. Synthetic checks cover routing
+across restart, legacy-reader exclusion, competing senders, disconnect/shutdown,
+expiry, unavailable targets, unknown dispatch, lost receipt responses, busy queue
+completion, source-context change, connection backoff and unsafe-storage blocking.
+
+Final full regression: 1,290 passed, zero failed, 23 original opt-in skips.
+The focused automatic-route suite has 13 passing cases.
+Static native validation passed on 2.1.286 with the new clock/tool APIs declared.
+
+Native execution is now blocked: both 2.1.286 and 2.1.287 report that the rollout
+switch served off. Process/user/project settings did not contain an explicit
+disable flag. No override was set, and the installed broker route/plugin were
+not switched. Prior nine-test/manual-delivery acceptance below remains historical;
+it does not validate the new automatic loop or establish current availability.
 
 ## Current macOS evidence
 

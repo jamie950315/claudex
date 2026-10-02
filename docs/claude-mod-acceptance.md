@@ -5,6 +5,39 @@ This checklist is for the next local Claude Code/Codex agent. Start with
 specified runtime. A written test is not an executed test; a stubbed UI tree is
 not a painted Desktop pane.
 
+## 0.2 automatic main-route gate
+
+This gate supersedes the manual-only deployment sequence below. It is currently
+blocked by the native rollout switch refusing Mod tests/loading. Do not force the
+flag, remove managed settings, or switch the installed route to pass a checklist.
+
+1. Run `test/mod-wake.test.mjs` and the affected core/transport tests. Verify full
+   regression for these shared persistence/concurrency changes.
+2. Stage 0.2 with nativeWake enabled, validate it with the actual target native
+   compiler, and run the official test kit. A static validator pass is not loading.
+3. At a safe idle boundary, install the matching broker and plugin without
+   replacing Claude Desktop or its translation. Verify loaded plugin version,
+   SendMessage availability, and one live event-backed waiter from a different
+   native session. Managed workers must remain excluded.
+4. Explicitly select `collaboration native-wake --route mod`. In dedicated,
+   authorized Sonnet 5.5 sessions, queue a new wake-enabled message and verify
+   automatic claim, actual session.send, target reply and native Stop ACK without
+   opening Inbox or manually invoking acceptWake. Confirm no legacy renderer claim.
+5. Check a receiver that is busy and one that refuses inbound messages. Preserve
+   native policy: accepted-but-held is not ACK; a definite refusal is never routed
+   around that policy. No SendMessage means no claim. No eligible sender means a
+   visible queue wait, not an invisible fallback or new model process.
+6. Test helper/broker disconnection and restart with synthetic fault injection:
+   known outcome receipts may be republished idempotently, but uncertain dispatches
+   must remain offered and must never call the native API again. Verify context
+   changes, app-stop holds, malformed private files and source-bound claim checks.
+7. Switch the route back to renderer for new messages and verify pending Mod
+   records retain their original route and evidence. Never reset claims or rewrite
+   native transcripts to make rollback appear successful.
+
+Only then promote automatic nativeWake as the installed primary route. Preserve
+the currently installed 0.1.1/renderer setup until these native gates pass.
+
 ## A. Source and synthetic tests (no inference)
 
 1. Confirm the reviewed base, clean worktree and patch hashes. Review all added

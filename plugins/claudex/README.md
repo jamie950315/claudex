@@ -1,4 +1,4 @@
-# Claudex native companion, 0.1.1
+# Claudex native companion, 0.2.0
 
 This plugin is staged from the Claudex repository with:
 
@@ -19,12 +19,18 @@ operation receipts. `/claudex receipt UUID` reads a receipt without redispatchin
 Use `/claudex:claudex-workflow` for the accompanying collaboration guidance.
 
 The native receipt adapter is disabled by default. After separate runtime and
-Desktop acceptance, it can claim a pending mailbox message and queue the original
+Desktop acceptance, enable nativeWake and select the broker's Mod route to
+automatically claim an authorized pending message and queue the original
 quoted peer context to an exact Claude session ID using `session.send`. The
 recipient's native policy and queue stay authoritative. Queue acceptance and the
 receiving model's Stop-hook ACK remain separate observations. A refused or
 uncertain dispatch stays offered for operator inspection; it is never
 silently placed back in the queue.
+
+Automatic delivery requires another loaded Mod session with SendMessage. It uses
+bounded event-backed broker waits, not a history sweep. Outcome receipts survive
+helper failures; only their publication is retried, never the native send. Broker
+route changes apply to new messages only. Preserve legacy messages and adapters.
 
 The existing MCP tools, synchronization engine, history storage, Desktop
 organization patches, lifecycle hooks, and unloaded-session fallbacks remain in

@@ -7,6 +7,7 @@ import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
+import { dispatchModWake } from './mod-wake-broker.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
 import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
@@ -140,6 +141,8 @@ export class CollaborationHub extends EventEmitter {
     this.chatWake = chatWake;
     this.claudeWakeManifest = claudeWakeManifest;
     this.claudeOwnerWake = claudeOwnerWake;
+    this.modWaiters = 0;
+    this.modReads = new Set();
   }
 
   // The controller's saved default is its explicit authorization for that level;
@@ -185,6 +188,8 @@ export class CollaborationHub extends EventEmitter {
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
+    if (this.state.nativeWakeRoute !== undefined && !['mod', 'renderer'].includes(this.state.nativeWakeRoute))
+      throw new Error('Malformed Claude native wake route.');
     if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
       throw new Error('Malformed default collaboration permission.');
     for (const [id, task] of Object.entries(this.state.tasks)) {
@@ -357,6 +362,7 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (method === 'native_wake' || method.startsWith('mod_wake_')) return dispatchModWake(this, envelope, actor);
     if (method === 'desktop_owner_wake') {
       if (actor.task || actor.peer !== 'claude' || !this.claudeOwnerWake || this.closed)
         throw new Error('Native Desktop owner wake endpoint is unavailable.');
@@ -366,6 +372,7 @@ export class CollaborationHub extends EventEmitter {
     if (['desktop_wake_claim', 'desktop_wake_receipt'].includes(method)) {
       if (actor.task || actor.peer !== 'claude' || !this.claudeWakeManifest) throw new Error('Native Desktop wake endpoint is unavailable.');
       const message = await this.chatMailbox.status(params.messageId);
+      if (message.wakeRoute === 'mod') throw new Error('This message belongs to the native Mod route.');
       if (message.targetProvider !== 'claude' || message.targetSessionId !== params.sessionId || message.wakeRequested !== true)
         throw new Error('Desktop wake identity or authorization mismatch.');
       if (method === 'desktop_wake_receipt') {
@@ -376,7 +383,7 @@ export class CollaborationHub extends EventEmitter {
       }
       if (this.closed) throw new Error('Broker is stopping.');
       await this.claudeWakeManifest.verify(params.sessionId);
-      const claim = await this.chatMailbox.claimWake(params.messageId);
+      const claim = await this.chatMailbox.claimWake(params.messageId, { route: 'renderer' });
       if (!claim) return { claimed: false };
       return { claimed: true, messageId: claim.messageId, claimId: claim.wake.claimId, context: claim.context };
     }
@@ -465,9 +472,11 @@ export class CollaborationHub extends EventEmitter {
       if (nativeTarget) await this.chatMailbox.discover(nativeTarget);
       let receipt = await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider,
         targetSessionId, message: params.message, requestId: params.requestId, wakeRequested: params.wake !== false,
+        ...(targetProvider === 'claude' && params.wake !== false ? { wakeRoute: this.state.nativeWakeRoute ?? 'renderer' } : {}),
         ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) });
       let wakeStatus = params.wake === false ? 'disabled' : 'unavailable';
-      if (params.wake !== false && targetProvider === 'claude' && this.claudeWakeManifest && receipt.state === 'queued') {
+      if (receipt.wakeRoute === 'mod' && receipt.state === 'queued') { wakeStatus = 'waiting-for-mod'; this.emit('chat-wake'); }
+      if (params.wake !== false && targetProvider === 'claude' && receipt.wakeRoute !== 'mod' && this.claudeWakeManifest && receipt.state === 'queued') {
         try { await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
         catch { wakeStatus = 'unavailable'; }
       }
@@ -935,5 +944,6 @@ export class CollaborationHub extends EventEmitter {
     for (const active of this.running.values()) active.controller.abort();
     await Promise.allSettled([...this.running.values()].map(active => active.promise));
     await this.serial;
+    await Promise.allSettled([...this.modReads]);
   }
 }
