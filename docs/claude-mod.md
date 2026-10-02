@@ -2,12 +2,14 @@
 
 Status: integrated and regression-tested on macOS; the official Claude Code
 2.1.287 strict validator and nine native test-kit cases pass. A development-signed
-macOS app build is verified. Real terminal/Desktop painting and optional recipient
-delivery remain separate deployment gates. See [validation](claude-mod-validation.md).
+macOS app build is verified. User-supplied Desktop pixels and accessibility data
+verify the real 2.1.286 pane, usage band and broker response with Traditional
+Chinese preserved. Terminal painting and optional recipient delivery remain
+separate gates. See [validation](claude-mod-validation.md).
 
 Baseline reviewed: `jamie950315/claudex` at
 `eb12d2e1d82624be4b1dc94f8f53e9a6aa85a000` (package version 1.0.3).
-Companion version: 0.1.0. Review date: 2026-10-02.
+Companion version: 0.1.1. Review date: 2026-10-02.
 The supplied revision-2 bundle is integrated with native compiler/API repairs,
 clear/end UI invalidation, and stage source-directory symlink protection.
 
@@ -64,8 +66,9 @@ The companion uses the native Mod API documented for Claude Code 2.1.287.
 This is the public baseline, not an enforced version check in the companion.
 The actual Desktop-bundled 2.1.286 runtime also passed strict validation, all
 nine native tests and SDK 0.3.286 no-inference initialization with `/claudex`
-registered, without additional feature flags. Test the installed runtime's actual
-capabilities before requiring an upgrade. These checks are not Desktop painting.
+registered, without additional feature flags. User-supplied native UI evidence
+then verified the pane and broker response on that same actual engine version.
+Test the installed runtime's actual capabilities before requiring an upgrade.
 The reviewed repo records a stricter, earlier synchronization acceptance baseline:
 Claude Code 2.1.281, SDK 0.3.281, and the repo's allowlisted Codex builds.
 Its collaboration evidence also predates 2.1.287. Check the actual source version

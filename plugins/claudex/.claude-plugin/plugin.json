@@ -1,6 +1,6 @@
 {
   "name": "claudex",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": { "name": "Claudex contributors" },
   "description": "Native Claudex control pane with reviewed operations and exact-session receipt handling.",
   "userConfig": {

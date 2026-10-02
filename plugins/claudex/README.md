@@ -1,4 +1,4 @@
-# Claudex native companion, 0.1.0
+# Claudex native companion, 0.1.1
 
 This plugin is staged from the Claudex repository with:
 
@@ -29,8 +29,9 @@ silently placed back in the queue.
 The existing MCP tools, synchronization engine, history storage, Desktop
 organization patches, lifecycle hooks, and unloaded-session fallbacks remain in
 place. The integration preserves the repository's existing runtime allowlists.
-Mods require a suitable native runtime (documented minimum 2.1.287), while full
-synchronization with that runtime needs its own acceptance evidence.
+The documented public Mod API baseline is 2.1.287, not a companion version gate.
+Native loading and the real Desktop pane also work on the tested 2.1.286 build.
+Full synchronization with a new runtime still needs its own acceptance evidence.
 
 See `docs/claude-mod.md`, `docs/claude-mod-handoff.md`, and
 `docs/claude-mod-acceptance.md` in the source repository. Review source and trust

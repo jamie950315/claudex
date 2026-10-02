@@ -64,7 +64,9 @@ separate recipient/ACK acceptance; do not upgrade a running sync runtime merely
 to load the pane. See the [handoff](docs/claude-mod-handoff.md) for deployment gates.
 The installed Desktop 2.1.286 runtime also passed native validation and command
 registration without extra flags. Inspect actual Mod availability before deciding
-that a runtime upgrade is needed; Desktop painting remains separate evidence.
+that a runtime upgrade is needed. Real Desktop pane/usage-band rendering and a
+read-only broker response are also verified on that 2.1.286 build, with the
+existing Traditional Chinese app unchanged. Native delivery stays opt-in.
 
 ### Source checkout
 

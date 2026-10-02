@@ -67,7 +67,7 @@ export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.e
     plugins: [{ name: 'claudex', source: './plugins/claudex', description: manifest.description, version: manifest.version }],
   }, null, 2)}\n`, { mode: 0o600 });
   const report = { version: 1, plugin, marketplace: output, stateRoot: root, nodeBinary: node,
-    minimumModRuntime: '2.1.287', nativeWake: nativeWake === true, hashes,
+    documentedModBaseline: '2.1.287', versionLoadGate: false, nativeWake: nativeWake === true, hashes,
     nativeValidation: 'required', synchronizationPolicy: 'unchanged', automaticInstallation: false };
   await writeFile(join(output, 'stage-report.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   return report;

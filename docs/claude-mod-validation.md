@@ -1,6 +1,6 @@
 # Claude Mod integration validation
 
-Reviewed on 2026-10-02 against base `eb12d2e`, companion 0.1.0.
+Reviewed on 2026-10-02 against base `eb12d2e`, companion 0.1.1.
 
 ## Current macOS evidence
 
@@ -18,6 +18,7 @@ was performed. Existing runtimes, SDK dependencies and services were preserved.
 | Installed Desktop CLI 2.1.286 validator and kit | Strict validation and 9 tests passed | No extra feature flags or version-policy changes |
 | SDK 0.3.286 with actual 2.1.286 runtime and Mod | Initialization and `/claudex` registration passed | Isolated, network denied, no model input, child exited |
 | Native user-scope plugin installation/configuration | Installed, enabled, all options configured | Native CLI receipts and read-back of installed configuration; not painting evidence |
+| Real Desktop Code pane and usage band | Verified by user-supplied pixels and accessibility tree | Actual engine 2.1.286, five pane tabs, broker limits/defaults response, Traditional Chinese app retained |
 | Packaged helper against the existing local broker | Passed | Read-only doctor and task inventory; no inference or mutation |
 | Development-signed Apple Silicon app build | Passed | Explicit packaging, portable Node v24.21.0, nested signing |
 | `codesign --verify --strict --deep` | Passed | Integrity/signature, not notarization or installed acceptance |
@@ -60,7 +61,7 @@ permission approval hook or periodic timer is added.
 
 ## Remaining boundaries
 
-Real terminal/Desktop painting, new-runtime synchronization, native model work
+Real terminal painting, new-runtime synchronization, native model work
 from the pane and recipient queue/Stop ACK are not established by these tests.
 Keep nativeWake off. No app replacement, runtime upgrade, service restart or
 native history mutation was performed. The companion has been installed and
@@ -69,10 +70,22 @@ state root, Node executable and nativeWake=false were saved with no unset option
 The earlier claim that installation must wait for a runtime upgrade was too broad:
 the existing 2.1.286 runtime already loads this Mod without additional flags.
 
-Native UI automation could show the translated main window but failed to target
-the composer with `noWindowsAvailable`, or selected a hidden window. This is a
-computer-use verification limitation, not evidence that the installed Mod failed.
-Do not report a painted panel until the user or a working UI target verifies it.
+Native UI automation initially failed to target the composer with
+`noWindowsAvailable`. The user then invoked `/claudex` and supplied a screenshot
+and accessibility tree showing the real pane and successful broker response.
+This closes the Desktop painting/read-only connection gate, not mutation or ACK
+acceptance. The earlier `/claudex:claudex-workflow` invocation was a separate
+user-triggered model interaction; it is not the pane-opening command.
+
+Version 0.1.1 corrects the misleading `Mod minimum` presentation and diagnostic
+field to a documented public API baseline, explicitly not a load gate. No runtime,
+permission, synchronization policy or native API behavior is changed.
+The native manager installed 0.1.1 and all 13 cached assets matched the stage.
+The existing Desktop session retained its 0.1.0 module after `/reload-plugins`
+reported success and `/claudex` was reopened; the installer explicitly requested
+a restart to apply changes. Keep that working session intact and load the update
+at its normal native lifecycle boundary. Do not claim the new label painted yet,
+rewrite the old cache in place, or interrupt an owner for a presentation update.
 
 Follow [the handoff](claude-mod-handoff.md) and
 [acceptance checklist](claude-mod-acceptance.md). Record the actual target engine;

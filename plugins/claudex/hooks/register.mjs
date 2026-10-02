@@ -90,7 +90,7 @@ export function register(on, options = {}) {
     if (state.notice) body.push(text(state.notice));
     if (state.tab === 'overview') {
       body.push(button('refresh', 'Refresh status', () => controller.refresh(host())));
-      body.push(text(`Engine: ${state.version?.version ?? 'unknown'}\nMod minimum: 2.1.287\nSynchronization version acceptance: separate; configured policy retained.`));
+      body.push(text(`Engine: ${state.version?.version ?? 'unknown'}\nPublic Mod API baseline: 2.1.287 (not a load gate)\nNative validation also passed on 2.1.286.\nSynchronization version acceptance: separate; configured policy retained.`));
       body.push(text(shortJSON(state.doctor ?? { status: 'Run Refresh status to inspect the configured root.' })));
       body.push(text(shortJSON(state.tasks?.limits ?? {})));
       body.push(button('handoff-codex', 'Append reviewed handoff draft to Codex', () => controller.handoffDraft(host(), 'codex')));

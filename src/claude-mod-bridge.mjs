@@ -96,7 +96,8 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
       return { version: 1, root, stopped: await stopState(), socketPresent, nodeVersion: process.version,
         nativeWakeEnabled: allowNativeWake, synchronizationPolicy: 'unchanged',
-        compatibility: { minimumModRuntime: '2.1.287', synchronizationAcceptance: 'separate-required-check' },
+        compatibility: { documentedModBaseline: '2.1.287', versionLoadGate: false,
+          synchronizationAcceptance: 'separate-required-check' },
         note: 'A socket pathname is presence evidence. Refresh task status to verify a broker response. Keep existing hooks and renderer fallbacks.' };
     }
     if (request.op === 'receipt') {

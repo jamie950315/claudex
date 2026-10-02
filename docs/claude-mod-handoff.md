@@ -3,7 +3,7 @@
 The revision-2 companion based on `eb12d2e` is integrated into this repository.
 Do not reapply the downloaded patch. Read `AGENTS.md`, [the guide](claude-mod.md),
 [acceptance gates](claude-mod-acceptance.md), and [validation](claude-mod-validation.md).
-Plugin version: 0.1.0. Reviewed on 2026-10-02.
+Plugin version: 0.1.1. Reviewed on 2026-10-02.
 
 ## Implemented scope
 
@@ -68,8 +68,9 @@ The inspected target Mac's user CLI is 2.1.283. Its Desktop local-runtime cache
 contains 2.1.284 and 2.1.286; cache names do not prove the active session version.
 No existing runtime, app, service or history was replaced. The companion is now
 installed and enabled through the native user-scope plugin manager, with all three
-configuration options saved and nativeWake false. Actual Desktop painting remains
-unverified because the UI automation could not target its composer reliably.
+configuration options saved and nativeWake false. User-supplied screenshot and
+accessibility evidence verifies the real Desktop pane, usage band and broker
+response on engine 2.1.286 with the Traditional Chinese app UI preserved.
 Reinspect these mutable facts before deployment.
 Private stage/build paths belong in the local operator handoff, not this repository.
 
