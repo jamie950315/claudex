@@ -36,6 +36,24 @@ function dependencyAnchorGuard(message) {
   return Object.assign(new Error(message), { code: 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED' });
 }
 
+// Native metadata rewrites may sort the projection header's object keys. Only
+// reconstruct our exact original serialization; the saved WHOLE FILE hash
+// must still match, including every byte after the first newline.
+function originalProjectionHeader(bytes) {
+  let row;
+  try { row = JSON.parse(bytes.toString('utf8')); } catch { return null; }
+  const sort = value => Array.isArray(value) ? value.map(sort) : value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  if (row.type !== 'session_meta' || row.ordinal !== 0 || row.payload?.originator !== 'claudex'
+    || row.payload.history_mode !== 'paginated'
+    || Object.keys(row).sort().join(',') !== 'ordinal,payload,timestamp,type'
+    || JSON.stringify(sort(row)) !== bytes.toString('utf8')) return null;
+  const payload = { ...row.payload };
+  delete payload.history_mode;
+  payload.history_mode = row.payload.history_mode;
+  return JSON.stringify({ timestamp: row.timestamp, type: row.type, payload, ordinal: row.ordinal });
+}
+
 function importedClaudeOriginal(record) {
   if (record.importPacket !== true) return false;
   if (record.side !== 'claude' || record.kind !== 'original' || record.managed !== false || record.packetVersion !== 2
@@ -866,34 +884,41 @@ export class DesktopRuntime {
       throw dependencyAnchorGuard('Dependency anchor requires a verified owned Codex snapshot and canonical checkpoint.');
   }
   async dependencyAnchorRawProof(path, record) {
-    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-    const sameStat = (a, b) => ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'uid', 'nlink'].every(key => a[key] === b[key]);
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const sameStat = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink'].every(key => a[key] === b[key]);
     try {
-      const before = await file.stat();
-      if (!before.isFile() || before.uid !== process.getuid() || before.nlink !== 1
-          || before.size > 64 * 1024 * 1024) throw dependencyAnchorGuard('Dependency anchor transcript is not a bounded owned regular file.');
+      const before = await file.stat({ bigint: true });
+      if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n
+          || before.size > 64n * 1024n * 1024n) throw dependencyAnchorGuard('Dependency anchor transcript is not a bounded owned regular file.');
       const digest = createHash('sha256'), chunks = [];
+      let originalDigest = null;
       let length = 0, headerLength = 0, endedHeader = false, lastByte = null;
       for await (const chunk of file.createReadStream({ autoClose: false })) {
         length += chunk.length;
         if (length > before.size) throw dependencyAnchorGuard('Dependency anchor transcript grew during verification.');
         digest.update(chunk); lastByte = chunk.at(-1);
-        if (!endedHeader) {
+        if (endedHeader) originalDigest?.update(chunk);
+        else {
           const newline = chunk.indexOf(10), part = newline < 0 ? chunk : chunk.subarray(0, newline);
           headerLength += part.length;
           if (headerLength > 64 * 1024 * 1024) throw dependencyAnchorGuard('Dependency anchor transcript header exceeds its byte limit.');
           chunks.push(part); endedHeader = newline >= 0;
+          if (endedHeader) {
+            const original = originalProjectionHeader(Buffer.concat(chunks));
+            if (original !== null) originalDigest = createHash('sha256').update(original).update('\n').update(chunk.subarray(newline + 1));
+          }
         }
       }
-      const after = await file.stat(), current = await lstat(path);
-      if (!sameStat(before, after) || !sameStat(after, current) || length !== before.size || lastByte !== 10)
+      const after = await file.stat({ bigint: true }), current = await lstat(path, { bigint: true });
+      if (!sameStat(before, after) || !sameStat(after, current) || BigInt(length) !== before.size || lastByte !== 10)
         throw dependencyAnchorGuard('Dependency anchor transcript changed during verification.');
       let row;
       try { row = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw dependencyAnchorGuard('Dependency anchor transcript header is malformed.'); }
       if (row.type !== 'session_meta' || row.payload?.id !== record.nativeId || row.payload?.cwd !== record.cwd)
         throw dependencyAnchorGuard('Dependency anchor transcript identity or working directory changed.');
-      return { path, hash: digest.digest('hex'), bytes: before.size };
+      return { path, hash: digest.digest('hex'), bytes: Number(before.size),
+        ...(originalDigest ? { originalSerializationHash: originalDigest.digest('hex') } : {}) };
     } finally { await file.close(); }
   }
   async dependencyAnchorSnapshot(record) {
@@ -968,7 +993,9 @@ export class DesktopRuntime {
         previous = edge.id;
       }
       const proof = await this.dependencyAnchorSnapshot(record);
-      if (JSON.stringify(anchor.raw) !== JSON.stringify(proof.raw)) throw dependencyAnchorGuard('Dependency anchor saved transcript bytes changed.');
+      if (anchor.raw.path !== proof.raw.path || anchor.raw.bytes !== proof.raw.bytes
+          || anchor.raw.hash !== proof.raw.hash && anchor.raw.hash !== proof.raw.originalSerializationHash)
+        throw dependencyAnchorGuard('Dependency anchor saved transcript bytes changed.');
       if (proof.bytes !== record.bytes) throw dependencyAnchorGuard('Dependency anchor aggregate storage changed.');
       return { bytes: proof.bytes };
     } catch (error) {

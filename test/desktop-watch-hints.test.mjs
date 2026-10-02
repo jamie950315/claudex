@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, writeFile, rename, symlink, unlink, realpath } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rename, symlink, unlink, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { persistentColdNativeIdentity } from '../src/desktop-watch-hints.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 
 async function fixture() {
@@ -184,4 +185,26 @@ test('native active or unknown lifecycle states cannot establish a cold hint', a
     await f.run({ maxPasses: 3 });
     assert.equal(f.calls.sync.filter(id => id === 'cold').length, 3);
   }
+});
+
+test('missing cold-cache native paths miss reuse and leave full inspection responsible for diagnostics', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-cold-hints-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const path = join(root, 'rollout.jsonl'); await writeFile(path, '{}\n');
+  const canonical = { count: 2, digest: 'a'.repeat(64) };
+  const state = { conversations: { c: { discoveryMode: 'cold-import', canonical } }, records:
+    ['codex', 'claude'].map(side => ({ conversationId: 'c', side, nativeId: side, path, cwd: root,
+      status: 'current', managed: false, kind: 'original', verified: true, checkpoint: canonical,
+      ...(side === 'claude' ? { importPacket: true, packetVersion: 2 } : {}) })) };
+  let thread = { id: 'codex', path, cwd: root, status: { type: 'idle' } };
+  const codex = { request: async () => ({ thread }) };
+  assert.ok(await persistentColdNativeIdentity(state, 'c', codex));
+  thread = { ...thread, cwd: join(root, 'removed-project') };
+  assert.equal(await persistentColdNativeIdentity(state, 'c', codex), null);
+  thread = { ...thread, cwd: root, path: join(root, 'removed-rollout') };
+  assert.equal(await persistentColdNativeIdentity(state, 'c', codex), null);
+  thread = { ...thread, path, cwd: join(path, 'not-a-directory') };
+  assert.equal(await persistentColdNativeIdentity(state, 'c', codex), null);
+  const error = new Error('Transport failed');
+  await assert.rejects(persistentColdNativeIdentity(state, 'c', { request: async () => { throw error; } }), e => e === error);
 });

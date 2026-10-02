@@ -686,6 +686,12 @@ metadata dependency inventory; each parent still has its own ancestor queries.
 Actual dependency anchors retain independent fresh inventory, canonical and raw
 proof revalidation. Never reuse this inventory for a later collection or as
 mutation authorization; native hide/remove guards still recheck independently.
+Native sorting of a Claudex projection's first JSON header may be recognized only
+by reconstructing its original serialization and matching the saved whole-file
+SHA256, with every subsequent byte unchanged. Preserve actual raw proofs and
+native files; never rebaseline an anchor from canonical message equality alone.
+Missing native paths invalidate persistent cold-cache reuse and proceed to full
+inspection for per-conversation diagnostics, rather than crashing the watcher.
 Reuse the verified read returned by assertUnchanged for that snapshot's byte
 count instead of immediately exporting the same history a second time.
 

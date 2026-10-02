@@ -69,7 +69,14 @@ export async function persistentColdNativeIdentity(state, id, codex) {
   if (!thread || thread.id !== record.nativeId) throw new Error('Codex returned a different native identity.');
   if (!['idle', 'notLoaded'].includes(thread.status?.type) || typeof thread.path !== 'string'
     || typeof thread.cwd !== 'string') return null;
-  const [path, cwd] = await Promise.all([realpath(thread.path), realpath(thread.cwd)]);
+  // Missing native paths invalidate reuse, not the watcher. The normal full
+  // inspection supplies the precise tracked-history/directory diagnostic.
+  const resolved = await Promise.allSettled([realpath(thread.path), realpath(thread.cwd)]);
+  const unexpected = resolved.find(result => result.status === 'rejected'
+    && !['ENOENT', 'ENOTDIR'].includes(result.reason?.code));
+  if (unexpected) throw unexpected.reason;
+  if (resolved.some(result => result.status === 'rejected')) return null;
+  const [path, cwd] = resolved.map(result => result.value);
   if (path !== record.path || cwd !== record.cwd) return null;
   return { nativeId: thread.id, path, cwd, inactive: true, updatedAt: thread.updatedAt ?? null };
 }

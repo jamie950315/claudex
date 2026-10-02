@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, realpath, writeFile, appendFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile, appendFile, symlink, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -125,6 +125,29 @@ test('extra retained rollout storage cannot silently escape the saved anchor quo
   const saved = { ...record, ...await runtime.adapters.codex.prepareDependencyAnchor(record), status: 'dependency-anchor' };
   state.data.bytes += 100;
   await assert.rejects(runtime.adapters.codex.assertDependencyAnchor(saved), /aggregate storage changed/);
+});
+
+test('sorted projection header keys require the exact original whole-file hash', async t => {
+  const { runtime, record, state } = await fixture(t);
+  const payload = { base_instructions: null, cwd: record.cwd, id: record.nativeId,
+    originator: 'claudex', history_mode: 'paginated' };
+  const header = { timestamp: '2026-09-27T00:00:00Z', type: 'session_meta', payload, ordinal: 0 };
+  const tail = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n';
+  const original = JSON.stringify(header) + '\n' + tail;
+  await writeFile(record.path, original); state.data.bytes = Buffer.byteLength(original);
+  const saved = { ...record, ...await runtime.adapters.codex.prepareDependencyAnchor(record), status: 'dependency-anchor' };
+  const sort = value => value && typeof value === 'object'
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  const rewritten = JSON.stringify(sort(header)) + '\n' + tail;
+  await writeFile(record.path, rewritten);
+  await runtime.adapters.codex.assertDependencyAnchor(saved);
+  assert.equal(await readFile(record.path, 'utf8'), rewritten);
+  assert.notEqual((await runtime.dependencyAnchorRawProof(record.path, saved)).hash, saved.dependencyAnchor.raw.hash);
+  // Same-size header values and body edits remain conflicts despite unchanged API history.
+  for (const changed of [rewritten.replace('2026-09-27', '2026-09-28'), rewritten.replace('task_complete', 'task_inactive')]) {
+    await writeFile(record.path, changed);
+    await assert.rejects(runtime.adapters.codex.assertDependencyAnchor(saved), /saved transcript bytes changed/);
+  }
 });
 
 test('a dependency or parent change during preflight blocks anchoring', async t => {
