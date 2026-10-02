@@ -10,13 +10,13 @@ export function createSessionObserver() {
       nativeWake: binding.api.nativeWakeEnabled, selfWake: binding.api.selfEnabled,
       inboundPolicy: 'unknown', capabilities: { sendMessage: false }, usage: null };
     const [policy, tools, usage] = await Promise.all([
-      binding.api.inbound().catch(() => 'unknown'), binding.api.tools().catch(() => []), binding.api.usage().catch(() => null),
+      binding.api.inbound().catch(() => 'unknown'), binding.api.tools().catch(() => null), binding.api.usage().catch(() => null),
     ]);
     if (current !== binding || !same(await binding.api.context(), binding.context) || current !== binding) return null;
     const percent = usage?.context?.percent;
     return { observerId: binding.id, sequence, lifecycle, nativeWake: binding.api.nativeWakeEnabled,
       selfWake: binding.api.selfEnabled, inboundPolicy: ['allow', 'hold', 'refuse'].includes(policy) ? policy : 'unknown',
-      capabilities: { sendMessage: Array.isArray(tools) && tools.some(tool => tool.name === 'SendMessage') },
+      capabilities: { sendMessage: Array.isArray(tools) ? tools.some(tool => tool.name === 'SendMessage') : null },
       usage: Number.isFinite(percent) && percent >= 0 && percent <= 100 ? { contextPercent: percent } : null };
   }
   async function publish(binding, lifecycle) {

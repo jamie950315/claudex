@@ -160,7 +160,7 @@ export function validateModObservation(value) {
   insist(typeof value.nativeWake === 'boolean' && typeof value.selfWake === 'boolean');
   insist(['allow', 'hold', 'refuse', 'unknown'].includes(value.inboundPolicy));
   fields(value.capabilities, ['sendMessage'], ['sendMessage']);
-  insist(typeof value.capabilities.sendMessage === 'boolean');
+  insist(value.capabilities.sendMessage === null || typeof value.capabilities.sendMessage === 'boolean');
   if (value.usage !== null) {
     fields(value.usage, ['contextPercent'], ['contextPercent']);
     insist(Number.isFinite(value.usage.contextPercent) && value.usage.contextPercent >= 0 && value.usage.contextPercent <= 100);

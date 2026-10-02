@@ -51,8 +51,9 @@ export async function modDeliveryDiagnosis(hub, message) {
   if (!reason) {
     const senders = [...records(hub).values()].filter(value => value.lifecycle === 'loaded'
       && value.context.sessionId !== message.targetSessionId && value.nativeWake);
-    reason = !senders.length ? 'no-live-receiver' : !senders.some(value => value.capabilities.sendMessage)
-      ? 'missing-SendMessage' : 'sender-observed';
+    reason = !senders.length ? 'no-live-receiver' : senders.some(value => value.capabilities.sendMessage === true)
+      ? 'sender-observed' : senders.some(value => value.capabilities.sendMessage === null)
+        ? 'native-tools-unavailable' : 'missing-SendMessage';
   }
   return { reason, observedAt: Date.now(), receiver: observation, diagnosticOnly: true,
     note: 'Observations do not prove dispatch readiness, recipient ACK, or work completion.' };

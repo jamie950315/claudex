@@ -50,7 +50,9 @@ test('peer delivery reports missing SendMessage on observed sender without assum
   const message = await f.send();
   await f.call('mod_wake_observe', { source: other, observation: observation({ capabilities: { sendMessage: false } }) });
   assert.equal((await modDeliveryDiagnosis(f.hub, message)).reason, 'missing-SendMessage');
-  await f.call('mod_wake_observe', { source: other, observation: observation({ sequence: 2 }) });
+  await f.call('mod_wake_observe', { source: other, observation: observation({ sequence: 2, capabilities: { sendMessage: null } }) });
+  assert.equal((await modDeliveryDiagnosis(f.hub, message)).reason, 'native-tools-unavailable');
+  await f.call('mod_wake_observe', { source: other, observation: observation({ sequence: 3 }) });
   assert.equal((await modDeliveryDiagnosis(f.hub, message)).reason, 'sender-observed');
 });
 test('observations expire, end fences late results and restart never restores online evidence', async t => {
@@ -123,4 +125,14 @@ test('native lifecycle observation strips content and fences suspended callbacks
   await new Promise(resolve => setImmediate(resolve));
   await observer.stop(); release(source); await starting;
   assert.equal(calls.length, 2);
+});
+
+test('unavailable native tool inventory is unknown rather than a false missing-tool claim', async () => {
+  const calls = [], observer = createSessionObserver();
+  await observer.start({ worker: async () => false, context: async () => source, inbound: async () => 'allow',
+    tools: async () => { throw new Error('Synthetic native inspection failure'); },
+    usage: async () => null, nativeWakeEnabled: true, selfEnabled: false,
+    bridge: async request => { calls.push(request); return { observed: true }; } });
+  assert.equal(calls[0].observation.capabilities.sendMessage, null);
+  await observer.stop();
 });
