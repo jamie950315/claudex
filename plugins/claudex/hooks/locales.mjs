@@ -1,0 +1,1711 @@
+/** English-keyed presentation catalogs. Protocol values and peer text stay verbatim.
+ * Columns: Traditional Chinese, Simplified Chinese, Japanese, Korean, Spanish,
+ * German, French, Italian. The English key is also the English translation. */
+const rows = {
+  "Language preference could not be read. Select a language.": [
+    "無法讀取語言偏好設定。請選擇語言。",
+    "无法读取语言偏好设置。请选择语言。",
+    "言語設定を読み取れませんでした。言語を選択してください。",
+    "언어 기본 설정을 읽을 수 없습니다. 언어를 선택하세요.",
+    "No se pudo leer la preferencia de idioma. Seleccione un idioma.",
+    "Spracheinstellung konnte nicht gelesen werden. Bitte eine Sprache wählen.",
+    "Impossible de lire la préférence de langue. Sélectionnez une langue.",
+    "Impossibile leggere la preferenza della lingua. Seleziona una lingua."
+  ],
+  "Saved language is unsupported. Select a language.": [
+    "儲存的語言不受支援。請選擇語言。",
+    "保存的语言不受支持。请选择语言。",
+    "保存された言語はサポートされていません。言語を選択してください。",
+    "저장된 언어가 지원되지 않습니다. 언어를 선택하세요.",
+    "El idioma guardado no es compatible. Seleccione un idioma.",
+    "Gespeicherte Sprache wird nicht unterstützt. Bitte eine Sprache wählen.",
+    "La langue enregistrée n’est pas prise en charge. Sélectionnez une langue.",
+    "La lingua salvata non è supportata. Seleziona una lingua."
+  ],
+  "System language could not be read. Select a language.": [
+    "無法讀取系統語言。請選擇語言。",
+    "无法读取系统语言。请选择语言。",
+    "システムの言語を読み取れませんでした。言語を選択してください。",
+    "시스템 언어를 읽을 수 없습니다. 언어를 선택하세요.",
+    "No se pudo leer el idioma del sistema. Seleccione un idioma.",
+    "Systemsprache konnte nicht gelesen werden. Bitte eine Sprache wählen.",
+    "Impossible de lire la langue du système. Sélectionnez une langue.",
+    "Impossibile leggere la lingua del sistema. Seleziona una lingua."
+  ],
+  "Language preference could not be saved. Your previous selection is unchanged.": [
+    "無法儲存語言偏好設定。先前的選擇維持不變。",
+    "无法保存语言偏好设置。之前的选择保持不变。",
+    "言語設定を保存できませんでした。以前の選択は変更されていません。",
+    "언어 기본 설정을 저장할 수 없습니다. 이전 선택은 유지됩니다.",
+    "No se pudo guardar la preferencia de idioma. Su selección anterior no ha cambiado.",
+    "Spracheinstellung konnte nicht gespeichert werden. Die bisherige Auswahl bleibt unverändert.",
+    "Impossible d’enregistrer la préférence de langue. Votre choix précédent est inchangé.",
+    "Impossibile salvare la preferenza della lingua. La selezione precedente non è cambiata."
+  ],
+  "Open the Claudex control pane. /claudex receipt UUID inspects an action.": [
+    "開啟 Claudex 控制面板。使用 /claudex receipt UUID 檢查操作。",
+    "打开 Claudex 控制面板。使用 /claudex receipt UUID 检查操作。",
+    "Claudex コントロールパネルを開きます。/claudex receipt UUID で操作を確認できます。",
+    "Claudex 제어 패널을 엽니다. /claudex receipt UUID로 작업을 확인합니다.",
+    "Abra el panel de control de Claudex. /claudex receipt UUID permite inspeccionar una acción.",
+    "Claudex-Steuerungsbereich öffnen. /claudex receipt UUID prüft eine Aktion.",
+    "Ouvrir le panneau de contrôle Claudex. /claudex receipt UUID permet d’examiner une action.",
+    "Apri il pannello di controllo Claudex. /claudex receipt UUID consente di esaminare un’azione."
+  ],
+  "Use this managed worker's existing generation-scoped MCP tools.": [
+    "請使用此受管理執行者既有、限定於目前世代的 MCP 工具。",
+    "请使用此受管理执行者现有、限定于当前世代的 MCP 工具。",
+    "この管理対象ワーカーの現在の世代に限定された既存の MCP ツールを使用してください。",
+    "이 관리형 워커의 현재 세대로 범위가 제한된 기존 MCP 도구를 사용하세요.",
+    "Use las herramientas MCP existentes de este agente ejecutor, limitadas a su generación.",
+    "Die vorhandenen, generationsgebundenen MCP-Werkzeuge dieses verwalteten Workers verwenden.",
+    "Utilisez les outils MCP existants de cet agent exécutant géré, limités à sa génération.",
+    "Usa gli strumenti MCP esistenti di questo agente esecutore gestito, limitati alla sua generazione."
+  ],
+  "Use /claudex or /claudex receipt UUID.": [
+    "請使用 /claudex 或 /claudex receipt UUID。",
+    "请使用 /claudex 或 /claudex receipt UUID。",
+    "/claudex または /claudex receipt UUID を使用してください。",
+    "/claudex 또는 /claudex receipt UUID를 사용하세요.",
+    "Use /claudex o /claudex receipt UUID.",
+    "/claudex oder /claudex receipt UUID verwenden.",
+    "Utilisez /claudex ou /claudex receipt UUID.",
+    "Usa /claudex o /claudex receipt UUID."
+  ],
+  "Own-inbox receive blocked ({phase}: {code}). Preserve the receipt; no automatic replay.": [
+    "自身收件匣接收已阻擋（{phase}：{code}）。請保留回條；不會自動重送。",
+    "自身收件箱接收已阻止（{phase}：{code}）。请保留回执；不会自动重发。",
+    "自身の受信箱への受信をブロックしました（{phase}: {code}）。受領記録を保存してください。自動再送は行いません。",
+    "자체 수신함 수신이 차단되었습니다({phase}: {code}). 수신 기록을 보존하세요. 자동 재전송하지 않습니다.",
+    "Recepción en la propia bandeja bloqueada ({phase}: {code}). Conserve el comprobante; no habrá reenvío automático.",
+    "Empfang im eigenen Posteingang blockiert ({phase}: {code}). Beleg aufbewahren; keine automatische Wiederholung.",
+    "Réception dans la boîte propre bloquée ({phase} : {code}). Conservez le reçu ; aucun renvoi automatique.",
+    "Ricezione nella propria casella bloccata ({phase}: {code}). Conserva la ricevuta; nessun reinvio automatico."
+  ],
+  "Managed worker controller access is disabled.": [
+    "受管理執行者的控制端存取已停用。",
+    "受管理执行者的控制端访问已停用。",
+    "管理対象ワーカーのコントローラーアクセスは無効です。",
+    "관리형 워커의 컨트롤러 접근이 비활성화되어 있습니다.",
+    "El acceso al controlador está desactivado para los agentes ejecutores administrados.",
+    "Controller-Zugriff für verwaltete Worker ist deaktiviert.",
+    "L’accès au contrôleur est désactivé pour les agents exécutants gérés.",
+    "L’accesso al controller è disattivato per gli agenti esecutori gestiti."
+  ],
+  "Stage and configure the Claudex companion with canonical root and Node paths.": [
+    "請使用標準化的根目錄與 Node 路徑，準備並設定 Claudex 伴隨模組。",
+    "请使用规范化的根目录与 Node 路径，准备并配置 Claudex 伴随模块。",
+    "正規化されたルートと Node のパスを指定して、Claudex 連携モジュールを準備・設定してください。",
+    "정규화된 루트 및 Node 경로로 Claudex 연동 모듈을 준비하고 설정하세요.",
+    "Prepare y configure el complemento Claudex con rutas canónicas de raíz y Node.",
+    "Das Claudex-Begleitmodul mit kanonischen Stamm- und Node-Pfaden bereitstellen und konfigurieren.",
+    "Préparez et configurez le module compagnon Claudex avec les chemins canoniques de la racine et de Node.",
+    "Prepara e configura il modulo complementare Claudex con percorsi canonici della radice e di Node."
+  ],
+  "The native plugin root is unavailable.": [
+    "無法取得原生外掛程式根目錄。",
+    "无法获取原生插件根目录。",
+    "ネイティブプラグインのルートを取得できません。",
+    "기본 플러그인 루트 경로를 사용할 수 없습니다.",
+    "La raíz del plugin nativo no está disponible.",
+    "Das Stammverzeichnis des nativen Plugins ist nicht verfügbar.",
+    "Le répertoire racine du plugin natif est indisponible.",
+    "La directory radice del plugin nativo non è disponibile."
+  ],
+  "Companion output exceeded its bound. Inspect the existing receipt.": [
+    "伴隨模組輸出超過上限。請檢查既有回條。",
+    "伴随模块输出超过上限。请检查现有回执。",
+    "連携モジュールの出力が上限を超えました。既存の受領記録を確認してください。",
+    "연동 모듈 출력이 한도를 초과했습니다. 기존 수신 기록을 확인하세요.",
+    "La salida del complemento superó su límite. Revise el comprobante existente.",
+    "Die Ausgabe des Begleitmoduls überschritt die Grenze. Vorhandenen Beleg prüfen.",
+    "La sortie du module compagnon a dépassé sa limite. Vérifiez le reçu existant.",
+    "L’output del modulo complementare ha superato il limite. Controlla la ricevuta esistente."
+  ],
+  "Companion response was incomplete. Inspect the existing receipt; preserve uncertainty.": [
+    "伴隨模組回應不完整。請檢查既有回條，並保留結果不明的狀態。",
+    "伴随模块响应不完整。请检查现有回执，并保留结果不明的状态。",
+    "連携モジュールの応答が不完全でした。既存の受領記録を確認し、結果不明の状態を保持してください。",
+    "연동 모듈 응답이 불완전합니다. 기존 수신 기록을 확인하고 결과 불확실 상태를 유지하세요.",
+    "La respuesta del complemento fue incompleta. Revise el comprobante existente y conserve el estado incierto.",
+    "Die Antwort des Begleitmoduls war unvollständig. Vorhandenen Beleg prüfen; Ungewissheit beibehalten.",
+    "La réponse du module compagnon était incomplète. Vérifiez le reçu existant ; conservez l’état incertain.",
+    "La risposta del modulo complementare era incompleta. Controlla la ricevuta esistente e conserva lo stato incerto."
+  ],
+  "Blocked: {code}": [
+    "已阻擋：{code}",
+    "已阻止：{code}",
+    "ブロック中：{code}",
+    "차단됨: {code}",
+    "Bloqueado: {code}",
+    "Blockiert: {code}",
+    "Bloqué : {code}",
+    "Bloccato: {code}"
+  ],
+  "Not started": [
+    "尚未開始",
+    "尚未开始",
+    "未開始",
+    "시작되지 않음",
+    "Sin iniciar",
+    "Nicht gestartet",
+    "Non démarré",
+    "Non avviato"
+  ],
+  "Managed worker": [
+    "受管理執行者",
+    "受管理执行者",
+    "管理対象ワーカー",
+    "관리형 워커",
+    "Agente ejecutor administrado",
+    "Verwalteter Worker",
+    "Agent exécutant géré",
+    "Agente esecutore gestito"
+  ],
+  "Waiting for an authorized message": [
+    "正在等待已授權的訊息",
+    "正在等待已授权的消息",
+    "許可済みメッセージを待機中",
+    "승인된 메시지 대기 중",
+    "Esperando un mensaje autorizado",
+    "Wartet auf eine autorisierte Nachricht",
+    "En attente d’un message autorisé",
+    "In attesa di un messaggio autorizzato"
+  ],
+  "Stopping": [
+    "停止中",
+    "正在停止",
+    "停止処理中",
+    "중지 중",
+    "Deteniendo",
+    "Wird gestoppt",
+    "Arrêt en cours",
+    "Arresto in corso"
+  ],
+  "Paused by app": [
+    "已由 App 暫停",
+    "已由 App 暂停",
+    "アプリにより一時停止",
+    "앱에서 일시 중지됨",
+    "Pausado por la app",
+    "Von der App pausiert",
+    "Suspendu par l’application",
+    "In pausa dall’app"
+  ],
+  "Recovering connection or receipt": [
+    "正在恢復連線或回條",
+    "正在恢复连接或回执",
+    "接続または受領記録を復旧中",
+    "연결 또는 수신 기록 복구 중",
+    "Recuperando conexión o comprobante",
+    "Verbindung oder Beleg wird wiederhergestellt",
+    "Récupération de la connexion ou du reçu",
+    "Ripristino della connessione o della ricevuta"
+  ],
+  "Submitted": [
+    "已提交",
+    "已提交",
+    "送信済み",
+    "제출됨",
+    "Enviado",
+    "Übermittelt",
+    "Envoyé",
+    "Inviato"
+  ],
+  "Operation in progress. Duplicate submission is disabled.": [
+    "操作進行中，已停用重複提交。",
+    "操作进行中，已停用重复提交。",
+    "操作中です。重複送信は無効になっています。",
+    "작업이 진행 중입니다. 중복 제출은 비활성화되어 있습니다.",
+    "Operación en curso. El envío duplicado está desactivado.",
+    "Aktion läuft. Doppeltes Senden ist deaktiviert.",
+    "Opération en cours. Les envois en double sont désactivés.",
+    "Operazione in corso. Gli invii duplicati sono disattivati."
+  ],
+  "Preview truncated. Read the exact-ID status or receipt for the complete record.": [
+    "預覽已截斷。請使用確切 ID 讀取狀態或回條，查看完整紀錄。",
+    "预览已截断。请使用确切 ID 读取状态或回执，查看完整记录。",
+    "プレビューは省略されています。完全な記録は正確な ID を指定して状態または受領記録を確認してください。",
+    "미리보기가 잘렸습니다. 전체 기록은 정확한 ID로 상태 또는 수신 기록을 조회하세요.",
+    "Vista previa truncada. Consulte el estado o comprobante por su ID exacto para ver el registro completo.",
+    "Vorschau gekürzt. Für den vollständigen Datensatz Status oder Beleg anhand der genauen ID lesen.",
+    "Aperçu tronqué. Consultez l’état ou le reçu à l’aide de l’ID exact pour obtenir le dossier complet.",
+    "Anteprima abbreviata. Leggi lo stato o la ricevuta con l’ID esatto per il record completo."
+  ],
+  "Uncertain work needs inspection before overlapping writes.": [
+    "進行寫入範圍重疊的工作前，必須先檢查結果不明的工作。",
+    "进行写入范围重叠的工作前，必须先检查结果不明的工作。",
+    "書き込み範囲が重なる作業の前に、結果が不明な作業を確認する必要があります。",
+    "쓰기 범위가 겹치는 작업을 시작하기 전에 결과가 불확실한 작업을 확인해야 합니다.",
+    "Debe revisar el trabajo con resultado incierto antes de realizar escrituras que se solapen.",
+    "Arbeit mit ungewissem Ergebnis muss vor überlappenden Schreibzugriffen geprüft werden.",
+    "Le travail au résultat incertain doit être vérifié avant toute écriture sur les mêmes ressources.",
+    "Il lavoro con esito incerto va controllato prima di scritture sulle stesse risorse."
+  ],
+  "Mod API baseline: 2.1.287; also validated on 2.1.286. Synchronization acceptance is separate.": [
+    "Mod API 基準版本：2.1.287；也已在 2.1.286 驗證。同步功能須另行驗收。",
+    "Mod API 基准版本：2.1.287；也已在 2.1.286 验证。同步功能须另行验收。",
+    "Mod API 基準：2.1.287。2.1.286 でも検証済みです。同期機能の検証は別途必要です。",
+    "Mod API 기준 버전: 2.1.287. 2.1.286에서도 검증되었습니다. 동기화 검증은 별도입니다.",
+    "Versión de referencia de Mod API: 2.1.287; también validado en 2.1.286. La sincronización se valida por separado.",
+    "Mod-API-Basis: 2.1.287; auch unter 2.1.286 geprüft. Die Synchronisierung benötigt eine separate Abnahme.",
+    "Référence Mod API : 2.1.287 ; également validé sur 2.1.286. La synchronisation nécessite une validation distincte.",
+    "Versione di riferimento Mod API: 2.1.287; verificato anche su 2.1.286. La sincronizzazione richiede una verifica separata."
+  ],
+  "No tasks in this inventory. Create a reviewed task from Compose.": [
+    "清單中沒有任務。可前往「撰寫」建立並檢查新任務。",
+    "列表中没有任务。可前往“撰写”创建并检查新任务。",
+    "タスクはありません。「作成」で新しいタスクを準備し、内容を確認してください。",
+    "목록에 작업이 없습니다. 작성 탭에서 새 작업을 만들고 검토하세요.",
+    "No hay tareas en esta lista. Cree y revise una tarea desde Redactar.",
+    "Keine Aufgaben vorhanden. Unter „Verfassen“ eine Aufgabe erstellen und prüfen.",
+    "Aucune tâche dans cette liste. Créez puis vérifiez une tâche dans Rédiger.",
+    "Nessuna attività nell’elenco. Crea e controlla un’attività da Componi."
+  ],
+  "Choose an exact ID. Duplicate titles and metadata errors remain visible.": [
+    "請選擇確切 ID。重複標題與中繼資料錯誤仍會顯示。",
+    "请选择确切 ID。重复标题与元数据错误仍会显示。",
+    "正確な ID を選択してください。重複タイトルやメタデータエラーも表示されます。",
+    "정확한 ID를 선택하세요. 중복 제목과 메타데이터 오류도 표시됩니다.",
+    "Elija un ID exacto. Los títulos duplicados y errores de metadatos siguen visibles.",
+    "Eine genaue ID auswählen. Doppelte Titel und Metadatenfehler bleiben sichtbar.",
+    "Choisissez un ID exact. Les titres en double et les erreurs de métadonnées restent visibles.",
+    "Scegli un ID esatto. Titoli duplicati ed errori nei metadati restano visibili."
+  ],
+  "No matching conversations. Try another title.": [
+    "找不到符合的對話。請嘗試其他標題。",
+    "找不到匹配的对话。请尝试其他标题。",
+    "一致する会話はありません。別のタイトルを試してください。",
+    "일치하는 대화가 없습니다. 다른 제목을 입력하세요.",
+    "No hay conversaciones coincidentes. Pruebe otro título.",
+    "Keine passenden Unterhaltungen. Einen anderen Titel versuchen.",
+    "Aucune conversation correspondante. Essayez un autre titre.",
+    "Nessuna conversazione corrispondente. Prova un altro titolo."
+  ],
+  "Enter prepares a preview only. Review the complete action before confirming.": [
+    "按 Enter 只會準備預覽。確認前請檢查完整操作。",
+    "按 Enter 只会准备预览。确认前请检查完整操作。",
+    "Enter キーではプレビューの準備のみ行います。確定する前に操作の全内容を確認してください。",
+    "Enter 키는 미리보기만 준비합니다. 확정하기 전에 전체 작업 내용을 검토하세요.",
+    "Intro solo prepara una vista previa. Revise la acción completa antes de confirmar.",
+    "Enter erstellt nur eine Vorschau. Vor der Bestätigung die vollständige Aktion prüfen.",
+    "Entrée prépare uniquement un aperçu. Vérifiez l’action complète avant de confirmer.",
+    "Invio prepara soltanto un’anteprima. Controlla l’azione completa prima di confermare."
+  ],
+  "Native model work consumes account allowance.": [
+    "原生模型工作會消耗帳號用量。",
+    "原生模型工作会消耗账号额度。",
+    "ネイティブモデルの実行はアカウントの利用枠を消費します。",
+    "기본 모델 작업은 계정 사용 한도를 소모합니다.",
+    "El trabajo del modelo nativo consume el cupo de la cuenta.",
+    "Native Modellarbeit verbraucht das Kontingent des Kontos.",
+    "Le travail du modèle natif consomme le quota du compte.",
+    "Il lavoro del modello nativo consuma la quota dell’account."
+  ],
+  "Omit blank model or effort fields. null selects native CLI defaults.": [
+    "模型或推理程度留空時，請省略該欄位。null 會使用原生 CLI 預設值。",
+    "模型或推理程度为空时，请省略该字段。null 会使用原生 CLI 默认值。",
+    "モデルや推論レベルが空の場合はフィールドを省略してください。null はネイティブ CLI の既定値を選択します。",
+    "모델 또는 추론 수준이 비어 있으면 필드를 생략하세요. null은 기본 CLI 설정을 선택합니다.",
+    "Omita los campos de modelo o esfuerzo vacíos. null selecciona los valores predeterminados del CLI nativo.",
+    "Leere Modell- oder Reasoning-Felder weglassen. null wählt die nativen CLI-Standardwerte.",
+    "Omettez les champs de modèle ou d’effort vides. null sélectionne les valeurs par défaut du CLI natif.",
+    "Ometti i campi vuoti del modello o dello sforzo di ragionamento. null seleziona i valori predefiniti della CLI nativa."
+  ],
+  "Full-access and forced ownership changes stay outside this pane.": [
+    "此面板不提供完整存取或強制變更負責者的操作。",
+    "此面板不提供完全访问或强制变更负责人的操作。",
+    "フルアクセスや担当の強制変更は、このパネルでは操作できません。",
+    "이 패널에서는 전체 접근 또는 담당자 강제 변경을 수행할 수 없습니다.",
+    "El acceso completo y los cambios forzados de responsable se gestionan fuera de este panel.",
+    "Vollzugriff und erzwungene Zuständigkeitswechsel erfolgen außerhalb dieses Bereichs.",
+    "L’accès complet et les changements forcés de responsable se gèrent hors de ce panneau.",
+    "L’accesso completo e le modifiche forzate del responsabile si gestiscono fuori da questo pannello."
+  ],
+  "Confirm dispatches exactly this operation. Writable work needs disjoint files or a dedicated checkout. Cancellation retains existing edits.": [
+    "確認後會送出這一項確切操作。可寫入的工作需要互不重疊的檔案或獨立 checkout。取消操作會保留既有修改。",
+    "确认后会发送这一项确切操作。可写入的工作需要互不重叠的文件或独立 checkout。取消操作会保留现有修改。",
+    "確認すると、この操作だけを送信します。書き込み作業には重複しないファイルまたは専用のチェックアウトが必要です。キャンセルしても既存の編集は保持されます。",
+    "확인하면 정확히 이 작업만 전송됩니다. 쓰기 작업에는 겹치지 않는 파일 또는 전용 체크아웃이 필요합니다. 취소해도 기존 편집 내용은 유지됩니다.",
+    "Confirmar envía exactamente esta operación. El trabajo con escritura necesita archivos separados o una copia de trabajo dedicada. Cancelar conserva las ediciones existentes.",
+    "Die Bestätigung sendet genau diese Aktion. Schreibende Arbeit erfordert getrennte Dateien oder einen eigenen Checkout. Ein Abbruch bewahrt vorhandene Änderungen.",
+    "La confirmation envoie exactement cette opération. Les travaux en écriture nécessitent des fichiers distincts ou une copie de travail dédiée. L’annulation conserve les modifications existantes.",
+    "La conferma invia esattamente questa operazione. Il lavoro in scrittura richiede file distinti o un checkout dedicato. L’annullamento conserva le modifiche esistenti."
+  ],
+  "Completed means the broker request returned. Task completion, delivery, ACK and cancellation exit need separate evidence.": [
+    "「已完成」代表協調服務請求已傳回。任務完成、訊息傳遞、ACK 與取消後退出，均須各自確認。",
+    "“已完成”表示协调服务请求已返回。任务完成、消息传递、ACK 与取消后退出，均须各自确认。",
+    "「完了」は調整サービスのリクエストが返ったことを示します。タスク完了、配信、ACK、キャンセル後の終了は、それぞれ別の証拠が必要です。",
+    "완료됨은 조정 서비스 요청이 반환되었음을 뜻합니다. 작업 완료, 전달, ACK 및 취소 후 종료는 각각 별도로 확인해야 합니다.",
+    "Completado significa que la solicitud al coordinador ha respondido. La finalización de la tarea, la entrega, el ACK y la salida tras cancelar requieren pruebas independientes.",
+    "Abgeschlossen bedeutet, dass die Vermittlungsanfrage zurückgekehrt ist. Aufgabenabschluss, Zustellung, ACK und Beendigung nach Abbruch benötigen jeweils eigene Nachweise.",
+    "Terminé signifie que la requête au coordinateur a répondu. L’achèvement de la tâche, la distribution, l’ACK et l’arrêt après annulation nécessitent des preuves distinctes.",
+    "Completato significa che la richiesta al coordinatore ha risposto. Completamento dell’attività, consegna, ACK e uscita dopo l’annullamento richiedono prove separate."
+  ],
+  "Automatic delivery follows the broker route. mod-self needs only this loaded session; mod needs another sender. Native hold/refuse remains active.": [
+    "自動傳遞依照協調服務的路由進行。mod-self 只需要目前已載入的對話；mod 則需要另一個傳送者。原生 hold/refuse 政策仍然有效。",
+    "自动传递按照协调服务的路由进行。mod-self 只需要当前已加载的会话；mod 则需要另一个发送者。原生 hold/refuse 策略仍然有效。",
+    "自動配信は調整サービスのルートに従います。mod-self はこの読み込み済みセッションのみ、mod は別の送信者を必要とします。ネイティブの hold/refuse ポリシーは引き続き有効です。",
+    "자동 전달은 조정 서비스 경로를 따릅니다. mod-self는 로드된 이 세션만 필요하며 mod는 별도 발신자가 필요합니다. 기본 hold/refuse 정책은 계속 적용됩니다.",
+    "La entrega automática sigue la ruta del coordinador. mod-self solo necesita esta sesión cargada; mod necesita otro remitente. La política nativa hold/refuse sigue activa.",
+    "Automatische Zustellung folgt der Route des Vermittlungsdienstes. mod-self benötigt nur diese geladene Sitzung, mod einen weiteren Sender. Native hold/refuse-Regeln bleiben aktiv.",
+    "La distribution automatique suit la route du coordinateur. mod-self requiert uniquement cette session chargée ; mod requiert un autre expéditeur. La politique native hold/refuse reste active.",
+    "La consegna automatica segue la rotta del coordinatore. mod-self richiede solo questa sessione caricata; mod richiede un altro mittente. La politica nativa hold/refuse resta attiva."
+  ],
+  "Native Mod delivery is disabled. Existing hooks still work; check the broker route for idle delivery.": [
+    "原生 Mod 傳遞已停用。既有 hooks 仍可運作；閒置時的傳遞請檢查協調服務路由。",
+    "原生 Mod 传递已停用。现有 hooks 仍可运行；空闲时的传递请检查协调服务路由。",
+    "ネイティブ Mod 配信は無効です。既存のフックは動作します。アイドル時の配信は調整サービスのルートを確認してください。",
+    "기본 Mod 전달이 비활성화되어 있습니다. 기존 훅은 계속 작동합니다. 유휴 상태 전달은 조정 서비스 경로를 확인하세요.",
+    "La entrega nativa del Mod está desactivada. Los hooks existentes siguen funcionando; revise la ruta del coordinador para la entrega en reposo.",
+    "Native Mod-Zustellung ist deaktiviert. Vorhandene Hooks funktionieren weiter; für Zustellung im Leerlauf die Vermittlungsroute prüfen.",
+    "La distribution native du Mod est désactivée. Les hooks existants fonctionnent toujours ; vérifiez la route du coordinateur pour la distribution au repos.",
+    "La consegna nativa del Mod è disattivata. Gli hook esistenti continuano a funzionare; controlla la rotta del coordinatore per la consegna inattiva."
+  ],
+  "A socket write or queue acceptance is not a recipient ACK.": [
+    "寫入 socket 或佇列接受訊息，不代表收件端已回覆 ACK。",
+    "写入 socket 或队列接受消息，不代表收件端已回复 ACK。",
+    "ソケットへの書き込みやキューの受付は、受信者の ACK ではありません。",
+    "소켓 쓰기 또는 대기열 수락은 수신자의 ACK가 아닙니다.",
+    "Una escritura en el socket o la aceptación en cola no equivale a un ACK del destinatario.",
+    "Ein Socket-Schreibvorgang oder eine Warteschlangenannahme ist kein Empfänger-ACK.",
+    "Une écriture sur le socket ou une acceptation en file ne constitue pas un ACK du destinataire.",
+    "Una scrittura sul socket o l’accettazione in coda non è un ACK del destinatario."
+  ],
+  "No pending messages for this recipient.": [
+    "此收件對象沒有待處理訊息。",
+    "此收件对象没有待处理消息。",
+    "この受信者の保留中メッセージはありません。",
+    "이 수신자에게 대기 중인 메시지가 없습니다.",
+    "No hay mensajes pendientes para este destinatario.",
+    "Keine ausstehenden Nachrichten für diesen Empfänger.",
+    "Aucun message en attente pour ce destinataire.",
+    "Nessun messaggio in attesa per questo destinatario."
+  ],
+  "Native queue processing can consume model allowance. Recipient policy remains active; uncertainty blocks automatic replay. Recipient ACK remains a separate check.": [
+    "原生佇列處理可能消耗模型用量。收件政策持續生效；結果不明時禁止自動重送。收件端 ACK 仍須另外確認。",
+    "原生队列处理可能消耗模型额度。收件策略持续生效；结果不明时禁止自动重发。收件端 ACK 仍须另外确认。",
+    "ネイティブキューの処理はモデルの利用枠を消費する場合があります。受信ポリシーは有効のままです。結果が不明な場合は自動再送を行いません。受信者の ACK は別途確認が必要です。",
+    "기본 대기열 처리는 모델 사용 한도를 소모할 수 있습니다. 수신 정책은 계속 적용되며 결과가 불확실하면 자동 재전송이 차단됩니다. 수신자의 ACK는 별도로 확인해야 합니다.",
+    "El procesamiento de la cola nativa puede consumir cupo del modelo. La política del destinatario sigue activa; un resultado incierto impide el reenvío automático. El ACK se verifica por separado.",
+    "Native Warteschlangenverarbeitung kann Modellkontingent verbrauchen. Die Empfängerrichtlinie bleibt aktiv; Ungewissheit verhindert automatisches Wiederholen. Das Empfänger-ACK wird separat geprüft.",
+    "Le traitement de la file native peut consommer le quota du modèle. La politique du destinataire reste active ; un résultat incertain bloque le renvoi automatique. L’ACK reste à vérifier séparément.",
+    "L’elaborazione della coda nativa può consumare la quota del modello. La politica del destinatario resta attiva; l’incertezza blocca il reinvio automatico. L’ACK va verificato separatamente."
+  ],
+  "Unknown": [
+    "未知",
+    "未知",
+    "不明",
+    "알 수 없음",
+    "Desconocido",
+    "Unbekannt",
+    "Inconnu",
+    "Sconosciuto"
+  ],
+  "Context {value}": [
+    "上下文 {value}",
+    "上下文 {value}",
+    "コンテキスト {value}",
+    "컨텍스트 {value}",
+    "Contexto {value}",
+    "Kontext {value}",
+    "Contexte {value}",
+    "Contesto {value}"
+  ],
+  "5-hour allowance": [
+    "5 小時用量",
+    "5 小时用量",
+    "5 時間の利用枠",
+    "5시간 사용량",
+    "Cupo de 5 horas",
+    "5-Stunden-Kontingent",
+    "Quota sur 5 heures",
+    "Quota di 5 ore"
+  ],
+  "7-day allowance": [
+    "7 天用量",
+    "7 天用量",
+    "7 日間の利用枠",
+    "7일 사용량",
+    "Cupo de 7 días",
+    "7-Tage-Kontingent",
+    "Quota sur 7 jours",
+    "Quota di 7 giorni"
+  ],
+  "Work & conversations": [
+    "工作與對話",
+    "工作与对话",
+    "作業と会話",
+    "작업 및 대화",
+    "Trabajo y conversaciones",
+    "Arbeit und Unterhaltungen",
+    "Travail et conversations",
+    "Lavoro e conversazioni"
+  ],
+  "Language": [
+    "語言",
+    "语言",
+    "言語",
+    "언어",
+    "Idioma",
+    "Sprache",
+    "Langue",
+    "Lingua"
+  ],
+  "Language setting": [
+    "語言設定",
+    "语言设置",
+    "言語設定",
+    "언어 설정",
+    "Configuración de idioma",
+    "Spracheinstellung",
+    "Réglage de la langue",
+    "Impostazione della lingua"
+  ],
+  "Follow system": [
+    "跟隨系統",
+    "跟随系统",
+    "システムに従う",
+    "시스템 설정 따르기",
+    "Usar idioma del sistema",
+    "Systemsprache verwenden",
+    "Suivre le système",
+    "Segui il sistema"
+  ],
+  "Overview": [
+    "總覽",
+    "概览",
+    "概要",
+    "개요",
+    "Resumen",
+    "Übersicht",
+    "Vue d’ensemble",
+    "Panoramica"
+  ],
+  "Tasks": [
+    "任務",
+    "任务",
+    "タスク",
+    "작업",
+    "Tareas",
+    "Aufgaben",
+    "Tâches",
+    "Attività"
+  ],
+  "Chats": [
+    "對話",
+    "对话",
+    "会話",
+    "대화",
+    "Conversaciones",
+    "Unterhaltungen",
+    "Conversations",
+    "Conversazioni"
+  ],
+  "Compose": [
+    "撰寫",
+    "撰写",
+    "作成",
+    "작성",
+    "Redactar",
+    "Verfassen",
+    "Rédiger",
+    "Componi"
+  ],
+  "Inbox": [
+    "收件匣",
+    "收件箱",
+    "受信箱",
+    "수신함",
+    "Bandeja de entrada",
+    "Posteingang",
+    "Boîte de réception",
+    "Posta in arrivo"
+  ],
+  "Attention": [
+    "需要注意",
+    "需要注意",
+    "注意",
+    "주의",
+    "Atención",
+    "Hinweis",
+    "Attention",
+    "Attenzione"
+  ],
+  "Update": [
+    "最新資訊",
+    "最新信息",
+    "最新情報",
+    "업데이트",
+    "Novedades",
+    "Aktuelles",
+    "Mise à jour",
+    "Aggiornamento"
+  ],
+  "Ready": [
+    "就緒",
+    "就绪",
+    "準備完了",
+    "준비됨",
+    "Listo",
+    "Bereit",
+    "Prêt",
+    "Pronto"
+  ],
+  "Running": [
+    "執行中",
+    "运行中",
+    "実行中",
+    "실행 중",
+    "En ejecución",
+    "Wird ausgeführt",
+    "En cours",
+    "In esecuzione"
+  ],
+  "Waiting": [
+    "等待中",
+    "等待中",
+    "待機中",
+    "대기 중",
+    "En espera",
+    "Wartet",
+    "En attente",
+    "In attesa"
+  ],
+  "Queued": [
+    "已排入佇列",
+    "已加入队列",
+    "キューに追加済み",
+    "대기열에 추가됨",
+    "En cola",
+    "In Warteschlange",
+    "En file d’attente",
+    "In coda"
+  ],
+  "Completed": [
+    "已完成",
+    "已完成",
+    "完了",
+    "완료됨",
+    "Completado",
+    "Abgeschlossen",
+    "Terminé",
+    "Completato"
+  ],
+  "Failed": [
+    "失敗",
+    "失败",
+    "失敗",
+    "실패함",
+    "Fallido",
+    "Fehlgeschlagen",
+    "Échec",
+    "Non riuscito"
+  ],
+  "Cancelled": [
+    "已取消",
+    "已取消",
+    "キャンセル済み",
+    "취소됨",
+    "Cancelado",
+    "Abgebrochen",
+    "Annulé",
+    "Annullato"
+  ],
+  "Uncertain": [
+    "結果不明",
+    "结果不明",
+    "結果不明",
+    "결과 불확실",
+    "Resultado incierto",
+    "Ergebnis ungewiss",
+    "Résultat incertain",
+    "Esito incerto"
+  ],
+  "Prepared": [
+    "已準備",
+    "已准备",
+    "準備済み",
+    "준비됨",
+    "Preparado",
+    "Vorbereitet",
+    "Préparé",
+    "Preparato"
+  ],
+  "Dispatching": [
+    "送出中",
+    "发送中",
+    "送信中",
+    "전송 중",
+    "Enviando",
+    "Wird gesendet",
+    "Envoi en cours",
+    "Invio in corso"
+  ],
+  "Accepted": [
+    "已接受",
+    "已接受",
+    "受付済み",
+    "수락됨",
+    "Aceptado",
+    "Angenommen",
+    "Accepté",
+    "Accettato"
+  ],
+  "Rejected": [
+    "已拒絕",
+    "已拒绝",
+    "拒否済み",
+    "거부됨",
+    "Rechazado",
+    "Abgelehnt",
+    "Refusé",
+    "Rifiutato"
+  ],
+  "Acknowledged": [
+    "已確認收件",
+    "已确认收件",
+    "受信確認済み",
+    "수신 확인됨",
+    "Recepción confirmada",
+    "Empfang bestätigt",
+    "Réception confirmée",
+    "Ricezione confermata"
+  ],
+  "Offered": [
+    "已提供",
+    "已提供",
+    "提供済み",
+    "제공됨",
+    "Ofrecido",
+    "Angeboten",
+    "Proposé",
+    "Offerto"
+  ],
+  "Stopped": [
+    "已停止",
+    "已停止",
+    "停止中",
+    "중지됨",
+    "Detenido",
+    "Gestoppt",
+    "Arrêté",
+    "Arrestato"
+  ],
+  "Disabled": [
+    "已停用",
+    "已停用",
+    "無効",
+    "비활성화됨",
+    "Desactivado",
+    "Deaktiviert",
+    "Désactivé",
+    "Disattivato"
+  ],
+  "Idle": [
+    "閒置",
+    "空闲",
+    "アイドル",
+    "유휴 상태",
+    "Inactivo",
+    "Inaktiv",
+    "Inactif",
+    "Inattivo"
+  ],
+  "Listening": [
+    "正在等候訊息",
+    "正在等待消息",
+    "メッセージ待受中",
+    "메시지 수신 대기 중",
+    "Esperando mensajes",
+    "Wartet auf Nachrichten",
+    "À l’écoute",
+    "In ascolto"
+  ],
+  "Waiting for child tasks": [
+    "等待子任務",
+    "等待子任务",
+    "子タスクを待機中",
+    "하위 작업 대기 중",
+    "Esperando subtareas",
+    "Wartet auf Unteraufgaben",
+    "En attente des sous-tâches",
+    "In attesa delle sottoattività"
+  ],
+  "Handoff pending": [
+    "等待交接",
+    "等待交接",
+    "引き継ぎ待ち",
+    "인계 대기 중",
+    "Traspaso pendiente",
+    "Übergabe ausstehend",
+    "Transfert en attente",
+    "Passaggio in attesa"
+  ],
+  "Cancelling": [
+    "取消中",
+    "取消中",
+    "キャンセル中",
+    "취소 중",
+    "Cancelando",
+    "Wird abgebrochen",
+    "Annulation en cours",
+    "Annullamento in corso"
+  ],
+  "Read only": [
+    "唯讀",
+    "只读",
+    "読み取り専用",
+    "읽기 전용",
+    "Solo lectura",
+    "Nur lesen",
+    "Lecture seule",
+    "Sola lettura"
+  ],
+  "Workspace write": [
+    "可寫入工作區",
+    "可写入工作区",
+    "ワークスペースへの書き込み",
+    "작업 공간 쓰기",
+    "Escritura en el espacio de trabajo",
+    "Arbeitsbereich beschreiben",
+    "Écriture dans l’espace de travail",
+    "Scrittura nell’area di lavoro"
+  ],
+  "Full access": [
+    "完整存取",
+    "完全访问",
+    "フルアクセス",
+    "전체 접근",
+    "Acceso completo",
+    "Vollzugriff",
+    "Accès complet",
+    "Accesso completo"
+  ],
+  "Native default": [
+    "原生預設",
+    "原生默认",
+    "ネイティブの既定値",
+    "기본 설정",
+    "Predeterminado nativo",
+    "Nativer Standard",
+    "Valeur native par défaut",
+    "Predefinito nativo"
+  ],
+  "Default access": [
+    "預設存取權限",
+    "默认访问权限",
+    "既定のアクセス権",
+    "기본 접근 권한",
+    "Acceso predeterminado",
+    "Standardzugriff",
+    "Accès par défaut",
+    "Accesso predefinito"
+  ],
+  "Technical details": [
+    "技術詳細資訊",
+    "技术详细信息",
+    "技術情報",
+    "기술 세부 정보",
+    "Detalles técnicos",
+    "Technische Details",
+    "Détails techniques",
+    "Dettagli tecnici"
+  ],
+  "Connection": [
+    "連線",
+    "连接",
+    "接続",
+    "연결",
+    "Conexión",
+    "Verbindung",
+    "Connexion",
+    "Connessione"
+  ],
+  "Broker": [
+    "協調服務",
+    "协调服务",
+    "調整サービス",
+    "조정 서비스",
+    "Servicio coordinador",
+    "Vermittlungsdienst",
+    "Service de coordination",
+    "Servizio di coordinamento"
+  ],
+  "Stopped by app": [
+    "已由 App 停止",
+    "已由 App 停止",
+    "アプリにより停止",
+    "앱에서 중지됨",
+    "Detenido por la app",
+    "Von der App gestoppt",
+    "Arrêté par l’application",
+    "Arrestato dall’app"
+  ],
+  "Responding": [
+    "回應正常",
+    "响应正常",
+    "応答中",
+    "응답 정상",
+    "Responde",
+    "Antwortet",
+    "Répond",
+    "Risponde"
+  ],
+  "Not verified": [
+    "尚未驗證",
+    "尚未验证",
+    "未検証",
+    "확인되지 않음",
+    "Sin verificar",
+    "Nicht geprüft",
+    "Non vérifié",
+    "Non verificato"
+  ],
+  "Automatic delivery": [
+    "自動傳遞",
+    "自动传递",
+    "自動配信",
+    "자동 전달",
+    "Entrega automática",
+    "Automatische Zustellung",
+    "Distribution automatique",
+    "Consegna automatica"
+  ],
+  "Refresh status": [
+    "重新整理狀態",
+    "刷新状态",
+    "状態を更新",
+    "상태 새로 고침",
+    "Actualizar estado",
+    "Status aktualisieren",
+    "Actualiser l’état",
+    "Aggiorna stato"
+  ],
+  "Work summary": [
+    "工作摘要",
+    "工作摘要",
+    "作業の概要",
+    "작업 요약",
+    "Resumen del trabajo",
+    "Arbeitsübersicht",
+    "Résumé du travail",
+    "Riepilogo del lavoro"
+  ],
+  "Worker limit": [
+    "執行者數量上限",
+    "执行者数量上限",
+    "ワーカー数の上限",
+    "워커 수 제한",
+    "Límite de agentes ejecutores",
+    "Maximale Worker-Anzahl",
+    "Limite d’agents exécutants",
+    "Limite di agenti esecutori"
+  ],
+  "Quick actions": [
+    "快速操作",
+    "快速操作",
+    "クイック操作",
+    "빠른 작업",
+    "Acciones rápidas",
+    "Schnellaktionen",
+    "Actions rapides",
+    "Azioni rapide"
+  ],
+  "Append handoff draft for Codex": [
+    "附加交接給 Codex 的草稿",
+    "追加交接给 Codex 的草稿",
+    "Codex への引き継ぎ下書きを追加",
+    "Codex 인계 초안 추가",
+    "Añadir borrador de traspaso a Codex",
+    "Übergabeentwurf für Codex anfügen",
+    "Ajouter un brouillon de transfert vers Codex",
+    "Aggiungi bozza di passaggio a Codex"
+  ],
+  "Adds instructions to your draft. Nothing is submitted.": [
+    "將指示附加至草稿，不會送出任何內容。",
+    "将说明追加到草稿，不会发送任何内容。",
+    "下書きに手順を追加します。送信は行いません。",
+    "초안에 지침을 추가합니다. 아무 내용도 제출하지 않습니다.",
+    "Añade instrucciones al borrador. No se envía nada.",
+    "Fügt Anweisungen zum Entwurf hinzu. Es wird nichts gesendet.",
+    "Ajoute des instructions au brouillon. Rien n’est envoyé.",
+    "Aggiunge istruzioni alla bozza. Non viene inviato nulla."
+  ],
+  "Read provider defaults": [
+    "讀取供應商預設值",
+    "读取提供方默认值",
+    "プロバイダーの既定値を表示",
+    "제공자 기본값 읽기",
+    "Consultar valores del proveedor",
+    "Anbieter-Standardwerte lesen",
+    "Lire les valeurs par défaut des fournisseurs",
+    "Leggi impostazioni predefinite dei provider"
+  ],
+  "Provider defaults": [
+    "供應商預設值",
+    "提供方默认值",
+    "プロバイダーの既定値",
+    "제공자 기본값",
+    "Valores del proveedor",
+    "Anbieter-Standardwerte",
+    "Valeurs par défaut des fournisseurs",
+    "Impostazioni predefinite dei provider"
+  ],
+  "Session & runtime": [
+    "對話與執行環境",
+    "会话与运行环境",
+    "セッションと実行環境",
+    "세션 및 실행 환경",
+    "Sesión y entorno de ejecución",
+    "Sitzung und Laufzeit",
+    "Session et environnement d’exécution",
+    "Sessione e ambiente di esecuzione"
+  ],
+  "Engine": [
+    "引擎",
+    "引擎",
+    "エンジン",
+    "엔진",
+    "Motor",
+    "Engine",
+    "Moteur",
+    "Motore"
+  ],
+  "Directory": [
+    "資料夾",
+    "目录",
+    "ディレクトリ",
+    "디렉터리",
+    "Directorio",
+    "Verzeichnis",
+    "Répertoire",
+    "Directory"
+  ],
+  "Delivery diagnostics": [
+    "傳遞診斷",
+    "传递诊断",
+    "配信の診断",
+    "전달 진단",
+    "Diagnóstico de entrega",
+    "Zustellungsdiagnose",
+    "Diagnostic de distribution",
+    "Diagnostica della consegna"
+  ],
+  "Task inventory": [
+    "任務清單",
+    "任务列表",
+    "タスク一覧",
+    "작업 목록",
+    "Lista de tareas",
+    "Aufgabenliste",
+    "Liste des tâches",
+    "Elenco delle attività"
+  ],
+  "Refresh tasks": [
+    "重新整理任務",
+    "刷新任务",
+    "タスクを更新",
+    "작업 새로 고침",
+    "Actualizar tareas",
+    "Aufgaben aktualisieren",
+    "Actualiser les tâches",
+    "Aggiorna attività"
+  ],
+  "{count} tasks · showing {first}–{last}": [
+    "共 {count} 個任務 · 顯示第 {first}–{last} 個",
+    "共 {count} 个任务 · 显示第 {first}–{last} 个",
+    "{count} 件のタスク · {first}～{last} 件を表示",
+    "작업 {count}개 · {first}–{last} 표시",
+    "{count} tareas · mostrando {first}–{last}",
+    "{count} Aufgaben · angezeigt: {first}–{last}",
+    "{count} tâches · affichage de {first} à {last}",
+    "{count} attività · visualizzate {first}–{last}"
+  ],
+  "Task ID": [
+    "任務 ID",
+    "任务 ID",
+    "タスク ID",
+    "작업 ID",
+    "ID de tarea",
+    "Aufgaben-ID",
+    "ID de tâche",
+    "ID attività"
+  ],
+  "Inspect task": [
+    "檢查任務",
+    "检查任务",
+    "タスクを確認",
+    "작업 확인",
+    "Inspeccionar tarea",
+    "Aufgabe prüfen",
+    "Examiner la tâche",
+    "Esamina attività"
+  ],
+  "Previous 10": [
+    "前 10 個",
+    "前 10 个",
+    "前の 10 件",
+    "이전 10개",
+    "10 anteriores",
+    "Vorherige 10",
+    "10 précédentes",
+    "10 precedenti"
+  ],
+  "Next 10": [
+    "後 10 個",
+    "后 10 个",
+    "次の 10 件",
+    "다음 10개",
+    "10 siguientes",
+    "Nächste 10",
+    "10 suivantes",
+    "10 successive"
+  ],
+  "Task details": [
+    "任務詳情",
+    "任务详情",
+    "タスクの詳細",
+    "작업 세부 정보",
+    "Detalles de la tarea",
+    "Aufgabendetails",
+    "Détails de la tâche",
+    "Dettagli attività"
+  ],
+  "Owner": [
+    "負責者",
+    "负责人",
+    "担当",
+    "담당자",
+    "Responsable",
+    "Verantwortlich",
+    "Responsable",
+    "Responsabile"
+  ],
+  "Status": [
+    "狀態",
+    "状态",
+    "状態",
+    "상태",
+    "Estado",
+    "Status",
+    "État",
+    "Stato"
+  ],
+  "Model": [
+    "模型",
+    "模型",
+    "モデル",
+    "모델",
+    "Modelo",
+    "Modell",
+    "Modèle",
+    "Modello"
+  ],
+  "Access": [
+    "存取權限",
+    "访问权限",
+    "アクセス権",
+    "접근 권한",
+    "Acceso",
+    "Zugriff",
+    "Accès",
+    "Accesso"
+  ],
+  "Project": [
+    "專案",
+    "项目",
+    "プロジェクト",
+    "프로젝트",
+    "Proyecto",
+    "Projekt",
+    "Projet",
+    "Progetto"
+  ],
+  "Task result": [
+    "任務結果",
+    "任务结果",
+    "タスクの結果",
+    "작업 결과",
+    "Resultado de la tarea",
+    "Aufgabenergebnis",
+    "Résultat de la tâche",
+    "Risultato attività"
+  ],
+  "Task actions": [
+    "任務操作",
+    "任务操作",
+    "タスク操作",
+    "작업 동작",
+    "Acciones de la tarea",
+    "Aufgabenaktionen",
+    "Actions de la tâche",
+    "Azioni attività"
+  ],
+  "Refresh exact task": [
+    "重新整理此任務",
+    "刷新此任务",
+    "このタスクを更新",
+    "해당 작업 새로 고침",
+    "Actualizar esta tarea",
+    "Diese Aufgabe aktualisieren",
+    "Actualiser cette tâche",
+    "Aggiorna questa attività"
+  ],
+  "Compose follow-up": [
+    "撰寫後續指示",
+    "撰写后续指示",
+    "追加指示を作成",
+    "후속 지침 작성",
+    "Redactar seguimiento",
+    "Folgeanweisung verfassen",
+    "Rédiger une instruction de suivi",
+    "Componi istruzioni successive"
+  ],
+  "Preview cancellation": [
+    "預覽取消操作",
+    "预览取消操作",
+    "キャンセル内容を確認",
+    "취소 미리보기",
+    "Vista previa de cancelación",
+    "Abbruchvorschau",
+    "Prévisualiser l’annulation",
+    "Anteprima annullamento"
+  ],
+  "Find a conversation": [
+    "尋找對話",
+    "查找对话",
+    "会話を検索",
+    "대화 찾기",
+    "Buscar una conversación",
+    "Unterhaltung suchen",
+    "Rechercher une conversation",
+    "Trova una conversazione"
+  ],
+  "Title search": [
+    "搜尋標題",
+    "搜索标题",
+    "タイトル検索",
+    "제목 검색",
+    "Buscar por título",
+    "Titelsuche",
+    "Recherche par titre",
+    "Ricerca per titolo"
+  ],
+  "Search": [
+    "搜尋",
+    "搜索",
+    "検索",
+    "검색",
+    "Buscar",
+    "Suchen",
+    "Rechercher",
+    "Cerca"
+  ],
+  "List registered chats": [
+    "列出已登錄對話",
+    "列出已登记对话",
+    "登録済みの会話を表示",
+    "등록된 대화 목록",
+    "Listar conversaciones registradas",
+    "Registrierte Unterhaltungen anzeigen",
+    "Lister les conversations enregistrées",
+    "Elenca conversazioni registrate"
+  ],
+  "Provider": [
+    "供應商",
+    "提供方",
+    "プロバイダー",
+    "제공자",
+    "Proveedor",
+    "Anbieter",
+    "Fournisseur",
+    "Provider"
+  ],
+  "Session ID": [
+    "對話 ID",
+    "会话 ID",
+    "セッション ID",
+    "세션 ID",
+    "ID de sesión",
+    "Sitzungs-ID",
+    "ID de session",
+    "ID sessione"
+  ],
+  "Metadata error": [
+    "中繼資料錯誤",
+    "元数据错误",
+    "メタデータエラー",
+    "메타데이터 오류",
+    "Error de metadatos",
+    "Metadatenfehler",
+    "Erreur de métadonnées",
+    "Errore nei metadati"
+  ],
+  "Compose queue-only message": [
+    "撰寫僅排入佇列的訊息",
+    "撰写仅加入队列的消息",
+    "キュー追加のみのメッセージを作成",
+    "대기열 추가 전용 메시지 작성",
+    "Redactar mensaje solo para la cola",
+    "Nachricht nur für die Warteschlange verfassen",
+    "Rédiger un message à mettre en attente uniquement",
+    "Componi messaggio da accodare soltanto"
+  ],
+  "Inspect pending receipts": [
+    "檢查待處理回條",
+    "检查待处理回执",
+    "保留中の受領記録を確認",
+    "대기 중 수신 기록 확인",
+    "Revisar comprobantes pendientes",
+    "Ausstehende Belege prüfen",
+    "Examiner les reçus en attente",
+    "Esamina ricevute in attesa"
+  ],
+  "Title unavailable": [
+    "無法取得標題",
+    "无法获取标题",
+    "タイトル取得不可",
+    "제목을 확인할 수 없음",
+    "Título no disponible",
+    "Titel nicht verfügbar",
+    "Titre indisponible",
+    "Titolo non disponibile"
+  ],
+  "Next page": [
+    "下一頁",
+    "下一页",
+    "次のページ",
+    "다음 페이지",
+    "Página siguiente",
+    "Nächste Seite",
+    "Page suivante",
+    "Pagina successiva"
+  ],
+  "1 · Choose a starting point": [
+    "1 · 選擇起始範本",
+    "1 · 选择起始模板",
+    "1 · テンプレートを選択",
+    "1 · 시작 템플릿 선택",
+    "1 · Elija un punto de partida",
+    "1 · Ausgangspunkt wählen",
+    "1 · Choisir un point de départ",
+    "1 · Scegli un punto di partenza"
+  ],
+  "New read-only Codex task": [
+    "新增唯讀 Codex 任務",
+    "新建只读 Codex 任务",
+    "読み取り専用の Codex タスクを作成",
+    "새 읽기 전용 Codex 작업",
+    "Nueva tarea Codex de solo lectura",
+    "Neue schreibgeschützte Codex-Aufgabe",
+    "Nouvelle tâche Codex en lecture seule",
+    "Nuova attività Codex in sola lettura"
+  ],
+  "New read-only Claude task": [
+    "新增唯讀 Claude 任務",
+    "新建只读 Claude 任务",
+    "読み取り専用の Claude タスクを作成",
+    "새 읽기 전용 Claude 작업",
+    "Nueva tarea Claude de solo lectura",
+    "Neue schreibgeschützte Claude-Aufgabe",
+    "Nouvelle tâche Claude en lecture seule",
+    "Nuova attività Claude in sola lettura"
+  ],
+  "2 · Edit and preview": [
+    "2 · 編輯並預覽",
+    "2 · 编辑并预览",
+    "2 · 編集してプレビュー",
+    "2 · 편집 및 미리보기",
+    "2 · Edite y previsualice",
+    "2 · Bearbeiten und prüfen",
+    "2 · Modifier et prévisualiser",
+    "2 · Modifica e visualizza l’anteprima"
+  ],
+  "Action JSON": [
+    "操作 JSON",
+    "操作 JSON",
+    "操作 JSON",
+    "작업 JSON",
+    "JSON de la acción",
+    "Aktions-JSON",
+    "JSON de l’action",
+    "JSON dell’azione"
+  ],
+  "Preview": [
+    "預覽",
+    "预览",
+    "プレビュー",
+    "미리보기",
+    "Vista previa",
+    "Vorschau",
+    "Aperçu",
+    "Anteprima"
+  ],
+  "Action format & limits": [
+    "操作格式與限制",
+    "操作格式与限制",
+    "操作の形式と制限",
+    "작업 형식 및 제한",
+    "Formato y límites de la acción",
+    "Aktionsformat und Grenzen",
+    "Format et limites des actions",
+    "Formato e limiti delle azioni"
+  ],
+  "3 · Review exact action": [
+    "3 · 檢查完整操作",
+    "3 · 检查完整操作",
+    "3 · 操作の全内容を確認",
+    "3 · 정확한 작업 검토",
+    "3 · Revise la acción exacta",
+    "3 · Genaue Aktion prüfen",
+    "3 · Vérifier l’action exacte",
+    "3 · Controlla l’azione esatta"
+  ],
+  "Operation": [
+    "操作",
+    "操作",
+    "操作",
+    "동작",
+    "Operación",
+    "Aktion",
+    "Opération",
+    "Operazione"
+  ],
+  "Receipt ID": [
+    "回條 ID",
+    "回执 ID",
+    "受領記録 ID",
+    "수신 기록 ID",
+    "ID de comprobante",
+    "Beleg-ID",
+    "ID de reçu",
+    "ID ricevuta"
+  ],
+  "State root": [
+    "狀態根目錄",
+    "状态根目录",
+    "状態の保存先",
+    "상태 루트 디렉터리",
+    "Directorio raíz del estado",
+    "Status-Stammverzeichnis",
+    "Répertoire racine de l’état",
+    "Directory radice dello stato"
+  ],
+  "Confirm and dispatch once": [
+    "確認並送出一次",
+    "确认并发送一次",
+    "確認して一度だけ送信",
+    "확인 후 한 번만 전송",
+    "Confirmar y enviar una vez",
+    "Bestätigen und einmal senden",
+    "Confirmer et envoyer une seule fois",
+    "Conferma e invia una sola volta"
+  ],
+  "Discard preview": [
+    "捨棄預覽",
+    "放弃预览",
+    "プレビューを破棄",
+    "미리보기 삭제",
+    "Descartar vista previa",
+    "Vorschau verwerfen",
+    "Abandonner l’aperçu",
+    "Scarta anteprima"
+  ],
+  "Action receipt": [
+    "操作回條",
+    "操作回执",
+    "操作の受領記録",
+    "작업 수신 기록",
+    "Comprobante de la acción",
+    "Aktionsbeleg",
+    "Reçu de l’action",
+    "Ricevuta dell’azione"
+  ],
+  "Read receipt without dispatch": [
+    "讀取回條，不重新送出",
+    "读取回执，不重新发送",
+    "再送せずに受領記録を確認",
+    "재전송 없이 수신 기록 읽기",
+    "Leer comprobante sin reenviar",
+    "Beleg ohne erneutes Senden lesen",
+    "Lire le reçu sans nouvel envoi",
+    "Leggi ricevuta senza reinviare"
+  ],
+  "Native message delivery": [
+    "原生訊息傳遞",
+    "原生消息传递",
+    "ネイティブメッセージ配信",
+    "기본 메시지 전달",
+    "Entrega nativa de mensajes",
+    "Native Nachrichtenzustellung",
+    "Distribution native des messages",
+    "Consegna nativa dei messaggi"
+  ],
+  "Refresh pending messages": [
+    "重新整理待處理訊息",
+    "刷新待处理消息",
+    "保留中のメッセージを更新",
+    "대기 중 메시지 새로 고침",
+    "Actualizar mensajes pendientes",
+    "Ausstehende Nachrichten aktualisieren",
+    "Actualiser les messages en attente",
+    "Aggiorna messaggi in attesa"
+  ],
+  "Exact recipient": [
+    "確切收件對象",
+    "确切收件对象",
+    "確定した受信者",
+    "정확한 수신자",
+    "Destinatario exacto",
+    "Genauer Empfänger",
+    "Destinataire exact",
+    "Destinatario esatto"
+  ],
+  "Pending message": [
+    "待處理訊息",
+    "待处理消息",
+    "保留中のメッセージ",
+    "대기 중 메시지",
+    "Mensaje pendiente",
+    "Ausstehende Nachricht",
+    "Message en attente",
+    "Messaggio in attesa"
+  ],
+  "Message ID": [
+    "訊息 ID",
+    "消息 ID",
+    "メッセージ ID",
+    "메시지 ID",
+    "ID de mensaje",
+    "Nachrichten-ID",
+    "ID de message",
+    "ID messaggio"
+  ],
+  "Review delivery": [
+    "檢查傳遞內容",
+    "检查传递内容",
+    "配信内容を確認",
+    "전달 내용 검토",
+    "Revisar entrega",
+    "Zustellung prüfen",
+    "Vérifier la distribution",
+    "Controlla consegna"
+  ],
+  "Review exact recipient": [
+    "檢查確切收件對象",
+    "检查确切收件对象",
+    "正確な受信者を確認",
+    "정확한 수신자 확인",
+    "Revisar destinatario exacto",
+    "Genauen Empfänger prüfen",
+    "Vérifier le destinataire exact",
+    "Controlla il destinatario esatto"
+  ],
+  "Confirm exact-recipient delivery": [
+    "確認傳遞至此收件對象",
+    "确认传递至此收件对象",
+    "この受信者への配信を確認",
+    "해당 수신자에게 전달 확인",
+    "Confirmar entrega al destinatario exacto",
+    "Zustellung an genauen Empfänger bestätigen",
+    "Confirmer l’envoi au destinataire exact",
+    "Conferma consegna al destinatario esatto"
+  ],
+  "Discard receipt preview": [
+    "捨棄回條預覽",
+    "放弃回执预览",
+    "受領記録のプレビューを破棄",
+    "수신 기록 미리보기 삭제",
+    "Descartar vista previa del comprobante",
+    "Belegvorschau verwerfen",
+    "Abandonner l’aperçu du reçu",
+    "Scarta anteprima della ricevuta"
+  ],
+  "Companion operation failed.": [
+    "伴隨模組操作失敗。",
+    "伴随模块操作失败。",
+    "連携モジュールの操作に失敗しました。",
+    "연동 모듈 작업에 실패했습니다.",
+    "La operación del complemento ha fallado.",
+    "Die Begleitmodul-Aktion ist fehlgeschlagen.",
+    "L’opération du module compagnon a échoué.",
+    "L’operazione del modulo complementare non è riuscita."
+  ],
+  "unknown": [
+    "未知",
+    "未知",
+    "不明",
+    "알 수 없음",
+    "desconocido",
+    "unbekannt",
+    "inconnu",
+    "sconosciuto"
+  ],
+  "Context {percent}": [
+    "上下文 {percent}",
+    "上下文 {percent}",
+    "コンテキスト {percent}",
+    "컨텍스트 {percent}",
+    "Contexto {percent}",
+    "Kontext {percent}",
+    "Contexte {percent}",
+    "Contesto {percent}"
+  ],
+  "Inspect or discard the current preview; preserve any uncertain receipt before preparing further work.": [
+    "請先檢查或捨棄目前的預覽；準備其他工作前，請保留結果不明的回條。",
+    "请先检查或放弃当前预览；准备其他工作前，请保留结果不明的回执。",
+    "現在のプレビューを確認または破棄してください。次の作業を準備する前に、結果が不明な受領記録を保存してください。",
+    "현재 미리보기를 확인하거나 삭제하세요. 다른 작업을 준비하기 전에 결과가 불확실한 수신 기록을 보존하세요.",
+    "Revise o descarte la vista previa actual; conserve los comprobantes con resultado incierto antes de preparar más trabajo.",
+    "Aktuelle Vorschau prüfen oder verwerfen. Belege mit ungewissem Ergebnis vor weiteren Vorbereitungen aufbewahren.",
+    "Vérifiez ou abandonnez l’aperçu actuel ; conservez les reçus au résultat incertain avant de préparer une autre action.",
+    "Controlla o scarta l’anteprima attuale; conserva le ricevute con esito incerto prima di preparare altro lavoro."
+  ],
+  "An equivalent preview is locked. Inspect the existing receipt before preparing again.": [
+    "同等操作的預覽已鎖定。請先檢查既有回條，再重新準備。",
+    "相同操作的预览已锁定。请先检查现有回执，再重新准备。",
+    "同じ操作のプレビューがロックされています。再度準備する前に既存の受領記録を確認してください。",
+    "동일한 작업의 미리보기가 잠겨 있습니다. 다시 준비하기 전에 기존 수신 기록을 확인하세요.",
+    "Hay una vista previa equivalente bloqueada. Revise el comprobante existente antes de volver a preparar la acción.",
+    "Eine gleichwertige Vorschau ist gesperrt. Vor erneuter Vorbereitung den vorhandenen Beleg prüfen.",
+    "Un aperçu équivalent est verrouillé. Vérifiez le reçu existant avant de recommencer.",
+    "Un’anteprima equivalente è bloccata. Controlla la ricevuta esistente prima di preparare di nuovo l’azione."
+  ],
+  "Action {id} exceeds the full-preview UI bound. Use the operator workflow; it remains uncommitted.": [
+    "操作 {id} 超過完整預覽的介面上限。請使用操作員流程；此操作尚未提交。",
+    "操作 {id} 超过完整预览的界面上限。请使用操作员流程；此操作尚未提交。",
+    "操作 {id} は完全プレビューの上限を超えています。オペレーター用の手順を使用してください。操作は未確定です。",
+    "작업 {id}이(가) 전체 미리보기 한도를 초과했습니다. 운영자 절차를 사용하세요. 아직 실행이 확정되지 않았습니다.",
+    "La acción {id} supera el límite de la vista previa completa. Use el flujo del operador; sigue sin confirmarse.",
+    "Aktion {id} überschreitet die Grenze der vollständigen Vorschau. Den Bedienerablauf verwenden; die Aktion ist noch nicht bestätigt.",
+    "L’action {id} dépasse la limite de l’aperçu complet. Utilisez le parcours opérateur ; elle n’est pas encore validée.",
+    "L’azione {id} supera il limite dell’anteprima completa. Usa la procedura operatore; l’azione non è ancora confermata."
+  ],
+  "Prepared only. Confirm explicitly to dispatch.": [
+    "僅完成準備。請明確確認後才會送出。",
+    "仅完成准备。明确确认后才会发送。",
+    "準備のみ完了しました。送信するには明示的に確認してください。",
+    "준비만 완료되었습니다. 명시적으로 확인해야 전송됩니다.",
+    "Solo preparada. Confirme explícitamente para enviarla.",
+    "Nur vorbereitet. Zum Senden ausdrücklich bestätigen.",
+    "Action préparée uniquement. Confirmez explicitement pour l’envoyer.",
+    "Solo preparata. Conferma esplicitamente per inviarla."
+  ],
+  "Action JSON exceeds 24,000 characters.": [
+    "操作 JSON 超過 24,000 個字元。",
+    "操作 JSON 超过 24,000 个字符。",
+    "操作 JSON が 24,000 文字を超えています。",
+    "작업 JSON이 24,000자를 초과했습니다.",
+    "El JSON de la acción supera los 24.000 caracteres.",
+    "Das Aktions-JSON überschreitet 24.000 Zeichen.",
+    "Le JSON de l’action dépasse 24 000 caractères.",
+    "Il JSON dell’azione supera 24.000 caratteri."
+  ],
+  "Use {\"method\":\"start\",\"params\":{...}}.": [
+    "請使用 {\"method\":\"start\",\"params\":{...}}。",
+    "请使用 {\"method\":\"start\",\"params\":{...}}。",
+    "{\"method\":\"start\",\"params\":{...}} を使用してください。",
+    "{\"method\":\"start\",\"params\":{...}} 형식을 사용하세요.",
+    "Use {\"method\":\"start\",\"params\":{...}}.",
+    "{\"method\":\"start\",\"params\":{...}} verwenden.",
+    "Utilisez {\"method\":\"start\",\"params\":{...}}.",
+    "Usa {\"method\":\"start\",\"params\":{...}}."
+  ],
+  "Preview discarded; the prepared audit record remains local.": [
+    "預覽已捨棄；已準備的稽核紀錄仍保留在本機。",
+    "预览已放弃；已准备的审计记录仍保留在本机。",
+    "プレビューを破棄しました。準備時の監査記録はローカルに保持されます。",
+    "미리보기를 삭제했습니다. 준비된 감사 기록은 로컬에 보존됩니다.",
+    "Vista previa descartada; el registro de auditoría preparado se conserva localmente.",
+    "Vorschau verworfen; der vorbereitete Prüfdatensatz bleibt lokal erhalten.",
+    "Aperçu abandonné ; la trace d’audit préparée reste conservée localement.",
+    "Anteprima scartata; il registro di controllo preparato resta salvato in locale."
+  ],
+  "Session or preview changed; the old action was left uncommitted.": [
+    "對話或預覽已變更；先前的操作未提交。",
+    "会话或预览已变更；之前的操作未提交。",
+    "セッションまたはプレビューが変更されました。以前の操作は未確定のままです。",
+    "세션 또는 미리보기가 변경되었습니다. 이전 작업은 실행되지 않았습니다.",
+    "La sesión o la vista previa ha cambiado; la acción anterior no se ha confirmado.",
+    "Sitzung oder Vorschau geändert; die vorherige Aktion wurde nicht bestätigt.",
+    "La session ou l’aperçu a changé ; l’ancienne action n’a pas été validée.",
+    "La sessione o l’anteprima è cambiata; l’azione precedente non è stata confermata."
+  ],
+  "Dispatch outcome requires inspection. Receipt {id}; automatic replay is disabled.": [
+    "送出結果需要檢查。回條 {id}；已停用自動重送。",
+    "发送结果需要检查。回执 {id}；已停用自动重发。",
+    "送信結果の確認が必要です。受領記録 {id}。自動再送は無効です。",
+    "전송 결과를 확인해야 합니다. 수신 기록 {id}. 자동 재전송은 비활성화되어 있습니다.",
+    "Debe revisarse el resultado del envío. Comprobante {id}; el reenvío automático está desactivado.",
+    "Das Sendeergebnis muss geprüft werden. Beleg {id}; automatisches Wiederholen ist deaktiviert.",
+    "Le résultat de l’envoi doit être vérifié. Reçu {id} ; le renvoi automatique est désactivé.",
+    "L’esito dell’invio richiede una verifica. Ricevuta {id}; il reinvio automatico è disattivato."
+  ],
+  "Handoff instructions appended to the draft. Review and submit manually.": [
+    "交接指示已附加至草稿。請檢查後手動送出。",
+    "交接说明已追加到草稿。请检查后手动发送。",
+    "引き継ぎ手順を下書きに追加しました。確認して手動で送信してください。",
+    "인계 지침을 초안에 추가했습니다. 검토 후 직접 제출하세요.",
+    "Instrucciones de traspaso añadidas al borrador. Revíselo y envíelo manualmente.",
+    "Übergabeanweisungen an den Entwurf angehängt. Prüfen und manuell senden.",
+    "Instructions de transfert ajoutées au brouillon. Vérifiez-le et envoyez-le manuellement.",
+    "Istruzioni di passaggio aggiunte alla bozza. Controllala e inviala manualmente."
+  ],
+  "The native composer could not accept the draft.": [
+    "原生輸入框無法接收草稿。",
+    "原生输入框无法接收草稿。",
+    "ネイティブ入力欄に下書きを追加できませんでした。",
+    "기본 작성란에 초안을 추가할 수 없습니다.",
+    "El editor nativo no pudo aceptar el borrador.",
+    "Der native Editor konnte den Entwurf nicht übernehmen.",
+    "L’éditeur natif n’a pas pu recevoir le brouillon.",
+    "L’editor nativo non ha potuto accettare la bozza."
+  ],
+  "Native receipt is disabled until local acceptance.": [
+    "完成本機驗收前，原生接收功能維持停用。",
+    "完成本机验收前，原生接收功能保持停用。",
+    "ローカルでの受け入れ検証が完了するまで、ネイティブ受信は無効です。",
+    "로컬 수락 검증이 완료될 때까지 기본 수신 기능이 비활성화됩니다.",
+    "La recepción nativa está desactivada hasta completar la validación local.",
+    "Der native Empfang bleibt bis zur lokalen Abnahme deaktiviert.",
+    "La réception native reste désactivée jusqu’à la validation locale.",
+    "La ricezione nativa è disattivata fino alla verifica locale."
+  ],
+  "Session changed; refresh exact pending messages.": [
+    "對話已變更；請重新整理此對話的待處理訊息。",
+    "会话已变更；请刷新此会话的待处理消息。",
+    "セッションが変更されました。対象の保留中メッセージを更新してください。",
+    "세션이 변경되었습니다. 해당 세션의 대기 중 메시지를 새로 고치세요.",
+    "La sesión ha cambiado; actualice los mensajes pendientes del destinatario exacto.",
+    "Sitzung geändert; ausstehende Nachrichten des genauen Empfängers aktualisieren.",
+    "La session a changé ; actualisez les messages en attente du destinataire exact.",
+    "La sessione è cambiata; aggiorna i messaggi in attesa per il destinatario esatto."
+  ],
+  "Native recipient queue accepted the message. Recipient ACK and requested-work completion remain separate checks.": [
+    "原生收件佇列已接受訊息。收件端 ACK 與要求工作的完成狀態仍須分別確認。",
+    "原生收件队列已接受消息。收件端 ACK 与请求工作的完成状态仍须分别确认。",
+    "ネイティブ受信キューがメッセージを受け付けました。受信者の ACK と依頼作業の完了は別途確認が必要です。",
+    "기본 수신 대기열이 메시지를 수락했습니다. 수신자의 ACK와 요청 작업의 완료는 별도로 확인해야 합니다.",
+    "La cola nativa del destinatario aceptó el mensaje. El ACK y la finalización del trabajo solicitado deben verificarse por separado.",
+    "Die native Empfängerwarteschlange hat die Nachricht angenommen. Empfänger-ACK und Abschluss der angeforderten Arbeit müssen separat geprüft werden.",
+    "La file native du destinataire a accepté le message. L’ACK du destinataire et l’achèvement du travail demandé restent à vérifier séparément.",
+    "La coda nativa del destinatario ha accettato il messaggio. L’ACK e il completamento del lavoro richiesto devono essere verificati separatamente."
+  ],
+  "Native delivery: {state} ({reason}). {nativeReason} No automatic resend.": [
+    "原生傳遞：{state}（{reason}）。{nativeReason} 不會自動重送。",
+    "原生传递：{state}（{reason}）。{nativeReason} 不会自动重发。",
+    "ネイティブ配信：{state}（{reason}）。{nativeReason} 自動再送は行いません。",
+    "기본 전달: {state} ({reason}). {nativeReason} 자동 재전송하지 않습니다.",
+    "Entrega nativa: {state} ({reason}). {nativeReason} Sin reenvío automático.",
+    "Native Zustellung: {state} ({reason}). {nativeReason} Kein automatischer Neuversand.",
+    "Distribution native : {state} ({reason}). {nativeReason} Aucun renvoi automatique.",
+    "Consegna nativa: {state} ({reason}). {nativeReason} Nessun reinvio automatico."
+  ]
+};
+
+const languages = ['zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it'];
+export const catalogs = { en: Object.fromEntries(Object.keys(rows).map(key => [key, key])) };
+for (let column = 0; column < languages.length; column++) {
+  catalogs[languages[column]] = Object.fromEntries(Object.entries(rows).map(([key, values]) => [key, values[column]]));
+}

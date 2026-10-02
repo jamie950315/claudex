@@ -1,5 +1,24 @@
 # Claude native Mod companion
 
+## Version 0.4 panel and language support
+
+Version 0.4.1 keeps the existing delivery and confirmation protocol and improves
+the native panel's presentation: selected two-row navigation, grouped status and
+actions, readable task/receipt summaries, empty states, and explicitly expandable
+technical records. Confirmation still displays every reviewed parameter and exact
+target identity before dispatch. Long labels wrap in narrow panes.
+
+The language picker offers the same nine languages as Claudex.app: English,
+Traditional Chinese, Simplified Chinese, Japanese, Korean, Spanish, German,
+French and Italian. Follow system resolves the macOS preferred-language list with
+script/region-aware Chinese selection. The native plugin store persists the Mod's
+choice independently of the graphical app. If system-language discovery fails,
+the pane explains it and still allows an explicit choice. Language switching
+changes presentation only, preserving form edits, prepared actions and receipts.
+Native IDs, paths, protocol JSON, models, user text and unknown diagnostics are
+not translated. Complete catalogs and placeholder parity are checked before
+staging or app packaging.
+
 ## Version 0.3 single-session delivery
 
 Version 0.3.1 provides an explicit `mod-self` route in the existing Mod. It does not
@@ -209,7 +228,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.3.1-review"
+STAGE="$PARENT/claudex-0.4.1-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -477,9 +496,9 @@ are deliberately separate from native deployment evidence.
 
 `src/app-bundle.mjs` includes both companion commands and the companion runtime
 modules through explicit allowlists, including the Mod broker route, own-inbox
-transport and receipt outbox modules. `ENGINE_PLUGIN_FILES` includes eight exact resources: the manifest,
-hooks declaration, controller, register and delivery modules, workflow skill,
-plugin README and native test fixture.
+transport and receipt outbox modules. `ENGINE_PLUGIN_FILES` includes the manifest,
+hooks declaration, controller, register, delivery, panel, localization and catalog
+modules, workflow skill, plugin README and native test fixture.
 `copyAllowed` copies only these assets and validates plugin directories from the
 source root downward. A symlinked parent is rejected before inspecting descendants.
 

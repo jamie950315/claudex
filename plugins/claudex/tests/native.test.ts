@@ -2,6 +2,7 @@
  * Native test-kit coverage; no sign-in, model call, network or real helper execution. */
 import { expect, test, mock } from 'claude-code/testing'
 import { textChunks, usageLine } from '../hooks/controller.mjs'
+import { catalogs } from '../hooks/locales.mjs'
 const ID = '11111111-1111-4111-8111-111111111111'
 const PANE = {
   plugin: 'claudex', component: 'Pane', requestId: 'claudex',
@@ -15,8 +16,9 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100,
     scroll: { offset: 0, bodyRows: 3 }, view: {} },
 } as const
-function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any) {
+function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en') {
   mock.env(on, worker ? { CLAUDEX_COLLABORATION_WORKER: '1' } : {})
+  mock.store(on, { 'ui-language': language })
   mock.clock(on, { now: 1000 })
   on('session.id', () => ({ value: ID }))
   on('session.cwd', () => ({ value: '/fixture' }))
@@ -28,6 +30,7 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
   on('classic.SessionStart', () => ({}))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['Existing native or peer-mod content'] }))
   on('process.run', async (_: any, e: any) => {
+    if (e.argv[0] === '/usr/bin/defaults') return { value: { exitCode: 0, stdout: '("zh-Hant-TW", "en-TW")', stderr: '' } }
     const request = JSON.parse(e.init.stdin)
     const result = bridge ? await bridge(request, e) : request.op === 'doctor' ? { root: '/fixture/state', stopped: false }
       : request.method === 'list' ? { tasks: [], limits: {} } : {}
@@ -165,6 +168,65 @@ test('native clear removes a pending confirm without dispatching it', async ($, 
   await $.classic.SessionStart({ source: 'clear' })
   expect(await ui.find({ key: 'confirm-action' })).toBeUndefined()
   expect(commits).toBe(0)
+  await ui.unmount()
+})
+
+test('all nine languages render both native surfaces without dispatch or lost input', async ($, on) => {
+  let calls = 0, submissions = 0
+  stubs(on, false, () => { calls++; return {} })
+  on('prompt.submit', (_: any, e: any) => { submissions++; return { text: e.text } })
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const ui = await $.ui.mount({ ...PANE, surface, props: { ...PANE.props, bodyColumns: 32 } })
+    await ui.press({ key: 'tab-compose' })
+    const draft = '{"method":"start","params":{"prompt":"unsent 日本語 中文 {value}"}}'
+    await ui.input({ key: 'action-json', text: draft, kind: 'change' })
+    for (const [language, catalog] of Object.entries(catalogs) as [string, Record<string, string>][]) {
+      await ui.select({ key: 'language', value: language })
+      expect((await ui.find({ key: 'tab-compose' })).props.label).toBe(catalog.Compose)
+      expect((await ui.find({ key: 'action-json' })).props.value).toBe(draft)
+    }
+    await ui.press({ key: 'tab-chats' })
+    await ui.input({ key: 'chat-query', text: 'Unsubmitted title 中文', kind: 'change' })
+    await ui.select({ key: 'language', value: 'en' })
+    expect((await ui.find({ key: 'chat-query' })).props.value).toBe('Unsubmitted title 中文')
+    await ui.unmount()
+  }
+  expect(calls).toBe(0)
+  expect(submissions).toBe(0)
+})
+
+test('language changes preserve the complete prepared action and do not dispatch it', async ($, on) => {
+  let commits = 0, prepared: any
+  stubs(on, false, request => {
+    if (request.op === 'commit') commits++
+    if (request.op === 'prepare') prepared = { id: ID, state: 'prepared', method: request.method,
+      params: request.params, context: request.context }
+    return prepared
+  })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tab-compose' })
+  const params = { taskId: 'exact-native-ID', message: 'Unchanged user text 日本語 {value}' }
+  await ui.input({ key: 'action-json', text: JSON.stringify({ method: 'send', params }) })
+  await ui.select({ key: 'language', value: 'zh-Hant' })
+  expect(await ui.find({ key: 'confirm-action' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: JSON.stringify(params, null, 2) })).toBeDefined()
+  expect(commits).toBe(0)
+  await ui.select({ key: 'language', value: 'de' })
+  expect(await ui.find({ type: 'Text', text: new RegExp(ID) })).toBeDefined()
+  expect(commits).toBe(0)
+  await ui.unmount()
+})
+
+test('system language resolves Traditional Chinese and diagnostics expand only on request', async ($, on) => {
+  stubs(on, false, undefined, 'system')
+  await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'claudex', args: '' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ key: 'tab-overview' })).props.label).toBe(catalogs['zh-Hant'].Overview)
+  expect(await ui.find({ type: 'Text', text: /"socketPresent"/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /"root"/ })).toBeUndefined()
+  await ui.press({ key: 'details-session' })
+  expect(await ui.find({ type: 'Text', text: /"root"/ })).toBeDefined()
   await ui.unmount()
 })
 

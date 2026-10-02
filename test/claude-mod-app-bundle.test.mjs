@@ -17,7 +17,7 @@ async function fixture(root) {
   const source = join(root, 'source');
   for (const name of [...ENGINE_BIN.map(n => `bin/${n}`), ...ENGINE_SRC.map(n => `src/${n}`), ...ENGINE_PLUGIN_FILES, 'package.json', 'package-lock.json']) {
     const file = join(source, name); await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, '{}\n');
+    await writeFile(file, name.endsWith('/locales.mjs') ? await readFile(join(repo, name)) : '{}\n');
   }
   return source;
 }

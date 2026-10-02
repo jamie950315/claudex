@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { copyFile, cp, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { validateModCatalogSource } from './claude-mod-install.mjs';
 
 export const APP_IDENTIFIER = 'dev.0ruka.claudex.app';
 export const APP_ICON_FILE = 'Claudex.icns';
@@ -14,6 +15,9 @@ export const ENGINE_PLUGIN_FILES = Object.freeze([
   'plugins/claudex/hooks/hooks.json',
   'plugins/claudex/hooks/register.mjs',
   'plugins/claudex/hooks/controller.mjs',
+  'plugins/claudex/hooks/panel.mjs',
+  'plugins/claudex/hooks/localization.mjs',
+  'plugins/claudex/hooks/locales.mjs',
   'plugins/claudex/hooks/delivery.mjs',
   'plugins/claudex/tests/native.test.ts',
   'plugins/claudex/README.md',
@@ -130,6 +134,7 @@ export async function copyAllowed(sourceRoot, engine) {
     await requireRegular(source);
     await copyFile(source, join(engine, name));
   }
+  validateModCatalogSource(await readFile(join(engine, 'plugins/claudex/hooks/locales.mjs'), 'utf8'));
 }
 
 async function nativeObjects(root) {

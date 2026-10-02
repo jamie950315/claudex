@@ -61,6 +61,13 @@ test('stage validates sources before creating output', async t => {
   await assert.rejects(stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node }));
   await assert.rejects(lstat(f.output), { code: 'ENOENT' });
 });
+test('stage rejects incomplete locale data before creating output', async t => {
+  const f = await fixture(t);
+  await writeFile(join(f.repo, 'plugins/claudex/hooks/locales.mjs'),
+    'const rows = {"Language":["語言"]};\n\nconst languages = [];\n');
+  await assert.rejects(stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node }), { code: 'MOD_LOCALES' });
+  await assert.rejects(lstat(f.output), { code: 'ENOENT' });
+});
 test('stage rejects unsafe state roots and source symlinks', async t => {
   const f = await fixture(t); await chmod(f.state, 0o755);
   await assert.rejects(stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node }), { code: 'UNSAFE_ROOT' });

@@ -1,10 +1,43 @@
 # Claude Mod integration validation
 
-Reviewed on 2026-10-02. Source and installed companion: 0.3.1. The reviewed Mac
+Reviewed on 2026-10-03. Source and installed companion: 0.4.1. The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## 0.4 panel and localization acceptance (2026-10-03)
+
+- The package provides 170 English-keyed strings in all nine app languages,
+  grouped panel summaries, wrapping navigation and collapsed technical details.
+  Native IDs, protocol bodies and unknown diagnostics remain verbatim.
+- 73 affected Node cases passed: controller/bridge/RPC contracts (55), and
+  localization/staging/packaged-engine contracts (18). Catalog validation rejects
+  missing language columns and changed placeholders before staging.
+- Desktop Code 2.1.286 strict validation passed with no warnings. Its official
+  native kit passed all 15 cases, including all nine locales on terminal/Desktop
+  trees, unsubmitted form retention, complete preview retention across language
+  changes, and the unchanged self-inbox receive fences. A first added test used
+  a store accessor absent from the test harness; that assertion was removed,
+  leaving persistence covered through the dedicated host-adapter unit test.
+- Earlier kit launches reported vendor rollout disabled, without an environment
+  override. After normal Desktop restart/resume, the normal kit command became
+  available. This was not a companion version gate or a synchronization-policy
+  change. The final 0.4.1 differs from the passing candidate only in package
+  version and README heading; runtime and test bytes are unchanged.
+- Normal native marketplace/update commands installed 0.4.1. All 19 staged-file
+  hashes match the installed package, including the corrected native fixture.
+  Existing opt-ins and the broker's mod-self route were retained.
+- Actual Desktop pixels showed Traditional Chinese selected from macOS system
+  preferences, all five navigation controls fitting two rows, readable broker,
+  work and runtime sections, and collapsed diagnostics. The broker inventory
+  responded. These pixels do not certify mouse interaction with every control;
+  native test-kit callbacks establish the multilingual switching contract.
+- During UI automation, a duplicated reload command was mistakenly submitted as
+  plain chat text and produced one short model reply, with no tools or workspace
+  edits. It was disclosed and retained in the original test history. Subsequent
+  correctly formed slash commands used native command handling. No history or
+  uncertain message record was erased to clean up the acceptance transcript.
 
 ## Single-session own-inbox evidence
 

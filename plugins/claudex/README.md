@@ -1,4 +1,4 @@
-# Claudex native companion, 0.3.1
+# Claudex native companion, 0.4.1
 
 This plugin is staged from the Claudex repository with:
 
@@ -17,6 +17,17 @@ exact-ID status, chat lookup with duplicate titles preserved, delegation and
 follow-up previews, cancellation previews, provider default updates, and durable
 operation receipts. `/claudex receipt UUID` reads a receipt without redispatching.
 Use `/claudex:claudex-workflow` for the accompanying collaboration guidance.
+
+The pane groups status, work, conversations, composition and inbox controls into
+sections. Technical records are collapsed by default; action confirmation always
+shows the complete reviewed parameters. Its language picker supports English,
+Traditional/Simplified Chinese, Japanese, Korean, Spanish, German, French and
+Italian. Follow system reads the macOS preferred-language list, including Chinese
+script/region selection. An explicit choice is saved in the native plugin store.
+This preference is independent of the Claudex app's own language setting. Changing
+it only redraws the pane and usage band; it does not dispatch work, restart services
+or discard unsubmitted form text or a pending action preview. Native identifiers,
+model names, user content and unknown diagnostics stay unchanged.
 
 Automatic delivery is off by default. After the separate runtime and Desktop
 acceptance gates, configure both `nativeWake: true` and `selfWake: true`, and

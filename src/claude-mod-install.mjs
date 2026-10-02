@@ -8,6 +8,8 @@ const SOURCE = fileURLToPath(new URL('..', import.meta.url));
 export const MOD_STAGE_FILES = [
   'plugins/claudex/.claude-plugin/plugin.json', 'plugins/claudex/hooks/hooks.json',
   'plugins/claudex/hooks/register.mjs', 'plugins/claudex/hooks/controller.mjs',
+  'plugins/claudex/hooks/panel.mjs', 'plugins/claudex/hooks/localization.mjs',
+  'plugins/claudex/hooks/locales.mjs',
   'plugins/claudex/hooks/delivery.mjs',
   'plugins/claudex/tests/native.test.ts', 'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
@@ -17,6 +19,26 @@ export const MOD_STAGE_FILES = [
   'src/collaboration-transport.mjs', 'src/collaboration-effort.mjs',
 ];
 function targetOf(file) { return file.startsWith('plugins/claudex/') ? file.slice('plugins/claudex/'.length) : `runtime/${file}`; }
+/** Validate the data literal without evaluating a candidate's JavaScript. */
+export function validateModCatalogSource(source) {
+  insist(typeof source === 'string' && source.length <= 1024 * 1024,
+    'MOD_LOCALES', 'Mod catalogs exceed the source bound.');
+  const literal = source.match(/const rows = (\{[\s\S]*\});\n\nconst languages/);
+  let rows;
+  try { rows = JSON.parse(literal?.[1] ?? ''); } catch {
+    insist(false, 'MOD_LOCALES', 'Mod catalogs must contain the complete static translation table.');
+  }
+  insist(rows && !Array.isArray(rows) && Object.keys(rows).length > 0,
+    'MOD_LOCALES', 'Mod catalogs must not be empty.');
+  const placeholders = value => JSON.stringify((value.match(/\{[A-Za-z][A-Za-z0-9_]*\}/g) ?? []).sort());
+  for (const [key, values] of Object.entries(rows)) {
+    insist(key.trim() && Array.isArray(values) && values.length === 8,
+      'MOD_LOCALES', `Mod catalog requires all eight translations: ${key}`);
+    for (const value of values) insist(typeof value === 'string' && value.trim()
+      && placeholders(value) === placeholders(key), 'MOD_LOCALES', `Invalid Mod translation or placeholder: ${key}`);
+  }
+  return rows;
+}
 /** Stage only into a new user-selected directory. No settings, services or apps are modified. */
 export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.execPath,
   repoRoot = SOURCE, nativeWake = false, selfWake = false } = {}) {
@@ -45,6 +67,7 @@ export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.e
     insist(stat.isFile() && !stat.isSymbolicLink(), 'STAGE_SOURCE', `Missing or unsafe stage source: ${file}`);
     sources.push({ file, path });
   }
+  validateModCatalogSource(await readFile(join(repoRoot, 'plugins/claudex/hooks/locales.mjs'), 'utf8'));
   await mkdir(output, { mode: 0o700 }); // EEXIST intentionally refuses replacement.
   const plugin = join(output, 'plugins', 'claudex');
   const hashes = {};

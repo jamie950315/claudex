@@ -1,5 +1,7 @@
-import { createController, shortJSON, usageLine, textChunks } from './controller.mjs';
+import { createController } from './controller.mjs';
 import { createNativeWakePump } from './delivery.mjs';
+import { createLocalization, localizedUsage, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
+import { renderPanel } from './panel.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validPath = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n\0]/u.test(value);
@@ -16,6 +18,9 @@ function api($, options) {
     selfEnabled: options.selfWake === true,
     inbound: async () => (await $.settings.read()).crossSessionInbound,
     after: (ms, callback) => $.clock.after(ms, callback),
+    readLanguage: () => $.store.get(LANGUAGE_PREFERENCE_KEY),
+    writeLanguage: value => $.store.set(LANGUAGE_PREFERENCE_KEY, value),
+    preferredLanguages: () => $.process.run(['/usr/bin/defaults', 'read', '-g', 'AppleLanguages'], { timeoutMs: 2000 }),
     bridge: async request => {
       if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker controller access is disabled.');
       if (!validPath(options.stateRoot) || !validPath(options.nodeBinary)) throw new Error('Stage and configure the Claudex companion with canonical root and Node paths.');
@@ -41,9 +46,11 @@ export function register(on, options = {}) {
   let lifecycle = 0;
   const controller = createController({ nativeWake: options.nativeWake === true });
   const wake = createNativeWakePump({ enabled: options.nativeWake === true });
+  const localization = createLocalization();
   on('session.start', async ($, e, next) => {
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') !== '1') {
-      await $.command.register({ name: 'claudex', description: 'Open the Claudex control pane. /claudex receipt UUID inspects an action.', immediate: true });
+      await localization.load(api($, options));
+      await $.command.register({ name: 'claudex', description: localization.t('Open the Claudex control pane. /claudex receipt UUID inspects an action.'), immediate: true });
       await controller.bind(api($, options));
       await controller.refreshUsage(api($, options));
       wake.start(api($, options));
@@ -95,11 +102,12 @@ export function register(on, options = {}) {
     return result;
   });
   on('command.run', { command: 'claudex' }, async ($, e) => {
-    if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return { text: 'Use this managed worker\'s existing generation-scoped MCP tools.' };
+    if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return { text: localization.t('Use this managed worker\'s existing generation-scoped MCP tools.') };
+    await localization.load(api($, options));
     await controller.bind(api($, options));
     const words = (e.args ?? '').trim().split(/\s+/u).filter(Boolean);
     if (words[0] === 'receipt' && UUID.test(words[1] ?? '') && words.length === 2) await controller.receipt(api($, options), words[1]);
-    else if (words.length) return { text: 'Use /claudex or /claudex receipt UUID.' };
+    else if (words.length) return { text: localization.t('Use /claudex or /claudex receipt UUID.') };
     else await controller.refresh(api($, options));
     await $.ui.open({ id: PANE, title: 'Claudex', focus: true, closeOnEscape: true, columns: 64 });
     return {};
@@ -109,99 +117,20 @@ export function register(on, options = {}) {
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return original;
     const ticket = await controller.bind(api($, options));
     if (!ticket) return original;
+    await localization.load(api($, options));
     const { Box, Text } = $.ui.resolve(e);
     if (e.props.maxRows < 1) return original;
-    const children = [Text({ wrap: 'truncate', children: [`Claudex | ${usageLine(controller.state.usage)} | /claudex`] })];
+    const children = [Text({ wrap: 'truncate', children: [`Claudex | ${localizedUsage(controller.state.usage, localization.t)} | /claudex`] })];
     if (original !== null && original !== undefined) children.push(original);
     return Box({ flexDirection: 'column', children });
   });
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE || await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return next(e);
     await controller.bind(api($, options));
-    const state = controller.state;
-    const { Box, Text, Button, Input } = $.ui.resolve(e);
-    const text = value => Text({ children: textChunks(value), wrap: 'wrap' });
-    const button = (key, label, action) => Button({ key, label, onPress: async () => { if (!controller.state.busy) await action(); } });
-    const host = () => api($, options);
-    const body = [];
-    const tabs = ['overview', 'tasks', 'chats', 'compose', 'inbox'];
-    // Desktop split panes can be narrower than the requested terminal columns.
-    for (const row of [tabs.slice(0, 3), tabs.slice(3)])
-      body.push(Box({ flexDirection: 'row', columnGap: 1, children: row.map(tab => button(`tab-${tab}`, tab, () => controller.tab(host(), tab))) }));
-    body.push(text(state.busy ? 'Operation in progress. Duplicate submission is disabled.' : usageLine(state.usage)));
-    if (options.nativeWake === true) body.push(text(`Automatic native delivery: ${wake.state.status}\n${wake.state.lastOutcome ? shortJSON(wake.state.lastOutcome) : 'Only explicitly wake-enabled broker messages are eligible.'}`));
-    if (state.context) body.push(text(`Session ${state.context.sessionId}\n${state.context.cwd}`));
-    if (state.error) body.push(text(`Attention: ${state.error}`));
-    if (state.notice) body.push(text(state.notice));
-    if (state.tab === 'overview') {
-      body.push(button('refresh', 'Refresh status', () => controller.refresh(host())));
-      body.push(text(`Engine: ${state.version?.version ?? 'unknown'}\nPublic Mod API baseline: 2.1.287 (not a load gate)\nNative validation also passed on 2.1.286.\nSynchronization version acceptance: separate; configured policy retained.`));
-      body.push(text(shortJSON(state.doctor ?? { status: 'Run Refresh status to inspect the configured root.' })));
-      body.push(text(shortJSON(state.tasks?.limits ?? {})));
-      body.push(button('handoff-codex', 'Append reviewed handoff draft to Codex', () => controller.handoffDraft(host(), 'codex')));
-      body.push(button('model-defaults', 'Read provider defaults', () => controller.read(host(), 'models', {}, 'detail')));
-      if (state.detail) body.push(text(shortJSON(state.detail)));
-    } else if (state.tab === 'tasks') {
-      body.push(button('tasks-refresh', 'Refresh task inventory', () => controller.refresh(host())));
-      const tasks = state.tasks?.tasks ?? [];
-      body.push(text(`${tasks.length} tasks; showing ${tasks.length ? Math.min(state.taskOffset + 1, tasks.length) : 0}-${Math.min(state.taskOffset + 10, tasks.length)}.`));
-      for (const task of tasks.slice(state.taskOffset, state.taskOffset + 10)) {
-        body.push(button(`task-${task.id}`, `${task.owner} | ${task.status} | ${task.id}`, () => controller.task(host(), task.id)));
-      }
-      if (state.taskOffset > 0) body.push(button('tasks-prev', 'Previous 10', () => controller.page(host(), -10)));
-      if (state.taskOffset + 10 < tasks.length) body.push(button('tasks-next', 'Next 10', () => controller.page(host(), 10)));
-    } else if (state.tab === 'detail') {
-      body.push(text(shortJSON(state.detail)));
-      if (state.selectedTask) {
-        body.push(button('task-refresh', 'Refresh exact task', () => controller.task(host(), state.selectedTask)));
-        body.push(button('task-followup', 'Compose follow-up', () => controller.template(host(), 'send', { taskId: state.selectedTask, message: 'Describe the explicitly authorized follow-up.' })));
-        body.push(button('task-cancel', 'Preview cancellation', () => controller.prepare(host(), 'cancel', { taskId: state.selectedTask })));
-      }
-    } else if (state.tab === 'chats') {
-      body.push(Input({ key: 'chat-query', label: 'Title search', value: state.chatQuery, submitLabel: 'search',
-        onSubmit: value => controller.searchChats(host(), value) }));
-      body.push(button('chats-list', 'List registered chats', () => controller.searchChats(host(), '')));
-      body.push(text('Choose an exact ID. Duplicate titles and metadata errors remain visible.'));
-      for (const chat of state.chats?.chats ?? []) {
-        body.push(text(`${chat.provider} | ${chat.title ?? '[title unavailable]'} | ${chat.sessionId}\n${chat.cwd ?? ''}${chat.titleError ? `\nMetadata error: ${chat.titleError}` : ''}`));
-        if (chat.title && !chat.titleError && !chat.archived) body.push(button(`chat-${chat.provider}-${chat.sessionId}`, 'Compose queue-only message',
-          () => controller.template(host(), 'chat_send', { provider: chat.provider, sessionId: chat.sessionId,
-            expectedTitle: chat.title, message: 'Describe the explicitly authorized coordination note.', wake: false })));
-        if (options.nativeWake === true && chat.provider === 'claude' && chat.title && !chat.titleError && !chat.archived)
-          body.push(button(`inbox-${chat.sessionId}`, 'Inspect native pending receipts for this session',
-            () => controller.wakeList(host(), { sessionId: chat.sessionId, cwd: chat.cwd })));
-      }
-      if (state.chats?.nextCursor) body.push(button('chats-next', 'Next page', () => controller.searchChats(host(), state.chatQuery, state.chats.nextCursor)));
-    } else if (state.tab === 'compose') {
-      body.push(text('Edit JSON, press Enter to prepare, then review the complete action. Native model work consumes account allowance.'));
-      body.push(button('template-codex', 'New read-only Codex task', () => controller.template(host(), 'start', {
-        provider: 'codex', cwd: state.context?.cwd, permission: 'read-only', prompt: 'Describe the task and relevant context explicitly.' })));
-      body.push(button('template-claude', 'New read-only Claude task', () => controller.template(host(), 'start', {
-        provider: 'claude', cwd: state.context?.cwd, permission: 'read-only', prompt: 'Describe the task and relevant context explicitly.' })));
-      body.push(Input({ key: 'action-json', label: 'Action JSON', value: state.form, submitLabel: 'preview',
-        onSubmit: value => { controller.edit(host(), value); return controller.prepareJSON(host(), value); } }));
-      body.push(text('Supported writes: start, send, cancel, chat_send, models. Blank model/effort fields should be omitted; null selects native CLI defaults. Full-access and forced ownership changes stay outside this pane.'));
-    } else if (state.tab === 'confirm') {
-      if (state.pending) {
-        body.push(text(`${state.pending.method} | receipt ${state.pending.id}\nState root: ${options.stateRoot}\n${JSON.stringify(state.pending.params, null, 2)}`));
-        body.push(text('Confirm dispatches exactly this operation. Writable work needs disjoint files or a dedicated checkout. Cancellation retains existing edits.'));
-        body.push(button('confirm-action', 'Confirm and dispatch once', () => controller.commit(host())));
-      }
-      body.push(button('discard-action', 'Discard preview', () => controller.discard(host())));
-    } else if (state.tab === 'receipt') {
-      body.push(text(shortJSON(state.lastReceipt)));
-      body.push(text('completed = broker request returned. Task completion, delivery, ACK and cancellation exit each require their own status evidence.'));
-      if (state.lastReceipt?.id) body.push(button('receipt-refresh', 'Read existing receipt (no dispatch)', () => controller.receipt(host(), state.lastReceipt.id)));
-    } else if (state.tab === 'inbox') {
-      body.push(text(options.nativeWake === true ? 'Automatic delivery follows the broker route. The opt-in mod-self route needs only this session; the mod route needs another sender. Native hold/refuse stays effective. A socket write or queue acceptance is not ACK.' : 'Native Mod delivery disabled in this session. Existing hooks still work; check the broker route for idle delivery.'));
-      if (options.nativeWake === true) body.push(button('inbox-refresh', 'Refresh identity-only pending messages', () => controller.wakeList(host())));
-      if (state.wakeTarget) body.push(text(`Recipient ${state.wakeTarget.sessionId}\n${state.wakeTarget.cwd}`));
-      for (const wake of state.wakes) body.push(button(`wake-${wake.messageId}`, wake.messageId, () => controller.previewWake(host(), wake.messageId)));
-    } else if (state.tab === 'wake-confirm') {
-      body.push(text(`Deliver ${state.wakePreview?.messageId} to exact Claude session ${state.wakePreview?.target?.sessionId}. Native queue processing can consume model allowance. Recipient policy remains active; uncertainty blocks automatic replay. Recipient ACK remains a separate check.`));
-      body.push(button('wake-confirm', 'Confirm exact-recipient queue delivery', () => controller.acceptWake(host())));
-      body.push(button('wake-discard', 'Discard receipt preview', () => controller.discard(host())));
-    }
-    return Box({ flexDirection: 'column', children: body });
+    await localization.load(api($, options));
+    return renderPanel({ ui: $.ui.resolve(e), state: controller.state, controller,
+      host: () => api($, options), options, wake, t: localization.t,
+      language: localization.preference, languageError: localization.error,
+      setLanguage: value => localization.select(api($, options), value) });
   });
 }

@@ -230,7 +230,7 @@ harness. Do not defer all new completions until a long cold sweep finishes.
 The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
 not a companion load gate. The installed Desktop 2.1.286 passed the final native
-validator, 12 kit tests and earlier no-inference command registration without added
+validator, 15 kit tests and earlier no-inference command registration without added
 feature flags; test the actual runtime before requiring an upgrade. This does not
 certify new synchronization runtimes. Keep the explicit app/stage allowlists;
 never install it as a setup side effect. `plugins/claudex/hooks/register.mjs` uses
@@ -238,6 +238,14 @@ top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and complete
 native test kit against a staged plugin after UI/API changes, in addition
 to affected Node tests. Native tree tests are not real Desktop painting evidence.
+The 0.4 panel uses grouped summaries, two wrapping navigation rows and collapsed
+technical records; never collapse or truncate the complete confirmation payload.
+Its native plugin-store language preference is independent of the app's preference,
+with the same nine languages and script/region-aware macOS system resolution.
+Language changes only redraw presentation, preserving form edits and pending
+confirmations. Keep native IDs, models, user content and unknown diagnostics raw.
+The catalog's static JSON rows are validated without executing candidate source;
+stage and app packaging reject missing translations or mismatched placeholders.
 User-authored controller writes use exact-context prepare/confirm and durable
 no-replay receipts; managed workers cannot borrow controller authority. Version
 0.3.1 provides explicit selfWake alongside nativeWake, both false by default.
@@ -247,7 +255,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has 0.3.1 installed with both opt-ins and route=mod-self.
+passes. The reviewed Mac has 0.4.1 installed with both opt-ins and route=mod-self.
 After normal Claude restart, one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real
 Stop ACK. Native UI evidence retained the unsent draft. Explicit native hold and
