@@ -27,6 +27,22 @@ Private IDs, transcripts and evidence directories remain outside this repository
   per-provider exact native call/result provenance needs live acceptance first.
   Native schema availability and synthetic event tests are not that acceptance.
 
+### Read-only Codex origin-path probe
+
+On the configured existing Codex 0.159.0-alpha.12.1 listener, a real
+`claudex-work/claudex_list` call issued through code mode was read back through
+bounded `thread/items/list`. Its completed `mcpToolCall` retained the exact
+server/tool, empty arguments, native call ID and turn ID; the saved result
+content exactly matched the actual MCP response. No new model invocation,
+thread resume, hook installation or native-store write was involved.
+
+This establishes the availability of an independent native call/result read
+path for this Codex runtime, including nested code-mode calls. It does not yet
+validate a fresh start receipt challenge, PostToolUse-to-task binding, Claude
+provenance, automatic notification or recipient wake. Those gates remain open;
+do not infer an origin from a supplied session ID or upgrade the read-only probe
+to end-to-end notification acceptance.
+
 ## 0.4 panel and localization acceptance (2026-10-03)
 
 - The package provides 170 English-keyed strings in all nine app languages,
