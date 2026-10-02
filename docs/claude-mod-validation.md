@@ -1,6 +1,6 @@
 # Claude Mod integration validation
 
-Reviewed on 2026-10-02. Source 0.2.0 is staged for automatic delivery; installed
+Reviewed on 2026-10-02. Source 0.2.1 is staged for automatic delivery; installed
 0.1.1 remains the previously verified manual implementation.
 
 ## Automatic-route validation gate
@@ -12,12 +12,20 @@ across restart, legacy-reader exclusion, competing senders, disconnect/shutdown,
 expiry, unavailable targets, unknown dispatch, lost receipt responses, busy queue
 completion, source-context change, connection backoff and unsafe-storage blocking.
 
-Final full regression: 1,290 passed, zero failed, 23 original opt-in skips.
-The focused automatic-route suite has 13 passing cases.
+Final 0.2.1 full regression: 1,292 passed, zero failed, 23 original opt-in skips.
+The initial automatic-route suite had 13 passing cases. Version 0.2.1 adds two
+reproduced malformed-reply regressions: dispatch requires ready:true and outcome
+publication must match the exact message, claim, source, recipient, route and
+status. Both failed before the repair; 69 affected tests now pass.
 Static native validation passed on 2.1.286 with the new clock/tool APIs declared.
+The corrected 0.2.1 candidate also completed the development-signed App build.
+Direct Desktop plugin-manager inspection still lists the installed 0.1.1 enabled;
+that confirms it was not uninstalled/disabled locally, not that 0.2.1 has loaded.
 
-Native execution is now blocked: both 2.1.286 and 2.1.287 report that the rollout
-switch served off. Process/user/project settings did not contain an explicit
+New CLI test processes on both 2.1.286 and 2.1.287 report that the rollout
+switch served off. This does not prove that already-loaded Desktop instances
+stopped: direct UI inspection still shows the installed Mod and prior delivered
+test result. Process/user/project settings did not contain an explicit
 disable flag. No override was set, and the installed broker route/plugin were
 not switched. Prior nine-test/manual-delivery acceptance below remains historical;
 it does not validate the new automatic loop or establish current availability.

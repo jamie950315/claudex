@@ -1,4 +1,4 @@
-# Claudex native companion, 0.2.0
+# Claudex native companion, 0.2.1
 
 This plugin is staged from the Claudex repository with:
 

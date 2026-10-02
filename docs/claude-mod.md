@@ -2,8 +2,10 @@
 
 ## Version 0.2 automatic-delivery route
 
-Source version 0.2.0 adds an automatic primary route. Deployment is currently
-held because both inspected native runtimes report the vendor rollout switch off.
+Source version 0.2.1 adds an automatic primary route. Deployment is currently
+held because new CLI test processes on both inspected runtimes report the rollout
+switch off. Already-loaded Desktop instances must be assessed separately;
+the installed Mod is still visible there, not proven globally disabled.
 The installed 0.1.1 plugin and existing broker route remain unchanged. The earlier
 manual acceptance below is historical evidence, not acceptance of this new loop.
 
@@ -73,7 +75,7 @@ separate gates. See [validation](claude-mod-validation.md).
 
 Baseline reviewed: `jamie950315/claudex` at
 `eb12d2e1d82624be4b1dc94f8f53e9a6aa85a000` (package version 1.0.3).
-Source companion version: 0.2.0; installed manual companion: 0.1.1. Review date: 2026-10-02.
+Source companion version: 0.2.1; installed manual companion: 0.1.1. Review date: 2026-10-02.
 The supplied revision-2 bundle is integrated with native compiler/API repairs,
 clear/end UI invalidation, and stage source-directory symlink protection.
 

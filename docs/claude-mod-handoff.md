@@ -3,11 +3,12 @@
 The revision-2 companion based on `eb12d2e` is integrated into this repository.
 Do not reapply the downloaded patch. Read `AGENTS.md`, [the guide](claude-mod.md),
 [acceptance gates](claude-mod-acceptance.md), and [validation](claude-mod-validation.md).
-Source plugin version: 0.2.0; installed version: 0.1.1. Reviewed on 2026-10-02.
+Source plugin version: 0.2.1; installed version: 0.1.1. Reviewed on 2026-10-02.
 
 The automatic native route is implemented but not activated. Start with the
-0.2 section in `claude-mod.md`: the native vendor rollout currently refuses Mod
-loading/testing. Preserve the existing installation while that gate is closed.
+0.2 section in `claude-mod.md`: new CLI test processes report the rollout switch
+off. Do not infer that already-loaded Desktop instances stopped. Preserve the
+existing installation until new native activation acceptance succeeds.
 Do not mistake the earlier manual Sonnet acceptance for automatic-loop acceptance.
 
 ## Implemented scope

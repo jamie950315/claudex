@@ -1,7 +1,7 @@
 import { readdir, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { privateDir, privateJSON, writeReceipt, syncDir } from './claude-mod-storage.mjs';
-import { validateRequest, insist } from './claude-mod-protocol.mjs';
+import { validateRequest, insist, sameContext } from './claude-mod-protocol.mjs';
 
 /** Only receipt publication is retried. A native send is never repeated here. */
 export function createWakeOutbox(root, publish) {
@@ -12,6 +12,12 @@ export function createWakeOutbox(root, publish) {
   }
   async function flush(path, request) {
     const result = await publish(request);
+    insist(result?.messageId === request.messageId && result.targetProvider === 'claude'
+      && result.targetSessionId === request.target.sessionId && result.wakeRoute === 'mod'
+      && ['offered', 'acknowledged'].includes(result.state)
+      && result.wake?.claimId === request.claimId && result.wake.state === request.status
+      && result.wake.source && sameContext(result.wake.source, request.context),
+    'INVALID_RECEIPT', 'The broker did not confirm this exact native delivery outcome. Pending evidence was retained.');
     const done = join(directory, `${request.claimId}.done.json`);
     const completed = await privateJSON(done, { optional: true });
     if (completed) insist(JSON.stringify(checked(completed)) === JSON.stringify(request), 'INVALID_RECEIPT');
@@ -29,19 +35,19 @@ export function createWakeOutbox(root, publish) {
       request = checked({ version: 1, request });
       const path = join(directory, `${request.claimId}.pending.json`);
       const done = join(directory, `${request.claimId}.done.json`);
-        const completed = await privateJSON(done, { optional: true });
-        if (completed) { insist(JSON.stringify(checked(completed)) === JSON.stringify(request), 'INVALID_RECEIPT'); return { recorded: true }; }
-        const saved = await privateJSON(path, { optional: true });
-        if (saved) insist(JSON.stringify(checked(saved)) === JSON.stringify(request), 'INVALID_RECEIPT');
-        else {
-          insist((await readdir(directory)).filter(name => name.endsWith('.json')).length < 2048, 'JOURNAL_FULL');
-          try { await writeReceipt(path, { version: 1, request }, { exclusive: true }); }
-          catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-            insist(JSON.stringify(checked(await privateJSON(path))) === JSON.stringify(request), 'INVALID_RECEIPT');
-          }
+      const completed = await privateJSON(done, { optional: true });
+      if (completed) { insist(JSON.stringify(checked(completed)) === JSON.stringify(request), 'INVALID_RECEIPT'); return { recorded: true }; }
+      const saved = await privateJSON(path, { optional: true });
+      if (saved) insist(JSON.stringify(checked(saved)) === JSON.stringify(request), 'INVALID_RECEIPT');
+      else {
+        insist((await readdir(directory)).filter(name => name.endsWith('.json')).length < 2048, 'JOURNAL_FULL');
+        try { await writeReceipt(path, { version: 1, request }, { exclusive: true }); }
+        catch (error) {
+          if (error.code !== 'EEXIST') throw error;
+          insist(JSON.stringify(checked(await privateJSON(path))) === JSON.stringify(request), 'INVALID_RECEIPT');
         }
-        return flush(path, request);
+      }
+      return flush(path, request);
     },
     async recover() {
       await privateDir(directory, true);

@@ -26,7 +26,15 @@ async function fixture(t, options = {}) {
   await mkdir(join(root, 'collaboration'), { mode: 0o700 });
   await write(join(root, 'collaboration', 'controller-key'), KEY + '\n');
   const calls = [];
-  const rpc = options.rpc ?? (async envelope => { calls.push(envelope); return envelope.method === 'models' ? defaults : { ok: true, id: 'synthetic-task' }; });
+  const rpc = options.rpc ?? (async envelope => {
+    calls.push(envelope);
+    if (envelope.method === 'mod_wake_receipt') {
+      const p = envelope.params;
+      return { state: 'offered', messageId: p.messageId, targetProvider: 'claude', targetSessionId: p.target.sessionId,
+        wakeRoute: 'mod', wake: { claimId: p.claimId, state: p.status, source: p.source } };
+    }
+    return envelope.method === 'models' ? defaults : { ok: true, id: 'synthetic-task' };
+  });
   const handle = createModBridge({ root, rpc, now: () => 1000, ...options });
   t.after(() => rm(root, { recursive: true, force: true }));
   return { root, calls, handle, rpc };

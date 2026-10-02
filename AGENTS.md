@@ -227,8 +227,9 @@ nativeWake opts a loaded Mod session into automatic delivery of already-authoriz
 broker messages. `collaboration native-wake --route mod|renderer` captures the
 route on new wake-enabled Claude messages; legacy messages retain renderer routing.
 Never flip the installed route until native activation acceptance passes. The
-current vendor rollout has disabled Mod loading/testing; leave the installed
-0.1.1/default route untouched while that gate remains closed.
+new CLI test processes currently report the rollout switch off. This is not
+evidence that an already-loaded Desktop Mod stopped. Leave the installed
+0.1.1/default route untouched until new native activation acceptance succeeds.
 Each loaded eligible session makes one bounded event-backed broker wait, never a
 history sweep. No sender or only the recipient itself means waiting-for-mod;
 do not create a model session or silently fall back. Check SendMessage before
@@ -236,6 +237,8 @@ claiming; verify exact recipient and app-stop again before native dispatch.
 Clear/end fences late callbacks. Unknown sends never retry. Explicit native false
 is rejected, not requeued through hooks (which could defeat recipient policy).
 Persist outcome receipts before RPC, and recover only idempotent receipt writes.
+Require literal ready:true before dispatch and exact message/claim/source/target,
+route and outcome confirmation before marking an outbox receipt complete.
 Malformed/private storage blocks rather than being discarded. Unavailable target
 metadata must not starve other recipients. Keep existing MCP, hooks, renderer
 adapters, version policy and live runtimes; no permission approval, native store

@@ -94,7 +94,11 @@ test('restart preserves unknown dispatch, never requeues it and permits bound re
 });
 test('durable receipt outbox retries only the receipt after a lost response', async t => {
   const f = await setup(t); let calls = 0, fail = true;
-  const publish = async () => { calls++; if (fail) throw new Error('Socket response lost'); return { state: 'offered' }; };
+  const publish = async r => {
+    calls++; if (fail) throw new Error('Socket response lost');
+    return { state: 'offered', messageId: r.messageId, targetProvider: 'claude', targetSessionId: r.target.sessionId,
+      wakeRoute: 'mod', wake: { claimId: r.claimId, state: r.status, source: r.context } };
+  };
   const request = { version: 1, op: 'wake-receipt', context: source, target, messageId: id, claimId, status: 'accepted', reason: 'queued' };
   const outbox = createWakeOutbox(f.root, publish);
   await assert.rejects(outbox.record(request));
@@ -175,4 +179,25 @@ test('an unavailable recipient is deferred without blocking other eligible recip
   h.timers.at(-1).fn(); await tick();
   assert.deepEqual(h.calls.filter(r => r.op === 'wake-next').at(-1).excludeIds, [id]);
   assert.equal(h.sends(), 0); p.stop();
+});
+
+test('malformed final readiness replies cannot authorize a native send', async () => {
+  for (const reply of [null, {}, false, { ready: false }, { ready: 'true' }]) {
+    const h = host(), base = h.api.bridge;
+    h.api.bridge = r => r.op === 'wake-check' ? reply : base(r);
+    const outcome = await deliverNativeWake(h.api, source, target, id);
+    assert.equal(h.sends(), 0, JSON.stringify(reply));
+    assert.equal(outcome.state, 'uncertain');
+    assert.equal(outcome.reason, 'pre_dispatch_stopped');
+  }
+});
+
+test('malformed receipt replies preserve pending evidence instead of marking publication complete', async t => {
+  const f = await setup(t);
+  const request = { version: 1, op: 'wake-receipt', context: source, target, messageId: id, claimId, status: 'accepted', reason: 'queued' };
+  const outbox = createWakeOutbox(f.root, async () => ({ state: 'offered', messageId: target.sessionId,
+    targetProvider: 'claude', targetSessionId: target.sessionId, wakeRoute: 'mod',
+    wake: { claimId, state: 'accepted', source } }));
+  await assert.rejects(outbox.record(request), { code: 'INVALID_RECEIPT' });
+  assert.deepEqual(await readdir(join(f.root, 'mod-wake-receipts')), [`${claimId}.pending.json`]);
 });

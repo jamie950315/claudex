@@ -22,7 +22,8 @@ export async function deliverNativeWake(api, source, target, messageId, current 
   try {
     if (!current() || !same(await api.context(), source)) reason = 'context_changed';
     else {
-      await call('wake-check', { claimId: claim.claimId });
+      const guard = await call('wake-check', { claimId: claim.claimId });
+      if (guard?.ready !== true) throw new Error('Native dispatch readiness was not confirmed');
       if (typeof claim.context !== 'string' || !claim.context.trim() || claim.context.length > 8192) throw new Error('Invalid native peer context');
       if (!current() || !same(await api.context(), source)) reason = 'context_changed';
       else {

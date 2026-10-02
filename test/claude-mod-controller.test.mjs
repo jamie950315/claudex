@@ -28,6 +28,7 @@ function fixture(options = {}) {
       if (request.op === 'receipt') return { id: ID, state: 'uncertain', context: request.context };
       if (request.op === 'wake-peek') return { messages: [{ messageId: ID, sessionId: CTX.sessionId, expiresAt: 10000 }] };
       if (request.op === 'wake-claim') return { claimed: true, claimId: CLAIM, messageId: ID, context: 'JSON-quoted peer data with original ACK instructions.' };
+      if (request.op === 'wake-check') return { ready: true };
       if (request.op === 'wake-receipt') return { state: 'offered' };
       return { id: request.params?.taskId };
     },
