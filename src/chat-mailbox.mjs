@@ -93,17 +93,24 @@ function validate(state) {
     messages.set(message.messageId, message);
     if (message.wakeRoute !== undefined && (!['mod', 'mod-self', 'renderer'].includes(message.wakeRoute)
       || message.targetProvider !== 'claude' || message.wakeRequested !== true)) fail('invalid wake route.');
+    if (message.notificationDeadline !== undefined) {
+      if (message.notificationDeadline !== message.expiresAt || !Number.isSafeInteger(message.notificationExpiresInMs)
+        || message.notificationExpiresInMs < message.expiresAt - message.createdAt
+        || message.notificationExpiresInMs > 3600000) fail('invalid notification deadline evidence.');
+    } else if (message.notificationExpiresInMs !== undefined) fail('orphan notification deadline evidence.');
   }
   for (const receipt of state.receipts) {
     provider(receipt.fromProvider); text(receipt.requestId, 256, 'request ID');
     const identity = JSON.stringify([receipt.fromProvider, receipt.requestId]);
     if (receipts.has(identity) || !messages.has(receipt.messageId) || typeof receipt.payload !== 'string') fail('invalid receipt record.');
     const message = messages.get(receipt.messageId);
-    const payload = [message.targetProvider, message.targetSessionId, message.message, message.expiresAt - message.createdAt];
+    const payload = [message.targetProvider, message.targetSessionId, message.message,
+      message.notificationExpiresInMs ?? message.expiresAt - message.createdAt];
     if (Object.hasOwn(message, 'wakeRequested')) {
       if (typeof message.wakeRequested !== 'boolean') fail('invalid wake request.');
       payload.push(message.wakeRequested);
     }
+    if (message.notificationDeadline !== undefined) payload.push({ expiresAt: message.notificationDeadline });
     if (message.fromProvider !== receipt.fromProvider || receipt.payload !== JSON.stringify(payload)) fail('receipt payload mismatch.');
     receipts.add(identity);
   }
@@ -301,13 +308,16 @@ export class ChatMailbox {
     });
   }
 
-  send({ fromProvider, targetProvider, targetSessionId, message, requestId, expiresInMs = 900000, wakeRequested, wakeRoute }) {
+  send({ fromProvider, targetProvider, targetSessionId, message, requestId, expiresInMs = 900000, wakeRequested, wakeRoute },
+    { expiresAt, beforeEnqueue } = {}) {
     provider(fromProvider); provider(targetProvider); nativeId(targetSessionId); text(message, 1500, 'message'); text(requestId, 256, 'request ID');
     if (!Number.isSafeInteger(expiresInMs) || expiresInMs <= 0 || expiresInMs > 3600000) fail('expiry must be between 1 ms and one hour.');
     if (wakeRequested !== undefined && typeof wakeRequested !== 'boolean') fail('invalid wake request.');
     if (wakeRoute !== undefined && (!['mod', 'mod-self', 'renderer'].includes(wakeRoute) || targetProvider !== 'claude' || wakeRequested !== true)) fail('invalid wake route.');
-    const payload = JSON.stringify([targetProvider, targetSessionId, message, expiresInMs, ...(wakeRequested === undefined ? [] : [wakeRequested])]);
-    return this.transaction(false, (state, now) => {
+    if (expiresAt !== undefined && !Number.isSafeInteger(expiresAt) || beforeEnqueue !== undefined && typeof beforeEnqueue !== 'function') fail('invalid notification deadline.');
+    const payload = JSON.stringify([targetProvider, targetSessionId, message, expiresInMs, ...(wakeRequested === undefined ? [] : [wakeRequested]),
+      ...(expiresAt === undefined ? [] : [{ expiresAt }])]);
+    return this.transaction(false, async (state, now) => {
       const receipt = state.receipts.find(item => item.fromProvider === fromProvider && item.requestId === requestId);
       if (receipt) {
         if (receipt.payload !== payload) fail('request ID was reused with a different payload.');
@@ -316,7 +326,11 @@ export class ChatMailbox {
       const target = state.chats.find(item => item.chatId === key(targetProvider, targetSessionId));
       if (!target) fail('exact target is not registered.');
       if (state.messages.length >= MAX_ITEMS || state.receipts.length >= MAX_ITEMS) fail('message capacity exhausted.');
-      const record = { messageId: randomUUID(), fromProvider, targetProvider, targetSessionId, message, state: 'queued', createdAt: now, expiresAt: now + expiresInMs,
+      await beforeEnqueue?.();
+      now = Date.now();
+      if (expiresAt !== undefined && (expiresAt <= now || expiresAt > now + 3600000)) fail('notification deadline expired or exceeds its bound.');
+      const record = { messageId: randomUUID(), fromProvider, targetProvider, targetSessionId, message, state: 'queued', createdAt: now, expiresAt: expiresAt ?? now + expiresInMs,
+        ...(expiresAt === undefined ? {} : { notificationDeadline: expiresAt, notificationExpiresInMs: expiresInMs }),
         ...(wakeRequested === undefined ? {} : { wakeRequested }), ...(wakeRoute === undefined ? {} : { wakeRoute }) };
       state.messages.push(record);
       state.receipts.push({ fromProvider, requestId, payload, messageId: record.messageId });

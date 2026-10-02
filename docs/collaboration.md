@@ -128,10 +128,50 @@ Use globally distinctive IDs per conversation/operation; identical generic IDs
 from two chats of the same provider share a receipt, while different input is
 rejected with `CLAUDEX_REQUEST_ID_CONFLICT`. This does not establish native origin.
 
-Automatic task-to-origin result notifications remain unavailable. A model-supplied
-session ID, title or unsigned hook payload is not an origin proof. Provider-native
-exact call/result binding still needs acceptance before opt-in queue/wake
-notifications can be implemented; status/wait remains the root result path.
+Root `start` accepts optional `notifications: {mode, expiresInMs}`. Mode defaults
+to off; queue uses ordinary next-hook delivery, while wake explicitly permits
+the existing native wake route and model allowance. Expiry defaults to ten
+minutes after the task's terminal revision, bounded to 1 second–1 hour. A long
+app-stop hold cannot renew that deadline when the broker resumes.
+Managed workers cannot request origin notifications or borrow controller send
+authority. Status/wait remains the authoritative result path.
+
+An opted-in start returns a one-use origin challenge valid for five minutes.
+The narrowly matched native PostToolUse hook submits identity hints to the private
+broker. The broker independently matches the original request fingerprint and
+complete challenge receipt against the exact primary native call/result. A
+model-supplied ID, title or hook JSON is never sufficient. Codex uses at most
+four 100-item pages of one exact native turn; Claude uses an exact Desktop Local
+registry mapping and a stable no-follow private transcript of at most 16 MiB.
+Remote Control, unmapped/CLI-only Claude origins and missing or ambiguous evidence stay unbound.
+No transcript content is retained as origin evidence. This shares the existing
+same-UID trust boundary; it does not defend against hostile same-user processes.
+
+Native transcripts may flush after PostToolUse. Only unavailable evidence stores
+one identity-only pending hint; matching SessionStart/UserPromptSubmit/Stop events
+recheck up to four pending tasks, with at most three attempts per task and no
+timer/history sweep. Expired challenges and failed proof never authorize a
+notification. Normal setup installs the extra hook; Codex must independently
+trust that exact definition. `notificationOrigin` reports its readiness without
+blocking the existing five-hook history synchronization contract.
+
+Terminal notifications contain only task ID, revision and a status-read request,
+not results, prompts or a claim of achieved goals. Undispatched revisions coalesce
+to the latest terminal revision. A durable intent precedes enqueue/dispatch;
+broker restart or a lost response leaves uncertainty, never automatic resend.
+At most 16 sends are retained per task and 16 per origin per minute; further
+revisions are explicitly suppressed and remain available through status.
+Absolute expiry survives slow native discovery, and shutdown/expiry is rechecked
+immediately before the actual Codex turn write. App-stop release uses an exact
+filesystem event, not polling. Ended origins retain normal native-resume rules.
+`notification.deliveries` contains the enqueue observation and message ID; read
+chat_status for current delivery/ACK/expiry, which is still not work completion.
+
+The implementation has synthetic broker, private RPC, native-record and hook
+coverage. Real existing native call/result pairs establish read-path feasibility
+for both providers, but fresh start nonce→origin→notification acceptance is not
+yet verified and the installed app has not been upgraded. Do not treat source
+or synthetic evidence as that live acceptance.
 
 `status`, `wait`, and list entries expose `phase`, `terminal`, `cancelPending`,
 `resultFinal`, `resultRole`, and `resultGeneration` in addition to existing fields.

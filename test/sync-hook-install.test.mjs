@@ -38,6 +38,13 @@ test('installs bounded synchronous native event publishers without replacing use
     assert.equal(group.hooks[0].timeout, 3);
     assert.equal(group.hooks[0].async, undefined);
   }
+  for (const def of Object.values(definitions)) {
+    const group = (await read(def.path)).hooks.PostToolUse.at(-1);
+    assert.deepEqual(group, def.originGroup);
+    assert.equal(group.matcher, '^mcp__claudex[-_]work__claudex_start$');
+    assert.equal(group.hooks[0].timeout, 5);
+    assert.equal(group.hooks[0].async, undefined);
+  }
   const journal = await read(result.journalPath);
   assert.equal(await readFile(journal.plans.find(p => p.provider === 'claude').beforePath, 'utf8'), originalBytes);
   assert.equal((await lstat(result.journalPath)).mode & 0o777, 0o600);
@@ -51,6 +58,47 @@ test('repeat installation is a true no-op and inspection does not create files',
   const before = await lstat(definitions.claude.path, { bigint: true });
   assert.equal((await installSyncHooks(options)).changed, false);
   assert.equal((await lstat(definitions.claude.path, { bigint: true })).mtimeNs, before.mtimeNs);
+});
+
+test('legacy lifecycle-only v1 journals upgrade additively and preserve user PostToolUse groups', async () => {
+  const { options, definitions } = await fixture();
+  const installed = await installSyncHooks(options);
+  const journal = await read(installed.journalPath);
+  const user = { matcher: 'Read|Bash', hooks: [{ type: 'command', command: '/private/user-tool-notification' }] };
+  for (const [provider, definition] of Object.entries(definitions)) {
+    const config = await read(definition.path);
+    config.hooks.PostToolUse = [user];
+    await writeFile(definition.path, JSON.stringify(config));
+    delete journal.definitions[provider].originGroup;
+  }
+  await writeFile(installed.journalPath, JSON.stringify(journal), { mode: 0o600 });
+  const before = await inspectSyncHooks(options);
+  assert.equal(before.configured, true);
+  assert.equal(before.originConfigured, false);
+  assert.equal(before.providers.codex.lifecycleConfigured, true);
+  assert.equal(before.providers.codex.originConfigured, false);
+  const upgraded = await installSyncHooks(options);
+  assert.equal(upgraded.configured, true); assert.equal(upgraded.changed, true);
+  assert.equal(upgraded.originConfigured, true);
+  for (const definition of Object.values(definitions)) {
+    const config = await read(definition.path);
+    assert.deepEqual(config.hooks.PostToolUse, [user, definition.originGroup]);
+    for (const event of definition.events) assert.deepEqual(config.hooks[event], [definition.group]);
+  }
+  assert.equal((await installSyncHooks(options)).changed, false);
+});
+
+test('foreign PostToolUse matches and modified origin ownership journals are never adopted', async () => {
+  const f = await fixture();
+  const group = { ...f.definitions.codex.originGroup, matcher: '.*' };
+  await writeFile(f.definitions.codex.path, JSON.stringify({ hooks: { PostToolUse: [group] } }));
+  await assert.rejects(installSyncHooks(f.options), /unrecognized Claudex hook/);
+  const g = await fixture(), installed = await installSyncHooks(g.options);
+  const journal = await read(installed.journalPath), before = await readFile(g.definitions.codex.path, 'utf8');
+  journal.definitions.codex.originGroup.matcher = '.*';
+  await writeFile(installed.journalPath, JSON.stringify(journal), { mode: 0o600 });
+  await assert.rejects(installSyncHooks(g.options), /origin ownership journal/);
+  assert.equal(await readFile(g.definitions.codex.path, 'utf8'), before);
 });
 
 test('upgrades only exact previously owned commands while retaining new native user settings', async () => {
@@ -126,9 +174,10 @@ async function nativeFixture() {
   const f = await fixture();
   await installSyncHooks(f.options);
   const definition = f.definitions.codex;
-  const inventory = { cwd: f.options.root, errors: [], warnings: [], hooks: definition.events.map(event => ({
+  const inventory = { cwd: f.options.root, errors: [], warnings: [], hooks: [...definition.events, 'PostToolUse'].map(event => ({
     eventName: event[0].toLowerCase() + event.slice(1), command: definition.group.hooks[0].command,
     enabled: true, currentHash: 'native-current-definition-hash', trustStatus: 'trusted', sourcePath: definition.path,
+    ...(event === 'PostToolUse' ? { matcher: definition.originGroup.matcher } : {}),
   })) };
   const requests = [];
   const client = { async request(method, args) { requests.push({ method, args }); return { data: [inventory] }; } };
@@ -143,6 +192,7 @@ test('native hook trust inspection is read-only and requires every exact loaded 
   assert.equal(result.ready, true);
   assert.equal(result.codex.trusted, true);
   assert.equal(result.codex.events.length, 5);
+  assert.equal(result.notificationOrigin.ready, true);
   assert.deepEqual(f.requests, [{ method: 'hooks/list', args: { cwds: [f.options.root] } }]);
   assert.equal((await lstat(f.definitions.codex.path, { bigint: true })).mtimeNs, before.mtimeNs);
 });
@@ -163,6 +213,34 @@ test('missing, disabled, untrusted and modified native hooks produce distinct ac
   }
   const f = await nativeFixture(); f.inventory.hooks.push({ ...f.inventory.hooks[0] });
   assert.match((await f.inspect()).reason, /not loaded/);
+});
+
+test('the narrowly matched PostToolUse definition requires its own exact native approval', async () => {
+  for (const change of [hook => { hook.matcher = '.*'; }, hook => { hook.trustStatus = 'untrusted'; }, hook => { hook.enabled = false; }]) {
+    const f = await nativeFixture();
+    change(f.inventory.hooks.find(hook => hook.eventName === 'postToolUse'));
+    const result = await f.inspect();
+    assert.equal(result.ready, true);
+    assert.equal(result.codex.trusted, true);
+    assert.equal(result.notificationOrigin.ready, false);
+  }
+});
+
+test('missing optional origin hooks do not block already configured and trusted history synchronization', async () => {
+  const f = await nativeFixture();
+  f.inventory.hooks = f.inventory.hooks.filter(hook => hook.eventName !== 'postToolUse');
+  for (const definition of Object.values(f.definitions)) {
+    const config = await read(definition.path);
+    delete config.hooks.PostToolUse;
+    await writeFile(definition.path, JSON.stringify(config));
+  }
+  const disk = await inspectSyncHooks(f.options), native = await f.inspect();
+  assert.equal(disk.configured, true); assert.equal(disk.originConfigured, false);
+  assert.equal(native.ready, true); assert.equal(native.codex.trusted, true);
+  assert.equal(native.notificationOrigin.ready, false);
+  assert.equal(native.notificationOrigin.codex.configured, false);
+  assert.equal(native.notificationOrigin.codex.loaded, false);
+  assert.equal(native.notificationOrigin.claude.configured, false);
 });
 
 test('Claude disabled hooks and absent disk configuration cannot be masked by trusted native inventory', async () => {

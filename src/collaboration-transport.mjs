@@ -3,12 +3,13 @@ import { chmod, lstat, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 import { validateOutcome, OUTCOMES, NEED_KINDS } from './collaboration-outcome.mjs';
+import { notificationPolicy } from './collaboration-notifications.mjs';
 
 const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'report', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
+const METHODS = new Set(['start', 'send', 'handoff', 'report', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -159,7 +160,10 @@ const tool = (name, description, properties, required = []) => ({
     ? ' The default workspace is the enclosing Git checkout root, or cwd for non-Git folders. Optional projectRoot explicitly contains cwd; readOnlyDirs grant reference access and writableDirs grant additional writes. Supply only user-authorized directories. Children inherit or narrow parent access; they cannot expand it. Handoffs preserve directory grants.' : ''),
   inputSchema: { type: 'object', properties: { ...properties,
     ...(['start', 'handoff'].includes(name) ? { effort } : {}),
-    ...(name === 'start' ? { projectRoot: str, readOnlyDirs: directories, writableDirs: directories } : {}) }, required, additionalProperties: false },
+    ...(name === 'start' ? { projectRoot: str, readOnlyDirs: directories, writableDirs: directories,
+      notifications: { type: 'object', additionalProperties: false, required: ['mode'], properties: {
+        mode: { type: 'string', enum: ['off', 'queue', 'wake'] }, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 } },
+      description: 'Root tasks only; default off. Queue or wake opts into bounded result notifications to the independently verified initiating native chat. Wake consumes model allowance. No notification without native PostToolUse proof. Missing/expired notifications never lose task results; use status/wait.' } } : {}) }, required, additionalProperties: false },
 });
 const str = { type: 'string', minLength: 1 };
 const directories = { type: 'array', maxItems: 16, items: str };
@@ -226,6 +230,7 @@ function validateTool(name, args) {
     if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
     if (key === 'report') validateOutcome(value);
+    if (key === 'notifications') notificationPolicy(value);
     if (key === 'targets') {
       if (!Array.isArray(value) || value.length < 1 || value.length > 16
         || value.some(target => !object(target) || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))

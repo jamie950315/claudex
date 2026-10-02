@@ -248,10 +248,22 @@ Mod observations are content-free, self-reported diagnostics in broker memory:
 at most 64 observers, 60-second server TTL, lifecycle/disconnect invalidation and
 existing wait refresh. Never reuse observations as dispatch or claim permission.
 Every new RPC must be in the private transport allowlist and tested over Unix
-RPC. Root task-to-origin binding and automatic result notifications remain
-unimplemented pending independently verified per-provider native call/result
-provenance; unsigned hook stdin, model IDs and titles are not that proof. Keep
-status/wait as the result path; do not silently add notification wake or fallback.
+RPC. Root notifications default off; explicit queue/wake captures per-task intent,
+but no message is created before independent native call/result origin proof.
+PostToolUse supplies hints only: match the exact start arguments fingerprint,
+one-use receipt challenge, primary session and call/result identity. Codex uses
+bounded exact-turn native items; Claude requires an exact Desktop Local registry mapping
+and stable private native transcript. CLI-only, Remote Control and unmapped Claude origins stay
+unsupported. Native flush gaps retain one identity-only hint, rechecked on matching
+SessionStart/UserPromptSubmit/Stop only (four tasks/event, three attempts/task).
+The new PostToolUse trust diagnostic is separate from legacy sync readiness.
+Keep write-ahead notification intents, absolute expiry through awaited preflights,
+and the final native dispatch fence. Interrupted/unknown dispatch never retries.
+Coalesce undispatched terminal revisions and cap retained sends at 16/task and
+16/origin/minute. App-stop release is event-driven, not a polling loop. Status/wait
+remains the result authority. Fresh nonce-to-notification native acceptance and
+new live Mod activation are still unverified; historical native pairs prove only
+the read-path feasibility, not full live notification acceptance.
 
 The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
@@ -411,7 +423,8 @@ exists; duplicates return needs-selection without enqueueing. Known ended chats
 can queue messages waiting-for-resume. Only real SessionStart/UserPromptSubmit
 reactivates them; late Stop events cannot. Receipt deliveryStatus is computed,
 not a new durable state or proof of native receipt. This
-does not introduce managed-task-to-origin-chat mapping. Codex metadata discovery
+alone does not establish managed-task-to-origin-chat mapping; the opt-in native
+receipt proof above is separate. Codex metadata discovery
 does not fabricate hook registrations. The broker inspects the synchronization
 root beside its collaboration root for the configured Desktop launcher. When
 configured, metadata discovery uses its private codex-shared/app.sock listener;

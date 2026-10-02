@@ -42,9 +42,15 @@ goal completion; normal completed/resultFinal execution semantics stay separate.
 Absent reports remain unreported. Attach the same optional report structure to
 handoff along with the complete message, then obey the end-turn boundary.
 
-Root tasks currently have no proven native origin binding or automatic result
-notification. Keep reading status/wait; do not synthesize origin IDs or send
-unrequested wake messages. Mod observations expire and are diagnostic only:
+Root notifications default off. Only when requested, use start's
+`notifications: {mode: "queue" | "wake", expiresInMs}`; wake consumes native
+model allowance. Native PostToolUse plus independent call/result validation
+must bind the initiating chat before a notification can be queued. Missing,
+untrusted or unmapped native proof leaves it unbound; never synthesize origin
+IDs or resend an uncertain notification. Check notification.bindingStatus and
+continue using status/wait as the result authority. The new path still requires
+fresh native activation acceptance; do not claim a notification was delivered
+from an enqueue receipt. Mod observations expire and are diagnostic only:
 hold/refuse, missing receiver/tools and target mapping failures never authorize
 fallback, retries, permission changes or removal of dispatch guards.
 

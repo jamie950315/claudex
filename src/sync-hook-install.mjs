@@ -7,6 +7,8 @@ import { hash, withLock } from './storage.mjs';
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const MARKER = 'Notify Claudex of a native conversation boundary';
+const ORIGIN_MARKER = 'Verify the native origin of an opted-in Claudex task';
+const ORIGIN_MATCHER = '^mcp__claudex[-_]work__claudex_start$';
 const EVENTS = {
   codex: ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt', 'SessionEnd'],
   claude: ['SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'SessionEnd'],
@@ -95,8 +97,14 @@ export function syncHookDefinitions(options) {
   return Object.fromEntries(Object.entries(EVENTS).map(([provider, events]) => {
     const command = [config.nodePath, config.hookPath, '--root', config.root, '--provider', provider].map(quote).join(' ');
     return [provider, { provider, path: join(config[`${provider}Home`], provider === 'codex' ? 'hooks.json' : 'settings.json'),
-      events, group: { hooks: [{ type: 'command', command, timeout: 3, statusMessage: MARKER }] } }];
+      events, group: { hooks: [{ type: 'command', command, timeout: 3, statusMessage: MARKER }] },
+      originGroup: { matcher: ORIGIN_MATCHER, hooks: [{ type: 'command', command, timeout: 5, statusMessage: ORIGIN_MARKER }] } }];
   }));
+}
+
+function ownsGroup(definition, event, group) {
+  return definition && (definition.events.includes(event) && JSON.stringify(group) === JSON.stringify(definition.group)
+    || event === 'PostToolUse' && definition.originGroup && JSON.stringify(group) === JSON.stringify(definition.originGroup));
 }
 
 function merge(snapshot, definition, prior) {
@@ -107,16 +115,15 @@ function merge(snapshot, definition, prior) {
       throw new Error('Native hook matcher groups have an unsupported shape; they were preserved.');
     for (const group of groups) for (const handler of group.hooks) {
       if (typeof handler?.command !== 'string') continue;
-      const owned = JSON.stringify(group) === JSON.stringify(definition.group)
-        || prior?.events.includes(event) && JSON.stringify(group) === JSON.stringify(prior.group);
+      const owned = ownsGroup(definition, event, group) || ownsGroup(prior, event, group);
       if (handler.command.includes('claudex-sync-hook.mjs') && !owned)
         throw new Error('An unrecognized Claudex hook already exists; review it before installing another.');
     }
   }
-  for (const event of new Set([...definition.events, ...(prior?.events ?? [])])) {
-    const retained = (hooks[event] ?? []).filter(group => JSON.stringify(group) !== JSON.stringify(definition.group)
-      && JSON.stringify(group) !== JSON.stringify(prior?.group));
+  for (const event of new Set([...definition.events, ...(prior?.events ?? []), 'PostToolUse'])) {
+    const retained = (hooks[event] ?? []).filter(group => !ownsGroup(definition, event, group) && !ownsGroup(prior, event, group));
     if (definition.events.includes(event)) retained.push(definition.group);
+    if (event === 'PostToolUse') retained.push(definition.originGroup);
     hooks[event] = retained;
   }
   return { ...config, hooks };
@@ -142,6 +149,11 @@ function validateJournal(value, definitions, directory) {
         || !object(def.group) || !Array.isArray(def.group.hooks) || def.group.hooks.length !== 1
         || def.group.hooks[0]?.statusMessage !== MARKER || def.group.hooks[0]?.type !== 'command')
       throw new Error('Sync hook ownership journal is invalid.');
+    if (def.originGroup !== undefined && (!object(def.originGroup) || def.originGroup.matcher !== ORIGIN_MATCHER
+      || !Array.isArray(def.originGroup.hooks) || def.originGroup.hooks.length !== 1
+      || def.originGroup.hooks[0]?.statusMessage !== ORIGIN_MARKER || def.originGroup.hooks[0]?.type !== 'command'
+      || typeof def.originGroup.hooks[0]?.command !== 'string' || def.originGroup.hooks[0]?.timeout !== 5))
+      throw new Error('Sync hook origin ownership journal is invalid.');
   }
   return value;
 }
@@ -160,12 +172,16 @@ export async function inspectSyncHooks(options) {
   const result = {};
   for (const [provider, definition] of Object.entries(definitions)) {
     const config = decode(await readStable(definition.path));
-    const configured = definition.events.every(event => Array.isArray(config.hooks?.[event])
+    const lifecycleConfigured = definition.events.every(event => Array.isArray(config.hooks?.[event])
       && config.hooks[event].some(group => JSON.stringify(group) === JSON.stringify(definition.group)));
-    result[provider] = { configured, path: definition.path, events: definition.events,
+    const originConfigured = Array.isArray(config.hooks?.PostToolUse)
+      && config.hooks.PostToolUse.some(group => JSON.stringify(group) === JSON.stringify(definition.originGroup));
+    result[provider] = { configured: lifecycleConfigured, lifecycleConfigured, originConfigured,
+      path: definition.path, events: definition.events,
       ...(provider === 'codex' ? { trust: 'not-inspected', requiresTrustReview: true } : {}) };
   }
-  return { configured: Object.values(result).every(value => value.configured), providers: result };
+  return { configured: Object.values(result).every(value => value.configured),
+    originConfigured: Object.values(result).every(value => value.originConfigured), providers: result };
 }
 
 /** Read native approval state without granting trust or changing any hook. */
@@ -180,17 +196,27 @@ export async function inspectNativeSyncHookTrust({ client, ...options }) {
   if (inventories.length !== 1 || !Array.isArray(inventories[0].hooks)
       || !Array.isArray(inventories[0].errors)) throw new Error('Native Codex hook inventory is missing or ambiguous.');
   const inventory = inventories[0], expected = definitions.codex;
-  const events = expected.events.map(eventName => {
+  const inspectEvent = eventName => {
     const nativeEvent = eventName[0].toLowerCase() + eventName.slice(1);
+    const group = eventName === 'PostToolUse' ? expected.originGroup : expected.group;
     const found = inventory.hooks.filter(hook => hook?.eventName === nativeEvent
-      && hook.command === expected.group.hooks[0].command && hook.sourcePath === expected.path);
+      && hook.command === group.hooks[0].command && hook.sourcePath === expected.path
+      && (eventName !== 'PostToolUse' || hook.matcher === group.matcher));
     const hook = found.length === 1 ? found[0] : null;
     return { event: eventName, loaded: found.length === 1, enabled: hook?.enabled === true,
       trusted: hook?.enabled === true && typeof hook.currentHash === 'string' && hook.currentHash.length > 0
         && ['trusted', 'managed'].includes(hook.trustStatus),
       trustStatus: hook && ['trusted', 'managed', 'untrusted', 'modified'].includes(hook.trustStatus)
         ? hook.trustStatus : 'unknown' };
-  });
+  };
+  const events = expected.events.map(inspectEvent);
+  const origin = inspectEvent('PostToolUse');
+  const notificationOrigin = {
+    codex: { configured: disk.providers.codex.originConfigured, ...origin },
+    claude: { configured: disk.providers.claude.originConfigured, enabled: claude.enabled },
+  };
+  notificationOrigin.ready = notificationOrigin.codex.configured && notificationOrigin.codex.trusted
+    && notificationOrigin.claude.configured && notificationOrigin.claude.enabled && inventory.errors.length === 0;
   const codex = { configured: disk.providers.codex.configured, loaded: events.every(event => event.loaded),
     trusted: events.every(event => event.trusted), events };
   let reason;
@@ -200,7 +226,7 @@ export async function inspectNativeSyncHookTrust({ client, ...options }) {
   else if (!codex.loaded) reason = 'Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.';
   else if (events.some(event => !event.enabled)) reason = 'Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.';
   else if (!codex.trusted) reason = 'Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.';
-  return { ready: reason === undefined, codex, claude, ...(reason ? { reason } : {}) };
+  return { ready: reason === undefined, codex, claude, notificationOrigin, ...(reason ? { reason } : {}) };
 }
 
 /** Install only notification hooks. Trust and native credential stores are untouched. */

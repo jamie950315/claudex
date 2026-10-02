@@ -12,20 +12,40 @@ Private IDs, transcripts and evidence directories remain outside this repository
 - 106 affected Mod Node tests passed, including real Unix RPC observation and
   typed-error ingress, per-session expiry/end/disconnect/restart behavior,
   unmapped target diagnosis and unchanged hook/claim/receive/ACK boundaries.
-- All 20 final staged hashes match. The independent packaged transport import
+- All 22 final staged hashes match. The independent packaged transport import
   and helper doctor work without source-checkout dependencies; both wake opt-ins
   remain false in this candidate. It was not installed or activated.
-- Desktop Code 2.1.286 strict validation has zero errors and warnings. The full
-  native kit refuses to run under that process's vendor rollout; installed
-  2.1.283 and 2.1.284 also refuse early-access hooks. No rollout override was
-  applied. The new sixteenth lifecycle case has not run in the native kit, and
-  no new Desktop painting, policy or inference acceptance is claimed.
+- Desktop Code 2.1.286 strict validation has zero errors and warnings. Initial
+  kit launches were refused by the vendor rollout; a later normal kit process
+  became available without any rollout override or app restart. Its own-inbox
+  case correctly could not deliver against the default-disabled shipping stage.
+  A separate never-installed test stage with both required opt-ins enabled passed
+  all 16 cases, including the new lifecycle observer case. The quickstart now
+  distinguishes those configurations. No new Desktop painting, policy or model
+  inference acceptance is claimed.
 - The signed app candidate packages all new broker modules through its normal
-  allowlist; 107 engine/plugin hashes and nested strict signatures were checked.
+  allowlist; 109 engine/plugin hashes and nested strict signatures were checked.
   It is development-signed, not notarized, and does not replace the installed app.
-- Root origin binding and automatic outcome notification are still unavailable:
-  per-provider exact native call/result provenance needs live acceptance first.
-  Native schema availability and synthetic event tests are not that acceptance.
+- The broker now implements default-off origin binding and notifications after
+  read-only native-pair feasibility checks. Four integrated synthetic cases cover
+  both providers with immediate and delayed native result flush: real MCP facade,
+  private RPC, random start receipt, production verifier, actual hook subprocess,
+  synthetic worker completion and one exact-origin queue-only notification.
+  Replay does not start a second invocation or send a second notification.
+- Separate regressions cover missing proof, worker denial, late verification,
+  lost notification response, restart, absolute expiry across async discovery,
+  native pre-dispatch shutdown fences, app-stop release and bounded storms.
+  New PostToolUse trust remains separate from the legacy synchronization gates.
+  These tests do not certify fresh native nonce-to-notification delivery; no new
+  model inference, live hook installation or recipient wake was performed.
+- Final repository regression: 1,479 cases, 1,456 passed, zero failed and 23
+  existing opt-in skips. The final P4 package passed strict native validation
+  without errors/warnings and imported its packaged broker, origin verifier and
+  standalone Mod transport without source-checkout dependencies.
+- A subsequent narrow diagnostic correction preserves an unavailable native tool
+  inventory as unknown instead of claiming SendMessage is absent; 35 related
+  tests passed and the updated seven observation cases passed. No dispatch policy
+  or permissions changed, and the valid full-suite evidence is retained.
 
 ### Read-only Codex origin-path probe
 
@@ -42,6 +62,22 @@ validate a fresh start receipt challenge, PostToolUse-to-task binding, Claude
 provenance, automatic notification or recipient wake. Those gates remain open;
 do not infer an origin from a supplied session ID or upgrade the read-only probe
 to end-to-end notification acceptance.
+
+### Read-only Claude origin-path probe
+
+An exact native Desktop registry mapping identified one existing primary Claude
+session. A stable no-follow transcript snapshot contained a unique native
+`claudex_chat_send` call/result pair: matching tool-use ID, session/cwd,
+non-sidechain records, source assistant UUID and parent chain. The result matched
+the persisted mailbox receipt and message, including request identity, sender,
+target, payload and timestamps. This was a historical 2.1.281 call reverified
+read-only, not a new runtime invocation or a start-challenge acceptance.
+
+Together these probes justify independent stored call/result verification for
+the two provider paths. The production verifier still requires exact
+`claudex_start` identity, the original arguments fingerprint and full one-use
+receipt. The complete new live flow and optional-hook native trust remain
+unverified until separately authorized acceptance.
 
 ## 0.4 panel and localization acceptance (2026-10-03)
 

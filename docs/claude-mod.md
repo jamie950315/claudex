@@ -12,11 +12,11 @@ delivery, hold/refuse and missing SendMessage remain explicit; no route fallback
 permission change or native dispatch is authorized by an observation.
 
 The changed observer has isolated Node/Unix RPC coverage and strict native
-validation. Current installed native runtimes refuse the official test kit under
-their feature rollout; the new lifecycle test and real Desktop activation remain
-unverified. Earlier Mod 0.4.1 acceptance is historical, not acceptance of this
-observer. Automatic task-to-origin notifications remain unavailable pending
-independent native provenance acceptance.
+validation. The official kit runs with the separate test-only opt-in stage;
+real Desktop activation remains unverified. Earlier Mod 0.4.1 Desktop acceptance
+is historical, not acceptance of this observer. The broker implements separately opt-in task-to-origin notifications
+with independent native provenance checks, but fresh nonce-to-notification
+activation acceptance is still unverified; see the collaboration protocol.
 
 ## Version 0.4 panel and language support
 
@@ -266,10 +266,18 @@ Use the independently selected native validation executable:
 CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" --version
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
-"$CLAUDE_VALIDATE" plugin test "$STAGE/plugins/claudex"
+# The own-inbox test explicitly exercises both opt-ins. Use a separate,
+# never-installed test candidate; keep the ordinary shipping stage off.
+TEST_STAGE="$PARENT/claudex-0.5.0-native-tests"
+node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
+"$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
+"$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"
 ```
 
 Those commands are offline Mod validation/test operations, not model prompts.
+The full kit requires that test-only opt-in configuration; running its own-inbox
+acceptance case against the default-disabled shipping stage correctly cannot
+deliver peer text. Test staging does not enable either option in an installed Mod.
 Inspect emitted types for that exact build when an API differs from the public
 GitHub type snapshot. Preserve the report and resolve validation errors before
 installation; preserve the existing synchronization policy throughout.

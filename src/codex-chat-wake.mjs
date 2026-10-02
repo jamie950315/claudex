@@ -172,7 +172,7 @@ export async function preflightCodexChatWake({ sessionId,
     return {
       status: 'ready', sessionId, ownerClientId: owner.handledByClientId,
       close() { used = true; clearTimeout(expires); ipc.close(); },
-      async dispatch({ messageId, text }) {
+      async dispatch({ messageId, text, beforeDispatch }) {
         if (used) throw new Error('Codex Desktop wake handle has already been used.');
         used = true; clearTimeout(expires);
         let dispatched = false;
@@ -184,6 +184,13 @@ export async function preflightCodexChatWake({ sessionId,
             { targetClientId: owner.handledByClientId });
           if (proof.resultType !== 'success' || proof.handledByClientId !== owner.handledByClientId
               || proof.result?.supportsUntrustedAppInput !== true) throw new Error('Codex Desktop owner changed.');
+          // An internal notification can expire or be stopped while native
+          // ownership is being rechecked. No callback comes from the wire.
+          if (beforeDispatch !== undefined) {
+            if (typeof beforeDispatch !== 'function') return { status: 'rejected', reason: 'invalid-dispatch-guard' };
+            try { await beforeDispatch(); }
+            catch { return { status: 'rejected', reason: 'dispatch-guard-refused' }; }
+          }
           dispatched = true;
           const response = await ipc.request('thread-follower-start-turn', payload,
             { version: 2, targetClientId: owner.handledByClientId });

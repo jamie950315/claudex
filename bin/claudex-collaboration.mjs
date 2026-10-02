@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { lstat, readFile, realpath, unlink } from 'node:fs/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { createNativeCollaborationRunner } from '../src/collaboration-native.mjs';
+import { createOriginVerifier } from '../src/collaboration-origin.mjs';
 import { callCollaboration, runCollaborationMcp, serveCollaborationSocket } from '../src/collaboration-transport.mjs';
 import { privateDirectory, readJSON, withLock, writeJSON } from '../src/storage.mjs';
 
@@ -79,6 +80,7 @@ async function serve(root, allowWrite, values) {
       nativeChatDiscovery: params => discoverCodexChats(params, { syncRoot: dirname(root) }),
       claudeWakeManifest: createClaudeChatWakeManifest({ root }),
       claudeOwnerWake: createClaudeOwnerWakePublisher({ root: dirname(root) }),
+      originVerifier: createOriginVerifier({ syncRoot: dirname(root) }),
       run: createNativeCollaborationRunner({ commands: { codex: values['codex-binary'] ?? 'codex', claude: values['claude-binary'] ?? 'claude' } }),
       mcp: ({ provider, token }) => ({ command: process.execPath,
         args: [cli, 'mcp', '--root', root, '--peer', provider], env: { CLAUDEX_WORK_TOKEN: token } }) });

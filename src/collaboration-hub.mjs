@@ -13,6 +13,9 @@ import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
 import { validateOutcome, outcomePresentation } from './collaboration-outcome.mjs';
 import { sanitizeNativeActivity } from './collaboration-activity.mjs';
+import { notificationPolicy, createTaskNotification, notificationPresentation, validateTaskNotification,
+  bindTaskOrigin, recheckTaskOrigins, recoverNotifications, scheduleNotifications, drainNotifications,
+  observeNotificationResume, NOTIFICATION_FENCE } from './collaboration-notifications.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -90,6 +93,7 @@ function addUsage(task, provider, usage) {
 function publicTask(task) {
   const result = copy(task);
   if (result.active) delete result.active.tokenHash;
+  result.notification = notificationPresentation(task);
   Object.assign(result, taskPresentation(task));
   return result;
 }
@@ -122,7 +126,7 @@ export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, allowFullAccess = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     inspectProcessGroup = inspectExitedProcessGroup, inspectProcesses = inspectOwnedProcesses, chatTitleResolver = enrichChatTitles,
-    nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null, claudeOwnerWake = null } = {}) {
+    nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null, claudeOwnerWake = null, originVerifier = null } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -144,6 +148,7 @@ export class CollaborationHub extends EventEmitter {
     this.chatWake = chatWake;
     this.claudeWakeManifest = claudeWakeManifest;
     this.claudeOwnerWake = claudeOwnerWake;
+    this.originVerifier = originVerifier;
     this.modWaiters = 0;
     this.modReads = new Set();
   }
@@ -196,6 +201,7 @@ export class CollaborationHub extends EventEmitter {
     if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
       throw new Error('Malformed default collaboration permission.');
     for (const [id, task] of Object.entries(this.state.tasks)) {
+      validateTaskNotification(task, this.state.requests);
       for (const execution of [task.active, task.lastExecution]) if (execution?.ownedProcesses !== undefined)
         validateOwnedProcesses(execution.ownedProcesses);
       if (task.projectRoot !== undefined && (!isAbsolute(task.projectRoot) || task.cwd !== task.projectRoot)
@@ -221,6 +227,7 @@ export class CollaborationHub extends EventEmitter {
         || permissionRank(task.permission) < 0) throw new Error('Malformed collaboration task.');
     }
     await this.mutate(state => {
+      recoverNotifications(state);
       state.defaultModels ??= { codex: null, claude: null };
       state.defaultEfforts ??= { codex: null, claude: null };
       for (const task of Object.values(state.tasks)) {
@@ -238,6 +245,7 @@ export class CollaborationHub extends EventEmitter {
       this.autoResolveUncertain().then(count => { if (count) this.schedule(); }, () => {});
     }, AUTO_RESOLVE_INTERVAL_MS);
     this.autoResolveTimer.unref?.();
+    observeNotificationResume(this);
     return this;
   }
 
@@ -355,7 +363,7 @@ export class CollaborationHub extends EventEmitter {
     if (serialized === this.serializedState) return value;
     if (Buffer.byteLength(serialized) > this.maxStateBytes) throw new Error('Collaboration ledger capacity reached; no history was discarded.');
     await writeJSON(this.path, state);
-    this.state = state; this.serializedState = serialized; this.emit('change');
+    this.state = state; this.serializedState = serialized; this.emit('change'); scheduleNotifications(this);
     return value;
   }
 
@@ -384,6 +392,9 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    const notificationFence = envelope[NOTIFICATION_FENCE];
+    if (method === 'origin_bind') return bindTaskOrigin(this, envelope, actor);
+    if (method === 'origin_recheck') return recheckTaskOrigins(this, envelope, actor);
     if (method === 'native_wake' || method.startsWith('mod_wake_')) return dispatchModWake(this, envelope, actor);
     if (method === 'desktop_owner_wake') {
       if (actor.task || actor.peer !== 'claude' || !this.claudeOwnerWake || this.closed)
@@ -458,6 +469,7 @@ export class CollaborationHub extends EventEmitter {
         return { ...message, deliveryObservation: await modDeliveryDiagnosis(this, message) };
       }
       if (this.closed) throw new Error('Broker is stopping; new messages are refused.');
+      await notificationFence?.check();
       requestId(params.requestId);
       if (params.wake !== undefined && typeof params.wake !== 'boolean') throw new Error('wake must be boolean.');
       let targetProvider = params.provider, targetSessionId = params.sessionId, expectedTitle = params.expectedTitle;
@@ -496,32 +508,45 @@ export class CollaborationHub extends EventEmitter {
           throw new Error('Native chat title changed or could not be verified. Search again; no message was queued.');
       }
       if (nativeTarget) await this.chatMailbox.discover(nativeTarget);
+      await notificationFence?.check();
       let receipt = await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider,
         targetSessionId, message: params.message, requestId: params.requestId, wakeRequested: params.wake !== false,
         ...(targetProvider === 'claude' && params.wake !== false ? { wakeRoute: this.state.nativeWakeRoute ?? 'renderer' } : {}),
-        ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) });
+        ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) },
+      notificationFence ? { expiresAt: notificationFence.expiresAt, beforeEnqueue: notificationFence.check } : undefined);
       let wakeStatus = params.wake === false ? 'disabled' : 'unavailable';
       if (['mod', 'mod-self'].includes(receipt.wakeRoute) && receipt.state === 'queued') { wakeStatus = 'waiting-for-mod'; this.emit('chat-wake'); }
       if (params.wake !== false && targetProvider === 'claude' && !['mod', 'mod-self'].includes(receipt.wakeRoute) && this.claudeWakeManifest && receipt.state === 'queued') {
-        try { await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
+        try { await notificationFence?.check(); await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
         catch { wakeStatus = 'unavailable'; }
       }
       if (params.wake !== false && targetProvider === 'codex' && this.chatWake && receipt.state === 'queued') {
         let handle;
         try {
+          await notificationFence?.check();
           handle = await this.chatWake({ sessionId: targetSessionId });
+          await notificationFence?.check();
           wakeStatus = handle.status;
           if (handle.status === 'ready') {
             const claim = await this.chatMailbox.claimWake(receipt.messageId);
             if (claim) {
+              try { await notificationFence?.check(); }
+              catch (error) {
+                await this.chatMailbox.finishWake(claim.messageId, { claimId: claim.wake.claimId, state: 'rejected',
+                  detail: 'Notification was stopped or expired before native dispatch; no replay is authorized.' });
+                throw error;
+              }
               let outcome;
-              try { outcome = await handle.dispatch({ messageId: claim.messageId, text: claim.context }); }
+              try { outcome = await handle.dispatch({ messageId: claim.messageId, text: claim.context,
+                ...(notificationFence ? { beforeDispatch: notificationFence.check } : {}) }); }
               catch { outcome = { status: 'uncertain' }; }
               wakeStatus = outcome.status;
               receipt = await this.chatMailbox.finishWake(claim.messageId, {
                 claimId: claim.wake.claimId,
-                state: outcome.status === 'accepted' ? 'accepted' : ['busy', 'unavailable'].includes(outcome.status) ? 'deferred' : 'uncertain',
+                state: outcome.status === 'accepted' ? 'accepted' : outcome.status === 'rejected' ? 'rejected'
+                  : ['busy', 'unavailable'].includes(outcome.status) ? 'deferred' : 'uncertain',
                 detail: outcome.status === 'accepted' ? `Native owner accepted turn ${outcome.turnId}; hook acknowledgement is separate.`
+                  : outcome.status === 'rejected' ? 'Notification guard refused before native dispatch; no replay is authorized.'
                   : ['busy', 'unavailable'].includes(outcome.status) ? 'Native owner refused before input dispatch; waiting for a native hook.'
                     : 'Native dispatch outcome is uncertain; no automatic resend is permitted.',
               });
@@ -633,6 +658,9 @@ export class CollaborationHub extends EventEmitter {
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
     let workspace, startPermission;
     if (method === 'start') {
+      const notifications = notificationPolicy(params.notifications);
+      if (notifications.mode !== 'off' && (actor.task || typeof this.originVerifier !== 'function'))
+        fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'Opt-in notifications require an external root caller and an available native origin verifier.');
       const permission = startPermission = params.permission ?? actor.task?.permission ?? this.effectiveDefaultPermission();
       this.checkPermission(permission, actor.task);
       workspace = await resolveCollaborationWorkspace({ cwd: params.cwd, projectRoot: params.projectRoot,
@@ -671,6 +699,8 @@ export class CollaborationHub extends EventEmitter {
             { from: actor.task?.id ?? actor.peer, kind: 'request', text: params.prompt, at: Date.now() },
           ] };
         state.tasks[task.id] = task;
+        const notifications = notificationPolicy(params.notifications);
+        if (notifications.mode !== 'off') task.notification = createTaskNotification(notifications, key);
       } else {
         task = state.tasks[params.taskId]; this.allowed(actor, task, state);
         if (!['cancel', 'resolve'].includes(method) && ['failed', 'cancelled', 'uncertain'].includes(task.status)) throw new Error('Failed, cancelled, or uncertain work cannot be implicitly restarted.');
@@ -748,6 +778,8 @@ export class CollaborationHub extends EventEmitter {
         if (bytes(task.messages) > 192 * 1024) throw new Error('Task context capacity reached; no messages were truncated.');
       }
       const receipt = { taskId: task.id, revision: task.revision, status: task.status, owner: task.owner,
+        ...(method === 'start' && task.notification ? { originChallenge: task.notification.challenge,
+          originChallengeExpiresAt: task.notification.challengeExpiresAt, notificationMode: task.notification.policy.mode } : {}),
         handoffPending: Boolean(task.pendingHandoff), returnTo: task.returnTo,
         ...(method === 'start' ? { cwd: task.cwd, projectRoot: task.projectRoot ?? task.cwd,
           readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [] } : {}),
@@ -1052,6 +1084,7 @@ export class CollaborationHub extends EventEmitter {
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }
       }
       response.waitReason = this.waitReason(task, state);
+      response.notification = notificationPresentation(task);
       response.outcome = includeOutcome || !terminal.has(task.status) ? outcomePresentation(task) : undefined;
       if (bounded) { response.changed = task.revision > (baseline ?? afterRevision ?? -1); response.timedOut = timedOut; }
       // A compact status must never acknowledge a child outcome it did not deliver.
@@ -1084,6 +1117,7 @@ export class CollaborationHub extends EventEmitter {
     await this.pumpDrain;
     for (const active of this.running.values()) active.controller.abort();
     await Promise.allSettled([...this.running.values()].map(active => active.promise));
+    await drainNotifications(this);
     await this.serial;
     await Promise.allSettled([...this.modReads]);
   }

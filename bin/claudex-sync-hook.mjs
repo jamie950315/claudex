@@ -4,6 +4,40 @@ import { readAppStopState } from '../src/app-stop-state.mjs';
 import { ChatMailbox } from '../src/chat-mailbox.mjs';
 import { isAbsolute, join } from 'node:path';
 
+const startTool = /^mcp__claudex[-_]work__claudex_start$/;
+const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(value);
+const sourceHint = input => identifier(input.session_id) && typeof input.cwd === 'string' && isAbsolute(input.cwd)
+  && input.cwd.length <= 4096 && !/[\0\r\n]/.test(input.cwd);
+async function originRpc(options, method, params) {
+  const { privateDir, privateRead } = await import('../src/claude-mod-storage.mjs');
+  const { callCollaboration } = await import('../src/collaboration-transport.mjs');
+  await privateDir(options['--root']);
+  const root = join(options['--root'], 'collaboration');
+  await privateDir(root);
+  const token = await privateRead(join(root, 'controller-key'), { maxBytes: 65 });
+  if (!/^[a-f0-9]{64}\n$/.test(token)) throw new Error('Invalid origin controller capability.');
+  const stopped = await readAppStopState(options['--root']);
+  if (stopped?.stopped || stopped?.resuming) return;
+  await callCollaboration({ root, peer: options['--provider'], token: token.trim(), method, timeoutMs: 2500, params });
+}
+async function bindOrigin(options, input) {
+  if (!startTool.test(input.tool_name ?? '') || !sourceHint(input) || !identifier(input.tool_use_id)
+    || input.turn_id !== undefined && !identifier(input.turn_id)) return;
+  if (options['--provider'] === 'codex' && !identifier(input.turn_id)) return;
+  let response = input.tool_response;
+  if (typeof response === 'string') { try { response = JSON.parse(response); } catch { return; } }
+  if (!response || response.isError === true || !Array.isArray(response.content) || response.content.length !== 1
+    || response.content[0]?.type !== 'text' || typeof response.content[0].text !== 'string') return;
+  let receipt;
+  try { receipt = JSON.parse(response.content[0].text); } catch { return; }
+  if (!receipt || receipt.replayed === true || receipt.isError === true || !identifier(receipt.taskId)
+    || typeof receipt.originChallenge !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.originChallenge)) return;
+  // These fields are hints only. The broker independently reads the exact native
+  // tool call/result and verifies its arguments fingerprint and one-time challenge.
+  await originRpc(options, 'origin_bind', { taskId: receipt.taskId, sessionId: input.session_id, cwd: input.cwd,
+    toolUseId: input.tool_use_id, ...(input.turn_id === undefined ? {} : { turnId: input.turn_id }) });
+}
+
 // Hook input can contain private prompts. Parse only bounded input; persist identity hints only.
 async function main() {
   const args = process.argv.slice(2);
@@ -25,10 +59,34 @@ async function main() {
   }
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object') throw new Error('Invalid hook input.');
-  if (input.agent_id || input.hook_event_name === 'SubagentStop') return;
+  if (input.agent_id || input.agentId || input.agent_type || input.hook_event_name === 'SubagentStop') return;
+  if (input.hook_event_name === 'PostToolUse') {
+    try {
+      const stopped = await readAppStopState(options['--root']);
+      if (stopped?.stopped || stopped?.resuming) return;
+      await bindOrigin(options, input);
+    }
+    catch (error) {
+      const code = typeof error?.code === 'string' && /^[A-Z_]{1,64}$/.test(error.code) ? error.code : 'ORIGIN_UNVERIFIED';
+      process.stderr.write(`Claudex origin binding was not confirmed (${code}); no retry or fallback was attempted.\n`);
+    }
+    return;
+  }
   let kind = { Stop: 'completed', UserPromptSubmit: 'started', SessionStart: 'session', Interrupt: 'interrupted', StopFailure: 'interrupted', SessionEnd: 'interrupted' }[input.hook_event_name];
   if (!kind) return;
-  if ((await readAppStopState(options['--root']))?.stopped) return;
+  const stopped = await readAppStopState(options['--root']);
+  if (stopped?.stopped || stopped?.resuming) return;
+  if (['SessionStart', 'UserPromptSubmit', 'Stop'].includes(input.hook_event_name) && sourceHint(input)) {
+    try {
+      await originRpc(options, 'origin_recheck', { sessionId: input.session_id, cwd: input.cwd, event: input.hook_event_name });
+    } catch {
+      // Native transcripts may flush after PostToolUse. This exact-session event
+      // is a bounded reread hint, not permission to retry work or notifications.
+      // An unavailable broker must not suppress ordinary mailbox/sync handling.
+    }
+    const currentStop = await readAppStopState(options['--root']);
+    if (currentStop?.stopped || currentStop?.resuming) return;
+  }
   let output;
   if (['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'].includes(input.hook_event_name)
     && typeof input.cwd === 'string' && isAbsolute(input.cwd)) {

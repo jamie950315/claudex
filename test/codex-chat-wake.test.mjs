@@ -65,6 +65,16 @@ test('native busy refusal is explicit and never steers a running turn', async t 
   assert.equal(f.requests.filter(r => r.method === 'thread-follower-start-turn').length, 1);
 });
 
+test('notification guard runs after native owner recheck and refuses the actual turn write', async t => {
+  const f = await fixture(t), handle = await preflightCodexChatWake({ sessionId, codexHome: f.codexHome });
+  const result = await handle.dispatch({ messageId: 'm', text: 'Peer text', beforeDispatch: async () => {
+    assert.equal(f.requests.filter(request => request.method === 'thread-owner-discovery').length, 2);
+    throw new Error('Notification stopped or expired');
+  } });
+  assert.equal(result.status, 'rejected');
+  assert.equal(f.requests.filter(request => request.method === 'thread-follower-start-turn').length, 0);
+});
+
 test('lost dispatch response is uncertain with no replay', async t => {
   const f = await fixture(t, 'disconnect'), handle = await preflightCodexChatWake({ sessionId, codexHome: f.codexHome });
   assert.equal((await handle.dispatch({ messageId: 'm', text: 'Peer text' })).status, 'uncertain');
