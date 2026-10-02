@@ -53,6 +53,46 @@ test('completed source prefix stays publishable while a newer user turn is unfin
   assert.equal(completedClaudePrefix({ text: importedOnly, conversationId, sessionId, key }).incompleteTail, false);
 });
 
+test('native transcript-only task notifications retain the completed checkpoint without waiting for inference', () => {
+  const original = encodeClaude({ meta, messages: turn('A') }, sessionId);
+  const assistant = original.rows.findLast(row => row.type === 'assistant');
+  const content = '<task-notification>\n<status>stopped</status>\n</task-notification>';
+  const stop = { type: 'system', subtype: 'stop_hook_summary', uuid: randomUUID(),
+    parentUuid: assistant.uuid, sessionId };
+  const notification = { type: 'user', uuid: randomUUID(), parentUuid: stop.uuid,
+    sessionId, cwd: assistant.cwd, userType: 'external', origin: { kind: 'task-notification' },
+    promptSource: 'system', queueTranscriptOnly: true, queueSkipAttachments: true,
+    message: { role: 'user', content } };
+  const rows = [stop, { type: 'queue-operation', operation: 'enqueue', sessionId, content },
+    { type: 'queue-operation', operation: 'dequeue', sessionId }, notification];
+  const read = items => completedClaudePrefix({ text: original.text + items.map(JSON.stringify).join('\n') + '\n' });
+  const result = read(rows);
+  assert.equal(result.incompleteTail, false);
+  assert.equal(result.text, completedClaudePrefix({ text: original.text }).text);
+  assert.equal(fingerprint(decodeClaude(result.text)), fingerprint(decodeClaude(original.text)));
+  for (const field of ['origin', 'promptSource', 'queueTranscriptOnly', 'queueSkipAttachments', 'userType']) {
+    const changed = structuredClone(rows); delete changed.at(-1)[field];
+    assert.equal(read(changed).incompleteTail, true, field);
+  }
+  for (const field of ['parentUuid', 'sessionId', 'cwd']) {
+    const changed = structuredClone(rows); changed.at(-1)[field] = 'different';
+    assert.equal(read(changed).incompleteTail, true, field);
+  }
+  assert.equal(read(rows.filter(row => row.operation !== 'dequeue')).incompleteTail, true);
+  const mismatch = structuredClone(rows); mismatch[1].content = 'different';
+  assert.equal(read(mismatch).incompleteTail, true);
+  const repeated = structuredClone(rows); repeated.at(-1).uuid = assistant.uuid;
+  assert.equal(read(repeated).incompleteTail, true);
+  assert.equal(read([...rows, { ...notification, uuid: randomUUID(), parentUuid: notification.uuid,
+    origin: undefined, queueTranscriptOnly: undefined }]).incompleteTail, true);
+  const reply = { ...assistant, uuid: randomUUID(), parentUuid: notification.uuid };
+  const answered = read([...rows, reply]);
+  assert.equal(answered.incompleteTail, false);
+  assert.ok(answered.text.includes(content.replaceAll('\n', '\\n')));
+  // Authenticated owned histories retain their stricter owner lifecycle path.
+  assert.equal(completedClaudePrefix({ text: original.text + rows.map(JSON.stringify).join('\n') + '\n', key }).incompleteTail, true);
+});
+
 test('the exact native resumed no-query placeholder is not an authored assistant turn', () => {
   const a = turn('A'), b = turn('B');
   const placeholder = { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] };

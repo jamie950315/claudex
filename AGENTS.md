@@ -31,6 +31,10 @@ fixtures use placeholder paths and IDs.
   so the test process's umask cannot hide the failing native state. Keep local
   recovery evidence separate from clean-profile and other-machine acceptance.
 - The synchronization coordinator has one owner per conversation and commits only complete turns.
+- Unmanaged Claude originals may end in native transcript-only task notifications.
+  Accept these as ancillary tails only with system provenance, exact queue evidence
+  and a parent chain from the completed assistant. Preserve their original bytes
+  and the canonical checkpoint; ordinary input and ambiguous tails still wait.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
 - Read transcript snapshots through a no-follow file descriptor and compare its
   nanosecond file identity with the named file before and after reading. Size and

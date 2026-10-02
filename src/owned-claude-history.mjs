@@ -132,6 +132,40 @@ function nativeImageAnnotationKeys(text, native, { sessionId, versionPolicy }, d
  * a publication boundary. A newer unfinished user turn is deliberately kept
  * local until it finishes, rather than blocking earlier completed work.
  */
+function transcriptOnlyTaskTail(text, cutoff, tail) {
+  if (!tail.length || !tail.every(row => row.type === 'user' && row.message?.role === 'user'
+    && row.origin?.kind === 'task-notification' && row.promptSource === 'system'
+    && row.queueTranscriptOnly === true && row.queueSkipAttachments === true
+    && row.userType === 'external' && typeof row.message.content === 'string'
+    && row.message.content.startsWith('<task-notification>\n')
+    && row.message.content.endsWith('</task-notification>'))) return false;
+  const before = text.slice(0, cutoff).split('\n').filter(Boolean).map(JSON.parse);
+  const boundary = before.at(-1);
+  if (boundary?.type !== 'assistant' || !boundary.uuid || !boundary.sessionId) return false;
+  const after = text.slice(cutoff).split('\n').filter(Boolean).map(JSON.parse);
+  const ids = new Set(before.filter(row => row.uuid).map(row => row.uuid));
+  let parent = boundary.uuid, queued = null, dequeued = false, seen = 0;
+  for (const row of after) {
+    if (row.isSidechain) continue;
+    if (row.type === 'queue-operation') {
+      if (row.sessionId !== boundary.sessionId) return false;
+      if (row.operation === 'enqueue' && queued === null) { queued = row.content; dequeued = false; }
+      else if (row.operation === 'dequeue' && queued !== null && !dequeued) dequeued = true;
+      else return false;
+    } else if (row.uuid) {
+      if (ids.has(row.uuid) || row.sessionId !== boundary.sessionId || row.parentUuid !== parent) return false;
+      ids.add(row.uuid);
+      if (row.type === 'system' && row.subtype === 'stop_hook_summary') {
+        parent = row.uuid;
+      } else if (row.type === 'user' && tail.some(item => item.uuid === row.uuid)) {
+        if (!dequeued || queued !== row.message.content || row.cwd !== boundary.cwd) return false;
+        queued = null; dequeued = false; parent = row.uuid; seen++;
+      } else return false;
+    }
+  }
+  return seen === tail.length && queued === null;
+}
+
 function completedPrefix(options, decodePacket) {
   const { text, key } = options;
   let offset = 0, cutoff = 0;
@@ -163,7 +197,12 @@ function completedPrefix(options, decodePacket) {
     if (imageAnnotations.has(messageKey({ role: 'user', content: tail[0].message.content, timestamp: tail[0].timestamp })))
       return { text, incompleteTail: false, validated: { ...validated, imageAnnotations } };
   }
-  return { text: text.slice(0, cutoff), incompleteTail: tail.length > 0 };
+  // A native system notification explicitly queued for transcript-only delivery
+  // does not request inference. Keep its bytes in the preserved original, while
+  // retaining the existing completed canonical checkpoint. A later real reply
+  // moves the boundary normally and is never discarded by this tail-only rule.
+  const ancillaryTail = !key && transcriptOnlyTaskTail(text, cutoff, tail);
+  return { text: text.slice(0, cutoff), incompleteTail: tail.length > 0 && !ancillaryTail };
 }
 
 export function completedClaudePrefix(options) {

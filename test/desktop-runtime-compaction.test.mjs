@@ -75,3 +75,28 @@ test('a Desktop fork carrying its parent session rows is an unsupported source, 
     await assert.rejects(f.runtime.inspect({ ...f.record, nativeId: forkId }), /^Error: Forked Claude history belongs to another native session/);
   } finally { await f.runtime.close(); }
 });
+
+test('a transcript-only task notice leaves an original idle and byte-for-byte preserved', async () => {
+  const f = await fixture();
+  try {
+    const before = await f.runtime.inspect(f.record);
+    const original = await readFile(f.record.path, 'utf8');
+    const parent = original.trim().split('\n').map(JSON.parse).findLast(row => row.type === 'assistant');
+    const content = '<task-notification>\n<status>stopped</status>\n</task-notification>';
+    const rows = [
+      { type: 'queue-operation', operation: 'enqueue', sessionId: f.record.nativeId, content },
+      { type: 'queue-operation', operation: 'dequeue', sessionId: f.record.nativeId },
+      { type: 'user', uuid: randomUUID(), parentUuid: parent.uuid, sessionId: f.record.nativeId,
+        cwd: f.record.cwd, userType: 'external', origin: { kind: 'task-notification' }, promptSource: 'system',
+        queueTranscriptOnly: true, queueSkipAttachments: true, message: { role: 'user', content } },
+    ];
+    const expected = original + rows.map(JSON.stringify).join('\n') + '\n';
+    await appendFile(f.record.path, expected.slice(original.length));
+    const after = await f.runtime.inspect(f.record);
+    assert.equal(after.digest, before.digest);
+    assert.equal(after.incompleteTail, false);
+    assert.equal(after.bytes, Buffer.byteLength(expected));
+    await f.runtime.assertIdle(f.record);
+    assert.equal(await readFile(f.record.path, 'utf8'), expected);
+  } finally { await f.runtime.close(); }
+});

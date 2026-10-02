@@ -712,6 +712,15 @@ Active incomplete tails are withheld, not presented as imported work. Originals
 and authoritative archive assets remain preserved; a partial batch is never
 reported as an all-history migration.
 
+A trailing native task notification on an unmanaged Claude original does not
+require a reply when its system/task-notification provenance, transcript-only
+flags, matching enqueue/dequeue evidence and parent chain from the completed
+assistant are verified. It remains ancillary evidence in the unchanged native
+original; the completed canonical checkpoint is unchanged. Ordinary user input,
+ambiguous evidence and actual unfinished responses still wait. If Claude later
+answers the notification, that completed continuation is handled normally,
+including the existing independently-advanced-history conflict checks.
+
 ### Same-title handoff and preserved originals
 
 New Codex generations use the stored logical conversation title. The bridge
