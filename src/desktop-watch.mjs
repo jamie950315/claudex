@@ -68,6 +68,7 @@ async function activeActivityHint(state, id) {
 /** Run the opt-in Desktop coordinator under the same lock as the legacy watcher. */
 export async function runDesktopWatch({ root, bridge, runtime, config, signal, pollMs = 2000,
   discover = discoverSources, sleep = (ms, options) => delay(ms, undefined, options),
+  heartbeatSleep = (ms, options) => delay(ms, undefined, options),
   now = () => Date.now(), maxPasses = Infinity, coldValidationMs = 60_000,
   blockedRetryMs = 30_000,
   writeStatus = writeDiagnosticJSON,
@@ -155,11 +156,30 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let fullVerificationCount = 0;
   let blockedSourceDiagnostics = new Map();
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
-  let folderProjection = null, lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
+  let folderProjection = null, folderMapProjection = null;
+  let lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
   let rendererAdapters = null;
   const autoRenderers = config.rendererAdapters?.enabled !== false && (config.rendererAdapters?.enabled === true
     || config.folderProjection?.enabled === true && typeof config.folderProjection.cachePath === 'string'
       && dirname(config.folderProjection.cachePath) === claudeCacheDirectory());
+  // The map publication and renderer resources have independent lifecycles.
+  // Resource notifications may refresh presentation, never its map proof/time
+  // or an unrelated mapping failure. Idle heartbeats publish this current view.
+  const refreshFolderProjection = () => {
+    if (!folderMapProjection || folderMapProjection.state === 'error') {
+      folderProjection = folderMapProjection;
+      return;
+    }
+    folderProjection = { ...folderMapProjection, resource: folderResource,
+      ...(folderResourceError ? { state: 'error', error: folderResourceError } : {}) };
+  };
+  const updateRendererStatus = value => {
+    rendererAdapters = value;
+    folderResource = value?.adapters?.folders ?? null;
+    folderResourceError = folderResource?.status === 'skipped' ? folderResource.reason
+      : value?.state === 'skipped' ? value.reason : null;
+    refreshFolderProjection();
+  };
   let localHandoff = null;
   const handoffs = config.desktopLocalHandoff?.enabled === true ? createHandoffPublisher({ root,
     desktopHome: config.desktopHome ?? join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
@@ -218,7 +238,10 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     catch (error) {
       lastEmptyPresentationKey = null;
       if (handoffs) localHandoff = { state: 'error', error: reason(error), updatedAt: now() };
-      if (foldersEnabled) folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
+      if (foldersEnabled) {
+        folderMapProjection = { state: 'error', error: reason(error), updatedAt: now() };
+        refreshFolderProjection();
+      }
       return writeProgress();
     }
     const emptyScope = Array.isArray(presentationScope) && presentationScope.length === 0;
@@ -238,27 +261,23 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     if (foldersEnabled) {
       try {
         const map = await publishFolders({ root, state });
-        if (autoRenderers) {
-          folderResource = rendererAdapters?.adapters?.folders ?? null;
-          folderResourceError = folderResource?.status === 'skipped' ? folderResource.reason
-            : rendererAdapters?.state === 'skipped' ? rendererAdapters.reason : null;
-        } else if (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000) {
+        // Rows whose project directory moved or disappeared are omitted, not errors.
+        folderMapProjection = { state: map.deferred ? 'deferred' : 'ready', entries: map.entries,
+          deferred: map.deferred, updatedAt: now(),
+          ...(map.unavailableCount ? { unavailableCount: map.unavailableCount, unavailable: map.unavailable } : {}) };
+        if (!autoRenderers && (lastFolderMaintenance === null || now() - lastFolderMaintenance >= 60_000)) {
           lastFolderMaintenance = now();
           try {
             folderResource = await maintainFolders({ root, cachePath: config.folderProjection.cachePath });
             folderResourceError = null;
-          } catch (error) { folderResourceError = reason(error); throw error; }
+          } catch (error) { folderResourceError = reason(error); }
         }
-        if (folderResourceError) throw new Error(folderResourceError);
-        // Rows whose project directory moved or disappeared are omitted, not errors.
-        folderProjection = { state: map.deferred ? 'deferred' : 'ready', entries: map.entries,
-          deferred: map.deferred, resource: folderResource, updatedAt: now(),
-          ...(map.unavailableCount ? { unavailableCount: map.unavailableCount, unavailable: map.unavailable } : {}) };
       } catch (error) {
         // Presentation failures remain explicit without interrupting native
         // user work or changing the conversation coordinator's write guards.
-        folderProjection = { state: 'error', error: reason(error), updatedAt: now() };
+        folderMapProjection = { state: 'error', error: reason(error), updatedAt: now() };
       }
+      refreshFolderProjection();
     }
     if (key !== null && (!handoffs || localHandoff?.state === 'ready' && localHandoff.actions === 0 && !localHandoff.deferred)
       && (!foldersEnabled || folderProjection?.state === 'ready')) lastEmptyPresentationKey = key;
@@ -270,7 +289,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       if (autoRenderers) rendererMaintenance = await startRendererMaintenance({ root,
         folders: config.folderProjection?.enabled === true, signal,
         watchAppStop: events?.watchAppStop,
-        onStatus: value => { rendererAdapters = value; } });
+        onStatus: updateRendererStatus });
       await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
       while (!signal?.aborted && passes++ < maxPasses) {
         const broadPass = !events || eventBatch === null || eventBatch.some(event => event.kind === 'reconnect');
@@ -346,7 +365,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               const heartbeatStop = new AbortController();
               const heartbeat = (async () => {
                 while (!heartbeatStop.signal.aborted) {
-                  try { await delay(10_000, undefined, { signal: heartbeatStop.signal }); }
+                  try { await heartbeatSleep(10_000, { signal: heartbeatStop.signal }); }
                   catch (error) { if (error.name === 'AbortError') return; throw error; }
                   if (!heartbeatStop.signal.aborted) await writeProgress();
                 }
@@ -683,7 +702,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const idleStop = new AbortController();
             const heartbeat = (async () => {
               while (!idleStop.signal.aborted) {
-                try { await delay(30_000, undefined, { signal: idleStop.signal }); }
+                try { await heartbeatSleep(30_000, { signal: idleStop.signal }); }
                 catch (error) { if (error.name === 'AbortError') return; throw error; }
                 if (!idleStop.signal.aborted) await writeProgress();
               }

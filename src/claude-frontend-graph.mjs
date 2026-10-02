@@ -14,6 +14,25 @@ const fileName = value => /^[a-f0-9]{16}_0$/.test(value);
 const same = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink'].every(k => a[k] === b[k]);
 const hintIdentity = info => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink'].map(k => String(info[k])).join(':');
 const fail = label => { throw new Error(`Claude frontend graph: ${label}`); };
+async function requiredRead(read, code, label) {
+  try { return await read(); }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    throw Object.assign(new Error(`Claude frontend graph: ${label}`), { code });
+  }
+}
+// Scope missing-file classification to the actual source of the read. A lost
+// Chromium resource may settle on another hint; lost recovery evidence cannot.
+async function nativeCacheRead(read) {
+  try { return await requiredRead(read, 'CLAUDEX_FRONTEND_CACHE_MISSING', 'native cache resource disappeared'); }
+  catch (error) {
+    if (!['Claude folder installation: file changed while opening',
+      'Claude folder installation: file changed while reading'].includes(error.message)) throw error;
+    throw Object.assign(new Error('Claude frontend graph: native cache resource changed during snapshot'),
+      { code: 'CLAUDEX_FRONTEND_CACHE_CHANGED' });
+  }
+}
+const evidenceRead = read => requiredRead(read, 'CLAUDEX_FRONTEND_EVIDENCE_MISSING', 'required resource recovery evidence disappeared');
 export function captureClaudeFrontendHints(graph) {
   return new Map([...graph.modules.values()].map(m => [m.name, hintIdentity(m.identity)]));
 }
@@ -31,28 +50,32 @@ export async function changedClaudeFrontendHint({ home = homedir(), filename, ob
 }
 export async function verifyClaudeFrontendGraph(graph) {
   for (const module of graph.modules.values()) {
-    if (!same(module.identity, await lstat(module.path, { bigint: true }))) fail('graph changed before publication');
+    if (!same(module.identity, await nativeCacheRead(() => lstat(module.path, { bigint: true })))) fail('graph changed before publication');
   }
 }
 async function cacheDirectory(path) {
-  const s = await lstat(path, { bigint: true });
-  if (resolve(path) !== path || await realpath(path) !== path || !s.isDirectory() || s.isSymbolicLink()
-    || s.uid !== BigInt(process.getuid()) || (s.mode & 0o7777n) !== 0o700n) fail('cache directory must be canonical, private and owned');
-  return s;
+  return nativeCacheRead(async () => {
+    const s = await lstat(path, { bigint: true });
+    if (resolve(path) !== path || await realpath(path) !== path || !s.isDirectory() || s.isSymbolicLink()
+      || s.uid !== BigInt(process.getuid()) || (s.mode & 0o7777n) !== 0o700n) fail('cache directory must be canonical, private and owned');
+    return s;
+  });
 }
 async function keyURL(path) {
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const s = await file.stat({ bigint: true });
-    if (!s.isFile() || s.uid !== BigInt(process.getuid()) || s.nlink !== 1n || (s.mode & 0o7777n) !== 0o600n)
-      fail('cache inventory file must be private, owned, regular and single-linked');
-    const header = Buffer.alloc(24); if ((await file.read(header, 0, 24, 0)).bytesRead !== 24) return null;
-    if (header.readBigUInt64LE(0) !== 0xfcfb6d1ba7725c30n || header.readUInt32LE(8) !== 5) return null;
-    const length = header.readUInt32LE(12); if (length < 1 || length > 4096) return null;
-    const key = Buffer.alloc(length); if ((await file.read(key, 0, length, 24)).bytesRead !== length) fail('cache key truncated');
-    if (!same(s, await file.stat({ bigint: true })) || !same(s, await lstat(path, { bigint: true }))) fail('cache inventory changed while reading');
-    const value = key.toString('utf8'); return value.startsWith('1/0/') && assetURL(value.slice(4)) ? value.slice(4) : null;
-  } finally { await file.close(); }
+  return nativeCacheRead(async () => {
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const s = await file.stat({ bigint: true });
+      if (!s.isFile() || s.uid !== BigInt(process.getuid()) || s.nlink !== 1n || (s.mode & 0o7777n) !== 0o600n)
+        fail('cache inventory file must be private, owned, regular and single-linked');
+      const header = Buffer.alloc(24); if ((await file.read(header, 0, 24, 0)).bytesRead !== 24) return null;
+      if (header.readBigUInt64LE(0) !== 0xfcfb6d1ba7725c30n || header.readUInt32LE(8) !== 5) return null;
+      const length = header.readUInt32LE(12); if (length < 1 || length > 4096) return null;
+      const key = Buffer.alloc(length); if ((await file.read(key, 0, length, 24)).bytesRead !== length) fail('cache key truncated');
+      if (!same(s, await file.stat({ bigint: true })) || !same(s, await lstat(path, { bigint: true }))) fail('cache inventory changed while reading');
+      const value = key.toString('utf8'); return value.startsWith('1/0/') && assetURL(value.slice(4)) ? value.slice(4) : null;
+    } finally { await file.close(); }
+  });
 }
 function responseTime(metadata) {
   // Observed Chromium HttpResponseInfo pickle: payload length, flags, optional
@@ -72,18 +95,22 @@ async function originalEntry(root, name, current, targetURL) {
   // permission to strip an injected patch or adopt another original.
   for (const adapter of ['ui-folders', 'ui-chat-wake', 'ui-owner-wake']) {
     const state = join(root, adapter, name, 'ui-folder-compat');
-    let m, receipt;
-    try { receipt = await snapshotClaudeCache(join(state, 'manifest.json'), 16 * 1024); m = JSON.parse(receipt.bytes.toString()); }
+    const manifestPath = join(state, 'manifest.json');
+    // An installation need not exist. Once its receipt is observed, however,
+    // disappearance during the stable read is missing evidence, not absence.
+    try { await lstat(manifestPath, { bigint: true }); }
     catch (e) { if (e.code === 'ENOENT') continue; throw e; }
+    const receipt = await evidenceRead(() => snapshotClaudeCache(manifestPath, 16 * 1024));
+    const m = JSON.parse(receipt.bytes.toString());
     validateClaudeCacheManifest(m, { root: join(root, adapter, name), cachePath: current.path, sourceHash: m.sourceHash });
     if (m.version !== 1 || m.root !== join(root, adapter, name) || m.cachePath !== current.path
       || !['prepared', 'installed'].includes(m.phase) || !['install', 'restore'].includes(m.action)
       || ![m.originalHash, m.patchedHash, ...(m.phase === 'prepared' ? [m.previousPatchedHash] : [])].includes(current.hash))
       fail('resource journal or cache ownership changed');
-    const original = await snapshotClaudeCache(join(state, 'original.cache'));
+    const original = await evidenceRead(() => snapshotClaudeCache(join(state, 'original.cache')));
     const entry = inspectFolderCache(original.bytes, { targetURL });
     if (sha256(original.bytes) !== m.originalHash || entry.sourceHash !== m.sourceHash) fail('resource original changed');
-    const latest = await snapshotClaudeCache(join(state, 'manifest.json'), 16 * 1024);
+    const latest = await evidenceRead(() => snapshotClaudeCache(manifestPath, 16 * 1024));
     if (latest.hash !== receipt.hash || !same(latest.info, receipt.info)) fail('resource journal changed during discovery');
     return entry;
   }
@@ -98,7 +125,7 @@ async function originalEntry(root, name, current, targetURL) {
  */
 export async function discoverClaudeFrontend({ root, home = homedir() }) {
   const directory = claudeCacheDirectory(home), before = await cacheDirectory(directory);
-  const names = await readdir(directory); if (names.length > 32768) fail('cache inventory exceeds its bound');
+  const names = await nativeCacheRead(() => readdir(directory)); if (names.length > 32768) fail('cache inventory exceeds its bound');
   const inventory = new Map();
   for (const name of names.filter(fileName)) {
     const path = join(directory, name);
@@ -109,7 +136,7 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
   }
   const entries = [];
   for (const resource of inventory.values()) if (/^index-[A-Za-z0-9_-]+\.js$/.test(basename(resource.url))) {
-    const snapshot = await snapshotClaudeCache(resource.path), entry = inspectFolderCache(snapshot.bytes, { targetURL: resource.url });
+    const snapshot = await nativeCacheRead(() => snapshotClaudeCache(resource.path)), entry = inspectFolderCache(snapshot.bytes, { targetURL: resource.url });
     if (!entry.source.includes('document.getElementById("root")')) fail('entry bootstrap anchor changed');
     entries.push({ ...resource, ...entry, snapshot, response: responseTime(entry.metadata) });
   }
@@ -123,7 +150,7 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
     // Observed September entry graphs retain both compiler branches and reach
     // 1,171 cached modules. Keep a finite bound covering those real builds.
     if (modules.size >= 2048 || missing.size > 2048) fail('import graph exceeds its bound');
-    const snapshot = await snapshotClaudeCache(resource.path);
+    const snapshot = await nativeCacheRead(() => snapshotClaudeCache(resource.path));
     bytes += snapshot.bytes.length; if (bytes > 256 * 1024 * 1024) fail('graph bytes exceed their bound');
     const original = await originalEntry(root, resource.name, { ...snapshot, path: resource.path }, url);
     const module = { ...resource, ...original, currentHash: snapshot.hash, identity: snapshot.info };
@@ -137,8 +164,8 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
   // Directory mtime can change while HTTP writes arrive; every participating
   // resource must still be exactly the snapshot that supplied its proof.
   if (before.dev !== after.dev || before.ino !== after.ino) fail('cache directory identity changed');
-  for (const module of modules.values()) if (!same(module.identity, await lstat(module.path, { bigint: true }))) fail('graph changed during discovery');
-  if (!same(entry.snapshot.info, await lstat(entry.path, { bigint: true }))) fail('entry changed during discovery');
+  for (const module of modules.values()) if (!same(module.identity, await nativeCacheRead(() => lstat(module.path, { bigint: true })))) fail('graph changed during discovery');
+  if (!same(entry.snapshot.info, await nativeCacheRead(() => lstat(entry.path, { bigint: true })))) fail('entry changed during discovery');
   const adapters = {};
   for (const [adapter, probe, plausible] of [
     ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('isScratchWorkspace')],

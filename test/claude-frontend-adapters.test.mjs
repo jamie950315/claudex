@@ -119,7 +119,7 @@ for(const partial of [false,true]) test(`a refused pass is revalidated on unchan
 for(const persistent of [false,true]) test(`an evicted cache entry gets one full rediscovery without another notification; persistent=${persistent}`,async t=>{
   const f=await fixture(t),statuses=[];let calls=0;
   const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,
-    maintain:async()=>{calls++;if(calls===1||persistent)throw Object.assign(new Error('Cache entry disappeared'),{code:'ENOENT'});return{entry:{},adapters:{}}},
+    maintain:async()=>{calls++;if(calls===1||persistent)throw Object.assign(new Error('Cache entry disappeared'),{code:'CLAUDEX_FRONTEND_CACHE_MISSING'});return{entry:{},adapters:{}}},
     watchFactory:()=>{const e=new EventEmitter;e.close=()=>{};return e},writeStatus:async(_path,s)=>statuses.push(s)});
   t.after(()=>maintenance.close());
   assert.equal(calls,2);assert.equal(statuses.at(-1).state,persistent?'skipped':'ready');
@@ -138,6 +138,73 @@ test('graphical resume clears the startup hold and runs maintenance without a ca
   await writeFile(join(f.root,'app-stop.json'),JSON.stringify({version:1,stopped:false}),{mode:0o600});
   for(let i=0;i<100&&statuses.at(-1).state!=='ready';i++)await new Promise(r=>setTimeout(r,20));
   assert.equal(statuses.at(-1).state,'ready');assert.ok(calls>=1);assert.equal(published,0);
+});
+
+test('a vanished unknown cache hint recovers an interrupted inventory, then healthy filtering resumes', async t => {
+  const f = await fixture(t), statuses = []; let calls = 0, notify;
+  const maintenance = await startClaudeRendererMaintenance({ ...f, settleMs: 0,
+    maintain: async (options, deps) => {
+      if (++calls <= 2) throw Object.assign(new Error('Native cache eviction'), { code: 'CLAUDEX_FRONTEND_CACHE_MISSING' });
+      return ensureClaudeRendererAdapters(options, deps);
+    },
+    watchFactory: (_path, listener) => { notify = listener; const watcher = new EventEmitter(); watcher.close = () => {}; return watcher; },
+    writeStatus: async (_path, status) => statuses.push(status),
+  });
+  t.after(() => maintenance.close());
+  assert.equal(calls, 2); assert.equal(statuses.at(-1).state, 'skipped');
+  // This deleted filename was never part of a successfully proved graph.
+  notify('rename', '0000000000000000_0');
+  for (let i = 0; i < 100 && statuses.at(-1).state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(statuses.at(-1).state, 'ready'); assert.equal(calls, 3);
+  notify('rename', '0000000000000000_0');
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(calls, 3, 'healthy operation must not scan on unrelated deletion hints');
+});
+
+test('missing recovery evidence is not retried or repaired by unrelated cache deletion hints', async t => {
+  const f = await fixture(t), statuses = []; let calls = 0, notify;
+  await ensureClaudeRendererAdapters(f);
+  const original = join(f.root, 'ui-folders', f.resources.folders.filename, 'ui-folder-compat', 'original.cache');
+  const patched = await readFile(f.resources.folders.path);
+  await rm(original);
+  const maintenance = await startClaudeRendererMaintenance({ ...f, settleMs: 0,
+    maintain: async (options, deps) => { calls++; return ensureClaudeRendererAdapters(options, deps); },
+    watchFactory: (_path, listener) => { notify = listener; const watcher = new EventEmitter(); watcher.close = () => {}; return watcher; },
+    writeStatus: async (_path, status) => statuses.push(status),
+  });
+  t.after(() => maintenance.close());
+  assert.equal(calls, 1); assert.equal(statuses.at(-1).failure.code, 'recovery-evidence-missing');
+  notify('rename', '0000000000000000_0'); await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(calls, 1); assert.equal(statuses.at(-1).state, 'skipped');
+  assert.deepEqual(await readFile(f.resources.folders.path), patched);
+  await assert.rejects(readFile(original), { code: 'ENOENT' });
+});
+
+test('interrupted adapter publication retains revalidation demand without retrying a permanent refusal', async t => {
+  for (const transient of [true, false]) {
+    const f = await fixture(t), statuses = []; let calls = 0, notify, failed = true;
+    const maintenance = await startClaudeRendererMaintenance({ ...f, settleMs: 0,
+      maintain: async (options, deps) => {
+        calls++;
+        if (failed) return { entry: {}, adapters: { folders: { status: 'skipped', reason: 'Publication refused',
+          failure: { code: transient ? 'cache-entry-missing' : 'recovery-evidence-missing' } } } };
+        return ensureClaudeRendererAdapters(options, deps);
+      },
+      watchFactory: (_path, listener) => { notify = listener; const watcher = new EventEmitter(); watcher.close = () => {}; return watcher; },
+      writeStatus: async (_path, status) => statuses.push(status),
+    });
+    t.after(() => maintenance.close());
+    assert.equal(calls, transient ? 2 : 1);
+    assert.equal(statuses.at(-1).adapters.folders.failure.code, transient ? 'cache-entry-missing' : 'recovery-evidence-missing');
+    failed = false; notify('rename', '0000000000000000_0');
+    if (transient) {
+      for (let i = 0; i < 100 && statuses.at(-1).state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 10));
+      assert.equal(statuses.at(-1).state, 'ready'); assert.equal(calls, 3);
+    } else {
+      await new Promise(resolve => setTimeout(resolve, 30));
+      assert.equal(calls, 1); assert.equal(statuses.at(-1).state, 'degraded');
+    }
+  }
 });
 
 test('app-stop hold prevents maintenance and pre-publication writes; closing drains an active check',async t=>{

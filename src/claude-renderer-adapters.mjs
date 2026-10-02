@@ -10,6 +10,19 @@ import { claudeCacheDirectory, discoverClaudeFrontend, verifyClaudeFrontendGraph
 
 const directories = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake' };
 const runtime = name => readFile(new URL(`./${name}.mjs`, import.meta.url), 'utf8');
+function publicationFailure(error, cachePath) {
+  if (error?.code === 'CLAUDEX_FRONTEND_CACHE_MISSING') return 'cache-entry-missing';
+  if (error?.code === 'CLAUDEX_FRONTEND_CACHE_CHANGED') return 'cache-changed';
+  if (error?.code === 'CLAUDEX_FRONTEND_EVIDENCE_MISSING') return 'recovery-evidence-missing';
+  // snapshotClaudeCache is shared with private recovery storage. Only the
+  // exact validated native target (or its directory) identifies cache eviction.
+  if (error?.code === 'ENOENT') return typeof cachePath === 'string'
+    && [cachePath, dirname(cachePath)].includes(error.path) ? 'cache-entry-missing' : 'required-file-missing';
+  if (['Claude renderer cache changed after graph validation', 'Claude renderer cache changed after publication',
+    'Claude frontend graph: graph changed before publication'].includes(error?.message)) return 'cache-changed';
+  if (['EACCES', 'EPERM'].includes(error?.code)) return 'access-denied';
+  return 'validation-refused';
+}
 export async function buildClaudeRendererCandidate({ root, home = homedir(), adapter, matched, original,
   sharedChatWake,
   registryRoot = join(home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions') }) {
@@ -85,7 +98,8 @@ export async function ensureClaudeRendererAdapters({ root, home = homedir(), fol
     if (shared && folders && adapter === 'chatWake') { adapters[adapter] = { ...adapters.folders }; continue; }
     try { adapters[adapter] = await ensureClaudeRendererAdapter({ root, home, adapter, graph,
       ...(shared && ['folders', 'chatWake'].includes(adapter) ? { sharedResourceMode: folders ? 'combined' : 'chat-only' } : {}) }, dependencies); }
-    catch { adapters[adapter] = { status: 'skipped', reason: 'Cache publication or recovery refused; original and journal preserved' }; }
+    catch (error) { adapters[adapter] = { status: 'skipped', reason: 'Cache publication or recovery refused; original and journal preserved',
+      failure: { code: publicationFailure(error, graph.adapters[adapter]?.target?.path) } }; }
   }
   return { entry: graph.entry, missingChunks: graph.missing, adapters, observations: captureClaudeFrontendHints(graph) };
 }

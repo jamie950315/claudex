@@ -174,6 +174,11 @@ first renderer evaluation. Loading each newly installed graph requires a normal
 idle Claude restart. The watcher never reloads/quits Claude or restarts native
 work. A successful cache installation is not proof of renderer reception or
 message delivery. The 30-second history-watcher heartbeat remains status-only.
+An interrupted cache inventory or resource publication retains a revalidation request for the next cache
+notification, even if its filename has already disappeared. A verified recovery
+updates the folder-resource status on the existing heartbeat without another
+conversation event or history scan. Missing immutable originals/manifests,
+permission errors and foreign changes remain explicit blocks, not cache churn.
 See [native-chat messaging](collaboration.md#messages-to-existing-native-chats)
 for supported discovery, delivery and recovery boundaries.
 

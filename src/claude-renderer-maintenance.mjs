@@ -8,7 +8,10 @@ import { ensureClaudeRendererAdapters } from './claude-renderer-adapters.mjs';
 
 // Fixed diagnostic codes only: native errors may contain paths or cache keys.
 function failureCode(error) {
-  if (error?.code === 'ENOENT') return 'cache-entry-missing';
+  if (error?.code === 'CLAUDEX_FRONTEND_CACHE_MISSING') return 'cache-entry-missing';
+  if (error?.code === 'CLAUDEX_FRONTEND_CACHE_CHANGED') return 'cache-changed';
+  if (error?.code === 'CLAUDEX_FRONTEND_EVIDENCE_MISSING') return 'recovery-evidence-missing';
+  if (error?.code === 'ENOENT') return 'required-file-missing';
   if (['EACCES', 'EPERM'].includes(error?.code)) return 'access-denied';
   if (['Claude frontend graph: graph changed during discovery',
     'Claude frontend graph: graph changed before publication',
@@ -29,6 +32,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   let closed = false, dirty = false, pending, timer, watcher, stopWatcher, closing, notificationsFailed = false, publication = Promise.resolve();
   const files = new Set(); let anonymous = true, observations = new Map();
   let transientRetryUsed = false;
+  let cacheRevalidationNeeded = false;
   const present = value => {
     const summary = { updatedAt: Date.now(), ...value };
     publication = publication.then(async () => {
@@ -42,12 +46,22 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
     if (closed || signal?.aborted) throw new Error('Renderer maintenance stopped');
     if ((await stopState(root))?.stopped) throw new Error('Renderer maintenance held by app stop');
   };
+  const retryInterruptedCache = () => {
+    if (!closed && !signal?.aborted && !dirty && !timer && !transientRetryUsed && cacheRevalidationNeeded) {
+      transientRetryUsed = true;
+      anonymous = true; dirty = true;
+    }
+  };
   const run = () => {
     if (pending || closed) return pending;
     pending = (async () => {
       while (dirty && !closed) {
         dirty = false;
-        const names = [...files]; files.clear(); let changed = anonymous; anonymous = false;
+        const names = [...files]; files.clear();
+        // After an interrupted inventory, a vanished filename cannot be
+        // classified against the discarded observations. Its notification is
+        // enough to request a fresh proof, never enough to report readiness.
+        let changed = anonymous || cacheRevalidationNeeded; anonymous = false;
         let phase = 'lifecycle';
         try {
           await checkHold();
@@ -59,6 +73,8 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           phase = 'discovery-or-installation';
           const result = await maintain({ root, home, folders }, { beforeReplace: checkHold, beforePublish: checkHold });
           const refused = Object.values(result.adapters).some(a => a.status === 'skipped');
+          cacheRevalidationNeeded = Object.values(result.adapters).some(a =>
+            a.status === 'skipped' && ['cache-entry-missing', 'cache-changed'].includes(a.failure?.code));
           if (!refused) transientRetryUsed = false;
           if (refused) observations = new Map();
           else if (result.observations instanceof Map) observations = result.observations;
@@ -66,21 +82,21 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
             ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : {}),
             entry: result.entry, missingChunks: result.missingChunks,
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
-              Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation'].filter(k => value[k] !== undefined).map(k => [k, value[k]]))])) });
+              { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
+                ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) });
+          retryInterruptedCache();
         } catch (error) {
           // A prior successful observation cannot prove a failed pass healthy.
           // The next JS hint must revalidate, including unchanged known assets.
           observations = new Map();
+          const code = failureCode(error);
+          cacheRevalidationNeeded = ['cache-entry-missing', 'cache-changed'].includes(code);
           if (!closed) await present({ state: 'skipped', reason: 'Frontend cache discovery or maintenance refused; no native work was restarted',
-            failure: { phase, code: failureCode(error) } });
+            failure: { phase, code } });
           // Chromium can evict an entry during the inventory walk, after its
           // last notification. Re-discover once in this pass; never replay a
           // native operation or poll persistent validation/permission failures.
-          if (!closed && !signal?.aborted && !dirty && !timer && !transientRetryUsed
-            && ['cache-entry-missing', 'cache-changed'].includes(failureCode(error))) {
-            transientRetryUsed = true;
-            anonymous = true; dirty = true;
-          }
+          retryInterruptedCache();
         }
       }
     })().finally(() => { pending = undefined; });

@@ -1345,6 +1345,19 @@ Do not schedule polling or retry timers. A missing cache entry or changed graph
 during discovery permits one immediate full rediscovery in the same pass; a
 second failure stays explicit until another native event. Failure diagnostics expose fixed phase
 and reason codes, never native error text, paths or cache keys.
+Classify missing native cache resources separately from missing known manifests or
+immutable originals; recovery-evidence loss never gets the cache-eviction retry.
+After interrupted cache discovery or adapter publication, retain full-revalidation demand for the next
+cache-entry hint, including an unknown filename already evicted. Discarded
+observations cannot classify that hint as unrelated. Clear this demand only
+after a coherent pass; healthy unchanged/unrelated-hint suppression stays intact.
+Per-adapter refusals retain fixed failure codes so a native publication race is
+not mistaken for a permanent refusal; missing recovery evidence is never retried
+as a native eviction.
+Keep the folder map publication result separate from the renderer-resource
+overlay. Cache status changes refresh only that overlay through existing status
+heartbeats, not history reads, map/handoff publication or proof timestamps.
+Renderer recovery cannot clear a genuine mapping error or deferred map state.
 Subscribe to app-stop.json through the event source's shared root watcher before
 the initial hold check. Graphical resume starts services before clearing that
 hold; its release must trigger renderer revalidation without cache activity,
