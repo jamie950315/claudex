@@ -98,6 +98,23 @@ test('automatic cache notifications reapply all adapters to a new graph, seriali
   assert.equal(statuses.at(-1).entry.asset,'index-b.js');assert.ok(Object.values(statuses.at(-1).adapters).every(a=>a.status==='installed'));assert.equal(calls,2);notify('change',null);for(let attempts=0;statuses.length<3&&attempts<100;attempts++)await new Promise(r=>setTimeout(r,20));assert.equal(calls,3);await maintenance.close();assert.equal(closed,true);const count=statuses.length;notify('change',newer.entry.filename);await new Promise(r=>setTimeout(r,10));assert.equal(statuses.length,count);
 });
 
+for(const partial of [false,true]) test(`a refused pass is revalidated on unchanged asset hints; partial=${partial}`,async t=>{
+  const f=await fixture(t),statuses=[];let notify,calls=0,refuse=false;
+  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,
+    maintain:async(options,deps)=>{calls++;if(refuse&&!partial)throw new Error('Claude frontend graph: graph changed during discovery');const result=await ensureClaudeRendererAdapters(options,deps);if(refuse)result.adapters.ownerWake={status:'skipped'};return result},
+    watchFactory:(_path,listener)=>{notify=listener;const e=new EventEmitter;e.close=()=>{};return e},
+    writeStatus:async(_path,value)=>statuses.push(value)});
+  t.after(()=>maintenance.close());
+  const until=async predicate=>{for(let i=0;i<100&&!predicate();i++)await new Promise(r=>setTimeout(r,10));assert.ok(predicate())};
+  assert.equal(statuses.at(-1).state,'ready');
+  refuse=true;notify('change',null);await until(()=>statuses.at(-1).state===(partial?'degraded':'skipped'));
+  if(!partial)assert.deepEqual(statuses.at(-1).failure,{phase:'discovery-or-installation',code:'cache-changed'});
+  await new Promise(r=>setTimeout(r,30));assert.equal(calls,2);
+  refuse=false;notify('change',f.resources.folders.filename);
+  await until(()=>statuses.at(-1).state==='ready');assert.equal(calls,3);
+  notify('change',f.resources.folders.filename);await new Promise(r=>setTimeout(r,30));assert.equal(calls,3);
+});
+
 test('app-stop hold prevents maintenance and pre-publication writes; closing drains an active check',async t=>{
   const f=await fixture(t);let called=0,held=true,release,started,notify;const begun=new Promise(r=>{started=r});const statuses=[];
   const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,stopState:async()=>({stopped:held}),watchFactory:(_path,listener)=>{notify=listener;const e=new EventEmitter;e.close=()=>{};return e},writeStatus:async(_path,s)=>statuses.push(s),maintain:async(_options,deps)=>{called++;started();await new Promise(r=>{release=r});await deps.beforeReplace();return{entry:{},adapters:{}}}});

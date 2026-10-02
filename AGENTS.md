@@ -1222,8 +1222,12 @@ src/claude-renderer-maintenance.mjs is owned by the normal Desktop watcher under
 watch.lock. It performs one startup cache pass, then debounces cache-directory
 notifications and serially re-discovers/reapplies all enabled adapters. Exact
 metadata/key hints suppress unchanged JS entries and unrelated HTTP/image writes;
-anonymous notifications still recheck the graph. Hints never authorize patches. Existing
-normal native folder cache configurations opt in; graphical setup records
+anonymous notifications still recheck the graph. Hints never authorize patches.
+Failed or partially refused passes discard unchanged-asset suppression evidence;
+the next JavaScript cache hint revalidates through the normal guarded installer.
+Do not schedule polling or retry timers. Failure diagnostics expose fixed phase
+and reason codes, never native error text, paths or cache keys.
+Existing normal native folder cache configurations opt in; graphical setup records
 rendererAdapters.enabled. An explicit false disables automatic cache maintenance.
 A disabled folder choice stays disabled. Cache maintenance reads no conversation
 histories and does not renew archive intents, advance checkpoints, start owners,

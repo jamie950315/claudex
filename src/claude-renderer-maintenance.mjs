@@ -6,6 +6,18 @@ import { writeDiagnosticJSON } from './storage.mjs';
 import { claudeCacheDirectory, changedClaudeFrontendHint } from './claude-frontend-graph.mjs';
 import { ensureClaudeRendererAdapters } from './claude-renderer-adapters.mjs';
 
+// Fixed diagnostic codes only: native errors may contain paths or cache keys.
+function failureCode(error) {
+  if (error?.code === 'ENOENT') return 'cache-entry-missing';
+  if (['EACCES', 'EPERM'].includes(error?.code)) return 'access-denied';
+  if (['Claude frontend graph: graph changed during discovery',
+    'Claude frontend graph: graph changed before publication',
+    'Claude frontend graph: entry changed during discovery',
+    'Claude frontend graph: cache inventory changed while reading'].includes(error?.message)) return 'cache-changed';
+  if (['Renderer maintenance stopped', 'Renderer maintenance held by app stop'].includes(error?.message)) return 'stopped';
+  return 'validation-refused';
+}
+
 /** One watcher-owned, serialized cache consumer. It never touches histories,
  * native owners, inference, archive proof lifetimes or service/app lifecycle.
  * fs.watch is an after-write hint, not an interception of renderer evaluation.
@@ -35,21 +47,31 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
       while (dirty && !closed) {
         dirty = false;
         const names = [...files]; files.clear(); let changed = anonymous; anonymous = false;
+        let phase = 'lifecycle';
         try {
           await checkHold();
+          phase = 'cache-hint';
           if (!changed) for (const filename of names) {
             if (await changedClaudeFrontendHint({ home, filename, observations })) { changed = true; break; }
           }
           if (!changed) continue;
+          phase = 'discovery-or-installation';
           const result = await maintain({ root, home, folders }, { beforeReplace: checkHold, beforePublish: checkHold });
-          if (result.observations instanceof Map) observations = result.observations;
-          await present({ state: notificationsFailed ? 'skipped' : Object.values(result.adapters).some(a => a.status === 'skipped') ? 'degraded' : 'ready',
+          const refused = Object.values(result.adapters).some(a => a.status === 'skipped');
+          if (refused) observations = new Map();
+          else if (result.observations instanceof Map) observations = result.observations;
+          await present({ state: notificationsFailed ? 'skipped' : refused ? 'degraded' : 'ready',
             ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : {}),
             entry: result.entry, missingChunks: result.missingChunks,
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
               Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation'].filter(k => value[k] !== undefined).map(k => [k, value[k]]))])) });
-        } catch {
-          if (!closed) await present({ state: 'skipped', reason: 'Frontend cache discovery or maintenance refused; no native work was restarted' });
+        } catch (error) {
+          // A prior successful observation cannot prove a failed pass healthy.
+          // The next JS hint must revalidate, including unchanged known assets.
+          // No timer, polling or automatic replay is introduced.
+          observations = new Map();
+          if (!closed) await present({ state: 'skipped', reason: 'Frontend cache discovery or maintenance refused; no native work was restarted',
+            failure: { phase, code: failureCode(error) } });
         }
       }
     })().finally(() => { pending = undefined; });
