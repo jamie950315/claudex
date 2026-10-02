@@ -80,6 +80,40 @@ export async function appendClaudeSession({ path, common, id, expectedHash }) {
   return { hash: hash(source.text + batch.text), lastUuid: batch.rows.at(-1)?.uuid ?? lastUuid };
 }
 
+function preserveUnpairedLocalCommands(common, rows) {
+  // txcript represents native slash-command UI records as Command tool calls.
+  // Local UI and skill commands can omit stdout. Keep those invocation records
+  // as inert text, not an unfinished model call or a fake result.
+  // Paired commands retain their historical codec representation and digest.
+  const results = new Set();
+  const calls = new Map();
+  for (const message of common.messages) {
+    for (const block of message.content) {
+      if (block.type === 'tool_result') results.add(block.tool_use_id ?? block.id);
+      if (block.type === 'tool_use') calls.set(block.id, (calls.get(block.id) ?? 0) + 1);
+    }
+  }
+  const identities = new Map();
+  for (const row of rows) if (row.uuid) identities.set(row.uuid, (identities.get(row.uuid) ?? 0) + 1);
+  const commands = new Map();
+  for (const row of rows) {
+    if (row.type !== 'user' || row.message?.role !== 'user'
+        || typeof row.message.content !== 'string' || !row.uuid || identities.get(row.uuid) !== 1) continue;
+    // Native UI commands put the name first; skill invocations may put the
+    // message first. Both envelopes retain their exact original bytes.
+    const match = /^<command-name>(\/[^\s<>]+)<\/command-name>\r?\n[\t ]*<command-message>[^<>]*<\/command-message>(?:\r?\n[\t ]*<command-args>[\s\S]*<\/command-args>)?$/.exec(row.message.content)
+      ?? /^<command-message>[^<>]*<\/command-message>\r?\n[\t ]*<command-name>(\/[^\s<>]+)<\/command-name>(?:\r?\n[\t ]*<command-args>[\s\S]*<\/command-args>)?$/.exec(row.message.content);
+    if (match) commands.set(row.uuid, { name: match[1], text: row.message.content });
+  }
+  for (const message of common.messages) {
+    if (message.role !== 'user' || message.content.length !== 1) continue;
+    const block = message.content[0], command = commands.get(block.id);
+    if (block.type !== 'tool_use' || block.tool?.name !== 'Command'
+        || !command || block.tool.command !== command.name || calls.get(block.id) !== 1 || results.has(block.id)) continue;
+    message.content = [{ type: 'text', text: `[Native local command]\n${command.text}` }];
+  }
+}
+
 export function decodeClaude(text, { preserveCompactionHistory = false, authenticatePreservedPacket } = {}) {
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
   const compact = preserveCompactionHistory ? claudeCompactionHistory(text, rows, authenticatePreservedPacket) : claudeCompaction(text, rows);
@@ -98,6 +132,7 @@ export function decodeClaude(text, { preserveCompactionHistory = false, authenti
     }
   }
   const common = JSON.parse(toCommon(main.map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
+  preserveUnpairedLocalCommands(common, main);
   if (compact) common.meta.compaction = compact.metadata;
   return common;
 }

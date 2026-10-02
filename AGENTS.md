@@ -207,6 +207,23 @@ bounded polling harness, not a production fallback.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
 - Imported history must not loop back as newly authored history.
+- Native user slash-command and skill-invocation records can omit stdout. Decode only
+  unpaired, identity-bound native string command envelopes as inert full text;
+  never synthesize tool results or exempt actual assistant tool calls from
+  completion checks. Support native name-first and message-first envelopes,
+  including indentation, without changing the retained original text.
+  Paired commands (including verified reset transport) retain
+  their existing canonical representation. Late or rewritten output still obeys
+  normal unpaired-result and checkpoint-conflict guards.
+
+In completion-event mode, initial verification reads each scheduled conversation
+normally but does not repeat full reads or broad discovery because streaming file
+metadata changed. Between startup checks, inspect bounded durable event metadata
+and service at most one exact completion/session target, with fair ordering and
+revision rechecks. Only consumed revisions are acknowledged; started, control and
+newer events survive. Unknown-source discovery is exact-key and revision-bounded.
+Retain the old activity-interleaved scheduler only for the injected non-event
+harness. Do not defer all new completions until a long cold sweep finishes.
 
 ## Cross-model collaboration
 

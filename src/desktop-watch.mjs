@@ -547,11 +547,71 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             discoveryDurationMs = completedAt - beganAt;
             return activeDesktopConversationIds(state).filter(id => !existing.has(id));
           };
+          const interleavedDiscovery = new Map();
+          const interleavedServiced = new Map();
+          let interleavedSequence = 0;
+          const refreshCompletion = async nextId => {
+            if (signal?.aborted || !events.peek) return;
+            let batch = await events.peek();
+            batch = await events.current?.(batch) ?? batch;
+            let state = await bridge.status();
+            if (state.pending) { clearHints(); await bridge.recover(); state = await bridge.status(); }
+            await events.observe(batch, activeDesktopState(state));
+            const pendingKeys = new Set(batch.map(eventKey));
+            // Keep only the current inbox's bounded identities, never a growing
+            // history of processed or unenrollable native sessions.
+            for (const key of interleavedDiscovery.keys()) if (!pendingKeys.has(key)) interleavedDiscovery.delete(key);
+            for (const key of interleavedServiced.keys()) if (!pendingKeys.has(key)) interleavedServiced.delete(key);
+            const actionable = batch.filter(event => ['completed', 'idle', 'interrupted', 'changed', 'session'].includes(event.kind))
+              .sort((left, right) => (interleavedServiced.get(eventKey(left)) ?? 0) - (interleavedServiced.get(eventKey(right)) ?? 0)
+                || (left.at ?? 0) - (right.at ?? 0));
+            const known = new Set(state.records.map(record => `${record.side}:${record.nativeId?.toLowerCase()}`));
+            const unknown = actionable.filter(event => !known.has(eventKey(event))
+              && interleavedDiscovery.get(eventKey(event)) !== event.revision);
+            if (unknown.length) {
+              for (const event of unknown) interleavedDiscovery.set(eventKey(event), event.revision);
+              await discoverNew(new Set(unknown.map(eventKey)));
+              state = await bridge.status();
+            }
+            // A completed revision can be superseded by started while discovery
+            // awaits. Do not turn stale completion into a streaming inspection.
+            const current = await events.current?.(actionable) ?? actionable;
+            const targets = new Map();
+            for (const event of current) for (const record of state.records) {
+              if (`${record.side}:${record.nativeId?.toLowerCase()}` !== eventKey(event)
+                || event.kind === 'session' && known.has(eventKey(event)) && record.managed
+                || record.conversationId === nextId || !state.conversations[record.conversationId]
+                || !isDesktopTracked(state.conversations[record.conversationId])) continue;
+              const sourceEvents = targets.get(record.conversationId) ?? [];
+              sourceEvents.push(event); targets.set(record.conversationId, sourceEvents);
+            }
+            const selected = targets.entries().next().value;
+            if (!selected || signal?.aborted) return;
+            const [id, sourceEvents] = selected;
+            for (const event of sourceEvents) interleavedServiced.set(eventKey(event), ++interleavedSequence);
+            eventWaits.delete(id);
+            for (let index = waitingContexts.length - 1; index >= 0; index--)
+              if (waitingContexts[index].conversationId === id) waitingContexts.splice(index, 1);
+            waiting = waitingContexts[0]?.reason ?? null;
+            eventSyncCount++;
+            const result = await sync(id);
+            for (const event of sourceEvents) {
+              deferredEvents.delete(eventKey(event));
+              if (event.kind !== 'session' && (result?.waiting || result?.incompleteTail || result?.changed === false))
+                deferEvent(event, event.retryAttempt ?? 0);
+            }
+            await events.observe(sourceEvents, activeDesktopState(await bridge.status()));
+            // Only these revisions were inspected. Newer streaming/completion
+            // hints and unrelated control work remain durable for the outer loop.
+            await events.acknowledge(sourceEvents);
+            await status({ waiting, waitingContexts, blockedSourceCount, blockedSources });
+          };
           // A whole foreground sweep can itself take tens of seconds. Discover
           // new work and observe existing active files between operations. One
           // dirty active owner may jump ahead per boundary; the fixed sweep still
           // advances, and managed lifecycle checks are never skipped by metadata.
           const refreshNew = async nextId => {
+            if (events) return refreshCompletion(nextId);
             if (signal?.aborted || now() - discoveryCompletedAt < Math.max(1, pollMs)) return;
             const fresh = await discoverNew();
             for (const id of fresh) {

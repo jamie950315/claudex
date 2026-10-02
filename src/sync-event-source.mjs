@@ -219,6 +219,14 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
       return watcher;
     },
     current,
+    async peek() {
+      // Non-consuming metadata snapshot for bounded work between startup
+      // inspections. Exact revision acknowledgements remain the caller's job.
+      await publisher;
+      if (failure) throw failure;
+      if (closed) return [];
+      return inbox.list();
+    },
     async observe(batch, state) {
       if (failure) throw failure;
       if (closed) return;
