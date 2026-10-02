@@ -84,7 +84,7 @@ test('real broker process serves both MCP peers without starting inference or re
     const [code] = await closed;
     assert.equal(code, 0, errors);
     const replies = output.trim().split('\n').map(line => JSON.parse(line));
-    assert.equal(replies.find(reply => reply.id === 2).result.tools.length, 10);
+    assert.equal(replies.find(reply => reply.id === 2).result.tools.length, 11);
     assert.deepEqual(JSON.parse(replies.find(reply => reply.id === 3).result.content[0].text).tasks, []);
     assert.equal(output.includes(token), false);
   }

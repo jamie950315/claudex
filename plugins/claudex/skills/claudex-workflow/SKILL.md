@@ -4,9 +4,12 @@ description: Coordinate explicitly authorized Codex and Claude work through an e
 
 # Claudex workflow
 
-Use the existing `claudex-work` MCP tools for model-driven collaboration. This
-plugin adds a human control pane; its private controller helper is not an agent
-permission-escalation route. Keep the caller's generation-scoped worker token and
+Use the existing `claudex-work` MCP tools to delegate, monitor, interpret blockers,
+collect results and hand off work autonomously within the user's scope. The Mod
+provides session-local observations and native delivery; its pane is for human
+inspection and explicit intervention, not a mandatory step in the AI workflow.
+Its private controller helper is not an agent permission-escalation route.
+Keep the caller's generation-scoped worker token and
 existing directory grants. A managed worker must continue using its own MCP
 connection. Preserve `CLAUDEX_COLLABORATION_WORKER` and all native permission modes.
 
@@ -15,6 +18,35 @@ authorized writes. Use a dedicated checkout or explicitly disjoint writable
 paths. Include the actual question, relevant files, constraints, test evidence,
 and expected deliverable in the new task. Provider names and exact model IDs
 remain distinct; retain model IDs exactly as the user supplies them.
+
+Choose a unique requestId per operation, including a caller-generated namespace
+for the conversation. Controller receipts are provider-scoped, not native-chat
+scoped: generic IDs can collide across chats. Never change an ID to replay an
+uncertain operation. Worker receipts remain generation-scoped.
+
+Use `claudex_list` with status/parentId/project filters and follow `nextCursor`
+with identical filters. Prefer `claudex_wait` with up to 16 distinct
+`targets: [{taskId, afterRevision}]`; multi-wait defaults to summary. Only returned
+terminal child outcomes are acknowledged. Single-task wait remains supported.
+Inspect each task's `waitReason` and blocker IDs, not the legacy global uncertain
+inventory flag. Native activity timestamps mean output was observed, not useful
+progress; process existence is not activity. Requested model/effort are not
+actual model evidence or proof of effective reasoning budget.
+
+Before finishing, a worker may call `claudex_report` for its own active task with
+`report: {outcome, summary, remaining, needs, artifacts}`. Outcome is done,
+partial, blocked or needs-input; needs use information, authorization, access,
+dependency or environment. Artifacts identify a file, URL, commit or other
+reference without embedding secrets. This is worker-self-reported, not verified
+goal completion; normal completed/resultFinal execution semantics stay separate.
+Absent reports remain unreported. Attach the same optional report structure to
+handoff along with the complete message, then obey the end-turn boundary.
+
+Root tasks currently have no proven native origin binding or automatic result
+notification. Keep reading status/wait; do not synthesize origin IDs or send
+unrequested wake messages. Mod observations expire and are diagnostic only:
+hold/refuse, missing receiver/tools and target mapping failures never authorize
+fallback, retries, permission changes or removal of dispatch guards.
 
 For an existing managed task, its current owner uses `claudex_handoff` with the
 latest task revision, then ends its turn with `CLAUDEX_HANDOFF`. Let the existing

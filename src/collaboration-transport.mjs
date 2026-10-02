@@ -2,12 +2,13 @@ import net from 'node:net';
 import { chmod, lstat, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
+import { validateOutcome, OUTCOMES, NEED_KINDS } from './collaboration-outcome.mjs';
 
 const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
-const METHODS = new Set(['start', 'send', 'handoff', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive']);
+const METHODS = new Set(['start', 'send', 'handoff', 'report', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -167,14 +168,28 @@ const integer = { type: 'integer', minimum: 0 };
 const effort = { type: ['string', 'null'], enum: [...new Set(Object.values(collaborationEfforts).flat()), null],
   description: 'Provider-native reasoning effort. Omitted uses the destination provider default; null uses the native CLI default. Codex: none, minimal, low, medium, high, xhigh, max, ultra. Claude: low, medium, high, xhigh, max. Model-specific restrictions are enforced by the native CLI; no fallback is applied.' };
 const view = { type: 'string', enum: ['full', 'summary'] };
+const report = { type: 'object', additionalProperties: false, required: ['outcome', 'summary'], properties: {
+  outcome: { type: 'string', enum: OUTCOMES }, summary: { ...str, maxLength: 4096 },
+  remaining: { type: 'array', maxItems: 16, items: { ...str, maxLength: 2048 } },
+  needs: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['kind', 'description'],
+    properties: { kind: { type: 'string', enum: NEED_KINDS }, description: { ...str, maxLength: 2048 } } } },
+  artifacts: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['kind', 'reference'],
+    properties: { kind: { type: 'string', enum: ['file', 'url', 'commit', 'other'] }, reference: { ...str, maxLength: 2048 },
+      description: { ...str, maxLength: 2048 } } } },
+} };
+const targets = { type: 'array', minItems: 1, maxItems: 16, items: { type: 'object', additionalProperties: false,
+  required: ['taskId'], properties: { taskId: str, afterRevision: integer } } };
 const toolDefinitions = [
   tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. Tasks and children may run concurrently in the same workspace: assign disjoint file responsibilities and coordinate shared edits; there is no workspace lock or automatic conflict merge. Work has no execution deadline; explicitly cancel unwanted work. Use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
-  tool('handoff', 'Transfer this same task to the other provider. Optional model overrides the receiving provider default reported by claudex_list; omission uses that default, not the outgoing model. Explicit null uses the native CLI default. Read status for the current revision first. Include all progress, remaining work and constraints in the message. After acknowledgement end your native turn immediately with exactly CLAUDEX_HANDOFF: no further tools or summary, and do not wait on yourself. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
+  tool('handoff', 'Transfer this same task to the other provider. Optional report carries structured self-reported outcome and remaining work, never independent proof. Optional model overrides the receiving provider default; omission uses that default, not the outgoing model. Read status for the revision first. Include progress, remaining work and constraints in the message. After acknowledgement end immediately with exactly CLAUDEX_HANDOFF: no further tools or summary. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, report, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
+  tool('report', 'Active worker only: record a structured self-reported outcome for your own task. Does not complete execution, verify success, authorize work or notify a native chat. Use a unique requestId for each update; preserve remaining work and typed needs.', { taskId: str, report, requestId: str }, ['taskId', 'report', 'requestId']),
   tool('status', 'Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default.', { taskId: str, view }, ['taskId']),
-  tool('wait', 'Wait up to 30 seconds for a task revision without starting a model. Prefer view=summary with afterRevision to avoid repeated history; changed/timedOut/terminal/resultFinal describe the response. Unseen terminal child outcomes are still delivered and acknowledged. Use view=full for complete history.', { taskId: str, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }, ['taskId']),
+  tool('wait', 'Wait up to 30 seconds without starting a model. Supply taskId/afterRevision for the compatible single-task response, OR 1–16 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.', { taskId: str, targets, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }),
   tool('cancel', 'Request cancellation. Check cancelAccepted, cancelPending and terminal: acceptance is not proof of process exit. Wait for a terminal outcome; an unsafe shutdown may remain uncertain. Completed, failed or cancelled tasks are no-ops; uncertain tasks require operator inspection and reject cancellation.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
-  tool('list', 'List visible tasks.', {}, []),
+  tool('list', 'List visible tasks with per-task observed waitReason and exact blockers. Global blockedByUncertainWork is a legacy inventory flag, not proof this task is blocked. Follow nextCursor with identical filters; pages are live, not frozen snapshots.', {
+    status: { type: 'string', enum: ['ready', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'uncertain'] },
+    parentId: { type: ['string', 'null'] }, project: str, limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str }, []),
   tool('chat_list', 'Find hook-registered native chats by title. Optional query searches native title metadata only, provider filters codex/claude, match selects exact or contains (default). Results include title, titleMatch, source and errors, sessionId and cwd; follow nextCursor. Titles are not unique IDs: if multiple or partial matches exist, ask the user to choose, never silently pick the newest. Do not send from errored title metadata. Pass the chosen sessionId and verbatim expectedTitle to chat_send. Does not scan conversation text or register unknown chats.', { limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str,
     query: str, provider: { type: 'string', enum: ['codex', 'claude'] }, match: { type: 'string', enum: ['exact', 'contains'] } }, []),
   tool('chat_send', 'Send an explicitly user-authorized peer message. Controller only. Supply title for automatic unique exact-title lookup, optionally with provider; duplicates return needs-selection without sending. Alternatively use provider/sessionId and expectedTitle from chat_list. Codex wakes the original Desktop chat through its native owner. Claude wakes through the installed Desktop bridge when idle with no draft or pending permission. Wake consumes native model allowance; busy chats defer to hooks. Set wake=false for queue-only delivery. Ended chats accept queued messages waiting for native resumption. Never creates a replacement chat or a second writer. Does not grant permissions or interrupt work. Check chat_status: waiting-for-resume is not delivery, offered is not acknowledged; an uncertain wake is never retried.', {
@@ -210,9 +225,19 @@ function validateTool(name, args) {
     if (name === 'claudex_desktop_owner_wake' && (value.length > field.maxLength || !new RegExp(field.pattern).test(value))) fail(`Invalid ${key}`);
     if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
-    if (field.type === 'array' && (!Array.isArray(value) || value.length > field.maxItems
+    if (key === 'report') validateOutcome(value);
+    if (key === 'targets') {
+      if (!Array.isArray(value) || value.length < 1 || value.length > 16
+        || value.some(target => !object(target) || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))
+          || typeof target.taskId !== 'string' || !target.taskId || target.afterRevision !== undefined
+            && (!Number.isSafeInteger(target.afterRevision) || target.afterRevision < 0))
+        || new Set(value.map(target => target.taskId)).size !== value.length) fail('Invalid targets');
+    }
+    if (['readOnlyDirs', 'writableDirs'].includes(key) && (!Array.isArray(value) || value.length > field.maxItems
       || value.some(path => typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')))) fail(`Invalid ${key}`);
   }
+  if (name === 'claudex_wait' && (args.targets === undefined ? args.taskId === undefined
+    : args.taskId !== undefined || args.afterRevision !== undefined)) fail('Supply taskId or targets, not both');
   if (name === 'claudex_start' && !isAbsolute(args.cwd)) fail('cwd must be absolute');
   if (name === 'claudex_start' && args.projectRoot !== undefined && !isAbsolute(args.projectRoot)) fail('projectRoot must be absolute');
   return name.slice('claudex_'.length);
@@ -245,7 +270,8 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
           const params = args;
           const value = await callCollaboration({ root, peer, token, method, params, timeoutMs: method === 'wait' ? Math.min(SOCKET_LIFETIME_MS, (args.timeoutMs ?? 30000) + 5000) : SOCKET_LIFETIME_MS });
           result = { content: [{ type: 'text', text: JSON.stringify(value) }] };
-        } catch (error) { result = { content: [{ type: 'text', text: String(error.message) }], isError: true }; }
+        } catch (error) { result = { content: [{ type: 'text', text: String(error.message) }], isError: true,
+          structuredContent: { error: { code: typeof error.code === 'string' ? error.code : null, message: String(error.message) } } }; }
       } else { send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }); return; }
       send({ jsonrpc: '2.0', id, result });
     } catch (error) { send({ jsonrpc: '2.0', id, error: { code: -32603, message: String(error.message) } }); }

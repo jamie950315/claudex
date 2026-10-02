@@ -1,10 +1,31 @@
 # Claude Mod integration validation
 
-Reviewed on 2026-10-03. Source and installed companion: 0.4.1. The reviewed Mac
+Source candidate is now 0.5.0; installed-companion acceptance below remains the
+historical 0.4.1 review from 2026-10-03. The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## 0.5 AI-first observation candidate (2026-10-03)
+
+- 106 affected Mod Node tests passed, including real Unix RPC observation and
+  typed-error ingress, per-session expiry/end/disconnect/restart behavior,
+  unmapped target diagnosis and unchanged hook/claim/receive/ACK boundaries.
+- All 20 final staged hashes match. The independent packaged transport import
+  and helper doctor work without source-checkout dependencies; both wake opt-ins
+  remain false in this candidate. It was not installed or activated.
+- Desktop Code 2.1.286 strict validation has zero errors and warnings. The full
+  native kit refuses to run under that process's vendor rollout; installed
+  2.1.283 and 2.1.284 also refuse early-access hooks. No rollout override was
+  applied. The new sixteenth lifecycle case has not run in the native kit, and
+  no new Desktop painting, policy or inference acceptance is claimed.
+- The signed app candidate packages all new broker modules through its normal
+  allowlist; 107 engine/plugin hashes and nested strict signatures were checked.
+  It is development-signed, not notarized, and does not replace the installed app.
+- Root origin binding and automatic outcome notification are still unavailable:
+  per-provider exact native call/result provenance needs live acceptance first.
+  Native schema availability and synthetic event tests are not that acceptance.
 
 ## 0.4 panel and localization acceptance (2026-10-03)
 

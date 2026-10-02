@@ -1,4 +1,10 @@
-# Claudex native companion, 0.4.1
+# Claudex native companion, 0.5.0
+
+AI collaboration uses the existing MCP delegation, multi-task wait, structured
+worker report and handoff tools. The pane remains optional for human inspection
+and reviewed intervention. Session-local observations of policy, capabilities
+and context usage expire at the broker and never authorize dispatch or fallback.
+See [the workflow](skills/claudex-workflow/SKILL.md) for the model-driven path.
 
 This plugin is staged from the Claudex repository with:
 

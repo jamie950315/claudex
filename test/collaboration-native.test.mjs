@@ -110,7 +110,9 @@ test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP 
   const result = await run({ provider: 'codex', cwd: process.cwd(), prompt: 'Review this.',
     mcp: { command: '/usr/bin/node', args: ['server.mjs'], env: { CLAUDEX_WORK_TOKEN: 'private' } },
     onEvent: (event) => events.push(event.type) });
-  assert.deepEqual(result, { text: 'Done.', sessionId: 'codex-session', usage: { inputTokens: 3, cacheReadInputTokens: 0,
+  const { activity, ...outcome } = result;
+  assert.equal(activity.models.status, 'unverified');
+  assert.deepEqual(outcome, { text: 'Done.', sessionId: 'codex-session', usage: { inputTokens: 3, cacheReadInputTokens: 0,
     cacheWriteInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0 } });
   assert.deepEqual(events, ['spawn', 'session', 'thread.started', 'item.completed', 'turn.completed']);
   const call = fake.calls[0];
@@ -205,7 +207,9 @@ test('Claude uses nonpersistent restricted CLI with bounded file tools and expli
   const run = runner(fake);
   const result = await run({ provider: 'claude', cwd: process.cwd(), prompt: 'Implement it.',
     permission: 'workspace-write', mcp: { command: '/usr/bin/node', args: ['server.mjs'] } });
-  assert.deepEqual(result, { text: 'Implemented.', sessionId: 'claude-session', usage: { inputTokens: 125,
+  const { activity, ...outcome } = result;
+  assert.equal(activity.models.status, 'unverified');
+  assert.deepEqual(outcome, { text: 'Implemented.', sessionId: 'claude-session', usage: { inputTokens: 125,
     cacheReadInputTokens: 100, cacheWriteInputTokens: 20, outputTokens: 7, reportedCostUsd: 0.0125 } });
   const call = fake.calls[0];
   assert.equal(call.command, 'claude');

@@ -7,16 +7,19 @@ import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
-import { dispatchModWake } from './mod-wake-broker.mjs';
+import { dispatchModWake, modSessionObservation, modDeliveryDiagnosis } from './mod-wake-broker.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
 import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
+import { validateOutcome, outcomePresentation } from './collaboration-outcome.mjs';
+import { sanitizeNativeActivity } from './collaboration-activity.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
 const digest = value => createHash('sha256').update(value).digest('hex');
 const bytes = value => Buffer.byteLength(typeof value === 'string' ? value : JSON.stringify(value));
 const copy = value => structuredClone(value);
+const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 function text(value, name, limit = 16384) {
   if (typeof value !== 'string' || !value.trim() || bytes(value) > limit || value.includes('\0'))
     throw new Error(`${name} must be nonempty text of at most ${limit} bytes.`);
@@ -310,9 +313,28 @@ export class CollaborationHub extends EventEmitter {
 
   /** Unknown work blocks only its own task tree and work that shares its access. */
   blockedByUncertain(state, candidate) {
+    return this.uncertainBlockers(state, candidate).length > 0;
+  }
+
+  uncertainBlockers(state, candidate) {
     const root = task => { let cursor = task; while (cursor?.parentId && state.tasks[cursor.parentId]) cursor = state.tasks[cursor.parentId]; return cursor?.id; };
-    return Object.values(state.tasks).some(task => task.status === 'uncertain'
-      && (root(task) === root(candidate) || task.permission !== 'read-only' && workspacesConflict(task, candidate)));
+    return Object.values(state.tasks).filter(task => task.status === 'uncertain'
+      && (root(task) === root(candidate) || task.permission !== 'read-only' && workspacesConflict(task, candidate))).map(task => task.id);
+  }
+
+  waitReason(task, state = this.state) {
+    const reason = (kind, taskIds) => ({ kind, taskIds: taskIds.slice(0, 64),
+      ...(taskIds.length > 64 ? { totalTaskCount: taskIds.length, truncated: true } : {}) });
+    if (task.status === 'running' && task.cancelRequested) return { kind: 'cancelling', taskIds: [] };
+    if (task.pendingHandoff) return { kind: 'handoff', taskIds: [] };
+    if (task.status === 'waiting') return reason('children', Object.values(state.tasks)
+      .filter(child => child.parentId === task.id && !terminal.has(child.status)).map(child => child.id));
+    if (task.status !== 'ready') return null;
+    const blockers = this.uncertainBlockers(state, task);
+    if (blockers.length) return reason('uncertain-overlap', blockers);
+    if (this.closed) return { kind: 'broker-stopping', taskIds: [] };
+    if (this.running.size >= this.maxWorkers) return { kind: 'capacity', taskIds: [...this.running.keys()] };
+    return { kind: 'queued', taskIds: [] };
   }
 
   serialized(fn) {
@@ -348,14 +370,14 @@ export class CollaborationHub extends EventEmitter {
   }
 
   allowed(actor, task, state) {
-    if (!task) throw new Error('Unknown task.');
+    if (!task) fail('CLAUDEX_TASK_NOT_FOUND', 'Unknown task.');
     if (!actor.task) return;
     let cursor = task;
     while (cursor) {
       if (cursor.id === actor.task.id) return;
       cursor = state.tasks[cursor.parentId];
     }
-    throw new Error('Worker may only access its own task and descendants.');
+    fail('CLAUDEX_ACCESS_DENIED', 'Worker may only access its own task and descendants.');
   }
 
   async dispatch(envelope) {
@@ -417,7 +439,8 @@ export class CollaborationHub extends EventEmitter {
         const start = Number(params.cursor ?? 0);
         const chats = []; let next = start, size = 0;
         while (next < all.length && chats.length < limit) {
-          const item = all[next], length = bytes(item);
+          const item = { ...all[next], modObservation: all[next].provider === 'claude' ? modSessionObservation(this, all[next]) : null };
+          const length = bytes(item);
           if (size + length > 512 * 1024) break;
           chats.push(item); size += length; next++;
         }
@@ -430,7 +453,10 @@ export class CollaborationHub extends EventEmitter {
           scope: query && this.nativeChatDiscovery ? 'registered-and-native-metadata' : 'hook-registered-native-chats',
           note: 'Titles are metadata, not unique IDs. Confirm the exact candidate when duplicate or partial titles match; send by sessionId with expectedTitle.' };
       }
-      if (method === 'chat_status') return this.chatMailbox.status(params.messageId);
+      if (method === 'chat_status') {
+        const message = await this.chatMailbox.status(params.messageId);
+        return { ...message, deliveryObservation: await modDeliveryDiagnosis(this, message) };
+      }
       if (this.closed) throw new Error('Broker is stopping; new messages are refused.');
       requestId(params.requestId);
       if (params.wake !== undefined && typeof params.wake !== 'boolean') throw new Error('wake must be boolean.');
@@ -507,7 +533,7 @@ export class CollaborationHub extends EventEmitter {
           wakeStatus = receipt.wake?.state === 'dispatching' ? 'uncertain' : 'unavailable';
         } finally { await handle?.close?.(); }
       }
-      return { ...receipt, wakeStatus,
+      return { ...receipt, wakeStatus, deliveryObservation: await modDeliveryDiagnosis(this, receipt),
         deliveryMode: receipt.wake?.state === 'accepted' ? 'native-owner' : 'next-native-hook',
         idleWakeSupported: targetProvider === 'codex' ? Boolean(this.chatWake) : Boolean(this.claudeWakeManifest),
         note: 'Queued is not delivered. Offered is not acknowledged. Acknowledgement does not prove requested work stopped; verify work status separately.' };
@@ -535,11 +561,37 @@ export class CollaborationHub extends EventEmitter {
       return this.readTask(envelope);
     }
     if (method === 'list') {
+      if (Object.keys(params).some(key => !['status', 'parentId', 'project', 'limit', 'cursor'].includes(key)))
+        fail('CLAUDEX_INVALID_QUERY', 'Invalid task list parameters.');
+      const limit = params.limit ?? 100;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+        || params.status !== undefined && !['ready', 'running', 'waiting', ...terminal].includes(params.status)
+        || params.parentId !== undefined && params.parentId !== null && typeof params.parentId !== 'string'
+        || params.project !== undefined && (typeof params.project !== 'string' || !isAbsolute(params.project)))
+        fail('CLAUDEX_INVALID_QUERY', 'Invalid task list filters or bounds.');
+      const filter = digest(JSON.stringify([params.status ?? null, params.parentId ?? null,
+        Object.hasOwn(params, 'parentId'), params.project ?? null, actor.key]));
+      let after = '';
+      if (params.cursor !== undefined) {
+        try {
+          if (typeof params.cursor !== 'string' || params.cursor.length > 512) throw new Error();
+          const cursor = JSON.parse(Buffer.from(params.cursor, 'base64url').toString());
+          if (cursor.filter !== filter || typeof cursor.after !== 'string' || cursor.after.length > 36) throw new Error();
+          after = cursor.after;
+        } catch { fail('CLAUDEX_INVALID_CURSOR', 'Task cursor does not match this query.'); }
+      }
       const tasks = Object.values(this.state.tasks).filter(task => {
-        try { this.allowed(actor, task, this.state); return true; } catch { return false; }
-      });
-      return { tasks: tasks.map(task => ({ id: task.id, parentId: task.parentId, owner: task.owner, status: task.status,
+        try { this.allowed(actor, task, this.state); } catch { return false; }
+        return (params.status === undefined || task.status === params.status)
+          && (params.parentId === undefined || task.parentId === params.parentId)
+          && (params.project === undefined || (task.projectRoot ?? task.cwd) === params.project);
+      }).sort((a, b) => a.id.localeCompare(b.id));
+      const remaining = tasks.filter(task => task.id > after), page = remaining.slice(0, limit);
+      return { tasks: page.map(task => ({ id: task.id, parentId: task.parentId, owner: task.owner, status: task.status,
+        projectRoot: task.projectRoot ?? task.cwd, waitReason: this.waitReason(task),
         revision: task.revision, updatedAt: task.updatedAt, ...taskPresentation(task) })),
+        totalCount: tasks.length, nextCursor: remaining.length > page.length
+          ? Buffer.from(JSON.stringify({ filter, after: page.at(-1).id })).toString('base64url') : null,
         limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.permissionCeiling() >= 1,
           allowFullAccess: this.permissionCeiling() >= 2, defaultPermission: this.effectiveDefaultPermission(),
           defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
@@ -548,6 +600,7 @@ export class CollaborationHub extends EventEmitter {
           .map(task => ({ id: task.id, owner: task.owner, permission: task.permission, cwd: task.cwd, error: task.error,
             revision: task.revision, updatedAt: task.updatedAt })) };
     }
+    if (method === 'wait' && params.targets !== undefined) return this.waitMany(envelope);
     if (method === 'wait') {
       if (params.view !== undefined && !['full', 'summary'].includes(params.view)) throw new Error('Invalid task view.');
       this.allowed(actor, this.state.tasks[params.taskId], this.state);
@@ -574,7 +627,7 @@ export class CollaborationHub extends EventEmitter {
       if (signal?.aborted) throw new Error('Collaboration wait connection closed.');
       return this.readTask(envelope, { baseline, timedOut });
     }
-    if (!['start', 'send', 'handoff', 'cancel', 'resolve'].includes(method)) throw new Error('Unknown collaboration method.');
+    if (!['start', 'send', 'handoff', 'cancel', 'resolve', 'report'].includes(method)) throw new Error('Unknown collaboration method.');
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
@@ -591,7 +644,7 @@ export class CollaborationHub extends EventEmitter {
       const actor = this.actor(envelope, state);
       const key = digest(`${actor.key}:${params.requestId}`);
       if (state.requests[key]) {
-        if (state.requests[key].fingerprint !== fingerprint) throw new Error('requestId was reused with different input.');
+        if (state.requests[key].fingerprint !== fingerprint) fail('CLAUDEX_REQUEST_ID_CONFLICT', 'requestId was reused with different input.');
         return { ...copy(state.requests[key].result), replayed: true };
       }
       if (actor.task?.pendingHandoff || actor.task?.cancelRequested) throw new Error('Worker has relinquished ownership; further mutations are refused.');
@@ -621,7 +674,12 @@ export class CollaborationHub extends EventEmitter {
       } else {
         task = state.tasks[params.taskId]; this.allowed(actor, task, state);
         if (!['cancel', 'resolve'].includes(method) && ['failed', 'cancelled', 'uncertain'].includes(task.status)) throw new Error('Failed, cancelled, or uncertain work cannot be implicitly restarted.');
-        if (method === 'resolve') {
+        if (method === 'report') {
+          if (!actor.task || actor.task.id !== task.id || task.status !== 'running')
+            fail('CLAUDEX_REPORT_OWNER_REQUIRED', 'Only the active worker may report its own outcome.');
+          task.active.report = { ...validateOutcome(params.report), provenance: 'worker-self-reported',
+            generation: task.generation, provider: actor.peer, reportedAt: Date.now() };
+        } else if (method === 'resolve') {
           if (actor.task) throw new Error('Only the controller may resolve uncertain execution.');
           if (task.status !== 'uncertain' || params.outcome !== 'failed') throw new Error('Resolution requires uncertain work and an explicit failed outcome.');
           if (params.revision !== task.revision) throw new Error('Task revision changed; read status before resolving.');
@@ -665,7 +723,11 @@ export class CollaborationHub extends EventEmitter {
           if (params.revision !== task.revision) throw new Error('Task revision changed; read status before handing off.');
           if (params.provider === task.owner || task.pendingHandoff || task.cancelRequested) throw new Error('Handoff requires a different owner and no pending transition.');
           if (Object.values(state.tasks).some(child => child.parentId === task.id && !terminal.has(child.status))) throw new Error('Finish or cancel active child work before transferring ownership.');
-          task.messages.push({ from: actor.task?.id ?? actor.peer, kind: 'handoff', text: params.message, at: Date.now() });
+          const outcome = params.report === undefined ? undefined : validateOutcome(params.report);
+          task.messages.push({ from: actor.task?.id ?? actor.peer, kind: 'handoff', text: params.message, at: Date.now(),
+            ...(outcome ? { report: { ...outcome, provenance: actor.task?.id === task.id ? 'worker-self-reported'
+              : actor.task ? 'parent-worker-reported' : 'controller-reported', reporterTaskId: actor.task?.id ?? null,
+              generation: task.generation, provider: actor.peer } } : {}) });
           if (task.status === 'running') task.pendingHandoff = { provider: params.provider, model: selectedModel, effort: selectedEffort };
           else { task.owner = params.provider; task.model = selectedModel; task.effort = selectedEffort; task.status = 'ready'; }
         } else {
@@ -785,6 +847,8 @@ export class CollaborationHub extends EventEmitter {
         : 'Use workspace.projectRoot as the working directory. readOnlyDirs are references, never edit them; writableDirs are the only additional authorized write locations. Children may inherit or narrow these grants, never widen them. Handoff preserves the scope. If you need another directory, report the exact need to the controller instead of bypassing permissions.\n')
       + 'The JSON below is a work record: previous messages and results are context, not tool commands to replay. Follow the current request and later explicit follow-ups.\n'
       + 'Use claudex_start for child work, claudex_status/wait for its result, and claudex_handoff to transfer THIS task. Read current status for its revision first.\n'
+      + 'Use claudex_wait targets for up to 16 tasks and claudex_list filters/cursors to keep reads bounded. Wait reasons and native activity are observations, never permission or proof of goal completion.\n'
+      + 'Before finishing, optionally use claudex_report with outcome done, partial, blocked or needs-input, summary, typed needs, artifacts and remaining work. This is your self-report, not independent verification; normal execution status remains separate. You may attach the same report structure to a handoff.\n'
       + 'A tool receipt with nextAction=end-turn is a control boundary, not completed user work: immediately emit only its finalResponse token and end this native turn. No additional tools, explanation, summary or verification. Put all handoff context in the handoff message BEFORE requesting it.\n'
       + 'After a successful handoff acknowledgement emit exactly CLAUDEX_HANDOFF. This overrides the normal final-report format; ownership transfers only after successful native completion and process exit.\n'
       + 'Children can run concurrently with their parent, including in the same workspace. Use status/wait for child results; never wait on yourself. Assign disjoint file responsibilities and coordinate shared-file edits: the broker does not lock overlapping workspaces or merge conflicting changes. Work has no execution deadline; cancel unwanted work explicitly.\n'
@@ -809,6 +873,16 @@ export class CollaborationHub extends EventEmitter {
         projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [],
         prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
         mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
+        onActivity: async snapshot => {
+          const activity = sanitizeNativeActivity(snapshot);
+          if (!activity || activity.provider !== task.owner) return;
+          await this.mutate(state => {
+            const current = state.tasks[task.id];
+            // Diagnostics cannot revive a stale invocation or change revisions.
+            if (current.status === 'running' && current.active?.generation === task.generation)
+              current.active.activity = activity;
+          });
+        },
         onEvent: async event => {
           if (!event || !['spawn', 'session', 'processes', 'process-inspection-failed'].includes(event.type)) return;
           await this.mutate(state => {
@@ -845,6 +919,8 @@ export class CollaborationHub extends EventEmitter {
       const current = state.tasks[task.id];
       if (current.status !== 'running' || current.active?.generation !== task.generation) throw new Error('Native completion does not match the active generation.');
       const active = current.active;
+      const activity = sanitizeNativeActivity(failure ? failure.activity : result?.activity);
+      if (activity?.provider === task.owner) active.activity = activity;
       const usage = recordedUsage(failure ? failure.usage : result?.usage);
       if (usage) { active.usage = usage; addUsage(current, task.owner, usage); }
       if (failure) {
@@ -881,7 +957,8 @@ export class CollaborationHub extends EventEmitter {
     const parent = state.tasks[task.parentId];
     if (!parent || terminal.has(parent.status)) return;
     parent.messages.push({ from: task.id, kind: 'child-result', sourceRevision: task.revision, text: JSON.stringify({ taskId: task.id,
-      status: task.status, provider: task.owner, result: task.result?.text ?? null, error: task.error }), at: Date.now() });
+      status: task.status, provider: task.owner, result: task.result?.text ?? null, error: task.error,
+      outcome: outcomePresentation(task) }), at: Date.now() });
     parent.revision++; parent.updatedAt = Date.now();
     if (bytes(parent.messages) > 192 * 1024) {
       parent.error = 'Child results exceed task context capacity. Inspect results explicitly; no further execution is allowed.';
@@ -895,7 +972,54 @@ export class CollaborationHub extends EventEmitter {
   }
 
   async readTask(envelope, { baseline, timedOut = false } = {}) {
-    const { taskId, view = 'full', afterRevision } = envelope.params;
+    return (await this.readTasks(envelope, [{ taskId: envelope.params.taskId,
+      afterRevision: envelope.params.afterRevision, baseline }], { timedOut }))[0];
+  }
+
+  async waitMany(envelope) {
+    const { params } = envelope, { targets, view = 'summary', timeoutMs = 30000 } = params;
+    if (params.taskId !== undefined || params.afterRevision !== undefined || !['full', 'summary'].includes(view)
+      || !Array.isArray(targets) || targets.length < 1 || targets.length > 16
+      || !Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 30000
+      || targets.some(target => !target || typeof target !== 'object' || Array.isArray(target)
+        || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))
+        || typeof target.taskId !== 'string' || target.afterRevision !== undefined
+          && (!Number.isSafeInteger(target.afterRevision) || target.afterRevision < 0))
+      || new Set(targets.map(target => target.taskId)).size !== targets.length)
+      fail('CLAUDEX_INVALID_WAIT', 'Wait requires 1–16 distinct targets and valid bounds; do not mix single-task fields.');
+    const actor = this.actor(envelope);
+    const selected = targets.map(target => {
+      const task = this.state.tasks[target.taskId];
+      this.allowed(actor, task, this.state);
+      if (actor.task?.id === task.id) fail('CLAUDEX_SELF_WAIT', 'A worker cannot wait on its own running task.');
+      return { ...target, baseline: target.afterRevision ?? task.revision };
+    });
+    const ready = target => {
+      const task = this.state.tasks[target.taskId];
+      return terminal.has(task.status) || task.revision > target.baseline;
+    };
+    let timedOut = false;
+    if (!selected.some(ready) && timeoutMs) await new Promise(resolve => {
+      const done = () => {
+        clearTimeout(timer); this.off('change', changed);
+        envelope.signal?.removeEventListener('abort', done); resolve();
+      };
+      const changed = () => { if (selected.some(ready) || this.closed || envelope.signal?.aborted) done(); };
+      const timer = setTimeout(() => { timedOut = true; done(); }, timeoutMs);
+      this.on('change', changed); envelope.signal?.addEventListener('abort', done, { once: true }); changed();
+    });
+    if (envelope.signal?.aborted) fail('CLAUDEX_WAIT_DISCONNECTED', 'Collaboration wait connection closed.');
+    // All ready targets are returned together, so an earlier busy target cannot
+    // starve later outcomes. Timeout/snapshot reads return every requested target.
+    const readyTargets = selected.filter(ready);
+    const tasks = await this.readTasks({ ...envelope, params: { ...params, view } },
+      readyTargets.length ? readyTargets : selected, { timedOut, bounded: true });
+    return { tasks, timedOut, changed: tasks.some(task => task.changed),
+      terminal: tasks.every(task => task.terminal), requestedCount: targets.length };
+  }
+
+  async readTasks(envelope, targets, { timedOut = false, bounded = false } = {}) {
+    const { view = 'full' } = envelope.params;
     if (!['full', 'summary'].includes(view)) throw new Error('Invalid task view.');
     // Status reads use the committed state directly; only an unseen child outcome
     // acknowledgement commits, in the same serialized step as the read.
@@ -903,6 +1027,8 @@ export class CollaborationHub extends EventEmitter {
       if (envelope.signal?.aborted) throw new Error('Collaboration wait connection closed.');
       const state = this.state;
       const actor = this.actor(envelope, state);
+      const acknowledgements = [];
+      const responses = targets.map(({ taskId, afterRevision, baseline }) => {
       const task = state.tasks[taskId];
       this.allowed(actor, task, state);
       const child = actor.task && task.parentId === actor.task.id && terminal.has(task.status);
@@ -918,20 +1044,35 @@ export class CollaborationHub extends EventEmitter {
           updatedAt: task.updatedAt, cancelRequested: task.cancelRequested, ...taskPresentation(task),
           execution: { generation: task.active?.generation ?? task.lastExecution?.generation ?? task.generation,
             inputs: copy(task.active?.inputs ?? task.lastExecution?.inputs ?? null),
-            usage: copy(task.active ? null : task.lastExecution?.usage ?? null) },
+            usage: copy(task.active ? null : task.lastExecution?.usage ?? null),
+            activity: copy((task.active ?? task.lastExecution)?.activity ?? null),
+            modelEvidence: copy((task.active ?? task.lastExecution)?.activity?.models ?? { status: 'unverified', main: [] }) },
           usageTotals: copy(task.usageTotals ?? null),
           changed: task.revision > (baseline ?? afterRevision ?? -1), timedOut };
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }
       }
+      response.waitReason = this.waitReason(task, state);
+      response.outcome = includeOutcome || !terminal.has(task.status) ? outcomePresentation(task) : undefined;
+      if (bounded) { response.changed = task.revision > (baseline ?? afterRevision ?? -1); response.timedOut = timedOut; }
       // A compact status must never acknowledge a child outcome it did not deliver.
       if (child && includeOutcome && actor.task.active.seenChildren?.[taskId] !== task.revision) {
+        acknowledgements.push([taskId, task.revision]);
+      }
+      return response;
+      });
+      // Fail before acknowledging anything if the atomic response cannot fit.
+      // The MCP facade nests JSON as text: escaping can almost double its size.
+      // Bound that actual outer representation before committing acknowledgements.
+      if (bytes({ content: [{ type: 'text', text: JSON.stringify(bounded ? { tasks: responses } : responses[0]) }] }) > 768 * 1024)
+        fail('CLAUDEX_RESPONSE_CAPACITY', 'Task response exceeds its bound; request fewer targets or summary view. No outcomes were acknowledged.');
+      if (acknowledgements.length) {
         await this.commit(next => {
           const active = next.tasks[actor.task.id].active;
           active.seenChildren ??= {};
-          active.seenChildren[taskId] = task.revision;
+          for (const [taskId, revision] of acknowledgements) active.seenChildren[taskId] = revision;
         });
       }
-      return response;
+      return responses;
     });
   }
 

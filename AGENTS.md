@@ -227,6 +227,32 @@ harness. Do not defer all new completions until a long cold sweep finishes.
 
 ## Cross-model collaboration
 
+AI-first diagnostics retain bounded native activity on each execution without
+changing task revisions or child acknowledgements. Keep requested model/effort
+separate from native response-model evidence; initialization, auxiliary and
+aggregate model metadata are not main-response proof. No prompts, tool payloads
+or reasoning are diagnostic data. PID/process samples never update activity.
+Per-task waitReason contains exact blockers (up to 64 IDs plus truncation/count);
+the legacy global uncertain flag is not a per-task blocking claim. List supports
+query-bound live pagination and filters. Multi-wait supports 1–16 targets with
+one event listener, atomically acknowledging only returned child outcomes after
+checking the MCP-escaped response bound. Preserve compatible single-task behavior.
+MCP errors retain typed code and readable text through structuredContent.error.
+Worker-only report is generation-fenced and explicitly self-reported, never
+verified goal completion or a replacement for completed/resultFinal. Handoff
+reports preserve author provenance and normal completion/process-exit guards.
+Controller requestId namespaces remain provider-scoped; do not migrate old
+receipts or mistake that scope for native-origin proof.
+
+Mod observations are content-free, self-reported diagnostics in broker memory:
+at most 64 observers, 60-second server TTL, lifecycle/disconnect invalidation and
+existing wait refresh. Never reuse observations as dispatch or claim permission.
+Every new RPC must be in the private transport allowlist and tested over Unix
+RPC. Root task-to-origin binding and automatic result notifications remain
+unimplemented pending independently verified per-provider native call/result
+provenance; unsigned hook stdin, model IDs and titles are not that proof. Keep
+status/wait as the result path; do not silently add notification wake or fallback.
+
 The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
 not a companion load gate. The installed Desktop 2.1.286 passed the final native

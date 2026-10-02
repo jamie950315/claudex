@@ -6,6 +6,7 @@ import { isAbsolute } from 'node:path';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { revalidateWorkspace } from './collaboration-workspace.mjs';
 import { createOwnedProcessTracker } from './collaboration-processes.mjs';
+import { createNativeActivity, NATIVE_ACTIVITY_INTERVAL_MS } from './collaboration-activity.mjs';
 
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
@@ -202,11 +203,12 @@ export function createNativeCollaborationRunner({
   // Metadata-only native config read; never starts model work.
   controllerMcpRegistered = spawnImpl === spawn ? codexControllerMcpRegistered : async () => false,
   userPath = spawnImpl === spawn ? userLoginPath : async () => null,
+  activityNow = Date.now,
 } = {}) {
   const run = async function runCollaborationNative({
     provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
     projectRoot, readOnlyDirs = [], writableDirs = [],
-    signal, onEvent,
+    signal, onEvent, onActivity,
   } = {}) {
     if (provider !== 'codex' && provider !== 'claude') throw failure('provider must be codex or claude.');
     checkedString(cwd, 'cwd', 4096);
@@ -216,6 +218,7 @@ export function createNativeCollaborationRunner({
     catch (error) { throw failure(error.message); }
     if (!['read-only', 'workspace-write', 'full-access'].includes(permission)) throw failure('Invalid permission.');
     if (onEvent != null && typeof onEvent !== 'function') throw failure('onEvent must be a function.');
+    if (onActivity != null && typeof onActivity !== 'function') throw failure('onActivity must be a function.');
     const mcp = checkedMcp(rawMcp);
     let canonicalCwd;
     try {
@@ -251,6 +254,7 @@ export function createNativeCollaborationRunner({
     }
     const result = { text: '', sessionId: provider === 'claude' ? randomUUID() : null,
       usage: undefined, terminal: null, conflictingReceipt: false };
+    const activity = createNativeActivity(provider, { now: activityNow });
     if (provider === 'claude') args.push('--session-id', result.sessionId);
 
     return await new Promise((resolve, rejectRun) => {
@@ -273,6 +277,7 @@ export function createNativeCollaborationRunner({
       let killTimer;
       let cancelled = false;
       let eventQueue = Promise.resolve();
+      let activityPublishedAt = null, activityPublishedCount = 0;
       let sessionNotified = false;
       let processTracker, trackerReady, stopping;
       const notify = (event) => {
@@ -280,6 +285,16 @@ export function createNativeCollaborationRunner({
           stop(failure('Native event handler failed.', { uncertain: true, cause }));
         });
         return eventQueue;
+      };
+      const publishActivity = (snapshot, force = false) => {
+        if (!onActivity || !snapshot || snapshot.eventCount === activityPublishedCount) return;
+        if (!force && activityPublishedAt !== null
+          && snapshot.lastNativeEventAt - activityPublishedAt < NATIVE_ACTIVITY_INTERVAL_MS) return;
+        activityPublishedAt = snapshot.lastNativeEventAt;
+        activityPublishedCount = snapshot.eventCount;
+        eventQueue = eventQueue.then(() => onActivity(snapshot)).catch(cause => {
+          stop(failure('Native activity handler failed.', { uncertain: true, cause }));
+        });
       };
       const ownershipFailure = cause => {
         notify({ type: 'process-inspection-failed' });
@@ -350,6 +365,8 @@ export function createNativeCollaborationRunner({
           return;
         }
         decodeEvent(provider, event, result);
+        const snapshot = activity.observe(event);
+        publishActivity(snapshot, snapshot?.recent.at(-1)?.kind === 'completion');
         if (result.sessionId && !sessionNotified &&
           (provider === 'codex' ? event.type === 'thread.started' : typeof event.session_id === 'string')) {
           sessionNotified = true;
@@ -387,6 +404,7 @@ export function createNativeCollaborationRunner({
         signal?.removeEventListener('abort', abort);
         lineBuffer += stdoutDecoder.end();
         if (lineBuffer.trim() && !problem) consume(lineBuffer);
+        publishActivity(activity.snapshot(), true);
         let drainTimer;
         await Promise.race([
           eventQueue,
@@ -440,7 +458,13 @@ export function createNativeCollaborationRunner({
         // Usage is accounting evidence only; it is attached to both outcomes and
         // never changes how success, failure or uncertainty is decided.
         const usage = normalizeNativeUsage(provider, result.usage, result.costUsd);
-        const reject = error => { if (usage && error && typeof error === 'object') error.usage = usage; rejectRun(error); };
+        const reject = error => {
+          if (error && typeof error === 'object') {
+            if (usage) error.usage = usage;
+            error.activity = activity.snapshot();
+          }
+          rejectRun(error);
+        };
         if (!processTrackerFactory) groupClosed = !Number.isSafeInteger(child.pid) || !groupAliveImpl(child.pid);
         if (cancelled && problem && groupClosed) problem.executionUncertain = false;
         if (problem) { reject(problem); return; }
@@ -462,7 +486,7 @@ export function createNativeCollaborationRunner({
           reject(failure(`Native ${provider} execution did not complete successfully${code == null ? '' : ` (exit ${code})`}.`, { uncertain: true }));
           return;
         }
-        resolve({ text: result.text, sessionId: result.sessionId, usage });
+        resolve({ text: result.text, sessionId: result.sessionId, usage, activity: activity.snapshot() });
       });
     });
   };

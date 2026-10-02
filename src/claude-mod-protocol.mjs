@@ -120,14 +120,14 @@ export function validateRequest(value) {
     doctor: [], read: ['method', 'params'], prepare: ['method', 'params'],
     commit: ['id'], receipt: ['id'], 'wake-peek': ['target'], 'wake-claim': ['messageId', 'target'],
     'wake-receipt': ['messageId', 'claimId', 'status', 'target'],
-    'wake-next': ['excludeIds'], 'wake-check': ['messageId', 'claimId', 'target'],
+    'wake-next': ['excludeIds', 'observation'], 'wake-observe': ['observation'], 'wake-check': ['messageId', 'claimId', 'target'],
     'wake-self-send': ['messageId', 'claimId', 'target'],
     'wake-self-receive': ['messageId', 'claimId', 'target'],
   }[value.op];
   insist(extras !== undefined, 'UNSUPPORTED_OPERATION', 'Unsupported companion operation.');
   if (value.op === 'wake-receipt') extras.push('reason');
   if (value.op.startsWith('wake-')) extras.push('route');
-  fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason', 'route'].includes(key))]);
+  fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason', 'route'].includes(key) && !(key === 'observation' && value.op === 'wake-next'))]);
   const request = { ...value, context: context(value.context) };
   if (value.op.startsWith('wake-')) {
     request.target = context(value.target ?? value.context);
@@ -137,6 +137,7 @@ export function validateRequest(value) {
   if (value.id !== undefined) identity(value.id, true);
   if (value.messageId !== undefined) identity(value.messageId, true);
   if (value.claimId !== undefined) identity(value.claimId, true);
+  if (value.observation !== undefined) request.observation = validateModObservation(value.observation);
   if (value.op === 'wake-receipt') {
     request.reason ??= value.status === 'accepted' ? 'queued' : 'native_exception';
     validateWakeOutcome(value.status, request.reason);
@@ -149,6 +150,23 @@ export function validateRequest(value) {
   return request;
 }
 export function sameContext(a, b) { return a.sessionId === b.sessionId && a.cwd === b.cwd; }
+
+/** Enumerated, content-free observations are diagnostic only, never capabilities. */
+export function validateModObservation(value) {
+  fields(value, ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage'],
+    ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage']);
+  identity(value.observerId); boundedInteger(value.sequence, 1, Number.MAX_SAFE_INTEGER);
+  insist(['loaded', 'ended'].includes(value.lifecycle));
+  insist(typeof value.nativeWake === 'boolean' && typeof value.selfWake === 'boolean');
+  insist(['allow', 'hold', 'refuse', 'unknown'].includes(value.inboundPolicy));
+  fields(value.capabilities, ['sendMessage'], ['sendMessage']);
+  insist(typeof value.capabilities.sendMessage === 'boolean');
+  if (value.usage !== null) {
+    fields(value.usage, ['contextPercent'], ['contextPercent']);
+    insist(Number.isFinite(value.usage.contextPercent) && value.usage.contextPercent >= 0 && value.usage.contextPercent <= 100);
+  }
+  return structuredClone(value);
+}
 
 export function validateWakeOutcome(status, reason) {
   insist(status === 'accepted' && reason === 'queued' || status === 'rejected' && reason === 'native_rejected'

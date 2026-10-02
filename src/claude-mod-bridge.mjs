@@ -106,7 +106,10 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       const recovered = await outbox.recover();
       if (recovered.remaining) return { state: 'receipt-recovery', messages: [] };
     }
-    if (request.op !== 'wake-receipt') await active();
+    if (request.op !== 'wake-receipt' && !(request.op === 'wake-observe' && request.observation.lifecycle === 'ended')) await active();
+    if (request.op === 'wake-observe') return requestRpc('mod_wake_observe', { source: request.context, observation: {
+      ...request.observation, nativeWake: allowNativeWake, selfWake: allowSelfWake,
+    } });
     if (request.op === 'read') return requestRpc(request.method, request.params);
     if (request.op === 'prepare') {
       await privateDir(collaborationRoot);
@@ -176,7 +179,9 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       insist(allowSelfWake && request.route === 'mod-self' && sameContext(request.context, request.target), 'SELF_WAKE_DISABLED', 'Enable own-inbox delivery explicitly and use the current exact session.');
     const wakeParams = { source: request.context, target: request.target, messageId: request.messageId,
       ...(request.claimId ? { claimId: request.claimId } : {}), ...(request.route ? { route: request.route } : {}) };
-    if (request.op === 'wake-next') return requestRpc('mod_wake_wait', { source: request.context, excludeIds: request.excludeIds, ...(allowSelfWake ? { self: true } : {}) });
+    if (request.op === 'wake-next') return requestRpc('mod_wake_wait', { source: request.context, excludeIds: request.excludeIds,
+      ...(request.observation ? { observation: { ...request.observation, nativeWake: allowNativeWake, selfWake: allowSelfWake } } : {}),
+      ...(allowSelfWake ? { self: true } : {}) });
     if (request.op === 'wake-peek') {
       const result = await requestRpc('mod_wake_wait', { source: request.context, timeoutMs: 0, ...(allowSelfWake ? { self: true } : {}) });
       return { target: request.target, messages: result.messages.filter(m => sameContext(m.target, request.target)) };

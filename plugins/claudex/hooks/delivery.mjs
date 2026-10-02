@@ -1,6 +1,46 @@
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
+/** One lifecycle-local reporter; no text, tool arguments, or history inspection. */
+export function createSessionObserver() {
+  let current = null, epoch = 0;
+  async function snapshot(binding, lifecycle = 'loaded') {
+    const sequence = ++binding.sequence;
+    if (lifecycle === 'ended') return { observerId: binding.id, sequence, lifecycle,
+      nativeWake: binding.api.nativeWakeEnabled, selfWake: binding.api.selfEnabled,
+      inboundPolicy: 'unknown', capabilities: { sendMessage: false }, usage: null };
+    const [policy, tools, usage] = await Promise.all([
+      binding.api.inbound().catch(() => 'unknown'), binding.api.tools().catch(() => []), binding.api.usage().catch(() => null),
+    ]);
+    if (current !== binding || !same(await binding.api.context(), binding.context) || current !== binding) return null;
+    const percent = usage?.context?.percent;
+    return { observerId: binding.id, sequence, lifecycle, nativeWake: binding.api.nativeWakeEnabled,
+      selfWake: binding.api.selfEnabled, inboundPolicy: ['allow', 'hold', 'refuse'].includes(policy) ? policy : 'unknown',
+      capabilities: { sendMessage: Array.isArray(tools) && tools.some(tool => tool.name === 'SendMessage') },
+      usage: Number.isFinite(percent) && percent >= 0 && percent <= 100 ? { contextPercent: percent } : null };
+  }
+  async function publish(binding, lifecycle) {
+    const observation = await snapshot(binding, lifecycle);
+    if (!observation) return;
+    try { await binding.api.bridge({ version: 1, op: 'wake-observe', context: binding.context, observation }); }
+    catch { /* Observation expires if its bounded transport is unavailable. Never dispatch from this path. */ }
+  }
+  return {
+    async start(api) {
+      const ticket = ++epoch;
+      if (await api.worker() || ticket !== epoch) return;
+      const context = await api.context();
+      if (ticket !== epoch) return;
+      const binding = { api, context, sequence: 0, id: `mod-${Date.now()}-${Math.floor(Math.random() * 1e9)}` };
+      current = binding;
+      await publish(binding, 'loaded');
+    },
+    async stop() { epoch++; const binding = current; current = null; if (binding) await publish(binding, 'ended'); },
+    async refresh() { const binding = current; if (binding) await publish(binding, 'loaded'); },
+    async snapshot() { const binding = current; return binding ? snapshot(binding) : null; },
+  };
+}
+
 /** Shared manual/automatic dispatch. Only receipt publication may be recovered. */
 export async function deliverNativeWake(api, source, target, messageId, current = () => true, route = 'mod') {
   if (await api.worker()) return { state: 'disabled', reason: 'managed-worker' };
@@ -70,7 +110,10 @@ export function createNativeWakePump({ enabled = false } = {}) {
       const source = await host.context();
       if (!active || ticket !== epoch) return;
       show({ status: 'waiting-for-authorized-message' });
-      const result = await host.bridge({ version: 1, op: 'wake-next', context: source, excludeIds: [...new Set([...deferred, ...ignored])].slice(0, 64) });
+      const observation = host.observation ? await host.observation() : null;
+      if (!active || ticket !== epoch) return;
+      const result = await host.bridge({ version: 1, op: 'wake-next', context: source, excludeIds: [...new Set([...deferred, ...ignored])].slice(0, 64),
+        ...(observation ? { observation } : {}) });
       if (!active || ticket !== epoch || !same(await host.context(), source)) return;
       failures = 0;
       if (result.state === 'disabled' || result.state === 'stopping') { show({ status: result.state }); delay = 30000; return; }

@@ -1,5 +1,23 @@
 # Claude native Mod companion
 
+## Version 0.5 AI-first observations
+
+The AI-first workflow uses the existing MCP start/wait/status/report/handoff
+protocol; the panel is an optional observation and intervention surface. The
+Mod reports bounded session-local policy, capability and context-usage
+observations through `mod_wake_observe` and existing event-backed waits. These
+are diagnostic only, expire after 60 seconds and are never restored as online
+state after broker restart. Unmapped targets, missing receivers, disabled self
+delivery, hold/refuse and missing SendMessage remain explicit; no route fallback,
+permission change or native dispatch is authorized by an observation.
+
+The changed observer has isolated Node/Unix RPC coverage and strict native
+validation. Current installed native runtimes refuse the official test kit under
+their feature rollout; the new lifecycle test and real Desktop activation remain
+unverified. Earlier Mod 0.4.1 acceptance is historical, not acceptance of this
+observer. Automatic task-to-origin notifications remain unavailable pending
+independent native provenance acceptance.
+
 ## Version 0.4 panel and language support
 
 Version 0.4.1 keeps the existing delivery and confirmation protocol and improves
@@ -228,7 +246,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.4.1-review"
+STAGE="$PARENT/claudex-0.5.0-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 

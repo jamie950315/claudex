@@ -16,7 +16,7 @@ export const MOD_STAGE_FILES = [
   'bin/claudex-mod-bridge.mjs', 'src/claude-mod-bridge.mjs',
   'src/claude-mod-storage.mjs', 'src/claude-mod-protocol.mjs',
   'src/claude-mod-wake-outbox.mjs', 'src/claude-mod-self-inbox.mjs',
-  'src/collaboration-transport.mjs', 'src/collaboration-effort.mjs',
+  'src/collaboration-transport.mjs', 'src/collaboration-effort.mjs', 'src/collaboration-outcome.mjs',
 ];
 function targetOf(file) { return file.startsWith('plugins/claudex/') ? file.slice('plugins/claudex/'.length) : `runtime/${file}`; }
 /** Validate the data literal without evaluating a candidate's JavaScript. */

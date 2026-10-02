@@ -35,6 +35,7 @@ The MCP interface exposes:
 | `claudex_start` | Start work with `provider`, `cwd`, `prompt`, and a stable `requestId`; worker calls create children. |
 | `claudex_send` | Queue a follow-up for the next completed boundary of an existing task. |
 | `claudex_handoff` | Transfer the same task to the other provider using its current `revision`, a handoff message, and an optional destination `model`. |
+| `claudex_report` | Active worker only: save a structured self-reported outcome for its own generation. |
 | `claudex_status` | Read progress, messages, last native identity and results. |
 | `claudex_wait` | Wait up to 30 seconds for a revision change or terminal result. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
@@ -70,6 +71,67 @@ the broker still waits for successful native completion and process-group exit.
 Model response and shutdown latency is not an instantaneous-transfer guarantee.
 
 ## Reading progress and results
+
+`waitReason: {kind, taskIds}` is a read-time diagnostic for each task: queued,
+capacity, uncertain-overlap, children, handoff, cancelling or broker-stopping.
+Only actual uncertain tree/access blockers are listed, up to 64 exact IDs per
+reason; larger sets include totalTaskCount/truncated. The legacy
+`blockedByUncertainWork` field is an inventory flag, not a per-task blocking proof.
+Diagnostics neither grant authority nor change scheduling.
+
+`list` accepts `status`, `parentId` (null selects roots), exact canonical `project`,
+`limit` (default/maximum 100) and `cursor`. Follow `nextCursor` with identical
+filters. Pages use stable task-ID ordering but are live observations, not a frozen
+snapshot. List never acknowledges child outcomes.
+
+`wait` also accepts `targets: [{taskId, afterRevision}]` for 1–16 distinct tasks,
+instead of the single-task fields. It defaults to summary and returns
+`{tasks, changed, timedOut, terminal, requestedCount}`: all ready targets together,
+or all requested snapshots on timeout. Terminal means every returned task is
+terminal, not necessarily every requested task. One event listener serves the
+whole wait; disconnect releases it without cancelling work. Response size is
+bounded to 768 KiB including MCP text escaping before any child acknowledgement; request fewer targets or a
+summary if a full response cannot fit. Single-task behavior is unchanged.
+
+Native activity is retained on `active.activity` / `lastExecution.activity`, or
+`execution.activity` in summary output. It contains a last native event timestamp,
+count, at most 16 enumerated events, tool phase/category and native completion
+receipt evidence. Updates coalesce at two-second event boundaries with a final
+flush; no timer, PID observation or heartbeat invents native progress. Activity
+does not increment task revision or acknowledge children. Prompts, tool names,
+arguments/results and reasoning content are not retained as diagnostics.
+
+Requested `model` and `effort` stay separate from `execution.modelEvidence`.
+Claude response model IDs carry their native event source; initialization config,
+auxiliary responses and aggregate usage models are separate. At most four models
+per category are retained. Missing main response evidence is `unverified`,
+including Codex events that do not provide it. Native-reported is not independent
+server verification, and requested effort is never an effective-budget claim.
+
+`claudex_report` accepts `{taskId, requestId, report}` where report contains
+`outcome` (done/partial/blocked/needs-input), `summary`, optional `remaining`, typed
+`needs` and `artifacts`. Reports are at most 16 KiB, 16 needs/remaining entries and
+32 artifact references. Only the active task's generation-fenced worker can write
+its report. It is persisted as `worker-self-reported`; missing reports are
+`unreported`. `outcome.current` distinguishes stale generation/boundary context.
+Reports do not end execution or reinterpret completed, terminal or resultFinal.
+A normally completed answer can still report needs-input. Handoff accepts the
+same optional report as context (controller-reported for external controllers,
+parent-worker-reported when a parent reports on a descendant),
+without relaxing native completion/process-exit requirements. Old tasks remain
+readable without reports or backfilling.
+
+MCP errors retain readable text and expose
+`structuredContent.error: {code, message}`; code is null for legacy untyped errors.
+Controller requestId namespaces remain provider-scoped for receipt compatibility.
+Use globally distinctive IDs per conversation/operation; identical generic IDs
+from two chats of the same provider share a receipt, while different input is
+rejected with `CLAUDEX_REQUEST_ID_CONFLICT`. This does not establish native origin.
+
+Automatic task-to-origin result notifications remain unavailable. A model-supplied
+session ID, title or unsigned hook payload is not an origin proof. Provider-native
+exact call/result binding still needs acceptance before opt-in queue/wake
+notifications can be implemented; status/wait remains the root result path.
 
 `status`, `wait`, and list entries expose `phase`, `terminal`, `cancelPending`,
 `resultFinal`, `resultRole`, and `resultGeneration` in addition to existing fields.
@@ -121,6 +183,17 @@ its parent is active intentionally notifies that parent. This is not a detached
 review mode. Parent edges and generation-scoped request IDs are unchanged.
 
 ## Messages to existing native chats
+
+Claude rows may include a `modObservation`, and queued Mod message receipts include
+`deliveryObservation`. These contain bounded self-reported session/cwd, opt-ins,
+inbound policy, SendMessage capability and optional context percentage. Server
+receipt time supplies a 60-second expiry, with at most 64 observers in memory;
+broker restart, observed disconnect and lifecycle end invalidate observations.
+Existing Mod waits refresh them without history polling. Target-unmapped,
+no-live-receiver, hold/refuse, disabled self delivery and missing-SendMessage are
+diagnoses, not dispatch permission. Every claim and dispatch still repeats its
+original native identity, policy, route and shutdown checks. Stale observations
+never prove online delivery, and receiver-observed is not ready, ACK or completion.
 
 Native-chat coordination is separate from managed work and history synchronization.
 An external Codex/Claude caller can use `claudex_chat_list` with `query` (a full

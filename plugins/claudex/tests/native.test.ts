@@ -24,6 +24,8 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
   on('session.cwd', () => ({ value: '/fixture' }))
   on('session.version', () => ({ value: { version: '2.1.287' } }))
   on('session.usage', () => ({ value: { context: { percent: 42 }, rateLimits: [] } }))
+  on('settings.read', () => ({ value: { crossSessionInbound: 'hold' } }))
+  on('tool.list', () => ({ value: [] }))
   on('command.register', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', () => ({ cwd: '/fixture' }))
@@ -259,11 +261,29 @@ test('own-inbox guard preserves ordinary peer events and rejects malformed routi
 })
 test('own-inbox delivery is fenced when clear happens during the final broker check', async ($, on) => {
   let delivered = 0
-  stubs(on, false, async () => {
+  stubs(on, false, async request => {
+    if (request.op !== 'wake-self-receive') return {}
     await $.classic.SessionStart({ source: 'clear' })
     return { ready: true, context: 'Must not reach the cleared context' }
   })
   on('session.receive', () => { delivered++; return { consumed: 'native-test-sink' } })
   await $.session.receive({ origin: { kind: 'peer-send-message' }, text: selfEnvelope() })
   expect(delivered).toBe(0)
+})
+
+test('native lifecycle publishes bounded policy observations and clear retires the previous observer', async ($, on) => {
+  const observed: any[] = []
+  stubs(on, false, request => { if (request.op === 'wake-observe') observed.push(request); return {} })
+  await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
+  expect(observed.length).toBe(1)
+  expect(observed[0].context).toEqual({ sessionId: ID, cwd: '/fixture' })
+  expect(observed[0].observation.inboundPolicy).toBe('hold')
+  expect(observed[0].observation.usage).toEqual({ contextPercent: 42 })
+  expect(observed[0].observation.capabilities).toEqual({ sendMessage: false })
+  await $.classic.SessionStart({ source: 'clear' })
+  expect(observed.length).toBe(3)
+  expect(observed[1].observation.lifecycle).toBe('ended')
+  expect(observed[1].observation.observerId).toBe(observed[0].observation.observerId)
+  expect(observed[2].observation.lifecycle).toBe('loaded')
+  expect(observed[2].observation.observerId).not.toBe(observed[0].observation.observerId)
 })

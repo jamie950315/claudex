@@ -1,8 +1,8 @@
 {
   "name": "claudex",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "author": { "name": "Claudex contributors" },
-  "description": "Native Claudex control pane with reviewed operations and exact-session receipt handling.",
+  "description": "AI-first Claudex session observations, reviewed operations and exact-session receipt handling.",
   "userConfig": {
     "stateRoot": {
       "type": "string", "title": "Claudex state root",

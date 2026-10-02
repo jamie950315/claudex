@@ -205,7 +205,7 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   const rows = content.trim().split('\n').map(JSON.parse);
   const byId = new Map(rows.map(row => [row.id, row]));
   assert.equal(byId.get(1).result.protocolVersion, '2025-06-18');
-  assert.equal(byId.get(2).result.tools.length, 10);
+  assert.equal(byId.get(2).result.tools.length, 11);
   const tools = byId.get(2).result.tools;
   assert.match(tools.find(tool => tool.name === 'claudex_start').description, /concurrent/i);
   assert.doesNotMatch(tools.find(tool => tool.name === 'claudex_start').description, /deferredUntilParentExit|CLAUDEX_YIELD/);

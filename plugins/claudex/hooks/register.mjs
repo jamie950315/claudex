@@ -1,12 +1,12 @@
 import { createController } from './controller.mjs';
-import { createNativeWakePump } from './delivery.mjs';
+import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
 import { createLocalization, localizedUsage, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validPath = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n\0]/u.test(value);
 
-function api($, options) {
+function api($, options, observer = null) {
   return {
     worker: async () => await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1',
     context: async () => ({ sessionId: await $.session.id(), cwd: await $.session.cwd() }),
@@ -16,6 +16,8 @@ function api($, options) {
     sendSession: args => $.session.send(args),
     tools: () => $.tool.list(),
     selfEnabled: options.selfWake === true,
+    nativeWakeEnabled: options.nativeWake === true,
+    observation: observer ? () => observer.snapshot() : undefined,
     inbound: async () => (await $.settings.read()).crossSessionInbound,
     after: (ms, callback) => $.clock.after(ms, callback),
     readLanguage: () => $.store.get(LANGUAGE_PREFERENCE_KEY),
@@ -46,26 +48,34 @@ export function register(on, options = {}) {
   let lifecycle = 0;
   const controller = createController({ nativeWake: options.nativeWake === true });
   const wake = createNativeWakePump({ enabled: options.nativeWake === true });
+  const observer = createSessionObserver();
   const localization = createLocalization();
   on('session.start', async ($, e, next) => {
+    const ticket = ++lifecycle;
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') !== '1') {
       await localization.load(api($, options));
       await $.command.register({ name: 'claudex', description: localization.t('Open the Claudex control pane. /claudex receipt UUID inspects an action.'), immediate: true });
       await controller.bind(api($, options));
       await controller.refreshUsage(api($, options));
-      wake.start(api($, options));
+      if (ticket !== lifecycle) return next(e);
+      await observer.start(api($, options));
+      if (ticket === lifecycle) wake.start(api($, options, observer));
     }
     return next(e);
   });
   on('classic.SessionStart', async ($, e, next) => {
     // Real settings hooks remain installed and keep their own native registration/ACK work.
     controller.reset();
-    lifecycle++;
-    wake.start(api($, options));
+    const ticket = ++lifecycle;
+    wake.stop();
+    await observer.stop();
+    if (ticket !== lifecycle) return next(e);
+    await observer.start(api($, options));
+    if (ticket === lifecycle) wake.start(api($, options, observer));
     $.ui.invalidate('ui.render');
     return next(e);
   });
-  on('session.end', async ($, e, next) => { lifecycle++; controller.reset(); wake.stop(); $.ui.invalidate('ui.render'); return next(e); });
+  on('session.end', async ($, e, next) => { lifecycle++; controller.reset(); wake.stop(); await observer.stop(); $.ui.invalidate('ui.render'); return next(e); });
   on('session.receive', async ($, e, next) => {
     if (!e.text.startsWith('CLAUDEX_SELF_INBOX_V1\n')) return next(e);
     // This prefix is a routing hint, never authority. Read the original peer text
@@ -98,6 +108,7 @@ export function register(on, options = {}) {
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
     await controller.refreshUsage(api($, options));
+    await observer.refresh();
     $.ui.invalidate('ui.render');
     return result;
   });
