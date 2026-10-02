@@ -49,7 +49,8 @@ successful build as clean-machine or notarized-release acceptance.
 
 ### Optional Claude Mod control pane
 
-On Claude Code **2.1.287 or later**, the optional [native Mod companion](docs/claude-mod.md)
+The optional [native Mod companion](docs/claude-mod.md), using the public Claude
+Code **2.1.287** Mod API baseline,
 adds `/claudex` in the terminal and Desktop **Code** tab: context/usage display,
 task and exact-chat lookup, reviewed delegation/follow-up/cancellation, model
 defaults, and durable action receipts. Writes require preview and confirmation.
@@ -61,6 +62,9 @@ then follow the guide's native validation and plugin installation steps. Staging
 does not install or enable it. Native peer delivery remains disabled pending
 separate recipient/ACK acceptance; do not upgrade a running sync runtime merely
 to load the pane. See the [handoff](docs/claude-mod-handoff.md) for deployment gates.
+The installed Desktop 2.1.286 runtime also passed native validation and command
+registration without extra flags. Inspect actual Mod availability before deciding
+that a runtime upgrade is needed; Desktop painting remains separate evidence.
 
 ### Source checkout
 

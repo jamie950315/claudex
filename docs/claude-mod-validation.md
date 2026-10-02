@@ -15,6 +15,9 @@ was performed. Existing runtimes, SDK dependencies and services were preserved.
 | Final focused `test/claude-mod-*.test.mjs` | 66 passed, 0 failed, 0 skipped | Includes source-parent symlink regression |
 | Official staged plugin strict validator | Passed, no warnings/errors | Actual 2.1.287 compiler and manifest |
 | Official staged plugin test kit | 9 passed, 0 failed | Native terminal/Desktop trees and callbacks; external operations stubbed |
+| Installed Desktop CLI 2.1.286 validator and kit | Strict validation and 9 tests passed | No extra feature flags or version-policy changes |
+| SDK 0.3.286 with actual 2.1.286 runtime and Mod | Initialization and `/claudex` registration passed | Isolated, network denied, no model input, child exited |
+| Native user-scope plugin installation/configuration | Installed, enabled, all options configured | Native CLI receipts and read-back of installed configuration; not painting evidence |
 | Packaged helper against the existing local broker | Passed | Read-only doctor and task inventory; no inference or mutation |
 | Development-signed Apple Silicon app build | Passed | Explicit packaging, portable Node v24.21.0, nested signing |
 | `codesign --verify --strict --deep` | Passed | Integrity/signature, not notarization or installed acceptance |
@@ -59,8 +62,17 @@ permission approval hook or periodic timer is added.
 
 Real terminal/Desktop painting, new-runtime synchronization, native model work
 from the pane and recipient queue/Stop ACK are not established by these tests.
-Keep nativeWake off. No user-account plugin activation, app replacement, runtime
-upgrade, service restart or native history mutation was performed.
+Keep nativeWake off. No app replacement, runtime upgrade, service restart or
+native history mutation was performed. The companion has been installed and
+enabled through the native user-scope plugin manager;
+state root, Node executable and nativeWake=false were saved with no unset options.
+The earlier claim that installation must wait for a runtime upgrade was too broad:
+the existing 2.1.286 runtime already loads this Mod without additional flags.
+
+Native UI automation could show the translated main window but failed to target
+the composer with `noWindowsAvailable`, or selected a hidden window. This is a
+computer-use verification limitation, not evidence that the installed Mod failed.
+Do not report a painted panel until the user or a working UI target verifies it.
 
 Follow [the handoff](claude-mod-handoff.md) and
 [acceptance checklist](claude-mod-acceptance.md). Record the actual target engine;

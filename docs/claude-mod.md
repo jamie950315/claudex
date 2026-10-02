@@ -61,6 +61,11 @@ existing synchronization and native asset pipeline.
 ## Installation prerequisites
 
 The companion uses the native Mod API documented for Claude Code 2.1.287.
+This is the public baseline, not an enforced version check in the companion.
+The actual Desktop-bundled 2.1.286 runtime also passed strict validation, all
+nine native tests and SDK 0.3.286 no-inference initialization with `/claudex`
+registered, without additional feature flags. Test the installed runtime's actual
+capabilities before requiring an upgrade. These checks are not Desktop painting.
 The reviewed repo records a stricter, earlier synchronization acceptance baseline:
 Claude Code 2.1.281, SDK 0.3.281, and the repo's allowlisted Codex builds.
 Its collaboration evidence also predates 2.1.287. Check the actual source version
@@ -149,6 +154,17 @@ executable and `nativeWake: false`, including overrides retained from prior
 installs. Open a fresh suitable native Code session or reload plugins using the
 runtime's normal command. The deployer should preserve active work and avoid
 restarting apps/services merely to make a validation screenshot.
+
+The native installer may report options as unset despite staged defaults. Save
+them through its supported configuration command instead of editing settings:
+
+```sh
+claude plugin configure claudex@claudex-local --values-stdin --json
+```
+
+Provide a JSON object on stdin with single-line string values for `stateRoot`,
+`nodeBinary`, and `nativeWake` (the string `"false"`). Verify the result has no
+unconfigured options. The native writer parses the declared boolean type.
 
 For a CLI-only temporary smoke test, use a separate harmless checkout and
 `claude --plugin-dir "$STAGE/plugins/claudex"`. The source plugin directory itself

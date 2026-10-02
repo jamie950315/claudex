@@ -211,8 +211,11 @@ bounded polling harness, not a production fallback.
 ## Cross-model collaboration
 
 The optional Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
-in `docs/claude-mod.md`. It requires Claude Code 2.1.287+ independently of sync
-compatibility. Keep its helper packaged through the explicit app/stage allowlists;
+in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
+not a companion load gate. The installed Desktop 2.1.286 also passed the native
+validator, nine kit tests and no-inference command registration without added
+feature flags; test the actual runtime before requiring an upgrade. This does not
+certify new synchronization runtimes. Keep the explicit app/stage allowlists;
 never install it as a setup side effect. `plugins/claudex/hooks/register.mjs` uses
 top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and nine

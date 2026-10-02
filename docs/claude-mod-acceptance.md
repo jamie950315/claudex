@@ -28,7 +28,10 @@ not a painted Desktop pane.
 
 ## B. Official native validator and test kit (no inference)
 
-Record the exact `claude --version` used; it must support Mods. Stage against an
+Record the exact `claude --version` used; it must support Mods. The public baseline
+is 2.1.287; actual 2.1.286 Desktop runtime validation/registration also passed
+without added flags. Verify capabilities rather than inferring a hard refusal
+from the version number alone. Stage against an
 isolated private root with nativeWake=false. The source plugin intentionally has
 empty configuration defaults and is not the installable machine configuration.
 
@@ -170,7 +173,7 @@ being delivered by a different consumer without operator reconciliation.
 
 ## F. Synchronization compatibility and production deployment
 
-Mods minimum 2.1.287 and the reviewed sync baseline 2.1.281/SDK 0.3.281 are separate
+The public Mods baseline 2.1.287 and sync baseline 2.1.281/SDK 0.3.281 are separate
 facts. Complete the repository's native history, asset, turn-completion, owner,
 compaction, relocation, cancellation and recovery acceptance for an actual new
 sync runtime before updating its strict compatibility evidence. Preserve the

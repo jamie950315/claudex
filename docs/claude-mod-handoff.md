@@ -50,21 +50,27 @@ claude plugin validate /canonical/new/claudex-mod-stage/plugins/claudex --strict
 claude plugin test /canonical/new/claudex-mod-stage/plugins/claudex
 ```
 
-Use an independently selected Claude Code 2.1.287+ executable. The source plugin
+Use the intended runtime's own validator/test kit. Claude Code 2.1.287 is the
+documented public baseline; the installed Desktop 2.1.286 also passes these tests
+and registers `/claudex` at initialization without additional feature flags.
+The source plugin
 has blank machine defaults and no packaged helper; validate the stage. Tests have
 no model runner. Native full-suite tests remain opt-in. Reuse unchanged regression
 evidence; run broader checks for actual core/permission/persistence changes.
 
 ## Runtime and installation gates
 
-Mods require 2.1.287+, independently of synchronization compatibility. Record the
+Do not mistake the documented 2.1.287 baseline for a local hard load gate. Record the
 terminal, actual Desktop Code, Claudex owner and SDK versions separately. Do not
 replace a shared CLI or change `versionPolicy` just to load the Mod.
 
 The inspected target Mac's user CLI is 2.1.283. Its Desktop local-runtime cache
 contains 2.1.284 and 2.1.286; cache names do not prove the active session version.
-No existing runtime, app, service, settings or history was replaced. The companion
-is staged, not globally enabled. Reinspect these mutable facts before deployment.
+No existing runtime, app, service or history was replaced. The companion is now
+installed and enabled through the native user-scope plugin manager, with all three
+configuration options saved and nativeWake false. Actual Desktop painting remains
+unverified because the UI automation could not target its composer reliably.
+Reinspect these mutable facts before deployment.
 Private stage/build paths belong in the local operator handoff, not this repository.
 
 Once the target runtime supports Mods and applicable compatibility/UI gates pass:
