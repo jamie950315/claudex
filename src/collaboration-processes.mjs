@@ -45,7 +45,13 @@ export function validateOwnedProcesses(records) {
 export async function inspectOwnedProcesses(records, readTable = readCollaborationProcessTable) {
   validateOwnedProcesses(records);
   const table = new Map((await readTable()).map(row => [row.pid, row]));
-  return { inspectedAt: Date.now(), processes: records.map(record => ({ ...record, absent: !same(record, table.get(record.pid)) })) };
+  return { inspectedAt: Date.now(), processes: records.map(record => ({ ...record, absent: !same(record, table.get(record.pid)),
+    // A process-group identifier reserves its leader PID while that group
+    // exists. A different birth at the leader PID proves reuse, not survival
+    // of the old owned group (including reuse by a system process after reboot).
+    ...(record.pid === record.pgid ? { groupAbsent: ![...table.values()].some(row => row.pgid === record.pgid)
+      || Boolean(table.get(record.pid) && !sameBirth(record, table.get(record.pid))) } : {}),
+  })) };
 }
 
 export async function signalOwnedProcesses(records, signal, readTable = readCollaborationProcessTable,

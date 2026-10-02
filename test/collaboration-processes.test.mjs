@@ -2,6 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOwnedProcessTracker, inspectOwnedProcesses, readCollaborationProcessTable, signalOwnedProcesses } from '../src/collaboration-processes.mjs';
 
+test('group disappearance and leader PID reuse are distinguished from a surviving leaderless group', async () => {
+  const leader = { pid: 54321, ppid: 1, pgid: 54321, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' };
+  const inspect = async table => (await inspectOwnedProcesses([leader], async () => table)).processes[0];
+  assert.equal((await inspect([])).groupAbsent, true);
+  assert.equal((await inspect([leader])).groupAbsent, false);
+  assert.equal((await inspect([{ ...leader, pid: 54322 }])).groupAbsent, false);
+  const reused = await inspect([{ ...leader, uid: 0, startedAt: 'Fri Oct 2 00:00:00 2026' }]);
+  assert.equal(reused.absent, true);
+  assert.equal(reused.groupAbsent, true);
+});
+
 const row = (pid, ppid, pgid = pid, startedAt = 'Wed Sep 30 20:00:00 2026') =>
   ({ pid, ppid, pgid, uid: process.getuid(), startedAt });
 

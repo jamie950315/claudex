@@ -180,6 +180,17 @@ test('Quit and restart retain a recorded descendant hold after the native leader
   assert.equal((await controlCollaboration('status', f.options, deps)).stopped, true);
 });
 
+test('verified birth and group absence do not probe a reused system PID during shutdown', async () => {
+  const f = await fixture();
+  await installCollaboration(f.options, f.deps); f.loaded = false;
+  const ownedProcesses = [{ pid: 54321, ppid: 1, pgid: 54321, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' }];
+  await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,
+    tasks: { worker: { status: 'completed', lastExecution: { pid: 54321, ownedProcesses, processInventoryRequired: true } } } }));
+  const deps = { ...f.deps, absent: pid => { if (Math.abs(pid) === 54321) throw new Error('kill EPERM'); return true; },
+    inspectProcesses: records => ({ processes: records.map(row => ({ ...row, absent: true, groupAbsent: true })) }) };
+  assert.equal((await controlCollaboration('status', f.options, deps)).stopped, true);
+});
+
 test('known no-spawn failure permits stopped status while incomplete native inventory keeps its hold', async () => {
   const f = await fixture(); await installCollaboration(f.options, f.deps); f.loaded = false;
   await atomicWrite(join(f.options.root, 'work.json'), JSON.stringify({ version: 1,

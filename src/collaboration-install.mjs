@@ -285,6 +285,10 @@ async function collaborationProcessesStopped(root, absent, inspectProcesses) {
       if (!Array.isArray(proof?.processes) || proof.processes.length !== execution.ownedProcesses.length
         || proof.processes.some((record, index) => record.absent !== true
           || ['pid', 'ppid', 'pgid', 'uid', 'startedAt'].some(key => record[key] !== execution.ownedProcesses[index][key]))) return false;
+      // Prefer the exact birth/group proof over a bare kill(pid, 0) probe:
+      // PID/PGID numbers can now identify unrelated native/system processes.
+      if (proof.processes.some(record => record.pid === execution.pid
+        && record.pgid === execution.pid && record.groupAbsent === true)) continue;
     }
     pids.add(execution.pid);
   }
