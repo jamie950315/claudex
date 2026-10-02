@@ -28,6 +28,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 60_000) throw new Error('Invalid renderer maintenance settle interval');
   let closed = false, dirty = false, pending, timer, watcher, stopWatcher, closing, notificationsFailed = false, publication = Promise.resolve();
   const files = new Set(); let anonymous = true, observations = new Map();
+  let transientRetryUsed = false;
   const present = value => {
     const summary = { updatedAt: Date.now(), ...value };
     publication = publication.then(async () => {
@@ -58,6 +59,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           phase = 'discovery-or-installation';
           const result = await maintain({ root, home, folders }, { beforeReplace: checkHold, beforePublish: checkHold });
           const refused = Object.values(result.adapters).some(a => a.status === 'skipped');
+          if (!refused) transientRetryUsed = false;
           if (refused) observations = new Map();
           else if (result.observations instanceof Map) observations = result.observations;
           await present({ state: notificationsFailed ? 'skipped' : refused ? 'degraded' : 'ready',
@@ -68,10 +70,17 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
         } catch (error) {
           // A prior successful observation cannot prove a failed pass healthy.
           // The next JS hint must revalidate, including unchanged known assets.
-          // No timer, polling or automatic replay is introduced.
           observations = new Map();
           if (!closed) await present({ state: 'skipped', reason: 'Frontend cache discovery or maintenance refused; no native work was restarted',
             failure: { phase, code: failureCode(error) } });
+          // Chromium can evict an entry during the inventory walk, after its
+          // last notification. Re-discover once in this pass; never replay a
+          // native operation or poll persistent validation/permission failures.
+          if (!closed && !signal?.aborted && !dirty && !timer && !transientRetryUsed
+            && ['cache-entry-missing', 'cache-changed'].includes(failureCode(error))) {
+            transientRetryUsed = true;
+            anonymous = true; dirty = true;
+          }
         }
       }
     })().finally(() => { pending = undefined; });
@@ -79,6 +88,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   };
   const notify = filename => {
     if (closed || signal?.aborted || filename && !/^[a-f0-9]{16}_0$/.test(String(filename))) return;
+    transientRetryUsed = false;
     if (!filename || files.size >= 4096) anonymous = true;
     else files.add(String(filename));
     dirty = true;

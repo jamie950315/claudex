@@ -1255,7 +1255,9 @@ metadata/key hints suppress unchanged JS entries and unrelated HTTP/image writes
 anonymous notifications still recheck the graph. Hints never authorize patches.
 Failed or partially refused passes discard unchanged-asset suppression evidence;
 the next JavaScript cache hint revalidates through the normal guarded installer.
-Do not schedule polling or retry timers. Failure diagnostics expose fixed phase
+Do not schedule polling or retry timers. A missing cache entry or changed graph
+during discovery permits one immediate full rediscovery in the same pass; a
+second failure stays explicit until another native event. Failure diagnostics expose fixed phase
 and reason codes, never native error text, paths or cache keys.
 Subscribe to app-stop.json through the event source's shared root watcher before
 the initial hold check. Graphical resume starts services before clearing that

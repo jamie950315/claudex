@@ -110,10 +110,20 @@ for(const partial of [false,true]) test(`a refused pass is revalidated on unchan
   assert.equal(statuses.at(-1).state,'ready');
   refuse=true;notify('change',null);await until(()=>statuses.at(-1).state===(partial?'degraded':'skipped'));
   if(!partial)assert.deepEqual(statuses.at(-1).failure,{phase:'discovery-or-installation',code:'cache-changed'});
-  await new Promise(r=>setTimeout(r,30));assert.equal(calls,2);
+  await new Promise(r=>setTimeout(r,30));assert.equal(calls,partial?2:3);
   refuse=false;notify('change',f.resources.folders.filename);
-  await until(()=>statuses.at(-1).state==='ready');assert.equal(calls,3);
-  notify('change',f.resources.folders.filename);await new Promise(r=>setTimeout(r,30));assert.equal(calls,3);
+  await until(()=>statuses.at(-1).state==='ready');assert.equal(calls,partial?3:4);
+  notify('change',f.resources.folders.filename);await new Promise(r=>setTimeout(r,30));assert.equal(calls,partial?3:4);
+});
+
+for(const persistent of [false,true]) test(`an evicted cache entry gets one full rediscovery without another notification; persistent=${persistent}`,async t=>{
+  const f=await fixture(t),statuses=[];let calls=0;
+  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,
+    maintain:async()=>{calls++;if(calls===1||persistent)throw Object.assign(new Error('Cache entry disappeared'),{code:'ENOENT'});return{entry:{},adapters:{}}},
+    watchFactory:()=>{const e=new EventEmitter;e.close=()=>{};return e},writeStatus:async(_path,s)=>statuses.push(s)});
+  t.after(()=>maintenance.close());
+  assert.equal(calls,2);assert.equal(statuses.at(-1).state,persistent?'skipped':'ready');
+  await new Promise(r=>setTimeout(r,30));assert.equal(calls,2);
 });
 
 test('graphical resume clears the startup hold and runs maintenance without a cache write or sync event',async t=>{
