@@ -681,6 +681,10 @@ changed health/conflict reasons, completion boundaries and final shutdown remain
 visible promptly; the ten-second in-flight heartbeat remains. Durable transaction
 ledgers and expiring Desktop handoff proofs never use this diagnostic throttle.
 Normal discovery scope is unchanged.
+Ordinary appends to the same managed Claude owner skip collection
+before and after delivery, including recovery: they allocate no Codex backup.
+Keep conversation-scoped source/original/target and native idle checks intact.
+New allocations, relocation, context maintenance and explicit GC still collect.
 Collection validates both current sides only for conversations owning managed
 snapshots, avoiding full exports of unrelated cold pairs with no backups. Keep
 the superseded-original guards global (frozen conversations are deferred), retain every managed snapshot in the

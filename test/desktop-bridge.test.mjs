@@ -122,6 +122,34 @@ async function fixture(policy = {}, sourceSide = 'claude') {
   };
 }
 
+test('ordinary Claude owner appends and recovery skip collection but retain native guards', async () => {
+  const f = await fixture({}, 'codex');
+  let collections = 0;
+  const collect = f.bridge.collectInLock.bind(f.bridge);
+  f.bridge.collectInLock = async state => { collections++; return collect(state); };
+  await f.bridge.sync(f.conversationId);
+  assert.equal(collections, 2, 'initial allocation still collects');
+  collections = 0;
+  const owner = await f.current('claude');
+  await f.advance('codex', 1);
+  f.files.get(owner.path).busy = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /busy/);
+  f.files.get(owner.path).busy = false;
+  f.fail.afterApply = true;
+  await assert.rejects(f.bridge.sync(f.conversationId), /Crash after durable/);
+  const applied = f.calls.apply.length;
+  await f.bridge.recover();
+  assert.equal(f.calls.apply.length, applied, 'recovery does not resend');
+  assert.equal(collections, 0);
+  assert.equal((await f.current('claude')).nativeId, owner.nativeId);
+  await f.advance('codex', 2);
+  await f.bridge.sync(f.conversationId);
+  assert.equal(collections, 0);
+  await f.advance('claude', 3);
+  await f.bridge.sync(f.conversationId);
+  assert.equal(collections, 2, 'new Codex snapshot still collects');
+});
+
 test('paired inspections overlap under one lock and all finish before allocating a handoff', async () => {
   const f = await fixture();
   await f.bridge.sync(f.conversationId);

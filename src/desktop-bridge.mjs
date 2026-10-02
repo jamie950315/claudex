@@ -448,7 +448,8 @@ export class DesktopBridge {
       }
       // Cleanup precedes allocation; a protected backup cannot create an
       // unlimited stream of replacement generations.
-      await this.collectInLock(state);
+      const ownerAppend = side === 'claude' && target?.managed && target.kind === 'owner' && !upkeep;
+      if (!ownerAppend) await this.collectInLock(state);
       if (source.cwd !== data.common.meta.cwd || conversation.cwd !== data.common.meta.cwd)
         throw Object.assign(relocationGuard('Source project changed while preparing synchronization; no handoff was allocated.'), { conversationId: id });
       if (side === 'codex' && target?.managed && this.adapters.codex.prepareDependencyAnchor) {
@@ -463,6 +464,9 @@ export class DesktopBridge {
       const planned = await this.adapters[side].plan({ conversationId: id, nativeId: randomUUID(), common, title, target, operationId, contextReset, contextRefresh,
         ...(ownerRelocation ? { relocation: true } : {}) });
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
+      // Ordinary owner appends allocate no retained Codex snapshot. If planning
+      // instead requires a replacement or maintenance, keep normal collection.
+      if (ownerAppend && (!reuse || planned.contextReset || planned.contextRefresh)) await this.collectInLock(state);
       if (ownerRelocation && (reuse || planned.kind !== 'owner')) throw new Error('A moved Claude owner requires a new native owner.');
       if (contextReset && (side !== 'claude' || !reuse || planned.kind !== 'owner' || planned.contextReset !== true))
         throw new Error('Context migration requires a reusable owned Claude reset plan.');
@@ -639,7 +643,9 @@ export class DesktopBridge {
     const result = { changed: true, conversationId: pending.record.conversationId, side: pending.record.side, nativeId: pending.record.nativeId };
     state.pending = null;
     await this.save(state, { event: 'completed', conversationId: result.conversationId, side: result.side });
-    await this.collectInLock(state);
+    if (!(pending.reuse && pending.record.side === 'claude' && pending.record.kind === 'owner'
+      && !pending.record.contextReset && !pending.record.contextRefresh && !pending.relocation))
+      await this.collectInLock(state);
     return result;
   }
 
