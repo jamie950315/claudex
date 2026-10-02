@@ -1227,6 +1227,10 @@ Failed or partially refused passes discard unchanged-asset suppression evidence;
 the next JavaScript cache hint revalidates through the normal guarded installer.
 Do not schedule polling or retry timers. Failure diagnostics expose fixed phase
 and reason codes, never native error text, paths or cache keys.
+Subscribe to app-stop.json through the event source's shared root watcher before
+the initial hold check. Graphical resume starts services before clearing that
+hold; its release must trigger renderer revalidation without cache activity,
+history synchronization or a timer. Close the subscription with maintenance.
 Existing normal native folder cache configurations opt in; graphical setup records
 rendererAdapters.enabled. An explicit false disables automatic cache maintenance.
 A disabled folder choice stays disabled. Cache maintenance reads no conversation

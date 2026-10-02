@@ -213,6 +213,11 @@ export async function createSyncEventSource({ root, runtime, config = {}, inbox,
   const current = async batch => (await readCurrent(batch)).batch;
   return {
     metrics,
+    async watchAppStop(listener) {
+      const watcher = await subscribeFiles(root, ['app-stop.json'], listener);
+      if (watcher) { watcher.on('error', fail); configWatches.push(watcher); }
+      return watcher;
+    },
     current,
     async observe(batch, state) {
       if (failure) throw failure;

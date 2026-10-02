@@ -15,6 +15,7 @@ import { ensureClaudeRendererAdapters, ensureClaudeRendererAdapter, restoreClaud
 import { startClaudeRendererMaintenance } from '../src/claude-renderer-maintenance.mjs';
 import { ensureClaudeFolderPresentationCache, restoreClaudeFolderPresentationCache } from '../src/claude-folder-presentation-cache.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
+import { createSyncEventSource } from '../src/sync-event-source.mjs';
 import { patchContracts } from './fixtures/claude-frontend-contracts.mjs';
 
 async function fixture(t, tag = 'a', options = {}) {
@@ -113,6 +114,20 @@ for(const partial of [false,true]) test(`a refused pass is revalidated on unchan
   refuse=false;notify('change',f.resources.folders.filename);
   await until(()=>statuses.at(-1).state==='ready');assert.equal(calls,3);
   notify('change',f.resources.folders.filename);await new Promise(r=>setTimeout(r,30));assert.equal(calls,3);
+});
+
+test('graphical resume clears the startup hold and runs maintenance without a cache write or sync event',async t=>{
+  const f=await fixture(t),statuses=[];let calls=0,published=0;
+  await writeFile(join(f.root,'app-stop.json'),JSON.stringify({version:1,stopped:true,resuming:true}),{mode:0o600});
+  const events=await createSyncEventSource({root:f.root,runtime:{},inbox:{publish:async()=>{published++}}});
+  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,watchAppStop:events.watchAppStop,
+    maintain:async(options,deps)=>{calls++;return ensureClaudeRendererAdapters(options,deps)},
+    writeStatus:async(_path,value)=>statuses.push(value)});
+  t.after(async()=>{await maintenance.close();await events.close()});
+  assert.equal(calls,0);assert.equal(statuses.at(-1).failure.code,'stopped');
+  await writeFile(join(f.root,'app-stop.json'),JSON.stringify({version:1,stopped:false}),{mode:0o600});
+  for(let i=0;i<100&&statuses.at(-1).state!=='ready';i++)await new Promise(r=>setTimeout(r,20));
+  assert.equal(statuses.at(-1).state,'ready');assert.ok(calls>=1);assert.equal(published,0);
 });
 
 test('app-stop hold prevents maintenance and pre-publication writes; closing drains an active check',async t=>{

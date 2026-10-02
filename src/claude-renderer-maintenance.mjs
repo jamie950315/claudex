@@ -23,10 +23,10 @@ function failureCode(error) {
  * fs.watch is an after-write hint, not an interception of renderer evaluation.
  */
 export async function startClaudeRendererMaintenance({ root, home = homedir(), folders = true, signal, onStatus = () => {},
-  settleMs = 1000, watchFactory = watch, maintain = ensureClaudeRendererAdapters, stopState = readAppStopState,
+  settleMs = 1000, watchFactory = watch, watchAppStop, maintain = ensureClaudeRendererAdapters, stopState = readAppStopState,
   writeStatus = writeDiagnosticJSON } = {}) {
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 60_000) throw new Error('Invalid renderer maintenance settle interval');
-  let closed = false, dirty = false, pending, timer, watcher, closing, notificationsFailed = false, publication = Promise.resolve();
+  let closed = false, dirty = false, pending, timer, watcher, stopWatcher, closing, notificationsFailed = false, publication = Promise.resolve();
   const files = new Set(); let anonymous = true, observations = new Map();
   const present = value => {
     const summary = { updatedAt: Date.now(), ...value };
@@ -87,7 +87,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   };
   const close = () => {
     if (closing) return closing;
-    closed = true; clearTimeout(timer); watcher?.close(); signal?.removeEventListener('abort', abort);
+    closed = true; clearTimeout(timer); watcher?.close(); stopWatcher?.close(); signal?.removeEventListener('abort', abort);
     closing = (async () => { await pending; await publication; })();
     return closing;
   };
@@ -96,6 +96,10 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   try {
     watcher = watchFactory(claudeCacheDirectory(home), (_type, filename) => notify(filename));
     watcher.on('error', () => { notificationsFailed = true; watcher.close(); void present({ state: 'skipped', reason: 'Frontend cache notifications unavailable' }); });
+    // Services start before graphical resume clears app-stop.json. Subscribe
+    // through the shared root watcher before checking the hold to avoid losing
+    // that release; a notification still rechecks the authoritative stop state.
+    stopWatcher = await watchAppStop?.(() => notify(null));
     signal?.addEventListener('abort', abort, { once: true });
     dirty = true; await run();
   } catch {

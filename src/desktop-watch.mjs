@@ -267,7 +267,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     let rendererMaintenance;
     try {
       if (autoRenderers) rendererMaintenance = await startRendererMaintenance({ root,
-        folders: config.folderProjection?.enabled === true, signal, onStatus: value => { rendererAdapters = value; } });
+        folders: config.folderProjection?.enabled === true, signal,
+        watchAppStop: events?.watchAppStop,
+        onStatus: value => { rendererAdapters = value; } });
       await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
       while (!signal?.aborted && passes++ < maxPasses) {
         const broadPass = !events || eventBatch === null || eventBatch.some(event => event.kind === 'reconnect');
