@@ -29,7 +29,7 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Read or save the default permission for new root work
   claudex collaboration request METHOD --peer codex|claude
                                                 Read JSON parameters from stdin
-  claudex collaboration native-wake [--route mod|renderer]
+  claudex collaboration native-wake [--route mod|mod-self|renderer]
                                                 Inspect or select Claude delivery for new messages
 
 --root PATH selects the private collaboration root, not the synchronization root.

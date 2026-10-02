@@ -13,7 +13,7 @@ export function createWakeOutbox(root, publish) {
   async function flush(path, request) {
     const result = await publish(request);
     insist(result?.messageId === request.messageId && result.targetProvider === 'claude'
-      && result.targetSessionId === request.target.sessionId && result.wakeRoute === 'mod'
+      && result.targetSessionId === request.target.sessionId && result.wakeRoute === (request.route ?? 'mod')
       && ['offered', 'acknowledged'].includes(result.state)
       && result.wake?.claimId === request.claimId && result.wake.state === request.status
       && result.wake.source && sameContext(result.wake.source, request.context),

@@ -13,6 +13,8 @@ function api($, options) {
     fill: args => $.prompt.fill(args),
     sendSession: args => $.session.send(args),
     tools: () => $.tool.list(),
+    selfEnabled: options.selfWake === true,
+    inbound: async () => (await $.settings.read()).crossSessionInbound,
     after: (ms, callback) => $.clock.after(ms, callback),
     bridge: async request => {
       if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker controller access is disabled.');
@@ -20,7 +22,7 @@ function api($, options) {
       const root = $.plugin.root;
       if (!validPath(root)) throw new Error('The native plugin root is unavailable.');
       const reply = await $.process.run([options.nodeBinary, `${root}/runtime/bin/claudex-mod-bridge.mjs`,
-        '--root', options.stateRoot, ...(options.nativeWake === true ? ['--native-wake'] : [])], {
+        '--root', options.stateRoot, ...(options.nativeWake === true ? ['--native-wake'] : []), ...(options.selfWake === true ? ['--self-wake'] : [])], {
         stdin: JSON.stringify(request), timeoutMs: request.op === 'wake-next' ? 35000 : 20000,
       });
       if (typeof reply.stdout !== 'string' || reply.stdout.length > 1024 * 1024) throw new Error('Companion output exceeded its bound. Inspect the existing receipt.');
@@ -36,6 +38,7 @@ function api($, options) {
 }
 
 export function register(on, options = {}) {
+  let lifecycle = 0;
   const controller = createController({ nativeWake: options.nativeWake === true });
   const wake = createNativeWakePump({ enabled: options.nativeWake === true });
   on('session.start', async ($, e, next) => {
@@ -50,11 +53,41 @@ export function register(on, options = {}) {
   on('classic.SessionStart', async ($, e, next) => {
     // Real settings hooks remain installed and keep their own native registration/ACK work.
     controller.reset();
+    lifecycle++;
     wake.start(api($, options));
     $.ui.invalidate('ui.render');
     return next(e);
   });
-  on('session.end', async ($, e, next) => { controller.reset(); wake.stop(); $.ui.invalidate('ui.render'); return next(e); });
+  on('session.end', async ($, e, next) => { lifecycle++; controller.reset(); wake.stop(); $.ui.invalidate('ui.render'); return next(e); });
+  on('session.receive', async ($, e, next) => {
+    if (!e.text.startsWith('CLAUDEX_SELF_INBOX_V1\n')) return next(e);
+    // This prefix is a routing hint, never authority. Read the original peer text
+    // only from a live exact broker claim after checking the current native owner.
+    const ticket = lifecycle;
+    let phase = 'envelope';
+    if (options.nativeWake !== true || options.selfWake !== true || e.agentId)
+      return { consumed: 'Claudex own-inbox delivery is not enabled for this session.' };
+    try {
+      if (e.text.length > 8192) throw new Error('Invalid self-inbox envelope');
+      const payload = JSON.parse(e.text.slice('CLAUDEX_SELF_INBOX_V1\n'.length));
+      if (!payload || Object.keys(payload).some(key => !['messageId', 'claimId', 'target'].includes(key))) throw new Error('Invalid self-inbox envelope');
+      const host = api($, options), context = await host.context();
+      phase = 'context';
+      if (ticket !== lifecycle || await host.worker()) throw new Error('Session changed');
+      phase = 'claim';
+      const result = await host.bridge({ version: 1, op: 'wake-self-receive', context, ...payload, route: 'mod-self' });
+      phase = 'lifecycle';
+      const current = await host.context();
+      if (ticket !== lifecycle || current.sessionId !== context.sessionId || current.cwd !== context.cwd
+        || result?.ready !== true || typeof result.context !== 'string' || result.context.length > 8192) throw new Error('Unverified self-inbox delivery');
+      return next({ ...e, text: result.context });
+    } catch (error) {
+      const code = typeof error?.code === 'string' && /^[A-Z_]{1,48}$/.test(error.code) ? error.code : 'UNVERIFIED';
+      controller.state.error = `Own-inbox receive blocked (${phase}: ${code}). Preserve the receipt; no automatic replay.`;
+      $.ui.invalidate('ui.render');
+      return { consumed: 'Claudex could not verify this own-inbox claim; it was not delivered or replayed.' };
+    }
+  });
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
     await controller.refreshUsage(api($, options));
@@ -160,7 +193,7 @@ export function register(on, options = {}) {
       body.push(text('completed = broker request returned. Task completion, delivery, ACK and cancellation exit each require their own status evidence.'));
       if (state.lastReceipt?.id) body.push(button('receipt-refresh', 'Read existing receipt (no dispatch)', () => controller.receipt(host(), state.lastReceipt.id)));
     } else if (state.tab === 'inbox') {
-      body.push(text(options.nativeWake === true ? 'Automatic delivery follows the broker route. Manual inspection shares the same claim fence. Another loaded Mod session is needed to send to this session. Queue acceptance is not ACK.' : 'Native Mod delivery disabled in this session. Existing hooks still work; check the broker route for idle delivery.'));
+      body.push(text(options.nativeWake === true ? 'Automatic delivery follows the broker route. The opt-in mod-self route needs only this session; the mod route needs another sender. Native hold/refuse stays effective. A socket write or queue acceptance is not ACK.' : 'Native Mod delivery disabled in this session. Existing hooks still work; check the broker route for idle delivery.'));
       if (options.nativeWake === true) body.push(button('inbox-refresh', 'Refresh identity-only pending messages', () => controller.wakeList(host())));
       if (state.wakeTarget) body.push(text(`Recipient ${state.wakeTarget.sessionId}\n${state.wakeTarget.cwd}`));
       for (const wake of state.wakes) body.push(button(`wake-${wake.messageId}`, wake.messageId, () => controller.previewWake(host(), wake.messageId)));

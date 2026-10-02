@@ -212,29 +212,63 @@ bounded polling harness, not a production fallback.
 
 The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
-not a companion load gate. The installed Desktop 2.1.286 also passed the native
-validator, nine kit tests and no-inference command registration without added
+not a companion load gate. The installed Desktop 2.1.286 passed the final native
+validator, 12 kit tests and earlier no-inference command registration without added
 feature flags; test the actual runtime before requiring an upgrade. This does not
 certify new synchronization runtimes. Keep the explicit app/stage allowlists;
 never install it as a setup side effect. `plugins/claudex/hooks/register.mjs` uses
 top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
-property, not an event or function. Run the official strict validator and nine
-native test-kit cases against a staged plugin after UI/API changes, in addition
+property, not an event or function. Run the official strict validator and complete
+native test kit against a staged plugin after UI/API changes, in addition
 to affected Node tests. Native tree tests are not real Desktop painting evidence.
 User-authored controller writes use exact-context prepare/confirm and durable
-no-replay receipts; managed workers cannot borrow controller authority. In 0.2,
-nativeWake opts a loaded Mod session into automatic delivery of already-authorized
-broker messages. `collaboration native-wake --route mod|renderer` captures the
-route on new wake-enabled Claude messages; legacy messages retain renderer routing.
+no-replay receipts; managed workers cannot borrow controller authority. Version
+0.3.1 provides explicit selfWake alongside nativeWake, both false by default.
+`collaboration native-wake --route mod-self|mod|renderer` captures the route on
+new wake-enabled Claude messages; existing messages and receipts keep their
+original route. The same loaded recipient Mod can receive with both opt-ins and
+mod-self; no second Mod, sender session or SendMessage tool is required for that
+route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac now uses installed 0.2.3 with nativeWake=true and route=mod.
-Actual Desktop Code 2.1.286 strict validation and nine native kit cases pass;
-the historical rollout-off CLI refusal was not reproduced. New installations
-still default off. Normal Claude restart preserves the Traditional Chinese bundle.
+passes. The reviewed Mac has 0.3.1 installed with both opt-ins and route=mod-self.
+After normal Claude restart, one Desktop native session and one waiter delivered
+a newly authorized message to the same session, with a Sonnet 5.5 reply and real
+Stop ACK. Native UI evidence retained the unsent draft. Explicit native hold and
+refuse passed in isolated tools:[] sessions with zero model turns. Preserve the
+earlier failed submitted/no-ACK message; success used a new message, never replay.
+Keep exact evidence in docs/claude-mod-validation.md. Isolated CLI rollout refusal
+does not invalidate a loaded Desktop Mod and must not be overridden to pass a
+test. New installations still default off; keep the Traditional Chinese bundle.
+Verified broker stop/start retained mod-self and one waiter without replay; the
+same native Claude process and unsent draft remained. Open the installed Claudex
+app by its exact /Applications/Claudex.app path, not a same-named test bundle.
 Each loaded eligible session makes one bounded event-backed broker wait, never a
-history sweep. No sender or only the recipient itself means waiting-for-mod;
-do not create a model session or silently fall back. Check SendMessage before
-claiming; verify exact recipient and app-stop again before native dispatch.
+history sweep. The retained mod route requires another loaded sender and checks
+SendMessage before claiming. The mod-self route checks exact own context, native
+inbound policy and inbox capability. Do not create a model session or silently
+fall back. Verify exact recipient and app-stop again before native dispatch.
+Own-inbox delivery is macOS-only: validate the native parent PID/birth/UID and
+its exact private owned socket with bounded process inspection and stable
+no-follow identities; only root-owned Darwin /tmp and /var aliases are allowed.
+Darwin lsof may list both listener and accepted FDs with that exact pathname;
+require at least one exact-parent match, preserving independent socket proofs.
+Use the documented native own-child ingress and inherited token in memory only,
+never token copies in requests/argv/files/logs. This is not session.send self
+(the tested runtime refuses it) or prompt.submit fallback. Native hold/refuse
+remain authoritative; never change inbound settings or fabricate human origin.
+Ordinary SessionStart/UserPromptSubmit/Stop hooks cannot consume queued mod-self
+messages, which would bypass its receiver-policy wait. Keep actual Stop ACK
+scanning intact; queue-only and older message routes retain their hook behavior.
+Persist a one-dispatch intent before the socket write; duplicate helpers return
+saved evidence, never resend. The socket provides no native ACK: submitted means
+written only. The receiving Mod checks exact context/lifecycle and app-stop, then
+obtains durable receive-once authorization before admitting original broker peer
+text. Recheck route/shutdown after awaited receive authorization; a lost reply
+consumes the authorization without replay. Only real recipient Stop ACK proves
+reception; no helper/socket response proves model or work completion.
+Keep mod_wake_receive in the private transport allowlist and test the actual
+Unix RPC path, not only direct hub.dispatch; a missing ingress method previously
+allowed socket submission but blocked receive authorization before the broker.
 Clear/end fences late callbacks, including after awaited context reads. Recheck
 broker route, shutdown, claim outcome and expiry after metadata verification.
 Unknown sends never retry. Explicit native false
@@ -254,10 +288,11 @@ Busy delivery accepted a second message before the first ACK; both ACKs arrived.
 Offline rejection stayed rejected after reopening/restarts without replay. Native
 pixels verify the unsubmitted draft remained and all five 0.2.3 tabs fit two rows.
 Keep the two-row layout for narrow panes. This is not every button flow or policy
-denial scenario or new synchronization-runtime acceptance. Final read-only
-inspection shows collaboration/folders/renderer adapters ready; unfinished-tool
-handoff and predecessor-archival lifecycle waits remain separate, unchanged guards.
-SendMessage and another loaded sender remain required. Preserve earlier manual
+denial scenario or new synchronization-runtime acceptance. Own-inbox acceptance
+does not certify renderer/cache readiness; preserve its independent diagnostics.
+Unfinished-tool handoff and predecessor-archival lifecycle waits remain separate,
+unchanged guards.
+Those historical cross-session results do not certify mod-self. Preserve earlier manual
 all-tools-removed offered/uncertain evidence; never reset or replay it. Untitled
 or unverified Desktop metadata remains refused.
 

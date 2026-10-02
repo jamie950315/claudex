@@ -188,7 +188,7 @@ export class CollaborationHub extends EventEmitter {
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
-    if (this.state.nativeWakeRoute !== undefined && !['mod', 'renderer'].includes(this.state.nativeWakeRoute))
+    if (this.state.nativeWakeRoute !== undefined && !['mod', 'mod-self', 'renderer'].includes(this.state.nativeWakeRoute))
       throw new Error('Malformed Claude native wake route.');
     if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
       throw new Error('Malformed default collaboration permission.');
@@ -372,7 +372,7 @@ export class CollaborationHub extends EventEmitter {
     if (['desktop_wake_claim', 'desktop_wake_receipt'].includes(method)) {
       if (actor.task || actor.peer !== 'claude' || !this.claudeWakeManifest) throw new Error('Native Desktop wake endpoint is unavailable.');
       const message = await this.chatMailbox.status(params.messageId);
-      if (message.wakeRoute === 'mod') throw new Error('This message belongs to the native Mod route.');
+      if (['mod', 'mod-self'].includes(message.wakeRoute)) throw new Error('This message belongs to the native Mod route.');
       if (message.targetProvider !== 'claude' || message.targetSessionId !== params.sessionId || message.wakeRequested !== true)
         throw new Error('Desktop wake identity or authorization mismatch.');
       if (method === 'desktop_wake_receipt') {
@@ -475,8 +475,8 @@ export class CollaborationHub extends EventEmitter {
         ...(targetProvider === 'claude' && params.wake !== false ? { wakeRoute: this.state.nativeWakeRoute ?? 'renderer' } : {}),
         ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) });
       let wakeStatus = params.wake === false ? 'disabled' : 'unavailable';
-      if (receipt.wakeRoute === 'mod' && receipt.state === 'queued') { wakeStatus = 'waiting-for-mod'; this.emit('chat-wake'); }
-      if (params.wake !== false && targetProvider === 'claude' && receipt.wakeRoute !== 'mod' && this.claudeWakeManifest && receipt.state === 'queued') {
+      if (['mod', 'mod-self'].includes(receipt.wakeRoute) && receipt.state === 'queued') { wakeStatus = 'waiting-for-mod'; this.emit('chat-wake'); }
+      if (params.wake !== false && targetProvider === 'claude' && !['mod', 'mod-self'].includes(receipt.wakeRoute) && this.claudeWakeManifest && receipt.state === 'queued') {
         try { await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
         catch { wakeStatus = 'unavailable'; }
       }

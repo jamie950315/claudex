@@ -1,4 +1,5 @@
 import { context, fields, identity, sameContext, validateWakeOutcome } from './claude-mod-protocol.mjs';
+import { peerContext } from './chat-mailbox.mjs';
 
 /** Controller-only routing. No native invocation is started by a wait or route change. */
 export async function dispatchModWake(hub, envelope, actor) {
@@ -7,7 +8,7 @@ export async function dispatchModWake(hub, envelope, actor) {
   if (method === 'native_wake') {
     fields(params, ['route']);
     if (params.route !== undefined) {
-      if (hub.closed || !['mod', 'renderer'].includes(params.route)) throw new Error('Invalid native wake route or stopping broker.');
+      if (hub.closed || !['mod', 'mod-self', 'renderer'].includes(params.route)) throw new Error('Invalid native wake route or stopping broker.');
       await hub.mutate(state => { state.nativeWakeRoute = params.route; });
       hub.emit('chat-wake');
     }
@@ -17,7 +18,8 @@ export async function dispatchModWake(hub, envelope, actor) {
   if (actor.peer !== 'claude' || !hub.claudeWakeManifest) throw new Error('Native Mod endpoint is unavailable.');
   const source = context(params.source);
   if (method === 'mod_wake_wait') {
-    fields(params, ['source', 'excludeIds', 'timeoutMs'], ['source']);
+    fields(params, ['source', 'excludeIds', 'timeoutMs', 'self'], ['source']);
+    if (params.self !== undefined && typeof params.self !== 'boolean') throw new Error('Invalid self-delivery capability.');
     const excluded = params.excludeIds ?? [], timeout = params.timeoutMs ?? 20000;
     if (!Array.isArray(excluded) || excluded.length > 64) throw new Error('Invalid excluded message list.');
     excluded.forEach(id => identity(id, true));
@@ -25,12 +27,13 @@ export async function dispatchModWake(hub, envelope, actor) {
       throw new Error('Invalid Mod wait bounds or waiter capacity reached.');
     const snapshot = async () => {
       if (hub.closed) return { state: 'stopping', messages: [] };
-      if ((hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { state: 'disabled', messages: [] };
+      const route = hub.state.nativeWakeRoute ?? 'renderer';
+      if (!['mod', 'mod-self'].includes(route) || route === 'mod-self' && params.self !== true) return { state: 'disabled', messages: [] };
       const pending = await hub.chatMailbox.pendingWakes(), chats = await hub.chatMailbox.list();
-      const messages = pending.filter(m => m.wakeRoute === 'mod' && m.targetSessionId !== source.sessionId && !excluded.includes(m.messageId))
+      const messages = pending.filter(m => m.wakeRoute === route && (route === 'mod-self' ? m.targetSessionId === source.sessionId : m.targetSessionId !== source.sessionId) && !excluded.includes(m.messageId))
         .slice(0, 64).map(m => {
           const chat = chats.find(c => c.provider === 'claude' && c.sessionId === m.targetSessionId);
-          return { messageId: m.messageId, target: { sessionId: m.targetSessionId, cwd: chat.cwd }, expiresAt: m.expiresAt };
+          return { messageId: m.messageId, route, target: { sessionId: m.targetSessionId, cwd: chat.cwd }, expiresAt: m.expiresAt };
         });
       return { state: messages.length ? 'pending' : 'waiting', messages };
     };
@@ -60,7 +63,9 @@ export async function dispatchModWake(hub, envelope, actor) {
       });
     } finally { hub.modWaiters--; }
   }
-  fields(params, ['source', 'target', 'messageId', 'claimId', 'status', 'reason'], ['source', 'target', 'messageId']);
+  fields(params, ['source', 'target', 'messageId', 'claimId', 'status', 'reason', 'route'], ['source', 'target', 'messageId']);
+  const route = params.route ?? 'mod';
+  if (!['mod', 'mod-self'].includes(route)) throw new Error('Invalid native Mod route.');
   const target = context(params.target); identity(params.messageId, true);
   const verifyTarget = async () => {
     try {
@@ -73,31 +78,38 @@ export async function dispatchModWake(hub, envelope, actor) {
     }
   };
   const message = await hub.chatMailbox.status(params.messageId);
-  if (message.wakeRoute !== 'mod' || message.targetProvider !== 'claude' || message.targetSessionId !== target.sessionId
-    || message.wakeRequested !== true || source.sessionId === target.sessionId) throw new Error('Native Mod message identity/route mismatch.');
+  if (message.wakeRoute !== route || message.targetProvider !== 'claude' || message.targetSessionId !== target.sessionId
+    || message.wakeRequested !== true || (route === 'mod-self' ? !sameContext(source, target) : source.sessionId === target.sessionId)) throw new Error('Native Mod message identity/route mismatch.');
   if (method === 'mod_wake_claim') {
-    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { claimed: false };
+    if (hub.closed || hub.state.nativeWakeRoute !== route) return { claimed: false };
     await verifyTarget();
-    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod') return { claimed: false };
-    const claim = await hub.chatMailbox.claimWake(params.messageId, { route: 'mod', source });
+    if (hub.closed || hub.state.nativeWakeRoute !== route) return { claimed: false };
+    const claim = await hub.chatMailbox.claimWake(params.messageId, { route, source });
     hub.emit('chat-wake');
     return claim ? { claimed: true, messageId: claim.messageId, claimId: claim.wake.claimId, context: claim.context } : { claimed: false };
   }
   identity(params.claimId, true);
   if (!message.wake?.source || !sameContext(message.wake.source, source) || message.wake.claimId !== params.claimId)
     throw new Error('Native Mod claim owner changed.');
-  if (method === 'mod_wake_check') {
-    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod' || message.wake.state !== 'dispatching'
+  if (method === 'mod_wake_check' || method === 'mod_wake_receive') {
+    const states = method === 'mod_wake_receive' && route === 'mod-self' ? ['dispatching', 'submitted'] : ['dispatching'];
+    if (method === 'mod_wake_receive' && route !== 'mod-self') throw new Error('Self receipt requires its explicit route.');
+    if (hub.closed || hub.state.nativeWakeRoute !== route || !states.includes(message.wake.state)
       || message.expiresAt <= Date.now()) throw new Error('Native Mod dispatch no longer authorized.');
     await verifyTarget();
     const latest = await hub.chatMailbox.status(params.messageId);
-    if (hub.closed || (hub.state.nativeWakeRoute ?? 'renderer') !== 'mod' || latest.wake?.state !== 'dispatching'
+    if (hub.closed || hub.state.nativeWakeRoute !== route || !states.includes(latest.wake?.state)
       || latest.wake.claimId !== params.claimId || !sameContext(latest.wake.source, source)
       || latest.expiresAt <= Date.now()) throw new Error('Native Mod dispatch no longer authorized.');
-    return { ready: true };
+    const ownContext = method === 'mod_wake_receive'
+      ? await hub.chatMailbox.receiveSelfWake(params.messageId, { claimId: params.claimId, source })
+      : route === 'mod-self' ? peerContext(latest) : undefined;
+    if (hub.closed || hub.state.nativeWakeRoute !== route) throw new Error('Native Mod dispatch no longer authorized.');
+    return { ready: true, ...(ownContext === undefined ? {} : { context: ownContext }) };
   }
   if (method === 'mod_wake_receipt') {
     validateWakeOutcome(params.status, params.reason);
+    if (params.status === 'submitted' && route !== 'mod-self') throw new Error('Only self inbox writes can be submitted.');
     const result = await hub.chatMailbox.finishWake(params.messageId, { claimId: params.claimId, state: params.status,
       detail: `Native Mod: ${params.reason}. Queue acceptance, recipient ACK and work completion are separate.` });
     hub.emit('chat-wake'); return result;

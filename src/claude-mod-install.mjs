@@ -13,13 +13,13 @@ export const MOD_STAGE_FILES = [
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
   'bin/claudex-mod-bridge.mjs', 'src/claude-mod-bridge.mjs',
   'src/claude-mod-storage.mjs', 'src/claude-mod-protocol.mjs',
-  'src/claude-mod-wake-outbox.mjs',
+  'src/claude-mod-wake-outbox.mjs', 'src/claude-mod-self-inbox.mjs',
   'src/collaboration-transport.mjs', 'src/collaboration-effort.mjs',
 ];
 function targetOf(file) { return file.startsWith('plugins/claudex/') ? file.slice('plugins/claudex/'.length) : `runtime/${file}`; }
 /** Stage only into a new user-selected directory. No settings, services or apps are modified. */
 export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.execPath,
-  repoRoot = SOURCE, nativeWake = false } = {}) {
+  repoRoot = SOURCE, nativeWake = false, selfWake = false } = {}) {
   absolute(output); absolute(stateRoot); absolute(nodeBinary);
   output = resolve(output);
   const parent = await realpath(dirname(output));
@@ -58,6 +58,7 @@ export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.e
   manifest.userConfig.stateRoot.default = root;
   manifest.userConfig.nodeBinary.default = node;
   manifest.userConfig.nativeWake.default = nativeWake === true;
+  manifest.userConfig.selfWake.default = selfWake === true;
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   for (const { file } of sources) {
     const relative = targetOf(file);
@@ -69,7 +70,7 @@ export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.e
     plugins: [{ name: 'claudex', source: './plugins/claudex', description: manifest.description, version: manifest.version }],
   }, null, 2)}\n`, { mode: 0o600 });
   const report = { version: 1, plugin, marketplace: output, stateRoot: root, nodeBinary: node,
-    documentedModBaseline: '2.1.287', versionLoadGate: false, nativeWake: nativeWake === true, hashes,
+    documentedModBaseline: '2.1.287', versionLoadGate: false, nativeWake: nativeWake === true, selfWake: selfWake === true, hashes,
     nativeValidation: 'required', synchronizationPolicy: 'unchanged', automaticInstallation: false };
   await writeFile(join(output, 'stage-report.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   return report;

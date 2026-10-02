@@ -2,13 +2,21 @@ const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 
 /** Shared manual/automatic dispatch. Only receipt publication may be recovered. */
-export async function deliverNativeWake(api, source, target, messageId, current = () => true) {
+export async function deliverNativeWake(api, source, target, messageId, current = () => true, route = 'mod') {
   if (await api.worker()) return { state: 'disabled', reason: 'managed-worker' };
-  const tools = await api.tools();
-  if (!tools.some(tool => tool.name === 'SendMessage')) return { state: 'waiting', reason: 'missing-SendMessage' };
+  const self = route === 'mod-self';
+  if (self) {
+    if (!api.selfEnabled || !same(source, target)) return { state: 'waiting', reason: 'self-delivery-disabled' };
+    const policy = await api.inbound();
+    if (policy === 'hold' || policy === 'refuse') return { state: 'waiting', reason: `native-inbound-${policy}` };
+  } else {
+    if (route !== 'mod') throw new Error('Unsupported delivery route');
+    const tools = await api.tools();
+    if (!tools.some(tool => tool.name === 'SendMessage')) return { state: 'waiting', reason: 'missing-SendMessage' };
+  }
   if (!current() || !same(await api.context(), source) || !current()) return { state: 'waiting', reason: 'context-changed' };
-  if (same(source, target) || source.sessionId === target.sessionId) return { state: 'waiting', reason: 'another-Mod-session-required' };
-  const call = (op, more = {}) => api.bridge({ version: 1, op, context: source, target, messageId, ...more });
+  if (!self && source.sessionId === target.sessionId) return { state: 'waiting', reason: 'another-Mod-session-required' };
+  const call = (op, more = {}) => api.bridge({ version: 1, op, context: source, target, messageId, ...(self ? { route } : {}), ...more });
   let claim;
   try { claim = await call('wake-claim'); }
   catch (error) {
@@ -29,8 +37,10 @@ export async function deliverNativeWake(api, source, target, messageId, current 
       if (!current() || !same(await api.context(), source) || !current()) reason = 'context_changed';
       else {
         reason = 'native_exception';
-        const result = await api.sendSession({ to: { sessionId: target.sessionId }, text: claim.context });
-        if (result?.isDelivered === true) { status = 'accepted'; reason = 'queued'; }
+        const result = self ? await call('wake-self-send', { claimId: claim.claimId })
+          : await api.sendSession({ to: { sessionId: target.sessionId }, text: claim.context });
+        if (self && result?.state === 'submitted') { status = 'submitted'; reason = 'inbox_written'; }
+        else if (!self && result?.isDelivered === true) { status = 'accepted'; reason = 'queued'; }
         else if (result?.isDelivered === false) {
           status = 'rejected'; reason = 'native_rejected';
           nativeReason = typeof result.reason === 'string' ? result.reason.slice(0, 300) : 'Native recipient refused delivery.';
@@ -58,9 +68,7 @@ export function createNativeWakePump({ enabled = false } = {}) {
     try {
       if (await host.worker()) { stop(); show({ status: 'managed-worker' }); return; }
       const source = await host.context();
-      const tools = await host.tools();
       if (!active || ticket !== epoch) return;
-      if (!tools.some(tool => tool.name === 'SendMessage')) { show({ status: 'missing-SendMessage' }); delay = 30000; return; }
       show({ status: 'waiting-for-authorized-message' });
       const result = await host.bridge({ version: 1, op: 'wake-next', context: source, excludeIds: [...new Set([...deferred, ...ignored])].slice(0, 64) });
       if (!active || ticket !== epoch || !same(await host.context(), source)) return;
@@ -68,7 +76,7 @@ export function createNativeWakePump({ enabled = false } = {}) {
       if (result.state === 'disabled' || result.state === 'stopping') { show({ status: result.state }); delay = 30000; return; }
       const message = result.messages?.find(item => !ignored.has(item.messageId) && !deferred.has(item.messageId));
       if (!message) { deferred.clear(); return; }
-      const outcome = await deliverNativeWake(host, source, message.target, message.messageId, () => active && ticket === epoch);
+      const outcome = await deliverNativeWake(host, source, message.target, message.messageId, () => active && ticket === epoch, message.route ?? 'mod');
       // Claimed/uncertain messages are never automatically retried, even across timer ticks.
       if (outcome.state !== 'waiting') {
         ignored.add(message.messageId);

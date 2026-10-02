@@ -18,7 +18,7 @@ export function createClaudeChatWakeManifest({ root,
       // Read the queue inside the publication chain: a slower metadata lookup
       // must not overwrite a newer send or receipt with its older snapshot.
       const operation = publication.then(async () => {
-        const pending = (await mailbox.pendingWakes()).filter(message => message.wakeRoute !== 'mod');
+        const pending = (await mailbox.pendingWakes()).filter(message => !['mod', 'mod-self'].includes(message.wakeRoute));
         const native = await mappings(registryRoot, [...new Set(pending.map(message => message.targetSessionId))]);
         const candidates = pending.filter(message => native.has(message.targetSessionId) && !native.get(message.targetSessionId).isArchived)
           .map(message => ({ messageId: message.messageId, sessionId: message.targetSessionId, expiresAt: message.expiresAt,

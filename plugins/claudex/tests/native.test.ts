@@ -27,9 +27,9 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
   on('session.start', () => ({ cwd: '/fixture' }))
   on('classic.SessionStart', () => ({}))
   on('ui.render', () => ({ type: 'Text', props: {}, children: ['Existing native or peer-mod content'] }))
-  on('process.run', (_: any, e: any) => {
+  on('process.run', async (_: any, e: any) => {
     const request = JSON.parse(e.init.stdin)
-    const result = bridge ? bridge(request, e) : request.op === 'doctor' ? { root: '/fixture/state', stopped: false }
+    const result = bridge ? await bridge(request, e) : request.op === 'doctor' ? { root: '/fixture/state', stopped: false }
       : request.method === 'list' ? { tasks: [], limits: {} } : {}
     return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, result }), stderr: '' } }
   })
@@ -166,4 +166,42 @@ test('native clear removes a pending confirm without dispatching it', async ($, 
   expect(await ui.find({ key: 'confirm-action' })).toBeUndefined()
   expect(commits).toBe(0)
   await ui.unmount()
+})
+
+// Run the staged candidate with both nativeWake and selfWake defaults enabled.
+const SELF = 'CLAUDEX_SELF_INBOX_V1\n'
+const selfEnvelope = () => SELF + JSON.stringify({ messageId: ID, claimId: ID, target: { sessionId: ID, cwd: '/fixture' } })
+test('own-inbox guard retrieves peer text from the exact broker claim, not the socket payload', async ($, on) => {
+  let delivered = ''
+  stubs(on, false, request => {
+    expect(request.op).toBe('wake-self-receive')
+    expect(request.route).toBe('mod-self')
+    expect(request.context).toEqual({ sessionId: ID, cwd: '/fixture' })
+    return { ready: true, context: 'Original broker-quoted peer message' }
+  })
+  on('session.receive', (_: any, e: any) => { delivered = e.text; return { consumed: 'native-test-sink' } })
+  await $.session.receive({ origin: { kind: 'peer-send-message' }, text: selfEnvelope() })
+  expect(delivered).toBe('Original broker-quoted peer message')
+})
+test('own-inbox guard preserves ordinary peer events and rejects malformed routing hints', async ($, on) => {
+  let calls = 0, delivered = ''
+  stubs(on, false, () => { calls++; return {} })
+  on('session.receive', (_: any, e: any) => { delivered = e.text; return { consumed: 'native-test-sink' } })
+  await $.session.receive({ origin: { kind: 'peer' }, text: 'Ordinary peer note' })
+  expect(delivered).toBe('Ordinary peer note')
+  delivered = ''
+  await $.session.receive({ origin: { kind: 'peer-send-message' }, text: SELF + '{}' })
+  expect(delivered).toBe('')
+  // The private bridge, not an untrusted prefix, remains authoritative.
+  expect(calls).toBeLessThanOrEqual(1)
+})
+test('own-inbox delivery is fenced when clear happens during the final broker check', async ($, on) => {
+  let delivered = 0
+  stubs(on, false, async () => {
+    await $.classic.SessionStart({ source: 'clear' })
+    return { ready: true, context: 'Must not reach the cleared context' }
+  })
+  on('session.receive', () => { delivered++; return { consumed: 'native-test-sink' } })
+  await $.session.receive({ origin: { kind: 'peer-send-message' }, text: selfEnvelope() })
+  expect(delivered).toBe(0)
 })

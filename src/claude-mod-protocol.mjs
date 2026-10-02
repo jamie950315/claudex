@@ -121,12 +121,18 @@ export function validateRequest(value) {
     commit: ['id'], receipt: ['id'], 'wake-peek': ['target'], 'wake-claim': ['messageId', 'target'],
     'wake-receipt': ['messageId', 'claimId', 'status', 'target'],
     'wake-next': ['excludeIds'], 'wake-check': ['messageId', 'claimId', 'target'],
+    'wake-self-send': ['messageId', 'claimId', 'target'],
+    'wake-self-receive': ['messageId', 'claimId', 'target'],
   }[value.op];
   insist(extras !== undefined, 'UNSUPPORTED_OPERATION', 'Unsupported companion operation.');
   if (value.op === 'wake-receipt') extras.push('reason');
-  fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason'].includes(key))]);
+  if (value.op.startsWith('wake-')) extras.push('route');
+  fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason', 'route'].includes(key))]);
   const request = { ...value, context: context(value.context) };
-  if (value.op.startsWith('wake-')) request.target = context(value.target ?? value.context);
+  if (value.op.startsWith('wake-')) {
+    request.target = context(value.target ?? value.context);
+    if (value.route !== undefined) insist(['mod', 'mod-self'].includes(value.route));
+  }
   if (['read', 'prepare'].includes(value.op)) request.params = validateParams(value.method, value.params ?? {}, value.op === 'prepare');
   if (value.id !== undefined) identity(value.id, true);
   if (value.messageId !== undefined) identity(value.messageId, true);
@@ -146,6 +152,7 @@ export function sameContext(a, b) { return a.sessionId === b.sessionId && a.cwd 
 
 export function validateWakeOutcome(status, reason) {
   insist(status === 'accepted' && reason === 'queued' || status === 'rejected' && reason === 'native_rejected'
+    || status === 'submitted' && reason === 'inbox_written'
     || status === 'uncertain' && ['native_exception', 'context_changed', 'pre_dispatch_stopped'].includes(reason),
   'INVALID_RECEIPT', 'Invalid native wake outcome.');
 }

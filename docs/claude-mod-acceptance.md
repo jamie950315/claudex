@@ -5,37 +5,48 @@ This checklist is for the next local Claude Code/Codex agent. Start with
 specified runtime. A written test is not an executed test; a stubbed UI tree is
 not a painted Desktop pane.
 
-## 0.2.3 automatic main-route gate
+## 0.3.1 single-session main-route gate
 
-This gate supersedes the historical manual-only deployment sequence. The reviewed
-Mac has installed 0.2.3 with nativeWake=true and broker route=mod. Actual 2.1.286
-strict validation and nine native kit cases pass without a rollout override.
-Real automatic Sonnet 5.5 acceptance includes SDK-owned and Desktop-owned senders,
-recipient reply/Stop ACK, busy queueing, offline refusal without replay, draft
-preservation and normal restart. See [validation](claude-mod-validation.md) for
-the scoped evidence; this checklist remains a procedure for future installations,
-not a claim that every policy-denial or synchronization scenario was exercised.
+The reviewed Mac has 0.3.1 installed with nativeWake=true, selfWake=true and broker
+route=mod-self. Actual 2.1.286 strict validation and 12 native kit cases pass in a
+fresh normal process, with no rollout override. All 16 installed plugin assets
+match the final stage. After normal Claude restart, one Desktop session and one
+eligible waiter delivered to that same session; Sonnet 5.5 replied with the nonce
+and real Stop ACK in 4.253 seconds. Native UI/accessibility evidence shows the
+peer message, reply, ACK and unchanged unsent draft. This is not a new screenshot
+pixel claim. Isolated tools:[] native tests confirmed hold/refuse with zero model
+turns and no global settings edits. Full regression passed 1,325 tests, with zero
+failures and 23 existing opt-in skips before the final narrow queued-hook exclusion;
+affected mailbox/Mod tests cover that backend delta. See [validation](claude-mod-validation.md)
+for boundaries; the checklist remains a procedure, not proof of every case below.
 
-1. Run `test/mod-wake.test.mjs` and the affected core/transport tests. Verify full
+1. Run `test/mod-self-wake.test.mjs`, `test/claude-mod-self-inbox.test.mjs`,
+   `test/mod-wake.test.mjs` and affected core/transport tests. Verify full
    regression for these shared persistence/concurrency changes.
-2. Stage 0.2 with nativeWake enabled, validate it with the actual target native
+2. Stage the candidate with nativeWake and selfWake enabled, validate it with the actual target native
    compiler, and run the official test kit. A static validator pass is not loading.
 3. At a safe idle boundary, install the matching broker and plugin without
    replacing Claude Desktop or its translation. Verify loaded plugin version,
-   SendMessage availability, and one live event-backed waiter from a different
-   native session. Managed workers must remain excluded.
-4. Explicitly select `collaboration native-wake --route mod`. In dedicated,
-   authorized Sonnet 5.5 sessions, queue a new wake-enabled message and verify
-   automatic claim, actual session.send, target reply and native Stop ACK without
-   opening Inbox or manually invoking acceptWake. Confirm no legacy renderer claim.
+   both explicit opt-ins, and one live event-backed waiter in the recipient's
+   own session. A second sender or SendMessage is not required for mod-self.
+   Managed workers must remain excluded.
+4. Explicitly select `collaboration native-wake --route mod-self`. In a dedicated,
+   authorized Sonnet 5.5 session, queue a new wake-enabled message and verify
+   automatic claim, socket submission, receive-once authorization, target reply
+   and native Stop ACK without manually invoking Inbox dispatch. Confirm only
+   that native session is required, and no legacy renderer consumes the claim.
 5. Check a receiver that is busy and one that refuses inbound messages. Preserve
    native policy: accepted-but-held is not ACK; a definite refusal is never routed
-   around that policy. No SendMessage means no claim. No eligible sender means a
-   visible queue wait, not an invisible fallback or new model process.
+   around that policy. An unloaded recipient waits for its normal resume, not an
+   invisible fallback or extra model process. Keep the cross-session mod route's
+   distinct SendMessage requirement intact.
 6. Test helper/broker disconnection and restart with synthetic fault injection:
    known outcome receipts may be republished idempotently, but uncertain dispatches
-   must remain offered and must never call the native API again. Verify context
+   must remain offered and must never write the native inbox again. Verify context
    changes, app-stop holds, malformed private files and source-bound claim checks.
+   Include concurrent helpers, duplicate receive envelopes, persisted receive-once
+   records and actual private Unix RPC ingress; direct hub tests alone missed the
+   omitted mod_wake_receive allowlist entry in the first integration.
 7. Switch the route back to renderer for new messages and verify pending Mod
    records retain their original route and evidence. Never reset claims or rewrite
    native transcripts to make rollback appear successful.
@@ -49,7 +60,8 @@ and a modern mailbox reader when rolling back.
 1. Confirm the reviewed base, clean worktree and patch hashes. Review all added
    files and the existing `AGENTS.md`. Preserve package/lockfile/runtime policy.
 2. Install the original locked dependencies with `npm ci --ignore-scripts`.
-3. Run affected `test/claude-mod-*.test.mjs` and `test/mod-wake.test.mjs` cases in the
+3. Run affected `test/claude-mod-*.test.mjs`, `test/mod-wake.test.mjs` and
+   `test/mod-self-wake.test.mjs` cases in the
    complete checkout with no failures or newly skipped cases. The real
    private transport test must execute. Its dispatcher is still a synthetic
    server; it intentionally starts no model runner.
@@ -82,8 +94,9 @@ claude plugin validate "$STAGE/plugins/claudex" --strict --json
 claude plugin test "$STAGE/plugins/claudex"
 ```
 
-Read the emitted types and validation errors. The candidate includes nine native
-kit tests, executed on Claude Code 2.1.287. They stub process execution, native state and other external calls;
+Read the emitted types and validation errors. The candidate includes 12 native
+kit tests; final 0.3.1 execution passed on the actual Desktop Code 2.1.286 binary.
+They stub process execution, native state and other external calls;
 no sign-in, model request or real network is required. Resolve any native kit or
 UI/event schema mismatch before installation. Keep this evidence separate from
 the Node contract tests and real terminal/Desktop painting.
@@ -92,11 +105,12 @@ The source-level expected inventory is:
 
 ```text
 Hooks:
-  session.start, classic.SessionStart, session.end, turn.complete,
+  session.start, classic.SessionStart, session.end, session.receive, turn.complete,
   command.run (claudex), ui.render (AbovePrompt and Pane)
 Calls:
   env.get (literal CLAUDEX_COLLABORATION_WORKER)
   session.id, session.cwd, session.usage, session.version, session.send
+  settings.read (native inbound policy)
   tool.list, clock.after (bounded wait/reconnection scheduling)
   process.run (plugin.root is an intrinsic property, not a call)
   command.register
@@ -177,11 +191,42 @@ with read-only tasks. Keep any existing sync watcher and user work unchanged.
    come from its current generation-scoped owner using the latest revision;
    controller drafts do not transfer an unrelated native chat's ownership.
 
-## E. Exact-recipient session.send adapter
+## E. Exact-recipient native delivery
+
+### Own-inbox mod-self route
+
+Source defaults are nativeWake=false and selfWake=false. Enabling both and
+selecting mod-self authorizes only already wake-enabled messages for the exact
+current native session. The same Mod receives its message; do not install a
+second Mod or create another model process to satisfy this gate.
+
+| Case | Required evidence |
+| --- | --- |
+| One loaded recipient | Exactly matching source/target context, one eligible waiter, native reply and real Stop ACK; no second sender required |
+| No SendMessage | Own-inbox transport works independently of that outbound tool; normal native receiver permissions remain unchanged |
+| Parent and socket | Exact native parent PID/birth/UID owns the private socket; symlinks, wrong owner and changed identities refuse; Darwin listener and accepted FDs at the same path are valid |
+| Native token/provenance | Inherited token remains in memory only; native receive is peer-originated, never human; actual wire behavior is validated for the runtime |
+| Submitted is not ACK | Socket flush records submitted only; native receive authorization and real recipient Stop ACK are inspected separately |
+| Hold/refuse | Native controls remain effective, including changes after preflight; no setting change, approval or alternate transport defeats them |
+| Ordinary hook exclusion | SessionStart/UserPromptSubmit/Stop cannot offer queued mod-self messages; real Stop ACK scanning remains available and older/queue-only routes retain their behavior |
+| Receive-once | Duplicate envelopes and a lost receive reply cannot obtain a second durable authorization, before or after ACK and restart |
+| Dispatch-once | Concurrent helper calls or a crash after intent persistence cannot cause a second socket write |
+| Lifecycle and authorization | Clear/end, changed exact context, app-stop, route revocation and expiry fence late work, including after awaited receive persistence |
+| Unsent draft | Observe the original native composer contents unchanged after actual receipt; a source/API claim is insufficient |
+| Closed/unloaded recipient | Visible wait for normal native resume, never a newly created model session |
+| Legacy data | Earlier submitted/no-ACK messages and old mod/renderer routes remain unchanged; a successful retry scenario uses a distinct authorized message |
+
+The own-inbox path is macOS-only. The documented own-child ingress does not turn
+the observed wire payload or absent receipt into a stable API promise. Neither
+self-addressed session.send nor prompt.submit is a fallback. Keep native queue
+semantics, user permissions and all original histories intact.
+
+### Retained cross-session mod route
 
 For an unvalidated installation, keep nativeWake=false until its required
 recipient cases have actual evidence. The reviewed local installation has passed
-the documented automatic-route cases and now enables it explicitly.
+the documented cases; its current primary route is mod-self, while this earlier
+cross-session route remains separately available.
 Enabling native receipt can trigger recipient model work and uses account quota.
 
 Create a separate controller session and recipient test session whose real
@@ -241,8 +286,9 @@ additional source changes outside this companion's current scope.
 ## G. Rollback acceptance
 
 For routing rollback, select renderer for future messages while retaining the
-modern broker. Existing Mod claims and rejected outcomes must not be downgraded,
-rewritten or replayed. No older reader may overwrite the new mailbox format.
+modern broker. Existing Mod claims, submitted outcomes and receive-once records
+must not be downgraded, rewritten or replayed. No older reader may overwrite the
+new mailbox format.
 
 Disable/uninstall the companion through the normal plugin lifecycle. Verify the
 original collaboration/sync configuration and native history remain intact.
@@ -261,7 +307,7 @@ Date / operator:
 Reviewed base and final commit/diff SHA256:
 OS / architecture / Node executable identity and version:
 CLI Claude version / Desktop Code version / SDK version / Codex version:
-Mod stage hashes / installed configuration / nativeWake:
+Mod stage hashes / installed configuration / nativeWake / selfWake / route:
 New Node tests (pass/fail/skip):
 Original npm test (pass/fail/skip):
 Native validator (exit code, warnings, declared capabilities):
@@ -269,7 +315,7 @@ Native kit (pass/fail):
 Terminal painting and behavior:
 Desktop painting and behavior:
 Authorized model executions and task results:
-Native claim / queue / recipient ACK / requested result:
+Native claim / socket submission / receive authorization / queue / recipient ACK / requested result:
 Actual-runtime sync acceptance evidence and configured version policy:
 Rollback evidence:
 Remaining blocked gates and exact reasons:

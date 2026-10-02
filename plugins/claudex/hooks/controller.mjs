@@ -174,7 +174,7 @@ export function createController({ nativeWake = false } = {}) {
     },
     previewWake(api, id) {
       if (!nativeWake || !state.wakes.some(item => item.messageId === id)) return;
-      state.wakePreview = { messageId: id, context: { ...state.context }, target: { ...(state.wakeTarget ?? state.context) } }; state.tab = 'wake-confirm'; changed(api);
+      state.wakePreview = { messageId: id, route: state.wakes.find(item => item.messageId === id).route ?? 'mod', context: { ...state.context }, target: { ...(state.wakeTarget ?? state.context) } }; state.tab = 'wake-confirm'; changed(api);
     },
     async acceptWake(api) {
       const preview = state.wakePreview;
@@ -182,7 +182,7 @@ export function createController({ nativeWake = false } = {}) {
       return run(api, async ticket => {
         if (!same(preview.context, ticket.context)) throw new Error('Session changed; refresh exact pending messages.');
         state.wakePreview = null;
-        const outcome = await deliverNativeWake(api, ticket.context, preview.target, preview.messageId, () => current(ticket));
+        const outcome = await deliverNativeWake(api, ticket.context, preview.target, preview.messageId, () => current(ticket), preview.route);
         if (current(ticket)) {
           if (outcome.state !== 'waiting') state.wakes = state.wakes.filter(item => item.messageId !== preview.messageId);
           state.notice = outcome.state === 'accepted'

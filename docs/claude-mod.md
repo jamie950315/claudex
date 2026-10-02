@@ -1,90 +1,106 @@
 # Claude native Mod companion
 
-## Version 0.2 automatic-delivery route
+## Version 0.3 single-session delivery
 
-Version 0.2.3 is installed on the reviewed Mac with `nativeWake: true` and the
-broker's `mod` primary route. The actual Desktop Code 2.1.286 runtime passed strict
-validation and all nine native kit tests; the earlier rollout-off refusal was not
-reproduced. An untouched automatic listener in a separate SDK-owned sender took
-an authorized message without a prompt or sender model input. Native queue
-acceptance, the Sonnet 5.5 recipient's requested reply and its real Stop ACK were
-verified separately. A normally restarted Traditional Chinese Desktop also
-renders the new pane and active listener state. See [validation](claude-mod-validation.md)
-for the exact evidence and remaining boundaries. Final Desktop-owned sender to
-Desktop recipient delivery also passed after normal broker/Claude restarts, with
-one real reply and Stop ACK. Native pixels verify all five tabs in two rows.
+Version 0.3.1 provides an explicit `mod-self` route in the existing Mod. It does not
+require another Mod, another loaded sender session or the SendMessage tool.
+The recipient's own loaded Mod obtains its already-authorized broker message and
+uses native own-child inbox delivery. The reviewed Mac has 0.3.1 installed with
+both opt-ins enabled and route `mod-self`; a single Desktop session produced the
+requested Sonnet 5.5 reply and real Stop ACK after normal restart. Its original
+unsent draft remained unchanged. Source defaults remain off. Exact native policy,
+RPC, test and Desktop evidence is recorded in [validation](claude-mod-validation.md).
 
-Two opt-ins are distinct: plugin `nativeWake: true` starts its listener, while
-`collaboration native-wake --route mod` selects the route for newly queued Claude
-messages whose `wake` is true. Queue-only messages remain queue-only. No existing
-message is silently rerouted; switching back affects only new messages.
+Three settings are distinct: plugin `nativeWake: true` starts the listener,
+plugin `selfWake: true` enables own-inbox delivery, and
+`collaboration native-wake --route mod-self` selects that route for newly queued
+Claude messages whose `wake` is true. Queue-only messages remain queue-only.
+Existing `mod` and `renderer` messages keep their original route and receipts;
+changing the setting never migrates or replays them.
 
 The Mod uses one long-poll helper call per loaded session. The broker wakes that
 call on a new message or route/shutdown event; its twenty-second bounded timeout
 also allows reconnection and lifecycle checks. This reads mailbox metadata, never
-native conversation histories. There is no two-second transcript sweep. An active
-Mod session with SendMessage must exist, distinct from the recipient. Otherwise
-messages report waiting-for-mod; ordinary native hooks remain available when the
-recipient resumes. The feature never starts an extra native model process.
+native conversation histories. There is no two-second transcript sweep. For
+`mod-self`, the recipient session must itself be loaded with the enabled Mod;
+otherwise its message waits for normal native resume. The earlier `mod` route
+still requires a distinct loaded sender with SendMessage. Neither route creates
+an extra native model process or silently falls back to another transport.
 
-Before taking a claim, check SendMessage and the exact controller context. Claiming
+Before taking a self claim, check native inbound policy, exact current context
+and the owned native inbox. Explicit `hold` or `refuse` leaves the message waiting;
+the native receiver's policy still applies if it changes after this preflight.
+The cross-session `mod` route instead checks SendMessage availability. Claiming
 binds the durable message to that controller and route. Recheck target metadata,
-route, expiry and app-stop before the native API call. Renderer consumers cannot
+route, expiry and app-stop before dispatch. Renderer consumers cannot
 take Mod claims, including from stale manifests. Native hooks share the mailbox's
-atomic offer guard; only one consumer can offer the queued message.
+atomic offer guard; only one consumer can offer the queued message. Ordinary
+SessionStart/UserPromptSubmit/Stop hooks cannot consume queued `mod-self` messages:
+otherwise a normal hook could bypass native hold/refuse while the own-inbox route
+waits. Real Stop ACK scanning remains enabled; queue-only and older routes keep
+their existing hook behavior.
+
+Own-inbox delivery is initially macOS-only. The helper verifies the parent Claude
+PID, birth identity and UID with bounded native process inspection and verifies
+that this parent owns the exact owner-private socket. It rejects user-controlled
+symlink paths; Darwin's root-owned `/tmp` and `/var` aliases are resolved safely.
+The native socket and authentication token are inherited only by the child,
+never copied into requests, argv, logs or durable state. Native own-child ingress
+is documented; the precise wire behavior still requires runtime-specific native
+acceptance. This is neither self-addressed `session.send` (which the tested
+runtime refuses) nor a `prompt.submit` fallback.
+
+The helper persists a dispatch intent before writing once. Only claim identifiers
+cross the native socket. The receiving Mod verifies current context and lifecycle,
+route, expiry and app-stop, then consumes a durable receive-once authorization
+before retrieving the original broker-quoted peer text. Clear/end callbacks and
+late asynchronous results cannot redirect delivery into another session.
 
 After a native result, write an owner-private receipt outbox before contacting
 the broker. Lost responses recover by publishing that same outcome, never by
-calling session.send again. Accepted means queued, not ACK. Explicit false is
-rejected and retained with no retry, because the cause may be recipient policy.
-Exceptions, lifecycle changes after claim and abandoned sends remain uncertain.
+dispatching again. The own-inbox socket supplies no native ACK: `submitted` means
+only the write completed, not queue acceptance, model reception or work completion.
+The real recipient Stop ACK is still required. For cross-session `mod`, accepted
+means queued, and explicit false is rejected without retry. Exceptions,
+lifecycle changes after claim and abandoned sends remain uncertain.
 They do not fall back to another transport. Unavailable target metadata is deferred
 without blocking other targets; connection recovery backs off to thirty seconds.
 Unsafe receipt storage stops the listener and remains visible for inspection.
 
-The outbox is `<root>/mod-wake-receipts/`, bounded to 2048 receipts (the broker's
-mailbox limit is lower). Completed outcome records are retained. Keep them and the
-original mailbox when investigating. Never remove a claim to force redelivery.
+The outbox is `<root>/mod-wake-receipts/`; own-inbox dispatch intents are in
+`<root>/mod-self-dispatch/`. Each has a 2048-record bound (the mailbox limit is
+lower). Completed outcomes and receive-once evidence are retained. Keep them and
+the original mailbox when investigating. Never remove a claim to force redelivery.
 
 Activation procedure for another installation:
 
-1. Run affected tests, stage the candidate with `--native-wake`, and run that runtime's strict
+1. Run affected tests, stage the candidate with `--native-wake --self-wake`, and run that runtime's strict
    validator and native test kit. Do not override a vendor/policy refusal.
 2. Update the broker through the normal owned installation path at a safe idle
    boundary; preserve the installed definition, current work and previous artifact.
 3. Install/configure the staged plugin using its native manager. Open a fresh
    normal session or use a supported reload, verifying the actual loaded version.
-4. Select `node bin/claudex.mjs collaboration native-wake --route mod` and inspect
-   its status. Run a separately authorized Sonnet canary, checking claim, queue,
-   real reply and Stop ACK. No backend result alone proves completion.
+4. Configure both native opt-ins, select
+   `node bin/claudex.mjs collaboration native-wake --route mod-self`, and inspect
+   its status. Run a separately authorized canary with only the recipient loaded,
+   checking the exact claim, native reception, real reply and Stop ACK. Verify
+   inbound hold/refuse, lifecycle fencing and no replay; a socket write alone
+   proves none of these.
 5. Keep renderer support for legacy messages and other Desktop functions. Route
    rollback is `native-wake --route renderer`; unresolved Mod messages keep their
    original route and evidence. Never automatically replay them on rollback.
 
-Rollback here means changing the route while retaining the 0.2 broker, not
-downgrading its data reader. Older brokers do not understand the new rejected
-outcome and do not enforce Mod route fencing. Do not restore an old broker binary
-over a mailbox that has used the Mod route, or rewrite the mailbox to make an
+Rollback here means changing the route while retaining the 0.3 broker, not
+downgrading its data reader. Older brokers do not understand `mod-self`, submitted
+outcomes or receive-once records. Do not restore an old broker binary
+over a mailbox that has used the new route, or rewrite the mailbox to make an
 older version accept it. Preserve the modern reader and all message evidence.
 
-The current renderer is intentionally not uninstalled. Real automatic acceptance
-also covers a busy recipient accepting a second message before the first ACK and
-an offline recipient returning a definite rejection without replay on reopening.
-The exact unsubmitted draft remained visible after busy delivery. A final new
-message passed after normal broker/Claude restarts while the prior rejected
-message remained unchanged without replay. Other policy-denial variants and
-fault-injected native failures are not covered by those observations.
-
-Historical manual-companion acceptance also verified the actual 2.1.286 pane,
-usage band, broker response and a manual recipient delivery. It is retained as
-historical evidence, separate from the current automatic listener and final
-Desktop-owned delivery. See [validation](claude-mod-validation.md).
-
-Baseline reviewed: `jamie950315/claudex` at
-`eb12d2e1d82624be4b1dc94f8f53e9a6aa85a000` (package version 1.0.3).
-Source and installed companion version: 0.2.3. Review date: 2026-10-02.
-The supplied revision-2 bundle is integrated with native compiler/API repairs,
-clear/end UI invalidation, and stage source-directory symlink protection.
+The renderer is intentionally retained. Earlier 0.2.3 cross-session acceptance
+includes native queue, reply, Stop ACK, busy delivery, draft preservation and
+offline no-replay observations. Those results do not certify the 0.3 own-inbox
+route. Keep historical and new evidence separate in the
+[validation record](claude-mod-validation.md).
 
 ## Architecture and scope
 
@@ -100,9 +116,11 @@ Claude Desktop Code tab / Claude Code CLI
 
 Automatic authorized delivery (or separately reviewed Inbox delivery):
     broker identity-only manifest -> exact mailbox claim
-        -> $.session.send({to: {sessionId}, text: originalQuotedPeerContext})
-            -> native recipient policy and queue
-                -> original recipient Stop hook -> exact CLAUDEX_ACK
+        mod-self: own native child -> authenticated own inbox (claim IDs only)
+            -> native inbound policy -> Mod receive-once broker verification
+                -> original quoted peer text -> real recipient Stop ACK
+        mod: $.session.send({to: {sessionId}, text: originalQuotedPeerContext})
+            -> native recipient policy and queue -> real recipient Stop ACK
 
 Existing synchronization, turn checkpoints, assets, native histories,
 Desktop folder/title organization and unloaded-session fallbacks stay intact.
@@ -124,7 +142,7 @@ while inspecting another installation's local state.
 | Defaults | Read and reviewed update of models, efforts, and bounded permission default | Full-access remains outside the companion |
 | Native chat lookup | Search, exact ID selection, expected title, page cursor | Duplicate titles and unavailable metadata stay visible |
 | Peer messages | Reviewed `chat_send`, queue-only default | `wake: true` is an explicit escalation to potentially billable native work |
-| Native receipt | Optional exact-recipient `session.send` adapter | Disabled by default; preserves mailbox claim/ACK rules |
+| Native receipt | Explicit own-inbox `mod-self` or cross-session `mod` adapter | Disabled by default; socket submission, queue acceptance and Stop ACK differ |
 | Handoff | Appends a reviewed instruction draft; bundled workflow skill | Owning workers keep the existing handoff protocol and revision fence |
 | Lossless conversation sync | Existing core and complete-turn checkpoints | No transcript export/import is implemented through Mod APIs |
 | Sidebar folders/archive/title organization | Existing structural integrations | New native pane complements these features |
@@ -137,10 +155,11 @@ existing synchronization and native asset pipeline.
 
 The companion uses the native Mod API documented for Claude Code 2.1.287.
 This is the public baseline, not an enforced version check in the companion.
-The actual Desktop-bundled 2.1.286 runtime also passed strict validation, all
+Earlier companion acceptance on Desktop-bundled 2.1.286 passed strict validation,
 nine native tests and SDK 0.3.286 no-inference initialization with `/claudex`
-registered, without additional feature flags. User-supplied native UI evidence
-then verified the pane and broker response on that same actual engine version.
+registered, without additional feature flags. Native UI evidence then verified
+the pane and broker response on that engine. These historical checks do not
+replace the current candidate's complete native kit or own-inbox acceptance.
 Test the installed runtime's actual capabilities before requiring an upgrade.
 The reviewed repo records a stricter, earlier synchronization acceptance baseline:
 Claude Code 2.1.281, SDK 0.3.281, and the repo's allowlisted Codex builds.
@@ -163,10 +182,11 @@ version shown by the Mod; a separate terminal executable's version alone does
 not identify the embedded runtime.
 
 The helper uses POSIX ownership, modes, no-follow file opens, and Unix sockets,
-matching the existing broker. macOS is the intended deployment target; Linux
-supports isolated tests and CLI use. Windows named-pipe support is outside this
-patch. Desktop WSL plugin support must be confirmed against current official
-runtime support before use.
+matching the existing broker. General companion CLI use and isolated tests may
+run on Linux, but `mod-self` requires the implemented macOS parent/socket checks.
+Linux own-inbox delivery and Windows named-pipe support are not implemented.
+Desktop WSL plugin support must be confirmed against current official runtime
+support before use.
 
 ## Stage and validate
 
@@ -189,7 +209,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.2.3-review"
+STAGE="$PARENT/claudex-0.3.1-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -226,10 +246,10 @@ claude plugin install claudex@claudex-local --scope user
 ```
 
 Use `/plugin configure claudex@claudex-local` to verify the state root, Node
-executable and intended `nativeWake` value, including overrides retained from
-prior installs. Keep it false for an unvalidated installation; the reviewed Mac
-has explicitly enabled it after native acceptance. Open a fresh suitable native Code session or reload plugins using the
-runtime's normal command. The deployer should preserve active work and avoid
+executable and intended `nativeWake` and `selfWake` values, including overrides
+retained from prior installs. Keep them false for an unvalidated installation.
+For own-inbox activation, both must be true. Open a fresh suitable native Code
+session or reload plugins using the runtime's normal command. The deployer should preserve active work and avoid
 restarting apps/services merely to make a validation screenshot.
 
 The native installer may report options as unset despite staged defaults. Save
@@ -240,7 +260,8 @@ claude plugin configure claudex@claudex-local --values-stdin --json
 ```
 
 Provide a JSON object on stdin with single-line string values for `stateRoot`,
-`nodeBinary`, and `nativeWake` (the string `"false"` or authorized `"true"`). Verify the result has no
+`nodeBinary`, `nativeWake`, and `selfWake` (booleans supplied as the string
+`"false"` or authorized `"true"`). Verify the result has no
 unconfigured options. The native writer parses the declared boolean type.
 
 For a CLI-only temporary smoke test, use a separate harmless checkout and
@@ -364,44 +385,38 @@ or mark work resolved simply to make the pane appear healthy.
 
 ## Native delivery and manual Inbox inspection
 
-For a new installation, keep `nativeWake` false until the automatic acceptance
-gate above is completed. The reviewed installation now uses it as the primary route.
-The Mod never fabricates SessionStart/Stop, approves permissions or submits a
-user prompt. Automatic delivery handles only existing wake-authorized broker
-messages and can cause the recipient's normal model work; that is not free of
+For a new installation, keep `nativeWake` and `selfWake` false until the automatic
+acceptance gate above is completed. The Mod never fabricates SessionStart/Stop,
+approves permissions or invokes `prompt.submit`. Own-inbox native ingress is
+framed as non-human peer input, not as the user's words. Automatic delivery handles
+only existing wake-authorized broker messages and can cause the recipient's normal model work; that is not free of
 inference. It does not initiate unrelated work or inspect native histories.
 
 When explicitly enabled, Inbox reads only the broker's bounded identity manifest.
-Chats can select another Claude recipient and inspect its pending messages. The
-controller's session/cwd and the recipient's session/cwd are distinct fields.
+Chats can select a Claude recipient and inspect its pending messages. The
+controller's session/cwd and the recipient's session/cwd are distinct fields;
+`mod-self` requires them to match exactly, while `mod` requires another session.
 The helper verifies the exact recipient against the manifest and existing broker
 metadata, then obtains a source-bound `mod_wake_claim`. Mod and renderer route
 fences plus the hooks' atomic offer guard prevent duplicate consumers.
 
-A confirmed delivery uses `$.session.send({to: {sessionId}, text})` with the exact
-recipient and the original broker-quoted peer context. It leaves the composer
-untouched and lets the native recipient policy and queue handle busy sessions.
-A native `isDelivered: true` means the queue accepted the message. It differs from
-recipient ACK and work completion. The original recipient Stop hook is still
-required to recognize the exact standalone `CLAUDEX_ACK:<messageId>`.
+Own-inbox delivery uses the current session's verified native child ingress and
+the receive-once guard described above. A successful write is `submitted`, not
+native acceptance. No composer fill, submission or permission-setting mutation
+is used. Native policy and queue behavior stay authoritative; verify actual
+busy-session and draft behavior on the deployed Desktop runtime.
 
-A bounded, user-authorized 0.2.3/2.1.286/Sonnet 5.5 test verified the automatic
-listener's claim, actual native queue acceptance, recipient reply and Stop ACK.
-The sender must have the native SendMessage tool available; a no-tools profile
-cannot use `session.send`. This is separate from model permission to call tools.
-The complete recipient must also have a verified native Desktop title/identity.
-Busy and offline outcomes were separately observed; mouse-driven Inbox acceptance
-and other native policy cases are not implied. The source default remains off for
-new installations. See the exact [validation scope](claude-mod-validation.md).
+Cross-session `mod` delivery uses `$.session.send({to: {sessionId}, text})` with
+the exact recipient and original broker-quoted peer context. It still requires
+SendMessage in another loaded sender. A native `isDelivered: true` means queued,
+not read. An explicit false is retained as `rejected` without switching routes.
 
-Some builds or account/session configurations may refuse self-delivery or lack
-reachability to a selected session. Test a second synthetic recipient from a
-separate controller session first. An explicit native false records `rejected`;
-an exception, failed receipt or context change after claim preserves uncertainty.
-Neither outcome requeues or replays the offered message. Missing SendMessage
-prevents a claim. Keep the old
-consumer installed; it can continue handling messages that the Mod has not
-claimed. Neither path may duplicate a message already claimed by the other.
+Both routes require the exact verified native Desktop title/identity, preserve
+uncertain outcomes, and recognize only the original recipient's real standalone
+`CLAUDEX_ACK:<messageId>` from Stop. A socket write, helper result or native queue
+receipt is never work completion. Legacy renderer messages retain their original
+consumer; a renderer cannot claim either Mod route. See the exact
+[validation scope](claude-mod-validation.md).
 
 ## Security and maintenance
 
@@ -448,6 +463,8 @@ https://code.claude.com/docs/en/plugins/mods/api
 https://code.claude.com/docs/en/plugins/mods/test
 https://code.claude.com/docs/en/plugins/manifest-reference
 https://code.claude.com/docs/en/plugins/components
+https://code.claude.com/docs/en/cross-session-messaging
+https://code.claude.com/docs/en/agent-sdk/typescript
 ```
 
 Repository contracts reviewed at the pinned commit: README.md, AGENTS.md,
@@ -459,8 +476,8 @@ are deliberately separate from native deployment evidence.
 ## App engine packaging in bundle revision 2
 
 `src/app-bundle.mjs` includes both companion commands and the companion runtime
-modules through explicit allowlists, including the 0.2 broker route and receipt
-outbox modules. `ENGINE_PLUGIN_FILES` includes eight exact resources: the manifest,
+modules through explicit allowlists, including the Mod broker route, own-inbox
+transport and receipt outbox modules. `ENGINE_PLUGIN_FILES` includes eight exact resources: the manifest,
 hooks declaration, controller, register and delivery modules, workflow skill,
 plugin README and native test fixture.
 `copyAllowed` copies only these assets and validates plugin directories from the

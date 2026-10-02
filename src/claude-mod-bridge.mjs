@@ -4,6 +4,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { privateDir, privateJSON, privateRead, writeReceipt, exclusiveAction } from './claude-mod-storage.mjs';
 import { validateRequest, validateParams, sameContext, insist, ModError, identity, context, record } from './claude-mod-protocol.mjs';
 import { createWakeOutbox } from './claude-mod-wake-outbox.mjs';
+import { inspectSelfInbox, submitSelfInbox } from './claude-mod-self-inbox.mjs';
 const TTL = 10 * 60 * 1000;
 const JOURNAL_LIMIT = 2048;
 const RPC_TIMEOUT = 12000;
@@ -44,7 +45,8 @@ function assertReceipt(receipt, id) {
 /** Readiness is observed independently from native version acceptance.
  * Every action is tied to an exact session + cwd and to the configured state root. */
 export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
-  worker = process.env.CLAUDEX_COLLABORATION_WORKER === '1', allowNativeWake = false } = {}) {
+  worker = process.env.CLAUDEX_COLLABORATION_WORKER === '1', allowNativeWake = false, allowSelfWake = false,
+  inspectInbox = inspectSelfInbox, submitInbox = submitSelfInbox } = {}) {
   const collaborationRoot = join(root ?? '', 'collaboration');
   const journalRoot = join(root ?? '', 'mod-companion');
   const pathFor = id => join(journalRoot, `${identity(id, true)}.json`);
@@ -75,6 +77,7 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
   const outbox = createWakeOutbox(root, request => requestRpc('mod_wake_receipt', {
     source: request.context, target: request.target, messageId: request.messageId,
     claimId: request.claimId, status: request.status, reason: request.reason,
+    ...(request.route ? { route: request.route } : {}),
   }));
   return async function handle(input) {
     insist(!worker, 'MANAGED_WORKER', 'Managed workers retain their generation-scoped MCP capabilities.');
@@ -169,18 +172,52 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       });
     }
     insist(allowNativeWake, 'NATIVE_WAKE_DISABLED', 'Enable native receipt only after the documented local acceptance checks.');
-    if (request.op === 'wake-next') return requestRpc('mod_wake_wait', { source: request.context, excludeIds: request.excludeIds });
+    if (request.op.startsWith('wake-self-') || request.route === 'mod-self')
+      insist(allowSelfWake && request.route === 'mod-self' && sameContext(request.context, request.target), 'SELF_WAKE_DISABLED', 'Enable own-inbox delivery explicitly and use the current exact session.');
+    const wakeParams = { source: request.context, target: request.target, messageId: request.messageId,
+      ...(request.claimId ? { claimId: request.claimId } : {}), ...(request.route ? { route: request.route } : {}) };
+    if (request.op === 'wake-next') return requestRpc('mod_wake_wait', { source: request.context, excludeIds: request.excludeIds, ...(allowSelfWake ? { self: true } : {}) });
     if (request.op === 'wake-peek') {
-      const result = await requestRpc('mod_wake_wait', { source: request.context, timeoutMs: 0 });
+      const result = await requestRpc('mod_wake_wait', { source: request.context, timeoutMs: 0, ...(allowSelfWake ? { self: true } : {}) });
       return { target: request.target, messages: result.messages.filter(m => sameContext(m.target, request.target)) };
     }
     if (request.op === 'wake-claim') {
-      return requestRpc('mod_wake_claim', { source: request.context, target: request.target, messageId: request.messageId });
+      if (request.route === 'mod-self') await inspectInbox();
+      return requestRpc('mod_wake_claim', wakeParams);
     }
     if (request.op === 'wake-check') {
-      const result = await requestRpc('mod_wake_check', { source: request.context, target: request.target,
-        messageId: request.messageId, claimId: request.claimId });
+      const result = await requestRpc('mod_wake_check', wakeParams);
       await active(); return result;
+    }
+    if (request.op === 'wake-self-receive') {
+      const result = await requestRpc('mod_wake_receive', wakeParams);
+      await active(); return result;
+    }
+    if (request.op === 'wake-self-send') {
+      // Only identifiers cross the native inbox. The receiving Mod retrieves the
+      // original quoted peer context from the exact durable claim before next(e).
+      const payload = `CLAUDEX_SELF_INBOX_V1\n${JSON.stringify({ messageId: request.messageId, claimId: request.claimId, target: request.target })}`;
+      const directory = join(root, 'mod-self-dispatch');
+      await privateDir(directory, true);
+      return exclusiveAction(join(directory, `${request.claimId}.lock`), async () => {
+        const path = join(directory, `${request.claimId}.json`);
+        const identity = { context: request.context, target: request.target, messageId: request.messageId, claimId: request.claimId, route: request.route };
+        const saved = await privateJSON(path, { optional: true });
+        if (saved) {
+          insist(saved.version === 1 && JSON.stringify(saved.identity) === JSON.stringify(identity), 'INVALID_RECEIPT');
+          return saved.outcome ?? { state: 'uncertain', reason: 'dispatch-recorded', automaticReplay: false };
+        }
+        insist((await readdir(directory)).filter(name => name.endsWith('.json')).length < JOURNAL_LIMIT, 'JOURNAL_FULL');
+        await writeReceipt(path, { version: 1, identity }, { exclusive: true });
+        const outcome = await submitInbox(payload, { beforeWrite: async () => {
+          const guard = await requestRpc('mod_wake_check', wakeParams);
+          insist(guard?.ready === true, 'INVALID_RECEIPT', 'Self dispatch readiness was not confirmed.');
+          await active();
+          return true;
+        } });
+        await writeReceipt(path, { version: 1, identity, outcome });
+        return outcome;
+      });
     }
     if (request.op === 'wake-receipt') return outbox.record(request);
     throw new ModError('UNSUPPORTED_OPERATION', 'Unsupported operation.');

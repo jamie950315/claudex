@@ -1,4 +1,4 @@
-# Claudex native companion, 0.2.3
+# Claudex native companion, 0.3.1
 
 This plugin is staged from the Claudex repository with:
 
@@ -18,36 +18,43 @@ follow-up previews, cancellation previews, provider default updates, and durable
 operation receipts. `/claudex receipt UUID` reads a receipt without redispatching.
 Use `/claudex:claudex-workflow` for the accompanying collaboration guidance.
 
-The native receipt adapter is disabled by default. After separate runtime and
-Desktop acceptance, enable nativeWake and select the broker's Mod route to
-automatically claim an authorized pending message and queue the original
-quoted peer context to an exact Claude session ID using `session.send`. The
-recipient's native policy and queue stay authoritative. Queue acceptance and the
-receiving model's Stop-hook ACK remain separate observations. A refused or
-uncertain dispatch stays offered for operator inspection; it is never
-silently placed back in the queue.
+Automatic delivery is off by default. After the separate runtime and Desktop
+acceptance gates, configure both `nativeWake: true` and `selfWake: true`, and
+select `collaboration native-wake --route mod-self` for newly queued wake-enabled
+messages. The same Mod in the recipient session receives its own authorized
+broker messages: no second loaded session, extra Mod or SendMessage tool is
+required. A closed/unloaded recipient still waits for its normal native resume;
+the feature does not create an extra model session.
 
-Automatic delivery requires another loaded Mod session with SendMessage. It uses
-bounded event-backed broker waits, not a history sweep. Outcome receipts survive
-helper failures; only their publication is retried, never the native send. Broker
-route changes apply to new messages only. Preserve legacy messages and adapters.
+The macOS-only own-inbox helper uses Claude's documented own-child socket
+ingress. It verifies the native parent process and its exact private socket,
+inherits the native authentication token without storing or exposing it, and
+writes once. This is not `session.send` to self and is not a `prompt.submit`
+fallback. Native inbound `hold` and `refuse` settings remain authoritative; the
+Mod does not change settings, approve permissions or impersonate user input.
 
-The reviewed macOS installation uses 0.2.3 with nativeWake enabled and the Mod
-primary route. Actual 2.1.286 validation and nine native kit tests passed; an
-automatic listener delivered to a Sonnet 5.5 recipient with a real reply and Stop
-ACK. The new pane also renders in the normally restarted Traditional Chinese
-Desktop. Final Desktop-owned delivery passed after normal broker/Claude restarts;
-all five tabs render in two rows. Busy queue acceptance, exact draft preservation
-and offline rejection without replay were observed separately. These results do
-not certify every native policy or synchronization
-scenario; see the source validation record for the exact boundaries.
+The socket has no delivery ACK. `submitted` means only that the write completed,
+not that the native queue accepted it or the model read it. The receiving Mod
+checks the exact one-use broker claim, current session, route and app-stop state
+before admitting the original quoted peer text. The real recipient Stop-hook
+ACK remains separate. Durable dispatch intents and receive-once records prevent
+replay across concurrent helpers and restarts. Uncertain outcomes stay recorded.
+
+The earlier `mod` route remains available for cross-session `session.send` and
+still requires another loaded sender with SendMessage. `renderer` remains a
+separate route. Route changes affect new messages only: existing routes, claims
+and receipts are preserved, with no automatic fallback between them. Bounded
+event-backed waits inspect mailbox metadata, never native history. Only outcome
+receipt publication may be retried, never the native dispatch.
 
 The existing MCP tools, synchronization engine, history storage, Desktop
 organization patches, lifecycle hooks, and unloaded-session fallbacks remain in
 place. The integration preserves the repository's existing runtime allowlists.
 The documented public Mod API baseline is 2.1.287, not a companion version gate.
-Native loading and the real Desktop pane also work on the tested 2.1.286 build.
-Full synchronization with a new runtime still needs its own acceptance evidence.
+Validate the actual runtime's emitted API declarations, strict validator and
+native test kit before activation. Own-inbox wire behavior requires its own
+native acceptance; full synchronization with a new runtime remains a separate
+gate. Linux and Windows own-inbox delivery are not implemented.
 
 See `docs/claude-mod.md`, `docs/claude-mod-handoff.md`, and
 `docs/claude-mod-acceptance.md` in the source repository. Review source and trust

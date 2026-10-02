@@ -1,11 +1,79 @@
 # Claude Mod integration validation
 
-Reviewed on 2026-10-02. Source and installed companion: 0.2.3. Initial automatic
-acceptance used 0.2.2; final 0.2.3 native acceptance also verifies the narrow-pane
-tab repair, installed assets, restart persistence and Desktop-owned delivery.
+Reviewed on 2026-10-02. Source and installed companion: 0.3.1. The reviewed Mac
+uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
+defaults remain false. Installation, native invocation and actual Desktop display
+were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
-## Automatic-route evidence
+## Single-session own-inbox evidence
+
+| Check | Observed result | Evidence boundary |
+| --- | --- | --- |
+| Full repository regression | 1,325 passed, zero failures, 23 existing opt-in skips; 1,348 total, before the final narrow queued-hook exclusion | Final hook-fence delta uses affected mailbox/Mod regression; synthetic tests never start inference |
+| Own-inbox transport | 16 focused cases pass | Includes exact parent/socket checks, Darwin listener plus accepted FD, timeout drainage and no retry |
+| Broker/bridge/pump integration | 15 focused cases pass after the real RPC and queued-hook repairs | Includes actual private Unix RPC; synthetic model/native delivery |
+| Final queued-hook fence regression | All 54 affected mailbox, own-inbox and prior Mod-route tests passed | The one-line final backend delta preserves Stop ACK and old routes; no additional model calls |
+| Final native validator and kit | 0.3.1 strict validation and all 12 official native cases passed in a fresh normal process | Earlier isolated processes reported rollout disabled; none was overridden, and process-specific availability is not account-wide proof |
+| Installed plugin assets | All 16 installed plugin assets match the final 0.3.1 stage | Artifact equality, separate from native display and delivery evidence |
+| Final bundle verification | Installed Claudex and Claude app deep signature verification passed; Claude app.asar remained unchanged | Traditional Chinese Claude bundle retained; not notarization or public release |
+| Installed 0.3.1 automatic delivery | After normal Claude restart, one Claude Code process and one eligible `mod-self` waiter remained; source and target were the same exact native session | Actual Desktop-owned listener, not a second sender, command-driven dispatch or synthetic broker |
+| Recipient result | A newly authorized Sonnet 5.5 canary replied with the requested nonce and actual Stop ACK in 4.253 seconds | Exact claim, `submitted`, receive-once timestamp, reply and ACK inspected independently |
+| Actual Desktop display | Native accessibility inspection after normal UI refresh showed peer framing, requested reply and Stop ACK; the original unsent draft remained unchanged | Actual rendered session and composer evidence, not only transcript/source checks |
+| Native explicit refusal | Isolated Desktop-binary 2.1.286 session with `tools: []` and per-invocation `crossSessionInbound: refuse` received one production-transport write; native logs explicitly refused it before receive-hook delivery | Zero assistant turns and zero model turns; no global setting edit |
+| Native explicit hold | Equivalent isolated session with `crossSessionInbound: hold` retained one message with `cause=explicit-setting`, then expired it at normal shutdown | Zero model turns; native hold was not released or bypassed |
+| Native receive shape | Hold probe observed `origin.kind=peer`, no agent ID, and the exact routing prefix followed by JSON at `session.receive` | Observed 2.1.286 wire behavior, not a permanent public wire-format guarantee |
+| Earlier failed delivery preservation | The earlier 0.3.0 claimed message remains `submitted` without receive authorization or ACK and was not resent | Success used a distinct newly authorized message; no reset, migration or replay of uncertain evidence |
+| Final broker restart/no replay | Owned services were verified stopped and resumed normally; mod-self persisted, one waiter reconnected and the same single Claude Code process remained. Successful nonce appeared once, earlier undelivered nonce zero times, and the outbox had no pending receipt | Actual restart evidence; draft never became a submitted prompt; no claim reset or retransmission |
+
+The documented native own-child inbox is distinct from `session.send`, which
+explicitly refused self-addressing in the native probe, and from `prompt.submit`,
+which is not used. This route is macOS-only. The helper verifies the native
+parent's PID, birth identity and UID and its exact private socket. The per-session
+token stays in inherited environment and the in-memory auth line: never in argv,
+receipts or logs. Native kernel peer evidence can be unavailable after a fast
+child exits; the documented own-session token supplies the native own-child
+authentication in that case. Explicit inbound hold/refuse remains authoritative.
+
+There is no native delivery ACK on the socket. `submitted` means the bounded write
+completed, not that the model read it. Durable one-dispatch and receive-once
+records prevent duplicate helpers and duplicate envelopes from replaying work.
+Only the real recipient Stop hook records receipt. Neither that receipt nor a
+socket write proves completion of arbitrary requested work.
+
+### Failures reproduced and repaired
+
+- Darwin `lsof` lists the listener and its accepted connection under the same
+  socket pathname. Requiring exactly one matching FD falsely rejected a valid
+  connected parent. The repair accepts one or more exact-parent/exact-path FDs
+  while preserving independent socket ownership, type, path and identity checks.
+- The private collaboration transport allowlist initially omitted
+  `mod_wake_receive`. A live 0.3.0 socket write succeeded, but receive validation
+  failed before reaching the broker. A real private-RPC regression reproduced
+  `Invalid collaboration request`, then passed after the method was added. Tests
+  that called the hub directly could not expose that transport boundary.
+- Duplicate receive authorization and concurrent helper dispatch were fenced by
+  durable one-use records. Route/shutdown is checked again after the awaited
+  receive transaction. Synthetic tests cover each fence and restart behavior.
+- Final safety review reproduced ordinary SessionStart/UserPromptSubmit/Stop
+  hooks consuming queued mod-self messages, which could bypass native hold/refuse.
+  A failing regression became green after excluding only that route from hook
+  offer selection. Real Stop ACK scanning, queue-only messages and older routes
+  retain their behavior. This backend-only delta does not change the validated
+  native plugin assets or require replaying the live canary.
+
+No native-store edits, fabricated ACKs, held-message approvals or hidden replay
+were used. New-runtime synchronization acceptance, arbitrary pane-button flows,
+Linux/Windows own-inbox delivery and closed-session automatic startup are outside
+this evidence. Busy-delivery evidence below belongs to the older cross-session
+route, not a new certification of every own-inbox busy-session case.
+Collaboration remains ready. A post-upgrade renderer-maintenance inspection
+reported `cache-entry-missing`; the own-inbox path does not use that renderer
+adapter. Existing unfinished-tool synchronization and predecessor-archival waits
+also remain separate from the completed own-inbox acceptance. This is not an
+all-components-healthy claim.
+
+## Historical 0.2.3 cross-session automatic-route evidence
 
 | Check | Observed result | Evidence boundary |
 | --- | --- | --- |
@@ -26,8 +94,8 @@ Private IDs, transcripts and evidence directories remain outside this repository
 | Final pane layout | Actual 0.2.3 screenshot shows all five tabs in two rows, Engine 2.1.286, nativeWakeEnabled=true and accepted outcome for the final message | Real painting; not every button-flow acceptance |
 
 No direct native-store edits, fabricated ACKs, claim reset or replay were used.
-Another eligible loaded sender is still required; the recipient alone cannot
-self-deliver. Pending-receipt fault recovery remains synthetic coverage; a normal
+That cross-session `mod` route requires another eligible loaded sender; the
+new explicit `mod-self` route removes that dependency. Pending-receipt fault recovery remains synthetic coverage; a normal
 restart with no pending outbox is not proof of every interrupted-send case. The
 temporary upgrade-time folder-cache diagnostic cleared through normal maintenance.
 Final read-only inspection shows collaboration, folders and renderer adapters ready,
@@ -67,23 +135,27 @@ strict manifest attribution. Automated tests never start model inference.
 Claude Code 2.1.287 is the documented public Mod baseline, not a load gate.
 The installed Desktop Code 2.1.286 actually validates and runs this companion.
 Earlier CLI test processes on 2.1.286 and 2.1.287 reported the rollout switch off;
-that applied to those processes, not every loaded Desktop session. Current tests
-pass without overrides. Neither observation establishes account-wide availability.
+that applied to those processes, not every loaded Desktop session. Later isolated
+native kit processes also reported rollout disabled while the installed Desktop
+successfully ran 0.3.1. No override was introduced. Neither observation establishes
+account-wide availability.
 
-Hooks cover session.start, classic.SessionStart, session.end, turn.complete,
-command.run and ui.render. Calls include command.register, env.get, process.run,
-prompt.fill, session.cwd/id/send/usage/version, tool.list, clock.after and
+Hooks cover session.start, classic.SessionStart, session.end, session.receive,
+turn.complete, command.run and ui.render. Calls include command.register, env.get, process.run,
+prompt.fill, session.cwd/id/send/usage/version, settings.read, tool.list, clock.after and
 ui.invalidate/open/resolve. The only environment read is the managed-worker marker.
 plugin.root is intrinsic metadata. Timers drive bounded broker waits/reconnection,
 not conversation-history sweeps. No prompt submission, permission approval or
 new sender model process is introduced. Recipient delivery can trigger authorized
 model work and consume account allowance.
 
-The native kit stubs external operations; passing nine tree/callback cases is not
+The native kit stubs external operations; passing its tree/callback cases is not
 Desktop painting or delivery evidence. The validator does not transitively audit
 the child helper. The helper's private file/RPC effects retain source-level and
 Node contract coverage. Declared session.send capability exists even with the
 default nativeWake=false; that flag gates use, not trust granted to installed code.
+Own-inbox delivery additionally requires selfWake; its native socket and token
+are inherited by the helper without exposure to the Mod's public result.
 
 ## Historical manual acceptance
 

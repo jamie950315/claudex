@@ -1,6 +1,6 @@
 {
   "name": "claudex",
-  "version": "0.2.3",
+  "version": "0.3.1",
   "author": { "name": "Claudex contributors" },
   "description": "Native Claudex control pane with reviewed operations and exact-session receipt handling.",
   "userConfig": {
@@ -11,6 +11,11 @@
     "nodeBinary": {
       "type": "string", "title": "Node executable",
       "description": "Absolute trusted Node.js executable supplied by the stage command.", "default": ""
+    },
+    "selfWake": {
+      "type": "boolean", "title": "Enable current-session inbox delivery",
+      "description": "Opt this session into the separately selected mod-self route. An owned native child posts into this session's own inbox; native inbound controls and Stop ACK remain authoritative. No other sender or SendMessage tool is required. Never retries refused or uncertain messages.",
+      "default": false
     },
     "nativeWake": {
       "type": "boolean", "title": "Enable automatic native delivery",

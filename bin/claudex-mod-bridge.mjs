@@ -4,7 +4,7 @@ import { createModBridge } from '../src/claude-mod-bridge.mjs';
 import { MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES, ModError, insist } from '../src/claude-mod-protocol.mjs';
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    root: { type: 'string' }, 'native-wake': { type: 'boolean', default: false },
+    root: { type: 'string' }, 'native-wake': { type: 'boolean', default: false }, 'self-wake': { type: 'boolean', default: false },
   } });
   insist(positionals.length === 0 && typeof values.root === 'string');
   // Refuse before consuming untrusted worker input or reading a controller capability.
@@ -16,7 +16,7 @@ async function main() {
     chunks.push(chunk);
   }
   const request = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-  const result = await createModBridge({ root: values.root, allowNativeWake: values['native-wake'] })(request);
+  const result = await createModBridge({ root: values.root, allowNativeWake: values['native-wake'], allowSelfWake: values['self-wake'] })(request);
   const output = `${JSON.stringify({ ok: true, result })}\n`;
   insist(Buffer.byteLength(output) <= MAX_RESPONSE_BYTES, 'OUTPUT_BOUND', 'Response exceeds the UI bound. Inspect the durable action receipt or use the existing operator CLI.');
   process.stdout.write(output);
