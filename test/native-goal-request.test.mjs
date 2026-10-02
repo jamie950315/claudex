@@ -65,6 +65,37 @@ function client(turns = [first()], before = () => {}) {
 const run = (source, options = {}) => exportNativeHistory({ client: client(), threadId, cwd,
   resolveInitialGoal: source.resolver, ...options });
 
+test('native header key sorting preserves only an exactly matching full saved checkpoint', async t => {
+  const source = await fixture(t, rows => {
+    rows[0] = { timestamp: '2026-09-30T00:00:00Z', ordinal: 0, type: 'session_meta', payload: {
+      id: threadId, cwd, originator: 'Codex Desktop', cli_version: '0.159.2',
+      base_instructions: { text: 'Synthetic instructions', provenance: { type: 'model', model: 'synthetic' } },
+      history_mode: 'paginated', git: { commit_hash: 'synthetic', branch: 'main', repository_url: 'https://example.invalid/repo' },
+    } };
+  });
+  const initial = await run(source);
+  const checkpoint = { count: initial.common.messages.length, digest: fingerprint(initial.common) };
+  const sort = value => value && typeof value === 'object' && !Array.isArray(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  const rows = structuredClone(source.rows); rows[0] = sort(rows[0]);
+  const sortedText = encode(rows); await writeFile(source.path, sortedText);
+  const rawSorted = await run(source);
+  assert.notEqual(fingerprint(rawSorted.common), checkpoint.digest);
+  const preserved = await run(source, { checkpoint });
+  assert.equal(fingerprint(preserved.common), checkpoint.digest);
+  assert.equal(await readFile(source.path, 'utf8'), sortedText);
+  const sortedCheckpoint = { count: checkpoint.count, digest: fingerprint(rawSorted.common) };
+  await writeFile(source.path, encode(source.rows));
+  assert.equal(fingerprint((await run(source, { checkpoint: sortedCheckpoint })).common), sortedCheckpoint.digest);
+  // Same-length real header changes and changes after the header cannot match.
+  for (const mutate of [rows => { rows[0].payload.git.branch = 'edit'; }, rows => { rows[1].timestamp = '2026-09-30T00:00:01Z'; }]) {
+    const changed = structuredClone(rows); mutate(changed); await writeFile(source.path, encode(changed));
+    assert.notEqual(fingerprint((await run(source, { checkpoint })).common), checkpoint.digest);
+  }
+  await writeFile(source.path, sortedText);
+  assert.notEqual(fingerprint((await run(source, { checkpoint: { ...checkpoint, digest: 'a'.repeat(64) } })).common), 'a'.repeat(64));
+});
+
 test('an exact initial goal preserves all native items and the objective as inert historical data across pages', async t => {
   const source = await fixture(t);
   const before = await readFile(source.path);

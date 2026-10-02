@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { isInlineBase64 } from './base64.mjs';
-import { assertComplete } from './history.mjs';
+import { assertComplete, fingerprint } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { isNativeInitialGoalRequest } from './native-goal-request.mjs';
@@ -291,7 +291,8 @@ export async function readStableNativeHistory({ client, threadId, limits: inputL
   const limits = checkedLimits(inputLimits);
   const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots);
   const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots);
-  if (first.digest !== second.digest || serialize(first.initialGoal?.sourceIdentity ?? null) !== serialize(second.initialGoal?.sourceIdentity ?? null))
+  if (first.digest !== second.digest || serialize(first.initialGoal?.sourceIdentity ?? null) !== serialize(second.initialGoal?.sourceIdentity ?? null)
+    || serialize(first.initialGoal?.prefixHashAlternatives ?? null) !== serialize(second.initialGoal?.prefixHashAlternatives ?? null))
     fail('source history changed between complete reads; synchronization paused.');
   return { ...first, threadId, turnCount: first.turns.length };
 }
@@ -302,12 +303,27 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, displayScreenshots } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, displayScreenshots, checkpoint } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
   const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots });
   const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
-  const common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
+  let common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
+  // Preserve an existing representation only if the entire saved canonical
+  // prefix authenticates it. Never choose a branch or renew a checkpoint.
+  if (checkpoint && Number.isSafeInteger(checkpoint.count) && checkpoint.count > 0
+    && checkpoint.count <= common.messages.length && /^[a-f0-9]{64}$/.test(checkpoint.digest ?? '')
+    && fingerprint(common, checkpoint.count) !== checkpoint.digest && first.initialGoal) {
+    const alternatives = first.initialGoal.prefixHashAlternatives;
+    if (Array.isArray(alternatives) && alternatives.length <= 2
+      && alternatives.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) {
+      for (const prefixHash of alternatives) {
+        const candidate = convertNativeTurns({ ...hydrated, initialGoal: { ...first.initialGoal,
+          request: { ...first.initialGoal.request, prefixHash } } }, { threadId, cwd, timestamp: suppliedTimestamp });
+        if (fingerprint(candidate, checkpoint.count) === checkpoint.digest) { common = candidate; break; }
+      }
+    }
+  }
   // Key order never changes the serialized byte length of plain JSON values.
   let encoded;
   try { encoded = JSON.stringify(common); } catch { fail('invalid JSON history.'); }

@@ -694,6 +694,10 @@ Native sorting of a Claudex projection's first JSON header may be recognized onl
 by reconstructing its original serialization and matching the saved whole-file
 SHA256, with every subsequent byte unchanged. Preserve actual raw proofs and
 native files; never rebaseline an anchor from canonical message equality alone.
+Native initial-goal exports likewise retain legacy prefix-hash serialization only
+when the observed native/key-sorted header forms reproduce the entire saved
+canonical checkpoint. Keep all post-header bytes and context/turn checks intact;
+never replace a saved hash, select a branch, or alter a native transcript to match.
 Missing native paths invalidate persistent cold-cache reuse and proceed to full
 inspection for per-conversation diagnostics, rather than crashing the watcher.
 Native cwd resolution in discovery, tracked inspection, owner startup and archive

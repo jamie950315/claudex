@@ -560,6 +560,7 @@ export class DesktopRuntime {
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
             completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages, displayScreenshots: record.displayScreenshots })
           : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits, displayScreenshots: record.displayScreenshots,
+            checkpoint: verifiedCheckpoint ? record.checkpoint : undefined,
             resolveLocalImages, resolveInitialGoal: createNativeGoalRequestResolver({ path, threadId: nativeId, cwd }) });
         if (imageEvidence) {
           // An owned bootstrap expands two native items into its authenticated
