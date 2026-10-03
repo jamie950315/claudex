@@ -1,7 +1,7 @@
 # Claude Mod integration validation
 
-The source companion is 0.6.0; the installed companion remains 0.5.2 pending the
-native test-kit gate below. Earlier acceptance remains the
+The source and installed companion are 0.6.2. The initial native test-kit gate
+and its explicitly authorized resolution are recorded below. Earlier acceptance remains the
 historical 0.4.1 review from 2026-10-03. The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
@@ -83,6 +83,46 @@ reports on a legacy task without a public event ledger now report collected
 history correctly, without enabling native content collection. Its focused
 regression passed; the prior native execution/delivery evidence remains valid
 because that one read-time label does not change execution or notifications.
+
+### Completed Mod gate and installed UI follow-up
+
+The user subsequently approved `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` only for the
+isolated official test process. With that process-local option, the final 0.6.2
+candidate passed all 18 native kit tests and its strict validator reported zero
+errors/warnings. No global option, native inbound policy, credential or app
+restart was introduced. This explicit test opt-in is not evidence that every
+unmodified CLI runtime enables function hooks by default.
+
+Real Desktop inspection exposed a standalone-package defect that mocked transport
+tests had missed: the staged transport omitted collaboration-wait and imported
+broker-only notification dependencies. The shared policy validator was extracted
+into a pure module, with explicit stage/app allowlists. A new integration test
+copies the real source allowlist, stages it, removes that source copy, and reads
+through the actual staged helper and Unix RPC. The packaging/transport/notification
+group passed all 44 tests. A later 43-case affected group also passed after
+aligning the pane's artifact read to the API's 64 KiB bound and preserving a typed,
+bounded artifact refusal instead of generic companion-unavailable text.
+
+The official native manager installed the updated companion while retaining
+earlier cache versions and recoverable marketplace copies. Both known native
+configuration identities retained the exact state root, bundled Node, and existing
+nativeWake/selfWake values. Already-loaded SDK sessions can retain their older
+plugin root despite reload-plugins; a fresh Local session loaded the update
+without restarting Claude. The first /claudex submission in a fresh composer can
+leave a native command-catalog warning while the registered handler opens its
+pane; do not equate that warning with inference or successful plugin activation.
+
+Actual native pixels verified the narrow two-row navigation, task pagination and
+exact task detail, independent report/activity timestamps, the answered old-generation
+blocker, worker-reported instruction acceptance, and artifact/check entry points.
+Native interaction switched history to generation 1, showed both reports, and
+read generation 2's native tool/message timeline with source labels. These pixels
+were captured on 0.6.1; 0.6.2 leaves that rendering unchanged and corrects only the
+artifact byte request/error path. A real installed 0.6.2 helper read the 52,379-byte
+declared document through Unix RPC with a matching SHA256 and attribution unknown.
+The final package has 23 companion files. Synthetic all-language/complete-confirmation
+tests remain distinct from this bounded native visual acceptance; this is not
+proof of every button or vendor host lifecycle.
 
 ## Codex main completion-wake acceptance (2026-10-03)
 

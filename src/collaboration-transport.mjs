@@ -3,7 +3,7 @@ import { chmod, lstat, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 import { validateOutcome, OUTCOMES, NEED_KINDS } from './collaboration-outcome.mjs';
-import { notificationPolicy } from './collaboration-notifications.mjs';
+import { notificationPolicy } from './collaboration-notification-policy.mjs';
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from './collaboration-wait.mjs';
 
 const MAX_FRAME = 1024 * 1024;

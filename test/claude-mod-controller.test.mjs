@@ -72,6 +72,7 @@ test('work details use exact generation bounded read pages without acknowledgeme
   await f.controller.children(f.api, 'task');
   assert.ok(f.calls.every(call => call.op === 'read'));
   assert.equal(f.calls.find(call => call.method === 'artifact_read').params.view, 'diff');
+  assert.equal(f.calls.find(call => call.method === 'artifact_read').params.maxBytes, 65536);
   assert.equal(f.calls.filter(call => call.method === 'work_events')[1].params.cursor, 'events-cursor');
   assert.equal(f.calls.filter(call => call.method === 'work_reports')[1].params.cursor, 'reports-cursor');
   assert.ok(f.calls.filter(call => ['work_events', 'work_reports', 'artifact_read'].includes(call.method)).every(call => call.params.generation === 3));

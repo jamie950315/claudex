@@ -14,7 +14,12 @@ const canonical = value => Array.isArray(value) ? value.map(canonical) : record(
 async function nativeRpc(envelope) {
   // Reuse the existing authenticated Unix-socket protocol; no new listener.
   const { callCollaboration } = await import('./collaboration-transport.mjs');
-  return callCollaboration(envelope);
+  try { return await callCollaboration(envelope); }
+  catch (error) {
+    if (envelope.method === 'artifact_read' && error.code === 'CLAUDEX_ARTIFACT_REFUSED')
+      throw new ModError(error.code, 'Artifact read refused. Select a declared, stable UTF-8 file within the task directory grants and the 64 KiB size limit.');
+    throw error;
+  }
 }
 function publicReceipt(receipt) {
   const resultBytes = Buffer.byteLength(JSON.stringify(receipt.result ?? null));

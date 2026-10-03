@@ -25,6 +25,7 @@ test('default companion RPC uses the original private transport and dispatches o
     seen.push(envelope);
     if (envelope.method === 'models') return { defaultModels: { claude: null, codex: 'gpt-6-sol' }, defaultEfforts: { claude: null, codex: 'high' } };
     if (envelope.method === 'list') return { tasks: [], limits: {} };
+    if (envelope.method === 'artifact_read') throw Object.assign(new Error('Do not expose private native error data'), { code: 'CLAUDEX_ARTIFACT_REFUSED' });
     return { taskId: 'synthetic-only', status: 'ready' };
   } });
   t.after(() => transport.close());
@@ -37,4 +38,8 @@ test('default companion RPC uses the original private transport and dispatches o
   assert.equal((await handle(req('commit', { id: prepared.id }))).state, 'completed');
   await handle(req('commit', { id: prepared.id }));
   assert.equal(seen.filter(item => item.method === 'start').length, 1);
+  await assert.rejects(handle(req('read', { method: 'artifact_read', params: {
+    taskId: '22222222-2222-4222-8222-222222222222', generation: 1, reference: 'test.txt',
+  } })), error => error.code === 'CLAUDEX_ARTIFACT_REFUSED' && /64 KiB/.test(error.message)
+    && !error.message.includes('private native error'));
 });

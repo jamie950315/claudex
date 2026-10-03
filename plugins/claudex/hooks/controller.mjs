@@ -174,7 +174,7 @@ export function createController({ nativeWake = false } = {}) {
       if (!task?.id || !Number.isSafeInteger(generation) || generation < 1 || generation > task.generation) return;
       return run(api, async ticket => {
         const result = await call(api, ticket, 'read', { method: 'artifact_read', params: {
-          taskId: task.id, generation, reference, maxBytes: 32768, view } });
+          taskId: task.id, generation, reference, maxBytes: 65536, view } });
         if (await stillBound(api, ticket) && state.detail === task) state.artifact = result;
       });
     },

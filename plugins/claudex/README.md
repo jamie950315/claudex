@@ -1,4 +1,4 @@
-# Claudex native companion, 0.6.0
+# Claudex native companion, 0.6.2
 
 The Tasks view now exposes the bounded broker work hierarchy, generation-bound
 progress, blockers, instruction adoption, cooperative pause, declared checks and

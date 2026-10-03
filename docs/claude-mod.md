@@ -2,7 +2,13 @@
 
 ## Version 0.5 AI-first observations
 
-Version 0.5.2 adds bounded configuration diagnostics inside the existing technical
+Version 0.6.2 adds the bounded work views described in
+[the collaboration guide](collaboration.md#opt-in-work-visibility), generation-bound
+report/event history, instruction and blocker state, and declared artifact/diff
+inspection. Its standalone package includes the transport's complete dependency
+set; the pane and API share the 64 KiB artifact read bound.
+
+Version 0.5.2 introduced bounded configuration diagnostics inside the existing technical
 session details: registration option types/values, this plugin's name/root, and
 only its two wake options for the marketplace and inline identities in the native
 user/flag/policy layers. It never displays
@@ -255,7 +261,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.5.2-review"
+STAGE="$PARENT/claudex-0.6.2-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -277,7 +283,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # The own-inbox test explicitly exercises both opt-ins. Use a separate,
 # never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.5.2-native-tests"
+TEST_STAGE="$PARENT/claudex-0.6.2-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

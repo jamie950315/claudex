@@ -4,10 +4,42 @@ import { mkdtemp, realpath, mkdir, writeFile, readFile, lstat, readdir, rm, cp, 
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { stageClaudeMod, MOD_STAGE_FILES } from '../src/claude-mod-install.mjs';
+import { serveCollaborationSocket } from '../src/collaboration-transport.mjs';
 const SOURCE = fileURLToPath(new URL('..', import.meta.url));
+
+test('standalone stage loads its real transport and reads Unix RPC without the source checkout', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cms-'))); await chmod(root, 0o700);
+  const repo = join(root, 'source'), state = join(root, 'state'), collaboration = join(state, 'collaboration');
+  await mkdir(collaboration, { recursive: true, mode: 0o700 });
+  const token = 'a'.repeat(64);
+  await writeFile(join(collaboration, 'controller-key'), `${token}\n`, { mode: 0o600 });
+  const node = join(root, 'node-fixture'); await writeFile(node, '#!/bin/sh\nexit 0\n', { mode: 0o700 });
+  for (const file of MOD_STAGE_FILES) {
+    await mkdir(dirname(join(repo, file)), { recursive: true });
+    await cp(join(SOURCE, file), join(repo, file));
+  }
+  const staged = await stageClaudeMod({ output: join(root, 'stage'), stateRoot: state, repoRoot: repo, nodeBinary: node });
+  await rm(repo, { recursive: true });
+  let reads = 0;
+  const server = await serveCollaborationSocket({ root: collaboration, dispatch: async envelope => {
+    assert.equal(envelope.token, token); assert.equal(envelope.peer, 'claude'); assert.equal(envelope.method, 'list');
+    reads++; return { tasks: [], totalCount: 0, syntheticOnly: true };
+  } });
+  t.after(async () => { await server.close(); await rm(root, { recursive: true, force: true }); });
+  const child = spawn(process.execPath, [join(staged.plugin, 'runtime/bin/claudex-mod-bridge.mjs'), '--root', state],
+    { cwd: root, stdio: ['pipe', 'pipe', 'pipe'] });
+  let stdout = '', stderr = '';
+  child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+  child.stdin.end(JSON.stringify({ version: 1, op: 'read', method: 'list', params: {},
+    context: { sessionId: '11111111-1111-4111-8111-111111111111', cwd: root } }));
+  const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('close', resolve); });
+  assert.equal(code, 0, stderr || stdout);
+  assert.deepEqual(JSON.parse(stdout), { ok: true, result: { tasks: [], totalCount: 0, syntheticOnly: true } });
+  assert.equal(reads, 1);
+});
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-mod-stage-unit-')));
   const repo = join(root, 'repo'), state = join(root, 'state'), output = join(root, 'marketplace'), node = join(root, 'node-fixture');

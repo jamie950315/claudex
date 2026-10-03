@@ -3,6 +3,8 @@ import { watch } from 'node:fs';
 import { dirname } from 'node:path';
 import { readAppStopState } from './app-stop-state.mjs';
 import { modDeliveryDiagnosis } from './mod-wake-broker.mjs';
+import { notificationPolicy } from './collaboration-notification-policy.mjs';
+export { notificationPolicy } from './collaboration-notification-policy.mjs';
 
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -46,17 +48,6 @@ const stopped = async hub => {
   const stop = await readAppStopState(dirname(hub.root));
   return hub.closed || stop?.stopped || stop?.resuming;
 };
-
-export function notificationPolicy(value) {
-  if (value === undefined) return { mode: 'off' };
-  if (!value || typeof value !== 'object' || Array.isArray(value)
-    || Object.keys(value).some(key => !['mode', 'expiresInMs'].includes(key))
-    || !['off', 'queue', 'wake'].includes(value.mode)
-    || value.expiresInMs !== undefined && (!Number.isSafeInteger(value.expiresInMs)
-      || value.expiresInMs < 1000 || value.expiresInMs > 3600000))
-    fail('CLAUDEX_INVALID_NOTIFICATION_POLICY', 'Notifications require off, queue or wake and a bounded expiry.');
-  return value.mode === 'off' ? { mode: 'off' } : { mode: value.mode, expiresInMs: value.expiresInMs ?? 600000 };
-}
 
 export function createTaskNotification(policy, requestKey, now = Date.now()) {
   return { policy, requestKey, challenge: randomBytes(32).toString('hex'), challengeExpiresAt: now + 300000,

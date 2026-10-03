@@ -333,6 +333,12 @@ top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and complete
 native test kit against a staged plugin after UI/API changes, in addition
 to affected Node tests. Native tree tests are not real Desktop painting evidence.
+Standalone staging must include the transport's pure notification-policy and
+wait modules. Keep broker-only imports out of that transport dependency graph.
+Verify an actual staged helper read over Unix RPC after its source copy is
+removed; doctor-only checks and mocked transports do not prove a deployable
+companion. Pane artifact reads share the broker's 64 KiB limit and retain a
+bounded, typed scope/identity/size refusal instead of claiming service failure.
 The 0.4 panel uses grouped summaries, two wrapping navigation rows and collapsed
 technical records; never collapse or truncate the complete confirmation payload.
 Its native plugin-store language preference is independent of the app's preference,
@@ -358,7 +364,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has 0.5.2 installed with both native configuration
+passes. The reviewed Mac has 0.6.2 installed with both native configuration
 identities enabled and route=mod-self. Earlier acceptance after a normal Claude
 restart verified that one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real
