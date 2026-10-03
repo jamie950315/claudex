@@ -46,7 +46,7 @@ test('a disconnected wait client releases its broker listener without cancelling
   } });
   for (const selection of [{ taskId: task.taskId }, { targets: [{ taskId: task.taskId }] }]) {
     const waiting = callCollaboration({ root, peer: 'codex', token: hub.controllerToken,
-      method: 'wait', params: { ...selection, timeoutMs: 300000 }, timeoutMs: 50 });
+      method: 'wait', params: { ...selection, timeoutMs: 1800000 }, timeoutMs: 50 });
     const rejected = assert.rejects(waiting, /timed out/);
     for (let attempt = 0; hub.listenerCount('change') === 0 && attempt < 100; attempt++)
       await new Promise(resolve => setTimeout(resolve, 1));
@@ -71,7 +71,7 @@ test('long single and multi waits return on revisions and clean up without launc
   } });
   for (const selection of [{ taskId: task.taskId }, { targets: [{ taskId: task.taskId }] }]) {
     const waiting = callCollaboration({ root, peer: 'codex', token: hub.controllerToken,
-      method: 'wait', params: { ...selection, view: 'summary', timeoutMs: 300000 } });
+      method: 'wait', params: { ...selection, view: 'summary', timeoutMs: 1800000 } });
     for (let attempt = 0; hub.listenerCount('change') === 0 && attempt < 100; attempt++)
       await new Promise(resolve => setTimeout(resolve, 1));
     assert.equal(hub.listenerCount('change'), 1);
@@ -94,19 +94,19 @@ test('only validated long waits extend both socket deadlines and ordinary RPC st
   });
   const seen = [];
   const { root } = await fixture(t, async request => { seen.push(request); return {}; });
-  await callCollaboration({ root, peer: 'codex', method: 'wait', params: { taskId: 'task', timeoutMs: 300000 } });
-  assert.equal(deadlines.filter(value => value === 305000).length, 2, 'client and server must both allow the wait plus response grace');
+  await callCollaboration({ root, peer: 'codex', method: 'wait', params: { taskId: 'task', timeoutMs: 1800000 } });
+  assert.equal(deadlines.filter(value => value === 1805000).length, 2, 'client and server must both allow the wait plus response grace');
   for (const request of [
     { method: 'status', params: { taskId: 'task' }, timeoutMs: 65001 },
-    { method: 'wait', params: { taskId: 'task', timeoutMs: 0 }, timeoutMs: 305000 },
-    { method: 'wait', params: { taskId: 'task', timeoutMs: 300000 }, timeoutMs: 305001 },
-    ...[-1, 300001, 1.5, '300000', null].map(timeoutMs => ({ method: 'wait', params: { taskId: 'task', timeoutMs } })),
-    { method: 'wait', params: { taskId: 'task', targets: [{ taskId: 'task' }], timeoutMs: 300000 } },
+    { method: 'wait', params: { taskId: 'task', timeoutMs: 0 }, timeoutMs: 1805000 },
+    { method: 'wait', params: { taskId: 'task', timeoutMs: 1800000 }, timeoutMs: 1805001 },
+    ...[-1, 1800001, 1.5, '1800000', null].map(timeoutMs => ({ method: 'wait', params: { taskId: 'task', timeoutMs } })),
+    { method: 'wait', params: { taskId: 'task', targets: [{ taskId: 'task' }], timeoutMs: 1800000 } },
   ]) await assert.rejects(callCollaboration({ root, peer: 'codex', ...request }), /Invalid|Supply taskId/);
   assert.equal(seen.length, 1, 'invalid waits must not reach dispatch or acquire a longer socket');
 });
 
-test('MCP advertises five-minute waits, retains the 30-second default and forwards long waits without clamping', async t => {
+test('MCP advertises thirty-minute waits, retains the five-minute default and forwards long waits without clamping', async t => {
   const deadlines = [];
   const original = net.Socket.prototype.setTimeout;
   t.mock.method(net.Socket.prototype, 'setTimeout', function (timeout, callback) {
@@ -126,16 +126,16 @@ test('MCP advertises five-minute waits, retains the 30-second default and forwar
     } }) + '\n');
   }
   input.end(JSON.stringify({ jsonrpc: '2.0', id: 'wait', method: 'tools/call', params: {
-    name: 'claudex_wait', arguments: { targets: [{ taskId: 'task' }], timeoutMs: 300000 },
+    name: 'claudex_wait', arguments: { targets: [{ taskId: 'task' }], timeoutMs: 1800000 },
   } }) + '\n');
   await running;
   const rows = content.trim().split('\n').map(JSON.parse);
   const definition = rows.find(row => row.id === 'list').result.tools.find(tool => tool.name === 'claudex_wait');
-  assert.equal(definition.inputSchema.properties.timeoutMs.maximum, 300000);
-  assert.equal(definition.inputSchema.properties.timeoutMs.default, 30000);
-  assert.equal(seen.find(request => request.params.targets).params.timeoutMs, 300000);
-  assert.equal(deadlines.filter(value => value === 305000).length, 2);
-  assert.equal(deadlines.filter(value => value === 35000).length, 1, 'the default MCP wait retains its five-second response grace');
+  assert.equal(definition.inputSchema.properties.timeoutMs.maximum, 1800000);
+  assert.equal(definition.inputSchema.properties.timeoutMs.default, 300000);
+  assert.equal(seen.find(request => request.params.targets).params.timeoutMs, 1800000);
+  assert.equal(deadlines.filter(value => value === 1805000).length, 2);
+  assert.equal(deadlines.filter(value => value === 305000).length, 2, 'the default MCP wait extends both socket deadlines with five-second response grace');
   assert.equal(deadlines.filter(value => value === 5000).length, 1, 'a zero-timeout MCP snapshot retains its five-second response grace');
   assert.equal(rows.find(row => row.id === 'wait').result.isError, undefined);
 });
@@ -281,7 +281,7 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   input.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
   request(2, 'tools/list');
   request(3, 'tools/call', { name: 'claudex_start', arguments: { provider: 'claude', cwd: '/tmp', prompt: 'work', requestId: 'once' } });
-  request(4, 'tools/call', { name: 'claudex_wait', arguments: { taskId: 'task-1', timeoutMs: 300001 } });
+  request(4, 'tools/call', { name: 'claudex_wait', arguments: { taskId: 'task-1', timeoutMs: 1800001 } });
   request(5, 'ping');
   input.end();
   await running;

@@ -240,7 +240,7 @@ the legacy global uncertain flag is not a per-task blocking claim. List supports
 query-bound live pagination and filters. Multi-wait supports 1–16 targets with
 one event listener, atomically acknowledging only returned child outcomes after
 checking the MCP-escaped response bound. Preserve compatible single-task behavior.
-Task waits default to 30 seconds and accept an explicit maximum of five minutes;
+Task waits default to five minutes and accept an explicit maximum of thirty minutes;
 only validated waits extend the private RPC deadline. Native MCP host deadlines
 remain independent. External controllers may request status checkNotification:true
 before ending a wake-enabled root turn. Its continuation nextAction is a read-only

@@ -37,7 +37,7 @@ The MCP interface exposes:
 | `claudex_handoff` | Transfer the same task to the other provider using its current `revision`, a handoff message, and an optional destination `model`. |
 | `claudex_report` | Active worker only: save a structured self-reported outcome for its own generation. |
 | `claudex_status` | Read progress, messages, last native identity and results. |
-| `claudex_wait` | Wait for a revision change or terminal result; default 30 seconds, explicit maximum 5 minutes. |
+| `claudex_wait` | Wait for a revision change or terminal result; default 5 minutes, explicit maximum 30 minutes. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
 | `claudex_list` | Read the bounded work inventory and broker limits. |
 | `claudex_chat_list` | List exact native chat identities observed by installed hooks. |
@@ -102,8 +102,8 @@ continues within the original user authorization; receipt is not goal completion
 Managed parents retain their existing child-result yield/resumption contract,
 not root notification authority.
 
-For in-turn waiting, `timeoutMs` defaults to 30000 and may explicitly be as high
-as 300000 for single or multi-wait. Revision changes and terminal outcomes return
+For in-turn waiting, `timeoutMs` defaults to 300000 and may explicitly be as high
+as 1800000 for single or multi-wait. Revision changes and terminal outcomes return
 early. Claudex grants only validated task waits a matching socket deadline plus
 five seconds; other RPCs retain their existing bounds. A native MCP host may have
 its own shorter tool deadline: configure that host explicitly or use shorter
@@ -266,7 +266,8 @@ terminal response omits repeated result/error bodies. An unseen terminal child
 outcome is always delivered to its parent worker even when the supplied cursor
 is caught up. A child revision is marked observed only in the same transaction
 that returns that outcome, never for an omitted result. Full status remains
-available for explicit history inspection. The 30-second wait limit is unchanged.
+available for explicit history inspection. Waits default to five minutes and
+accept an explicit maximum of thirty minutes.
 
 Each new native invocation persists `active.inputs` with a zero-based,
 end-exclusive message range and `kinds` (request, message, child-result, handoff).

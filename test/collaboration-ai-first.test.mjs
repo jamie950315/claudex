@@ -61,7 +61,7 @@ test('uncertain blockers are exact and separate from the legacy global flag and 
 test('multi-wait uses one bounded listener, returns all changed targets, and never starts work', async t => {
   const { hub, call, start } = await fixture(t);
   const a = await start('wait-a'), b = await start('wait-b');
-  const waiting = call('wait', { targets: [a, b].map(task => ({ taskId: task.taskId, afterRevision: 1 })), timeoutMs: 300000 });
+  const waiting = call('wait', { targets: [a, b].map(task => ({ taskId: task.taskId, afterRevision: 1 })), timeoutMs: 1800000 });
   await until(() => hub.listenerCount('change') === 1);
   await hub.mutate(state => { for (const id of [a.taskId, b.taskId]) state.tasks[id].revision++; });
   const response = await waiting;
@@ -77,7 +77,7 @@ test('single and multi waits reject invalid bounds without retaining listeners',
   const { hub, call, start } = await fixture(t);
   const task = await start('wait-bounds');
   for (const selection of [{ taskId: task.taskId }, { targets: [{ taskId: task.taskId }] }]) {
-    for (const timeoutMs of [-1, 300001, 1.5, '300000', null])
+    for (const timeoutMs of [-1, 1800001, 1.5, '1800000', null])
       await assert.rejects(call('wait', { ...selection, timeoutMs }), /valid.*bounds/);
   }
   assert.equal(hub.listenerCount('change'), 0);
