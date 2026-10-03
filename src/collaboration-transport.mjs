@@ -11,7 +11,7 @@ const MAX_FRAME = 1024 * 1024;
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
 const WAIT_RESPONSE_GRACE_MS = 5000;
-const METHODS = new Set(['start', 'send', 'handoff', 'report', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
+const METHODS = new Set(['start', 'send', 'handoff', 'report', 'work_events', 'work_reports', 'artifact_read', 'work_control', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -174,6 +174,11 @@ const tool = (name, description, properties, required = []) => ({
   inputSchema: { type: 'object', properties: { ...properties,
     ...(['start', 'handoff'].includes(name) ? { effort } : {}),
     ...(name === 'start' ? { projectRoot: str, readOnlyDirs: directories, writableDirs: directories,
+      observability: { type: 'object', additionalProperties: false, properties: {
+        timeline: { type: 'string', enum: ['off', 'public'], default: 'off' },
+        reports: { type: 'string', enum: ['off', 'milestones'], default: 'off' },
+        blockerNotifications: { type: 'boolean', default: false } },
+      description: 'Explicit per-task opt-in. Public timeline retains bounded public assistant messages and allowlisted tool metadata, never prompts, reasoning or raw tool output. Milestone reports are worker self-reports. Blocker notifications independently opt into the existing authorized notification route.' },
       notifications: { type: 'object', additionalProperties: false, required: ['mode'], properties: {
         mode: { type: 'string', enum: ['off', 'queue', 'wake'] }, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 } },
       description: 'Root tasks only; default off. When the user requests background delegation with a completion wake, select wake explicitly; it consumes model allowance. Queue delivers only at the next native hook and cannot wake an idle caller. After start, call status with checkNotification=true: await-notification permits ending the current turn with a pending-work handoff, not a completion claim; wait means retain status/wait monitoring; read-result means collect the result now. Native PostToolUse proof is mandatory. Route checks are snapshots, not delivery guarantees. On notification, read status and continue the original authorized work; never replay an uncertain send.' } } : {}) }, required, additionalProperties: false },
@@ -187,6 +192,11 @@ const effort = { type: ['string', 'null'], enum: [...new Set(Object.values(colla
 const view = { type: 'string', enum: ['full', 'summary'] };
 const report = { type: 'object', additionalProperties: false, required: ['outcome', 'summary'], properties: {
   outcome: { type: 'string', enum: OUTCOMES }, summary: { ...str, maxLength: 4096 },
+  stage: { ...str, maxLength: 2048 }, next: { ...str, maxLength: 2048 },
+  checks: { type: 'array', maxItems: 32, items: { type: 'object', additionalProperties: false, required: ['name', 'result'],
+    properties: { name: { ...str, maxLength: 2048 }, result: { type: 'string', enum: ['passed', 'failed', 'not-run', 'unverified'] }, reference: { ...str, maxLength: 2048 }, at: { type: 'integer', minimum: 1 } } } },
+  blocker: { type: 'object', additionalProperties: false, required: ['question', 'impact', 'needs'], properties: {
+    id: str, question: { ...str, maxLength: 2048 }, impact: { ...str, maxLength: 2048 }, needs: { ...str, maxLength: 2048 } } },
   remaining: { type: 'array', maxItems: 16, items: { ...str, maxLength: 2048 } },
   needs: { type: 'array', maxItems: 16, items: { type: 'object', additionalProperties: false, required: ['kind', 'description'],
     properties: { kind: { type: 'string', enum: NEED_KINDS }, description: { ...str, maxLength: 2048 } } } },
@@ -200,12 +210,30 @@ const toolDefinitions = [
   tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. Tasks and children may run concurrently in the same workspace: assign disjoint file responsibilities and coordinate shared edits; there is no workspace lock or automatic conflict merge. Work has no execution deadline; explicitly cancel unwanted work. Use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
   tool('handoff', 'Transfer this same task to the other provider. Optional report carries structured self-reported outcome and remaining work, never independent proof. Optional model overrides the receiving provider default; omission uses that default, not the outgoing model. Read status for the revision first. Include progress, remaining work and constraints in the message. After acknowledgement end immediately with exactly CLAUDEX_HANDOFF: no further tools or summary. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, report, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
-  tool('report', 'Active worker only: record a structured self-reported outcome for your own task. Does not complete execution, verify success, authorize work or notify a native chat. Use a unique requestId for each update; preserve remaining work and typed needs.', { taskId: str, report, requestId: str }, ['taskId', 'report', 'requestId']),
+  tool('report', 'Active worker only: record generation-bound structured progress for your own task. Does not complete execution, verify success or authorize work. Use unique requestIds at meaningful milestones; preserve remaining work and typed needs. Reuse an exact blocker ID for its updates. Only explicitly enabled blocker notifications may use an already authorized native route.', { taskId: str, report, requestId: str }, ['taskId', 'report', 'requestId']),
+  tool('work_events', 'Read bounded public work events for one exact task and execution generation. No inference, revision change, child-result acknowledgement or native-history scan. Cursor is an event position, never a task revision. Old or disabled tasks report not collected; inspect gaps and collection limits. Use recent for a bounded tail, or cursor for incremental pages.', {
+    taskId: str, generation: { type: 'integer', minimum: 1 }, cursor: str,
+    limit: { type: 'integer', minimum: 1, maximum: 64 }, recent: { type: 'boolean' },
+  }, ['taskId', 'generation']),
+  tool('artifact_read', 'Read an explicitly reported file artifact for one exact task and generation within its canonical directory grants. No arbitrary host paths, native histories, inference or child-result acknowledgement. Current bytes are inspection evidence, not proof that the worker authored all changes.', {
+    taskId: str, generation: { type: 'integer', minimum: 1 }, reference: str, maxBytes: { type: 'integer', minimum: 1, maximum: 65536 },
+    view: { type: 'string', enum: ['content', 'diff'] },
+  }, ['taskId', 'generation', 'reference']),
+  tool('work_reports', 'Read complete bounded structured worker report history for an exact execution generation, including declared checks, artifacts and limitations. No child-result acknowledgement, task revision change or model inference. Reports remain self-reported; cursor is not a task revision.', {
+    taskId: str, generation: { type: 'integer', minimum: 1 }, cursor: str,
+    limit: { type: 'integer', minimum: 1, maximum: 16 }, recent: { type: 'boolean' },
+  }, ['taskId', 'generation']),
+  tool('work_control', 'Generation-fenced cooperative work control. Respond to or resolve an exact blocker, acknowledge an instruction as the owning worker, request pause, checkpoint, resume or explicitly review/integrate a result. Pause requests do not freeze a process: the worker must checkpoint and finish and owned processes must exit before paused. Never bypass cancellation, handoff or writer guards. Responses are peer instructions, not new user permission. Each mutation requires a stable unique requestId.', {
+    taskId: str, generation: { type: 'integer', minimum: 1 }, requestId: str,
+    action: { type: 'string', enum: ['respond-blocker', 'resolve-blocker', 'ack-instruction', 'request-pause', 'checkpoint', 'resume', 'review-result'] },
+    blockerId: str, instructionId: str, text: { ...str, maxLength: 4096 },
+    decision: { type: 'string', enum: ['accepted', 'rejected', 'reviewed', 'integrated'] },
+  }, ['taskId', 'generation', 'requestId', 'action']),
   tool('status', 'Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default. External callers can set checkNotification=true after wake-enabled start to inspect notification.continuation.nextAction: await-notification, wait, or read-result. This read-only route snapshot never opens a chat, sends input, grants permission, or guarantees future delivery. After a completion notification, collect the exact task result here and continue within the original user scope.', { taskId: str, view, checkNotification: { type: 'boolean' } }, ['taskId']),
   tool('wait', 'Wait without starting a model: 5 minutes by default, up to 30 minutes with explicit timeoutMs. Returns early on a task revision or terminal outcome; activity heartbeats do not wake it. Client disconnect or timeout does not cancel work. Supply taskId/afterRevision for the compatible single-task response, OR 1–16 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.', { taskId: str, targets, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: MAX_WAIT_MS, default: DEFAULT_WAIT_MS } }),
   tool('cancel', 'Request cancellation. Check cancelAccepted, cancelPending and terminal: acceptance is not proof of process exit. Wait for a terminal outcome; an unsafe shutdown may remain uncertain. Completed, failed or cancelled tasks are no-ops; uncertain tasks require operator inspection and reject cancellation.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
   tool('list', 'List visible tasks with per-task observed waitReason and exact blockers. Global blockedByUncertainWork is a legacy inventory flag, not proof this task is blocked. Follow nextCursor with identical filters; pages are live, not frozen snapshots.', {
-    status: { type: 'string', enum: ['ready', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'uncertain'] },
+    status: { type: 'string', enum: ['ready', 'running', 'waiting', 'paused', 'completed', 'failed', 'cancelled', 'uncertain'] },
     parentId: { type: ['string', 'null'] }, project: str, limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str }, []),
   tool('chat_list', 'Find hook-registered native chats by title. Optional query searches native title metadata only, provider filters codex/claude, match selects exact or contains (default). Results include title, titleMatch, source and errors, sessionId and cwd; follow nextCursor. Titles are not unique IDs: if multiple or partial matches exist, ask the user to choose, never silently pick the newest. Do not send from errored title metadata. Pass the chosen sessionId and verbatim expectedTitle to chat_send. Does not scan conversation text or register unknown chats.', { limit: { type: 'integer', minimum: 1, maximum: 100 }, cursor: str,
     query: str, provider: { type: 'string', enum: ['codex', 'claude'] }, match: { type: 'string', enum: ['exact', 'contains'] } }, []),
@@ -244,6 +272,11 @@ function validateTool(name, args) {
     if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
     if (key === 'report') validateOutcome(value);
     if (key === 'notifications') notificationPolicy(value);
+    if (field.type === 'boolean' && typeof value !== 'boolean') fail(`Invalid ${key}`);
+    if (key === 'observability' && (!object(value) || Object.keys(value).some(key => !['timeline', 'reports', 'blockerNotifications'].includes(key))
+      || value.timeline !== undefined && !['off', 'public'].includes(value.timeline)
+      || value.reports !== undefined && !['off', 'milestones'].includes(value.reports)
+      || value.blockerNotifications !== undefined && typeof value.blockerNotifications !== 'boolean')) fail('Invalid observability');
     if (key === 'targets') {
       if (!Array.isArray(value) || value.length < 1 || value.length > 16
         || value.some(target => !object(target) || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))

@@ -1,4 +1,13 @@
-# Claudex native companion, 0.5.2
+# Claudex native companion, 0.6.0
+
+The Tasks view now exposes the bounded broker work hierarchy, generation-bound
+progress, blockers, instruction adoption, cooperative pause, declared checks and
+artifacts. Exact-task timelines and report histories are read on demand with
+separate event cursors; viewing them never acknowledges a child result. File
+inspection and working-tree-versus-index diffs retain unknown authorship rather
+than attributing shared-checkout edits to one worker. Every intervention still
+uses the complete prepare/confirm workflow. Public collection and blocker wakes
+remain separate per-task opt-ins, disabled by default.
 
 AI collaboration uses the existing MCP delegation, multi-task wait, structured
 worker report and handoff tools. The pane remains optional for human inspection

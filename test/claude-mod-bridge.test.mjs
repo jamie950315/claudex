@@ -8,6 +8,17 @@ import { fileURLToPath } from 'node:url';
 import { createModBridge } from '../src/claude-mod-bridge.mjs';
 import { privateRead, privateDir } from '../src/claude-mod-storage.mjs';
 import { validateRequest, validateParams } from '../src/claude-mod-protocol.mjs';
+
+test('work pane protocol narrows read bounds and keeps worker-only intervention outside the controller', () => {
+  const query = { taskId: 'task', generation: 1 };
+  assert.equal(validateParams('work_events', { ...query, limit: 64 }).limit, 64);
+  assert.equal(validateParams('work_reports', { ...query, limit: 16 }).limit, 16);
+  assert.equal(validateParams('artifact_read', { ...query, reference: 'result.txt', view: 'diff' }).view, 'diff');
+  assert.throws(() => validateParams('work_reports', { ...query, limit: 17 }));
+  assert.throws(() => validateParams('artifact_read', { ...query, reference: 'file', maxBytes: 65537 }));
+  assert.equal(validateParams('work_control', { ...query, action: 'respond-blocker', blockerId: 'need:input', text: 'Decision' }, true).blockerId, 'need:input');
+  for (const action of ['ack-instruction', 'checkpoint']) assert.throws(() => validateParams('work_control', { ...query, action }, true));
+});
 const SESSION = '11111111-1111-4111-8111-111111111111';
 const OTHER = '22222222-2222-4222-8222-222222222222';
 const MESSAGE = '33333333-3333-4333-8333-333333333333';

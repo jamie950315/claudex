@@ -36,6 +36,72 @@ async function until(check) {
   throw new Error('Synthetic notification did not settle');
 }
 
+test('opt-in blocker notifications deduplicate transitions, omit content and ignore ordinary revisions', async t => {
+  const f = await fixture(t); const task = await f.start('blocker'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.generation = 1;
+    value.observability = { timeline: 'off', reports: 'off', blockerNotifications: true };
+    value.blockers = [{ id: 'decision-one', generation: 1, revision: 3, state: 'open',
+      question: 'PRIVATE QUESTION', impact: 'PRIVATE IMPACT', needs: 'PRIVATE NEED', updatedAt: Date.now() }];
+  });
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
+  const first = f.hub.state.tasks[task.taskId].notification.deliveries[0];
+  assert.equal(first.kind, 'blocker'); assert.equal(first.blockerId, 'decision-one');
+  const message = await f.call('chat_status', { messageId: first.messageId });
+  assert.doesNotMatch(JSON.stringify(message), /PRIVATE/);
+  assert.equal(message.wakeRequested, false);
+  await f.hub.mutate(state => { state.tasks[task.taskId].revision++; });
+  await delay(20);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 1);
+  await f.hub.mutate(state => { state.tasks[task.taskId].blockers[0].state = 'resolved'; });
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.generation = 2;
+    value.blockers.push({ ...value.blockers[0], id: 'old-generation', state: 'open' });
+  });
+  await delay(20);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 1);
+  await f.complete(task);
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[1]?.state === 'queued');
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries[1].kind, 'terminal');
+});
+
+test('blocker notifications require separate opt-in and revoke an awaited dispatch after response', async t => {
+  let release;
+  const f = await fixture(t, { nativeChatDiscovery: () => new Promise(resolve => {
+    release = () => resolve([{ provider: 'codex', sessionId, cwd: f.parent }]);
+  }) });
+  const task = await f.start('blocker-fence'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.generation = 1;
+    value.blockers = [{ id: 'decision', generation: 1, revision: 3, state: 'open', updatedAt: Date.now() }];
+  });
+  await delay(20); assert.equal(release, undefined);
+  await f.hub.mutate(state => {
+    state.tasks[task.taskId].observability = { timeline: 'off', reports: 'off', blockerNotifications: true };
+  });
+  await until(() => release);
+  await f.hub.mutate(state => { state.tasks[task.taskId].blockers[0].state = 'responded'; });
+  release(); await drainNotifications(f.hub);
+  const delivery = f.hub.state.tasks[task.taskId].notification.deliveries[0];
+  assert.equal(delivery.state, 'failed'); assert.equal(delivery.reason, 'blocker-superseded');
+  assert.equal(delivery.messageId, undefined);
+});
+
+test('multiple rate-limited blockers retain individual suppression without rescheduling storms', async t => {
+  const f = await fixture(t); const task = await f.start('blocker-quota'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.generation = 1;
+    value.observability = { timeline: 'off', reports: 'off', blockerNotifications: true };
+    value.notification.deliveries = Array.from({ length: 16 }, (_, i) => ({ revision: i + 1,
+      state: 'queued', createdAt: Date.now(), expiresAt: Date.now() + 600000, requestId: `quota-${i}` }));
+    value.blockers = ['one', 'two', 'three'].map(id => ({ id, generation: 1, revision: 1, state: 'open', updatedAt: Date.now() }));
+  });
+  await until(() => Object.keys(f.hub.state.tasks[task.taskId].notification.suppressedBlockers ?? {}).length === 3);
+  await drainNotifications(f.hub);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 16);
+  assert.deepEqual(f.hub.state.tasks[task.taskId].notification.suppressedBlockers, { '1:one': 1, '1:two': 1, '1:three': 1 });
+});
+
 test('default-off and unbound tasks never notify; exact root proof queues only once over Unix RPC', async t => {
   const f = await fixture(t);
   const off = await f.start('off', { mode: 'off' }), task = await f.start('queue');

@@ -57,7 +57,7 @@ export function taskInventoryCount(inventory) {
 function blank(context = null, epoch = 0) {
   return { context, epoch, enabled: false, busy: false, tab: 'overview', error: '', notice: '',
     usage: null, version: null, doctor: null, configuration: null, tasks: null, chats: null, chatQuery: '', chatCursor: null,
-    taskOffset: 0, selectedTask: null, detail: null, pending: null, lastReceipt: null,
+    taskOffset: 0, selectedTask: null, detail: null, workGeneration: null, children: {}, events: null, reports: null, artifact: null, pending: null, lastReceipt: null,
     wakes: [], wakeTarget: null, wakePreview: null, form: '' };
 }
 export function createController({ nativeWake = false } = {}) {
@@ -130,7 +130,63 @@ export function createController({ nativeWake = false } = {}) {
     async task(api, id) {
       return run(api, async ticket => {
         const result = await call(api, ticket, 'read', { method: 'status', params: { taskId: id, view: 'summary' } });
-        if (await stillBound(api, ticket)) Object.assign(state, { selectedTask: id, tab: 'detail', detail: result });
+        if (await stillBound(api, ticket)) Object.assign(state, { selectedTask: id, tab: 'detail', detail: result,
+          workGeneration: state.selectedTask === id && state.workGeneration >= 1 && state.workGeneration <= result.generation
+            ? state.workGeneration : result.generation, events: null, reports: null, artifact: null });
+      });
+    },
+    generation(api, value) {
+      const generation = Number(value);
+      if (state.busy || !Number.isSafeInteger(generation) || generation < 1 || generation > state.detail?.generation) return;
+      Object.assign(state, { workGeneration: generation, events: null, reports: null, artifact: null }); changed(api);
+    },
+    async taskPage(api, cursor) {
+      return run(api, async ticket => {
+        const result = await call(api, ticket, 'read', { method: 'list', params: { limit: 100, ...(cursor ? { cursor } : {}) } });
+        if (await stillBound(api, ticket)) Object.assign(state, { tasks: result, taskOffset: 0, children: {} });
+      });
+    },
+    async children(api, parentId, cursor) {
+      if (!cursor && state.children[parentId]) { delete state.children[parentId]; changed(api); return; }
+      return run(api, async ticket => {
+        const result = await call(api, ticket, 'read', { method: 'list', params: { parentId, limit: 10, ...(cursor ? { cursor } : {}) } });
+        if (await stillBound(api, ticket)) {
+          // Presentation cache is bounded and never implies outcome acknowledgement.
+          if (Object.keys(state.children).length >= 16) state.children = {};
+          state.children[parentId] = result;
+        }
+      });
+    },
+    async events(api, incremental = false, fromStart = false) {
+      const task = state.detail;
+      const generation = state.workGeneration;
+      if (!task?.id || !Number.isSafeInteger(generation) || generation < 1 || generation > task.generation) return;
+      return run(api, async ticket => {
+        const cursor = incremental ? state.events?.cursor : null;
+        const result = await call(api, ticket, 'read', { method: 'work_events', params: {
+          taskId: task.id, generation, limit: 32, ...(cursor ? { cursor } : fromStart ? {} : { recent: true }) } });
+        if (await stillBound(api, ticket) && state.detail === task) state.events = result;
+      });
+    },
+    async artifact(api, reference, view = 'content', declaredGeneration) {
+      const task = state.detail;
+      const generation = declaredGeneration ?? task?.outcome?.generation ?? task?.generation;
+      if (!task?.id || !Number.isSafeInteger(generation) || generation < 1 || generation > task.generation) return;
+      return run(api, async ticket => {
+        const result = await call(api, ticket, 'read', { method: 'artifact_read', params: {
+          taskId: task.id, generation, reference, maxBytes: 32768, view } });
+        if (await stillBound(api, ticket) && state.detail === task) state.artifact = result;
+      });
+    },
+    async reports(api, incremental = false, fromStart = false) {
+      const task = state.detail;
+      const generation = state.workGeneration;
+      if (!task?.id || !Number.isSafeInteger(generation) || generation < 1 || generation > task.generation) return;
+      return run(api, async ticket => {
+        const cursor = incremental ? state.reports?.cursor : null;
+        const result = await call(api, ticket, 'read', { method: 'work_reports', params: {
+          taskId: task.id, generation, limit: 8, ...(cursor ? { cursor } : fromStart ? {} : { recent: true }) } });
+        if (await stillBound(api, ticket) && state.detail === task) state.reports = result;
       });
     },
     read,

@@ -14,9 +14,25 @@ const stateFor = hub => {
   if (!states.has(hub)) states.set(hub, { queued: false, running: null });
   return states.get(hub);
 };
-const pending = task => task.notification?.origin && terminal.has(task.status)
-  && task.notification.suppressedRevision !== task.revision
-  && !task.notification.deliveries.some(delivery => delivery.revision === task.revision);
+// A blocker has its own transition identity. Ordinary reports/activity must not
+// turn one unresolved question into repeated native wakeups.
+function notificationTarget(task) {
+  const n = task.notification;
+  if (!n?.origin) return null;
+  if (terminal.has(task.status)) {
+    if (n.suppressedRevision === task.revision
+      || n.deliveries.some(d => (d.kind ?? 'terminal') === 'terminal' && d.revision === task.revision)) return null;
+    return { kind: 'terminal', revision: task.revision, generation: task.generation, at: task.updatedAt };
+  }
+  if (task.observability?.blockerNotifications !== true || task.parentId !== null) return null;
+  const blocker = (task.blockers ?? []).find(b => b.state === 'open' && b.generation === task.generation
+    && n.suppressedBlockers?.[`${b.generation}:${b.id}`] !== b.revision
+    && !n.deliveries.some(d => d.kind === 'blocker' && d.blockerId === b.id
+      && d.generation === b.generation && d.blockerRevision === b.revision));
+  return blocker ? { kind: 'blocker', revision: task.revision, generation: blocker.generation,
+    blockerId: blocker.id, blockerRevision: blocker.revision, at: blocker.updatedAt } : null;
+}
+const pending = task => Boolean(notificationTarget(task));
 const sameOrigin = (a, b) => a?.provider === b?.provider && a?.sessionId === b?.sessionId
   && a?.cwd === b?.cwd && a?.toolUseId === b?.toolUseId && a?.turnId === b?.turnId;
 function notificationLimit(state, notification, now = Date.now()) {
@@ -55,7 +71,8 @@ export function notificationPresentation(task) {
     origin: structuredClone(value.origin), deliveries: structuredClone(value.deliveries),
     pendingVerification: value.originHint ? { attempts: value.originHint.attempts,
       lastAttemptAt: value.originHint.lastAttemptAt, error: value.originHint.error } : null,
-    suppressedRevision: value.suppressedRevision, suppressionReason: value.suppressionReason ?? null };
+    suppressedRevision: value.suppressedRevision, suppressedBlockers: structuredClone(value.suppressedBlockers ?? {}),
+    suppressionReason: value.suppressionReason ?? null };
 }
 
 /** Explicit read-only preflight for a caller considering ending its current turn.
@@ -64,6 +81,8 @@ export async function inspectNotificationContinuation(hub, task) {
   const result = (nextAction, reason, evidence = null) => ({ nextAction, reason, evidence,
     checkedAt: Date.now(), diagnosticOnly: true, deliveryGuaranteed: false });
   if (terminal.has(task.status)) return result('read-result', 'task-terminal');
+  if ((task.blockers ?? []).some(b => b.state === 'open' && b.generation === task.generation))
+    return result('read-result', 'open-blocker');
   const n = task.notification;
   if (!n || n.policy.mode === 'off') return result('wait', 'notifications-off');
   if (n.policy.mode !== 'wake') return result('wait', 'queue-does-not-wake');
@@ -126,8 +145,16 @@ export function validateTaskNotification(task, requests) {
     || !Number.isSafeInteger(n.challengeExpiresAt) || !requests[n.requestKey]
     || requests[n.requestKey].result?.taskId !== task.id || requests[n.requestKey].result?.originChallenge !== n.challenge
     || !Array.isArray(n.deliveries) || n.deliveries.length > 16
+    || n.suppressedBlockers !== undefined && (!n.suppressedBlockers || typeof n.suppressedBlockers !== 'object'
+      || Array.isArray(n.suppressedBlockers) || Object.keys(n.suppressedBlockers).length > 64
+      || Object.entries(n.suppressedBlockers).some(([key, revision]) => !/^\d{1,3}:[A-Za-z0-9_.:-]{1,128}$/.test(key)
+        || !Number.isSafeInteger(revision) || revision < 1))
     || n.deliveries.some(d => !Number.isSafeInteger(d.revision) || !['dispatching', 'queued', 'expired', 'uncertain', 'failed'].includes(d.state)
-      || !Number.isSafeInteger(d.createdAt) || !Number.isSafeInteger(d.expiresAt) || typeof d.requestId !== 'string')
+      || !Number.isSafeInteger(d.createdAt) || !Number.isSafeInteger(d.expiresAt) || typeof d.requestId !== 'string'
+      || d.kind !== undefined && !['terminal', 'blocker'].includes(d.kind)
+      || d.kind === 'blocker' && (typeof d.blockerId !== 'string' || d.blockerId.length > 128
+        || !Number.isSafeInteger(d.generation) || d.generation < 1
+        || !Number.isSafeInteger(d.blockerRevision) || d.blockerRevision < 1))
     || n.origin && (!['codex', 'claude'].includes(n.origin.provider) || !uuid.test(n.origin.sessionId ?? '')
       || typeof n.origin.cwd !== 'string' || !n.origin.cwd.startsWith('/') || typeof n.origin.toolUseId !== 'string')
     || n.originHint && (!uuid.test(n.originHint.sessionId ?? '') || !['codex', 'claude'].includes(n.originHint.provider)
@@ -237,23 +264,27 @@ export function recoverNotifications(state) {
 }
 
 async function publish(hub) {
-  // Terminal revisions coalesce until selected. Bound each pass and each origin.
+  // Terminal revisions coalesce; blockers use exact, generation-fenced changes.
   for (let sent = 0; sent < 16 && !hub.closed; sent++) {
     if (await stopped(hub)) return 'held';
     const next = await hub.mutate(state => {
       const task = Object.values(state.tasks).find(pending);
       if (!task) return null;
+      const target = notificationTarget(task);
       const n = task.notification, now = Date.now();
       const limit = notificationLimit(state, n, now);
       if (limit) {
-        n.suppressedRevision = task.revision;
+        if (target.kind === 'terminal') n.suppressedRevision = task.revision;
+        else (n.suppressedBlockers ??= {})[`${target.generation}:${target.blockerId}`] = target.blockerRevision;
         n.suppressionReason = limit;
         return { suppressed: true };
       }
-      const expiresAt = task.updatedAt + n.policy.expiresInMs;
-      const delivery = { revision: task.revision, state: 'dispatching', mode: n.policy.mode,
+      const expiresAt = target.at + n.policy.expiresInMs;
+      const { at, ...identity } = target;
+      const delivery = { ...identity, state: 'dispatching', mode: n.policy.mode,
         createdAt: now, expiresAt,
-        requestId: `origin-${task.id}-${task.revision}-${n.challenge.slice(0, 16)}` };
+        requestId: target.kind === 'terminal' ? `origin-${task.id}-${task.revision}-${n.challenge.slice(0, 16)}`
+          : `blocker-${task.id}-${target.generation}-${target.blockerRevision}-${n.deliveries.length}-${n.challenge.slice(0, 16)}` };
       n.deliveries.push(delivery);
       if (expiresAt <= now) {
         delivery.state = 'expired'; delivery.reason = 'expired-before-publication';
@@ -272,17 +303,31 @@ async function publish(hub) {
         const fence = { expiresAt: next.expiresAt, check: async () => {
           if (await stopped(hub)) fail('CLAUDEX_NOTIFICATION_STOPPED', 'Notification dispatch stopped.');
           if (next.expiresAt <= Date.now()) fail('CLAUDEX_NOTIFICATION_EXPIRED', 'Notification expired before dispatch.');
+          if (next.kind === 'blocker') {
+            const current = hub.state.tasks[next.taskId];
+            if (!current || terminal.has(current.status) || current.generation !== next.generation
+              || !sameOrigin(current.notification?.origin, next.origin)
+              || current.observability?.blockerNotifications !== true
+              || !(current.blockers ?? []).some(b => b.id === next.blockerId && b.state === 'open'
+                && b.generation === next.generation && b.revision === next.blockerRevision))
+              fail('CLAUDEX_NOTIFICATION_SUPERSEDED', 'Blocker was answered, resolved or superseded before dispatch.');
+          }
         } };
         receipt = await hub.dispatch({ [NOTIFICATION_FENCE]: fence,
           peer: next.origin.provider, token: hub.controllerToken, method: 'chat_send', params: {
           provider: next.origin.provider, sessionId: next.origin.sessionId,
           requestId: next.requestId, wake: next.mode === 'wake', expiresInMs: next.expiresInMs,
-          message: `Claudex task ${next.taskId} reached terminal revision ${next.revision}. Read claudex_status for its current result and blockers. This notification is not proof that the goal was achieved and grants no new authority.`,
+          message: next.kind === 'blocker'
+            ? `Claudex task ${next.taskId}, generation ${next.generation}, blocker ${next.blockerId} needs attention. Read claudex_status for its current state before responding; it may already be resolved. This peer notification grants no new authority.`
+            : `Claudex task ${next.taskId} reached terminal revision ${next.revision}. Read claudex_status for its current result and blockers. This notification is not proof that the goal was achieved and grants no new authority.`,
         } });
         if (!receipt || typeof receipt.messageId !== 'string') throw new Error('Missing notification receipt');
         state = 'queued';
       }
-    } catch { reason = 'notification-outcome-unknown'; }
+    } catch (error) {
+      if (error.code === 'CLAUDEX_NOTIFICATION_SUPERSEDED') { state = 'failed'; reason = 'blocker-superseded'; }
+      else reason = 'notification-outcome-unknown';
+    }
     await hub.mutate(ledger => {
       const delivery = ledger.tasks[next.taskId].notification.deliveries.find(item => item.requestId === next.requestId);
       delivery.state = state;

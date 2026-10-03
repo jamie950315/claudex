@@ -53,6 +53,51 @@ test('pane draws for terminal and Desktop using native element validation', asyn
     await ui.unmount()
   }
 })
+
+test('work pane exposes exact-generation evidence and reviewed controls without read acknowledgements', async ($, on) => {
+  const seen: any[] = []
+  stubs(on, false, request => {
+    seen.push(request)
+    if (request.op === 'doctor') return { stopped: false }
+    if (request.method === 'list') return { tasks: [{ id: 'task', owner: 'codex', status: 'running' }], limits: {} }
+    if (request.method === 'status') return { id: 'task', owner: 'codex', generation: 2, status: 'running',
+      objective: 'Inspect public work', execution: { activity: { lastNativeEventAt: 1000 } },
+      progress: { stage: 'validation', lastReportedAt: 2000, next: 'Review evidence', provenance: 'worker-self-reported' },
+      children: [{ taskId: 'child', status: 'completed', unread: true }],
+      blockers: [{ id: 'blocker', generation: 2, current: true, state: 'open', question: 'Which behavior?', impact: 'Validation waits', needs: 'Decision' }],
+      instructions: [{ id: 'instruction', requestedGeneration: 2, state: 'queued' }],
+      outcome: { summary: 'Ready to validate', provenance: 'worker-self-reported', artifacts: [{ kind: 'file', reference: 'result.txt' }], checks: [{ name: 'unit', result: 'passed' }] } }
+    if (request.method === 'work_events') return { events: [{ sequence: 1, kind: 'assistant-message', source: 'native:codex', at: 3000, text: 'Public message' }], cursor: 'cursor', collection: { status: 'collecting' } }
+    if (request.method === 'work_reports') return { reports: [{ summary: 'Report body', reportedAt: 2000, provenance: 'worker-self-reported' }], cursor: 'report-cursor', collection: 'collected' }
+    if (request.method === 'artifact_read') return { content: 'Artifact bytes', provenance: 'file-observed', attribution: 'unknown' }
+    if (request.op === 'prepare') return { id: ID, state: 'prepared', method: request.method, params: request.params, context: request.context }
+    return {}
+  })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, bodyColumns: 40 } })
+  await ui.press({ key: 'refresh' })
+  await ui.press({ key: 'tab-tasks' })
+  await ui.press({ key: 'task-task-0' })
+  expect(await ui.find({ type: 'Text', text: /Inspect public work/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Unread result/ })).toBeDefined()
+  await ui.press({ key: 'events-recent' })
+  expect(await ui.find({ type: 'Text', text: /Public message/ })).toBeDefined()
+  await ui.press({ key: 'reports-recent' })
+  expect(await ui.find({ type: 'Text', text: /Report body/ })).toBeDefined()
+  await ui.press({ key: 'artifact-diff-0' })
+  expect(await ui.find({ type: 'Text', text: /Artifact bytes/ })).toBeDefined()
+  expect(seen.filter(item => item.op === 'commit').length).toBe(0)
+  expect(seen.find(item => item.method === 'work_events').params.generation).toBe(2)
+  expect(seen.find(item => item.method === 'artifact_read').params.view).toBe('diff')
+  await ui.select({ key: 'history-generation', value: '1' })
+  await ui.press({ key: 'events-start' })
+  expect(seen.filter(item => item.method === 'work_events').at(-1).params.generation).toBe(1)
+  expect(seen.filter(item => item.method === 'work_events').at(-1).params.recent).toBeUndefined()
+  await ui.press({ key: 'task-pause' })
+  expect(await ui.find({ key: 'confirm-action' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /request-pause/ })).toBeDefined()
+  expect(seen.filter(item => item.op === 'commit').length).toBe(0)
+  await ui.unmount()
+})
 test('band composes with later mods instead of replacing their content', async ($, on) => {
   stubs(on)
   await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })

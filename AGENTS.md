@@ -227,6 +227,27 @@ harness. Do not defer all new completions until a long cold sweep finishes.
 
 ## Cross-model collaboration
 
+Work observability is broker-owned and independently opt-in per task:
+`observability.timeline=public`, `reports=milestones`, and `blockerNotifications`.
+Defaults collect no native public content and authorize no intermediate wake.
+Keep public work events separate from content-free activity; allow only native
+assistant messages and tool identity/status/exit metadata, never prompts,
+reasoning, tool payloads or arbitrary output. Event reads use task/generation
+cursors, not revisions, and expose eviction/collection-capacity gaps. Complete
+reports use the separate bounded work_reports API; do not put their entire
+history back in status. All reads preserve child-result acknowledgement state.
+Blocker transitions retain exact ID/generation, deduplicate unchanged reports,
+and revoke stale native dispatch after awaited preflights. Managed parents use
+child-progress context, never external native-chat controller privileges.
+Follow-up instruction context delivery is distinct from worker-reported adoption
+and actual completion. Cooperative pause remains pending until the worker's
+checkpoint, successful native completion and owned-process exit; no SIGSTOP,
+forced interruption, second writer or uncertain replay. End-turn receipts
+override any report requirement. File evidence requires a declared artifact and
+canonical, stable no-follow identities within task roots, even for full-access
+work. Exact-file Git diffs remain shared-workspace observations with unknown
+authorship. UI expansion/reads never imply result review or integration.
+
 AI-first diagnostics retain bounded native activity on each execution without
 changing task revisions or child acknowledgements. Keep requested model/effort
 separate from native response-model evidence; initialization, auxiliary and

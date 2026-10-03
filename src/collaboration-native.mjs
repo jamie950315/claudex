@@ -7,6 +7,7 @@ import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { revalidateWorkspace } from './collaboration-workspace.mjs';
 import { createOwnedProcessTracker } from './collaboration-processes.mjs';
 import { createNativeActivity, NATIVE_ACTIVITY_INTERVAL_MS } from './collaboration-activity.mjs';
+import { projectNativeWorkEvents } from './collaboration-events.mjs';
 
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
@@ -208,7 +209,7 @@ export function createNativeCollaborationRunner({
   const run = async function runCollaborationNative({
     provider, cwd, prompt, model, effort = null, mcp: rawMcp, permission = 'read-only',
     projectRoot, readOnlyDirs = [], writableDirs = [],
-    signal, onEvent, onActivity,
+    signal, onEvent, onActivity, onWorkEvent,
   } = {}) {
     if (provider !== 'codex' && provider !== 'claude') throw failure('provider must be codex or claude.');
     checkedString(cwd, 'cwd', 4096);
@@ -219,6 +220,7 @@ export function createNativeCollaborationRunner({
     if (!['read-only', 'workspace-write', 'full-access'].includes(permission)) throw failure('Invalid permission.');
     if (onEvent != null && typeof onEvent !== 'function') throw failure('onEvent must be a function.');
     if (onActivity != null && typeof onActivity !== 'function') throw failure('onActivity must be a function.');
+    if (onWorkEvent != null && typeof onWorkEvent !== 'function') throw failure('onWorkEvent must be a function.');
     const mcp = checkedMcp(rawMcp);
     let canonicalCwd;
     try {
@@ -367,6 +369,11 @@ export function createNativeCollaborationRunner({
         decodeEvent(provider, event, result);
         const snapshot = activity.observe(event);
         publishActivity(snapshot, snapshot?.recent.at(-1)?.kind === 'completion');
+        if (onWorkEvent) for (const projected of projectNativeWorkEvents(provider, event, activityNow(), { sessionId: result.sessionId })) {
+          eventQueue = eventQueue.then(() => onWorkEvent(projected)).catch(cause => {
+            stop(failure('Native public work event handler failed.', { uncertain: true, cause }));
+          });
+        }
         if (result.sessionId && !sessionNotified &&
           (provider === 'codex' ? event.type === 'thread.started' : typeof event.session_id === 'string')) {
           sessionNotified = true;

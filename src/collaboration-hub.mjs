@@ -13,6 +13,9 @@ import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
 import { validateOutcome, outcomePresentation } from './collaboration-outcome.mjs';
 import { sanitizeNativeActivity } from './collaboration-activity.mjs';
+import { observabilityPolicy, instruction, recordProgress, progressPresentation, controlWork, validateProgress, queryWorkReports, assertProgressCapacity } from './collaboration-progress.mjs';
+import { initializeWorkEvents, appendWorkEvent, queryWorkEvents, validateWorkEvents } from './collaboration-events.mjs';
+import { readCollaborationArtifact } from './collaboration-artifacts.mjs';
 import { DEFAULT_WAIT_MS, validWaitTimeout } from './collaboration-wait.mjs';
 import { notificationPolicy, createTaskNotification, notificationPresentation, validateTaskNotification,
   inspectNotificationContinuation,
@@ -99,17 +102,20 @@ function publicTask(task) {
     if (execution?.activity) execution.activity = sanitizeNativeActivity(execution.activity);
   }
   result.notification = notificationPresentation(task);
+  delete result.workEvents;
+  delete result.reportHistory;
+  Object.assign(result, progressPresentation(task));
   Object.assign(result, taskPresentation(task));
   return result;
 }
 
 function taskPresentation(task) {
   const cancelPending = task.status === 'running' && task.cancelRequested;
-  const phase = terminal.has(task.status) ? task.status : cancelPending ? 'cancelling' : task.pendingHandoff ? 'handoff-pending'
+  const phase = terminal.has(task.status) ? task.status : cancelPending ? 'cancelling' : task.pause?.state === 'requested' || task.pause?.state === 'checkpoint' ? 'pause-pending' : task.pendingHandoff ? 'handoff-pending'
     : task.status === 'waiting' ? 'waiting-for-children' : task.status === 'ready' ? 'queued' : task.status;
   const resultFinal = task.status === 'completed' && Boolean(task.result) && task.result.generation === task.generation;
   const resultRole = !task.result ? 'none' : resultFinal ? 'final' : task.status === 'cancelled' ? 'cancelled'
-    : task.result.generation === task.generation && (task.status === 'waiting'
+    : task.result.generation === task.generation && (task.status === 'waiting' || task.status === 'paused'
       || task.status === 'ready' && (task.lastExecution?.boundary === true || task.owner !== task.result.provider)) ? 'boundary' : 'superseded';
   return { phase, terminal: terminal.has(task.status), cancelPending: Boolean(cancelPending), resultFinal,
     resultRole, resultGeneration: task.result?.generation ?? null };
@@ -208,6 +214,9 @@ export class CollaborationHub extends EventEmitter {
       throw new Error('Malformed default collaboration permission.');
     for (const [id, task] of Object.entries(this.state.tasks)) {
       validateTaskNotification(task, this.state.requests);
+      observabilityPolicy(task.observability);
+      validateWorkEvents(task);
+      validateProgress(task);
       for (const execution of [task.active, task.lastExecution]) if (execution?.ownedProcesses !== undefined)
         validateOwnedProcesses(execution.ownedProcesses);
       if (task.projectRoot !== undefined && (!isAbsolute(task.projectRoot) || task.cwd !== task.projectRoot)
@@ -222,7 +231,7 @@ export class CollaborationHub extends EventEmitter {
         if (Object.hasOwn(task.pendingHandoff, 'effort')) validateCollaborationEffort(task.pendingHandoff.provider, task.pendingHandoff.effort);
       }
       if (id !== task.id || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(id)
-        || !providers.includes(task.owner) || !['ready', 'running', 'waiting', ...terminal].includes(task.status)
+        || !providers.includes(task.owner) || !['ready', 'running', 'waiting', 'paused', ...terminal].includes(task.status)
         || !Array.isArray(task.messages) || !Number.isSafeInteger(task.revision) || task.revision < 1 || !isAbsolute(task.cwd ?? '')
         || !Number.isSafeInteger(task.depth) || task.depth < 0 || !Number.isSafeInteger(task.generation) || task.generation < 0
         || (task.parentId !== null && this.state.tasks[task.parentId]?.depth !== task.depth - 1)
@@ -340,6 +349,7 @@ export class CollaborationHub extends EventEmitter {
     const reason = (kind, taskIds) => ({ kind, taskIds: taskIds.slice(0, 64),
       ...(taskIds.length > 64 ? { totalTaskCount: taskIds.length, truncated: true } : {}) });
     if (task.status === 'running' && task.cancelRequested) return { kind: 'cancelling', taskIds: [] };
+    if (task.status === 'paused' || ['requested', 'checkpoint'].includes(task.pause?.state)) return { kind: task.status === 'paused' ? 'paused' : 'pause-checkpoint', taskIds: [] };
     if (task.pendingHandoff) return { kind: 'handoff', taskIds: [] };
     if (task.status === 'waiting') return reason('children', Object.values(state.tasks)
       .filter(child => child.parentId === task.id && !terminal.has(child.status)).map(child => child.id));
@@ -597,12 +607,23 @@ export class CollaborationHub extends EventEmitter {
       if (params.checkNotification) response.notification.continuation = await inspectNotificationContinuation(this, this.state.tasks[params.taskId]);
       return response;
     }
+    if (method === 'work_events' || method === 'artifact_read' || method === 'work_reports') {
+      const task = this.state.tasks[params.taskId];
+      this.allowed(actor, task, this.state);
+      if (method === 'work_events') return queryWorkEvents(task, params);
+      if (method === 'work_reports') return queryWorkReports(task, params);
+      const artifact = await readCollaborationArtifact(task, params);
+      // File identity checks do not extend a worker's lifetime. Its capability
+      // may have expired while the bounded asynchronous read was in progress.
+      this.allowed(this.actor(envelope), this.state.tasks[params.taskId], this.state);
+      return artifact;
+    }
     if (method === 'list') {
       if (Object.keys(params).some(key => !['status', 'parentId', 'project', 'limit', 'cursor'].includes(key)))
         fail('CLAUDEX_INVALID_QUERY', 'Invalid task list parameters.');
       const limit = params.limit ?? 100;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
-        || params.status !== undefined && !['ready', 'running', 'waiting', ...terminal].includes(params.status)
+        || params.status !== undefined && !['ready', 'running', 'waiting', 'paused', ...terminal].includes(params.status)
         || params.parentId !== undefined && params.parentId !== null && typeof params.parentId !== 'string'
         || params.project !== undefined && (typeof params.project !== 'string' || !isAbsolute(params.project)))
         fail('CLAUDEX_INVALID_QUERY', 'Invalid task list filters or bounds.');
@@ -664,13 +685,16 @@ export class CollaborationHub extends EventEmitter {
       if (signal?.aborted) throw new Error('Collaboration wait connection closed.');
       return this.readTask(envelope, { baseline, timedOut });
     }
-    if (!['start', 'send', 'handoff', 'cancel', 'resolve', 'report'].includes(method)) throw new Error('Unknown collaboration method.');
+    if (!['start', 'send', 'handoff', 'cancel', 'resolve', 'report', 'work_control'].includes(method)) throw new Error('Unknown collaboration method.');
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
     let workspace, startPermission;
     if (method === 'start') {
       const notifications = notificationPolicy(params.notifications);
+      const observability = observabilityPolicy(params.observability);
+      if (observability.blockerNotifications && !actor.task && notifications.mode === 'off')
+        fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'External blocker notifications require an explicit queue or wake notification policy.');
       if (notifications.mode !== 'off' && (actor.task || typeof this.originVerifier !== 'function'))
         fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'Opt-in notifications require an external root caller and an available native origin verifier.');
       const permission = startPermission = params.permission ?? actor.task?.permission ?? this.effectiveDefaultPermission();
@@ -687,10 +711,11 @@ export class CollaborationHub extends EventEmitter {
         if (state.requests[key].fingerprint !== fingerprint) fail('CLAUDEX_REQUEST_ID_CONFLICT', 'requestId was reused with different input.');
         return { ...copy(state.requests[key].result), replayed: true };
       }
-      if (actor.task?.pendingHandoff || actor.task?.cancelRequested) throw new Error('Worker has relinquished ownership; further mutations are refused.');
+      if (actor.task?.pendingHandoff || actor.task?.cancelRequested || actor.task?.pause?.state === 'checkpoint') throw new Error('Worker has relinquished ownership; further mutations are refused.');
       if (Object.keys(state.requests).length >= this.maxRequests) throw new Error('Request journal capacity reached; no idempotency records were discarded.');
       let task;
       let cancelAccepted = false;
+      let extraReceipt = {};
       if (method === 'start') {
         provider(params.provider); text(params.prompt, 'prompt');
         const selectedModel = params.model === undefined ? state.defaultModels[params.provider] : model(params.model);
@@ -711,6 +736,8 @@ export class CollaborationHub extends EventEmitter {
             { from: actor.task?.id ?? actor.peer, kind: 'request', text: params.prompt, at: Date.now() },
           ] };
         state.tasks[task.id] = task;
+        task.observability = observabilityPolicy(params.observability);
+        initializeWorkEvents(task, task.observability);
         const notifications = notificationPolicy(params.notifications);
         if (notifications.mode !== 'off') task.notification = createTaskNotification(notifications, key);
       } else {
@@ -721,6 +748,10 @@ export class CollaborationHub extends EventEmitter {
             fail('CLAUDEX_REPORT_OWNER_REQUIRED', 'Only the active worker may report its own outcome.');
           task.active.report = { ...validateOutcome(params.report), provenance: 'worker-self-reported',
             generation: task.generation, provider: actor.peer, reportedAt: Date.now() };
+          extraReceipt = recordProgress(task, task.active.report);
+          this.deliverProgressToParent(state, task, extraReceipt);
+        } else if (method === 'work_control') {
+          extraReceipt = controlWork(task, params, actor, state);
         } else if (method === 'resolve') {
           if (actor.task) throw new Error('Only the controller may resolve uncertain execution.');
           if (task.status !== 'uncertain' || params.outcome !== 'failed') throw new Error('Resolution requires uncertain work and an explicit failed outcome.');
@@ -756,7 +787,8 @@ export class CollaborationHub extends EventEmitter {
           text(params.message, 'message');
           if (actor.task?.id === task.id) throw new Error('Send follow-ups to a child task, not to your own running turn.');
           if (task.pendingHandoff || task.cancelRequested) throw new Error('Task is already transferring or cancelling.');
-          task.messages.push({ from: actor.task?.id ?? actor.peer, kind: 'message', text: params.message, at: Date.now() });
+          if (task.pause?.state === 'checkpoint') throw new Error('Task is committing a pause checkpoint.');
+          extraReceipt.instructionId = instruction(task, actor, params.message);
           if (task.status === 'completed') task.status = 'ready';
         } else if (method === 'handoff') {
           provider(params.provider); text(params.message, 'message');
@@ -764,6 +796,7 @@ export class CollaborationHub extends EventEmitter {
           const selectedEffort = params.effort === undefined ? state.defaultEfforts[params.provider] : validateCollaborationEffort(params.provider, params.effort);
           if (params.revision !== task.revision) throw new Error('Task revision changed; read status before handing off.');
           if (params.provider === task.owner || task.pendingHandoff || task.cancelRequested) throw new Error('Handoff requires a different owner and no pending transition.');
+          if (task.pause && ['requested', 'checkpoint', 'paused'].includes(task.pause.state)) throw new Error('Resume or cancel the pause before transferring ownership.');
           if (Object.values(state.tasks).some(child => child.parentId === task.id && !terminal.has(child.status))) throw new Error('Finish or cancel active child work before transferring ownership.');
           const outcome = params.report === undefined ? undefined : validateOutcome(params.report);
           task.messages.push({ from: actor.task?.id ?? actor.peer, kind: 'handoff', text: params.message, at: Date.now(),
@@ -778,7 +811,8 @@ export class CollaborationHub extends EventEmitter {
             if (terminal.has(target.status) || target.cancelRequested) return;
             if (target === task) cancelAccepted = true;
             target.cancelRequested = true; target.pendingHandoff = null;
-            if (['ready', 'waiting'].includes(target.status)) target.status = 'cancelled';
+            if (target.pause && ['requested', 'checkpoint', 'paused'].includes(target.pause.state)) target.pause.state = 'cancelled';
+            if (['ready', 'waiting', 'paused'].includes(target.status)) target.status = 'cancelled';
             target.revision++; target.updatedAt = Date.now();
             for (const child of Object.values(state.tasks).filter(child => child.parentId === target.id)) mark(child);
             if (target.status === 'cancelled') this.deliverToParent(state, target);
@@ -789,7 +823,9 @@ export class CollaborationHub extends EventEmitter {
         if (method === 'resolve') this.deliverToParent(state, task);
         if (bytes(task.messages) > 192 * 1024) throw new Error('Task context capacity reached; no messages were truncated.');
       }
+      assertProgressCapacity(task);
       const receipt = { taskId: task.id, revision: task.revision, status: task.status, owner: task.owner,
+        ...extraReceipt,
         ...(method === 'start' && task.notification ? { originChallenge: task.notification.challenge,
           originChallengeExpiresAt: task.notification.challengeExpiresAt, notificationMode: task.notification.policy.mode } : {}),
         handoffPending: Boolean(task.pendingHandoff), returnTo: task.returnTo,
@@ -854,9 +890,13 @@ export class CollaborationHub extends EventEmitter {
             const from = task.lastExecution?.messageCount ?? 0;
             const inputs = { from, to: task.messages.length,
               kinds: [...new Set(task.messages.slice(from).map(message => message.kind)
-                .filter(kind => ['request', 'message', 'child-result', 'handoff'].includes(kind)))] };
+                .filter(kind => ['request', 'message', 'child-result', 'child-progress', 'handoff'].includes(kind)))] };
             task.active = { generation: task.generation, tokenHash: digest(token), messageCount: task.messages.length,
               provider: task.owner, startedAt: Date.now(), pid: null, sessionId: null, seenChildren: {}, inputs };
+            for (const record of task.instructions ?? []) if (record.state === 'queued') {
+              Object.assign(record, { state: 'delivered', generation: task.generation, deliveredAt: Date.now(), deliveryProvenance: 'broker-context' });
+              appendWorkEvent(task, { generation: task.generation, source: 'broker', kind: 'instruction', instructionId: record.id, status: 'delivered' });
+            }
             if (this.run.tracksOwnedProcesses) task.active.processInventoryRequired = true;
             return copy(task);
           });
@@ -883,7 +923,9 @@ export class CollaborationHub extends EventEmitter {
     const packet = { protocol: 'claudex-work-v1', taskId: task.id, parentId: task.parentId,
       revision: task.revision, owner: task.owner, permission: task.permission, cwd: task.cwd,
       workspace: { projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [] },
-      execution: { generation: task.generation, inputs: task.active?.inputs ?? null }, messages: task.messages };
+      execution: { generation: task.generation, inputs: task.active?.inputs ?? null },
+      observability: observabilityPolicy(task.observability), instructions: task.instructions ?? [], pause: task.pause ?? null,
+      blockers: (task.blockers ?? []).filter(item => item.generation === task.generation), messages: task.messages };
     return 'You are executing an explicitly delegated Claudex work item, not synchronizing history.\n'
       + 'Read applicable repository instructions before working. Work only on the supplied task. Never expand permissions or reveal secrets.\n'
       + (task.permission === 'full-access'
@@ -893,6 +935,9 @@ export class CollaborationHub extends EventEmitter {
       + 'Use claudex_start for child work, claudex_status/wait for its result, and claudex_handoff to transfer THIS task. Read current status for its revision first.\n'
       + 'Use claudex_wait targets for up to 16 tasks and claudex_list filters/cursors to keep reads bounded. Wait reasons and native activity are observations, never permission or proof of goal completion.\n'
       + 'Before finishing, optionally use claudex_report with outcome done, partial, blocked or needs-input, summary, typed needs, artifacts and remaining work. This is your self-report, not independent verification; normal execution status remains separate. You may attach the same report structure to a handoff.\n'
+      + (task.observability?.reports === 'milestones' ? 'Milestone reporting is enabled: use claudex_report when starting, finding a root cause or important plan change, preparing validation, meeting a blocker, and finishing validation. Include stage, next and checks as applicable. Do not report each tool or invented percentages. End-turn receipts override reporting.\n' : '')
+      + 'Use claudex_work_events for exact-generation public work records; cursor positions are not task revisions. New reports and checks are worker declarations, never independent validation. Read artifacts only through authorized task scope.\n'
+      + 'Use claudex_work_control action ack-instruction with exact instructionId/generation and accepted or rejected only for instructions actually delivered to this invocation. Delivery is not adoption or completion. At meaningful work boundaries check your task status for pause requests; if requested, finish tools and child work, then acknowledge checkpoint with a summary. End immediately on its end-turn receipt. A request alone is not a pause; never freeze processes or start another writer.\n'
       + 'A tool receipt with nextAction=end-turn is a control boundary, not completed user work: immediately emit only its finalResponse token and end this native turn. No additional tools, explanation, summary or verification. Put all handoff context in the handoff message BEFORE requesting it.\n'
       + 'After a successful handoff acknowledgement emit exactly CLAUDEX_HANDOFF. This overrides the normal final-report format; ownership transfers only after successful native completion and process exit.\n'
       + 'Children can run concurrently with their parent, including in the same workspace. Use status/wait for child results; never wait on yourself. Assign disjoint file responsibilities and coordinate shared-file edits: the broker does not lock overlapping workspaces or merge conflicting changes. Work has no execution deadline; cancel unwanted work explicitly.\n'
@@ -917,6 +962,13 @@ export class CollaborationHub extends EventEmitter {
         projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: task.readOnlyDirs ?? [], writableDirs: task.writableDirs ?? [],
         prompt: this.prompt(task), ...(task.model ? { model: task.model } : {}), ...(task.effort ? { effort: task.effort } : {}), signal: controller.signal,
         mcp: this.mcp ? await this.mcp({ provider: task.owner, token }) : undefined,
+        ...(task.observability?.timeline === 'public' ? { onWorkEvent: async event => {
+          await this.mutate(state => {
+            const current = state.tasks[task.id];
+            if (current.status === 'running' && current.active?.generation === task.generation)
+              appendWorkEvent(current, { ...event, generation: task.generation, source: `native:${task.owner}` });
+          });
+        } } : {}),
         onActivity: async snapshot => {
           const activity = sanitizeNativeActivity(snapshot);
           if (!activity || activity.provider !== task.owner) return;
@@ -982,6 +1034,11 @@ export class CollaborationHub extends EventEmitter {
         current.messages.push({ from: task.owner, kind: 'result', text: result.text, at: Date.now() });
         const activeChildren = Object.values(state.tasks).some(child => child.parentId === task.id && !terminal.has(child.status));
         if (current.cancelRequested) { current.status = 'cancelled'; current.pendingHandoff = null; }
+        else if (current.pause?.state === 'checkpoint' && current.pause.generation === task.generation) {
+          current.status = 'paused'; current.pause.state = 'paused'; current.pause.pausedAt = Date.now();
+          current.pause.boundaryProvenance = 'native-completion-and-exit';
+        }
+        else if (current.messages.slice(active.messageCount, -1).some(message => message.kind === 'child-progress')) current.status = 'ready';
         else if (activeChildren) { current.status = 'waiting'; current.pendingHandoff = null; }
         else if (current.pendingHandoff) {
           current.owner = current.pendingHandoff.provider; current.model = current.pendingHandoff.model ?? null; current.effort = current.pendingHandoff.effort ?? null; current.pendingHandoff = null; current.status = 'ready';
@@ -989,12 +1046,29 @@ export class CollaborationHub extends EventEmitter {
           || message.kind === 'child-result' && active.seenChildren?.[message.from] !== message.sourceRevision) ? 'ready' : 'completed';
         if (bytes(current.messages) > 192 * 1024) { current.status = 'failed'; current.error = 'Task context capacity reached; output preserved but no further execution is allowed.'; }
       }
+      if (current.pause?.state === 'requested' || current.pause?.state === 'checkpoint') {
+        current.pause.state = 'not-paused'; current.pause.reason = failure ? 'Native execution failed before a verified pause.' : 'Worker completed without acknowledging the requested checkpoint.';
+      }
+      appendWorkEvent(current, { generation: task.generation, source: 'broker', kind: 'termination', status: current.status });
       current.lastExecution = { ...active,
-        boundary: !failure && (current.status === 'waiting' || current.owner !== task.owner) };
+        boundary: !failure && (current.status === 'waiting' || current.status === 'paused' || current.owner !== task.owner) };
       delete current.lastExecution.tokenHash;
       current.active = null; current.revision++; current.updatedAt = Date.now();
       if (terminal.has(current.status)) this.deliverToParent(state, current);
     });
+  }
+
+  deliverProgressToParent(state, task, progress) {
+    const parent = state.tasks[task.parentId];
+    if (!parent || terminal.has(parent.status)) return;
+    // Reports update the parent's revision, but only an explicitly enabled new
+    // blocker schedules parent work. Never borrow native controller wake authority.
+    parent.revision++; parent.updatedAt = Date.now();
+    if (!progress.blockerChanged || !task.observability?.blockerNotifications) return;
+    parent.messages.push({ kind: 'child-progress', from: task.id, at: Date.now(), text: JSON.stringify({
+      taskId: task.id, generation: task.generation, blockerId: progress.blockerId, nextAction: 'read-child-status', provenance: 'worker-self-reported' }) });
+    if (bytes(parent.messages) > 192 * 1024) throw new Error('Parent context capacity reached; blocker report was not committed.');
+    if (parent.status === 'waiting') parent.status = 'ready';
   }
 
   deliverToParent(state, task) {
@@ -1099,6 +1173,15 @@ export class CollaborationHub extends EventEmitter {
       response.waitReason = this.waitReason(task, state);
       response.notification = notificationPresentation(task);
       response.outcome = includeOutcome || !terminal.has(task.status) ? outcomePresentation(task) : undefined;
+      Object.assign(response, progressPresentation(task));
+      response.objective = (task.messages.find(message => message.kind === 'request')?.text ?? '').slice(0, 2048);
+      const children = Object.values(state.tasks).filter(childTask => childTask.parentId === task.id);
+      response.childrenTotalCount = children.length;
+      response.childrenTruncated = children.length > 64;
+      response.children = children.slice(0, 64)
+        .map(childTask => ({ taskId: childTask.id, status: childTask.status, generation: childTask.generation,
+          revision: childTask.revision, unread: terminal.has(childTask.status)
+            && (task.active ?? task.lastExecution)?.seenChildren?.[childTask.id] !== childTask.revision }));
       if (bounded) { response.changed = task.revision > (baseline ?? afterRevision ?? -1); response.timedOut = timedOut; }
       // A compact status must never acknowledge a child outcome it did not deliver.
       if (child && includeOutcome && actor.task.active.seenChildren?.[taskId] !== task.revision) {

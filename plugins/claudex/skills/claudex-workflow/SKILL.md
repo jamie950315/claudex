@@ -42,6 +42,59 @@ goal completion; normal completed/resultFinal execution semantics stay separate.
 Absent reports remain unreported. Attach the same optional report structure to
 handoff along with the complete message, then obey the end-turn boundary.
 
+## Observable work and safe intervention
+
+At delegation, explicitly choose `observability: {timeline: "public", reports:
+"milestones", blockerNotifications: false}` when the task needs public work
+tracking. Each field otherwise defaults off. Public collection retains bounded
+assistant messages and allowlisted tool metadata, never hidden reasoning,
+prompts, raw tool payloads or arbitrary stdout/stderr. Provider granularity is
+real, not simulated token streaming. Keep secrets out of public reports.
+
+With milestone reports enabled, report the initial direction, important findings
+or plan changes, completed edits before validation, blockers, and validation or
+final work. Do not report every tool or invent percentages. Add `stage`, `next`,
+`checks: [{name,result,reference?,at?}]` and existing artifacts/remaining fields.
+Check results are `passed`, `failed`, `not-run` or `unverified`; optional `at` is
+Unix milliseconds. These are self-reported, not independent product acceptance.
+An acknowledged handoff's immediate end-turn instruction always takes precedence.
+
+Read `claudex_work_events` for one exact task and generation, with `recent:true`
+or a returned cursor. Use `claudex_work_reports` for complete structured report
+history. Event/report cursors are not task revisions; inspect collection state,
+gaps and `hasMore`. Old or opted-out work has no invented history. Both reads
+are observational and do not acknowledge child results. Use status/wait for
+authoritative outcomes and retain bounded waits instead of frequent global polls.
+
+For a blocker, report `outcome:"blocked"|"needs-input"` plus
+`blocker:{id?,question,impact,needs}`. Reuse its exact ID for updates. Only explicit
+`blockerNotifications:true` plus an authorized root notification route permits
+mid-work native notices. Managed parents use the child protocol, never controller
+chat authority. Read the exact task after a notice; no notice grants new authority.
+Respond using `claudex_work_control` with `action:"respond-blocker"`, exact
+taskId/generation/blockerId, text and requestId; resolve with `resolve-blocker`
+only when evidence supports it. Never apply an old-generation decision to new work.
+
+`claudex_send` still queues at a completed boundary and returns an instructionId.
+Queued, delivered and worker-self-reported accepted/rejected are different facts.
+The active worker can use `work_control` action `ack-instruction` with the exact
+instructionId and decision. Adoption does not prove the instruction was completed.
+
+For cooperative pause, request `work_control` action `request-pause`. The worker
+observes it at a tool/checkpoint boundary, records `checkpoint` with text describing
+safe remaining work, then follows the returned end-turn instruction. Pending pause
+is not paused; only broker-confirmed completion and owned-process exit establish
+the safe boundary. Long-running tools are not interrupted. Resume only a confirmed
+paused generation with action `resume`; cancellation and handoff guards still win.
+Never freeze processes, start another writer or replay an uncertain invocation.
+
+Use `claudex_artifact_read` for a declared file reference and exact generation;
+`view:"diff"` inspects that file's current working-tree-versus-index differences.
+Canonical scope and stable file checks are mandatory. Current bytes and shared
+checkout diffs do not prove worker authorship. Use explicit `review-result` with
+decision `reviewed` or `integrated` only after doing that work; viewing a pane,
+reading a file or receiving an outcome is not automatic integration.
+
 Root notifications default off. Only when requested, use start's
 `notifications: {mode: "queue" | "wake", expiresInMs}`; wake consumes native
 model allowance. Native PostToolUse plus independent call/result validation

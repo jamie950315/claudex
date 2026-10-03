@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createController, shortJSON, usageLine, textChunks, configurationDiagnostic, taskInventoryCount } from '../plugins/claudex/hooks/controller.mjs';
+import { renderPanel } from '../plugins/claudex/hooks/panel.mjs';
+import { translator } from '../plugins/claudex/hooks/localization.mjs';
 const CTX = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/fixture' };
 const OTHER = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/other' };
 const ID = '33333333-3333-4333-8333-333333333333';
@@ -52,6 +54,116 @@ test('status refresh performs only doctor/read and usage calls', async () => {
   const f = fixture(); await f.controller.refresh(f.api);
   assert.deepEqual(f.calls.map(call => call.op), ['doctor', 'read']);
   assert.equal(f.controller.state.usage.context.percent, 53); assert.equal(f.submissions.length, 0);
+});
+
+test('work details use exact generation bounded read pages without acknowledgement or dispatch', async () => {
+  const f = fixture();
+  f.api.bridge = async request => {
+    f.calls.push(request);
+    if (request.method === 'status') return { id: 'task', generation: 3, children: [{ taskId: 'child', unread: true }] };
+    if (request.method === 'work_events') return { events: [], cursor: 'events-cursor' };
+    if (request.method === 'work_reports') return { reports: [], cursor: 'reports-cursor' };
+    return { tasks: [] };
+  };
+  await f.controller.task(f.api, 'task');
+  await f.controller.events(f.api); await f.controller.events(f.api, true);
+  await f.controller.reports(f.api); await f.controller.reports(f.api, true);
+  await f.controller.artifact(f.api, 'result.txt', 'diff');
+  await f.controller.children(f.api, 'task');
+  assert.ok(f.calls.every(call => call.op === 'read'));
+  assert.equal(f.calls.find(call => call.method === 'artifact_read').params.view, 'diff');
+  assert.equal(f.calls.filter(call => call.method === 'work_events')[1].params.cursor, 'events-cursor');
+  assert.equal(f.calls.filter(call => call.method === 'work_reports')[1].params.cursor, 'reports-cursor');
+  assert.ok(f.calls.filter(call => ['work_events', 'work_reports', 'artifact_read'].includes(call.method)).every(call => call.params.generation === 3));
+  assert.equal(f.controller.state.detail.children[0].unread, true);
+  await f.controller.task(f.api, 'task');
+  assert.equal(f.controller.state.events, null); assert.equal(f.controller.state.reports, null);
+  assert.equal(f.submissions.length, 0);
+});
+
+test('work panel renders evidence and pause boundary honestly in every locale without mutations', async () => {
+  const f = fixture(); await f.controller.bind(f.api);
+  const state = f.controller.state;
+  Object.assign(state, { tab: 'detail', selectedTask: 'task', detail: { id: 'task', generation: 2, owner: 'codex', status: 'running',
+    objective: 'User objective', execution: { activity: { lastNativeEventAt: 1000, models: { main: [] } } },
+    progress: { stage: 'Review', lastReportedAt: 2000, current: true },
+    children: [{ taskId: 'child', status: 'completed', unread: true }],
+    blockers: [{ id: 'block', current: true, generation: 2, state: 'open', question: 'A question', impact: 'Wait', needs: 'Decision' }],
+    instructions: [{ id: 'instruction', generation: 2, state: 'delivered', deliveryProvenance: 'broker-context' }],
+    outcome: { summary: 'Worker summary', artifacts: [{ kind: 'file', reference: 'result.txt' }] } },
+    events: { cursor: 'cursor', events: [{ sequence: 1, source: 'native:codex', kind: 'assistant-message', text: 'Public work output', at: 1000 }], collection: { status: 'collecting' } } });
+  const ui = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select'].map(type => [type, props => ({ type, props })]));
+  for (const language of ['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']) {
+    const tree = renderPanel({ ui, state, controller: f.controller, host: () => f.api, options: {}, wake: { state: {} }, t: translator(language), language, setLanguage: () => {} });
+    const source = JSON.stringify(tree);
+    for (const value of ['User objective', 'Worker summary', 'Public work output', '1970-01-01T00:00:01.000Z', 'task-pause', 'reports-start', 'events-start', 'broker-context']) assert.ok(source.includes(value), `${language}: ${value}`);
+    assert.ok(source.includes(translator(language)('Included in invocation context')));
+    assert.ok(source.includes(translator(language)('Unread result')));
+    assert.ok(!source.includes('task-reviewed'), 'running work has no result acceptance action');
+  }
+  assert.equal(f.calls.length, 0); assert.equal(f.submissions.length, 0);
+});
+
+test('historical reads and artifact inspections retain their exact declaration generation', async () => {
+  const f = fixture();
+  f.api.bridge = async request => {
+    f.calls.push(request);
+    if (request.method === 'status') return { id: 'task', generation: 3,
+      outcome: { generation: 2, artifacts: [{ kind: 'file', reference: 'previous.txt' }] } };
+    return { cursor: 'cursor', generation: request.params.generation };
+  };
+  await f.controller.task(f.api, 'task');
+  await f.controller.artifact(f.api, 'previous.txt');
+  assert.equal(f.calls.at(-1).params.generation, 2);
+  f.controller.generation(f.api, '1');
+  await f.controller.events(f.api, false, true);
+  await f.controller.reports(f.api, false, true);
+  assert.ok(f.calls.slice(-2).every(call => call.params.generation === 1 && call.params.recent === undefined));
+  await f.controller.artifact(f.api, 'historic.txt', 'diff', 1);
+  assert.equal(f.calls.at(-1).params.generation, 1);
+  f.controller.generation(f.api, '4'); assert.equal(f.controller.state.workGeneration, 1);
+  f.controller.generation(f.api, '2');
+  assert.equal(f.controller.state.events, null); assert.equal(f.controller.state.reports, null);
+  await f.controller.task(f.api, 'task');
+  assert.equal(f.controller.state.workGeneration, 2, 'exact-task refresh preserves a valid historical selection');
+  const calls = f.calls.length;
+  await f.controller.artifact(f.api, 'future.txt', 'diff', 4);
+  assert.equal(f.calls.length, calls);
+  assert.ok(f.calls.every(call => call.op === 'read'));
+});
+
+test('known work states are localized and unavailable intervention buttons stay hidden', async () => {
+  const f = fixture(); await f.controller.bind(f.api);
+  const state = f.controller.state;
+  const task = { id: 'task', generation: 2, owner: 'codex', status: 'running',
+    blockers: [{ id: 'block', current: true, generation: 2, state: 'responded', question: 'Question', impact: 'Impact', needs: 'Decision' }],
+    pause: { state: 'requested' }, resultReview: { state: 'integrated' } };
+  Object.assign(state, { tab: 'detail', selectedTask: 'task', detail: task });
+  const ui = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select'].map(type => [type, props => ({ type, props })]));
+  const render = language => JSON.stringify(renderPanel({ ui, state, controller: f.controller, host: () => f.api,
+    options: {}, wake: { state: {} }, t: translator(language), language, setLanguage: () => {} }));
+  for (const language of ['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']) {
+    let source = render(language);
+    for (const label of ['Responded', 'Requested', 'Integrated']) assert.ok(source.includes(translator(language)(label)), `${language}: ${label}`);
+    assert.ok(!source.includes('respond-block')); assert.ok(source.includes('resolve-block'));
+    for (const [value, label] of [['checkpoint', 'Checkpoint acknowledged'], ['paused', 'Paused'], ['resumed', 'Resumed'], ['cancelled', 'Cancelled'], ['not-paused', 'Not paused']]) {
+      task.pause.state = value; source = render(language); assert.ok(source.includes(translator(language)(label)), `${language}: ${value}`);
+    }
+    task.pause.state = 'requested';
+  }
+  task.blockers[0].state = 'open'; task.pause = null;
+  assert.ok(render('en').includes('respond-block'));
+  for (const fence of [{ status: 'failed' }, { status: 'cancelled' }, { status: 'uncertain' },
+    { phase: 'handoff-pending' }, { cancelRequested: true }, { cancelPending: true }, { pause: { state: 'checkpoint' } }]) {
+    const before = { ...task }; Object.assign(task, fence);
+    const source = render('en');
+    for (const key of ['respond-block', 'resolve-block', 'task-pause', 'task-resume', 'task-followup', 'task-reviewed', 'task-integrated']) assert.ok(!source.includes(key), `${JSON.stringify(fence)}: ${key}`);
+    Object.keys(task).forEach(key => { delete task[key]; }); Object.assign(task, before);
+  }
+  task.blockers[0].state = 'vendor-new-state';
+  assert.ok(render('zh-Hant').includes('vendor-new-state'));
+  assert.ok(!render('zh-Hant').includes('resolve-block'));
+  assert.equal(f.calls.length, 0);
 });
 test('configuration diagnostics retain only exact non-sensitive option values and explicit types', () => {
   const result = configurationDiagnostic({ options: { nativeWake: true, selfWake: 'false', secret: 'NEVER_COPY' },

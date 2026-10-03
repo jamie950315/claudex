@@ -3,8 +3,8 @@
 export const PROTOCOL_VERSION = 1;
 export const MAX_REQUEST_BYTES = 96 * 1024;
 export const MAX_RESPONSE_BYTES = 1024 * 1024;
-export const READ_METHODS = new Set(['list', 'status', 'chat_list', 'chat_status', 'models']);
-export const WRITE_METHODS = new Set(['start', 'send', 'cancel', 'chat_send', 'models']);
+export const READ_METHODS = new Set(['list', 'status', 'work_events', 'work_reports', 'artifact_read', 'chat_list', 'chat_status', 'models']);
+export const WRITE_METHODS = new Set(['start', 'send', 'cancel', 'work_control', 'chat_send', 'models']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ID = /^[A-Za-z0-9_-]{1,128}$/;
 export class ModError extends Error {
@@ -56,7 +56,12 @@ export function validateParams(method, input, mutation = false) {
     'This companion keeps worker handoff, resolution, and native lifecycle changes in the existing agent/operator workflows.');
   insist(record(input));
   const params = structuredClone(input);
-  if (method === 'list') fields(params, []);
+  if (method === 'list') {
+    fields(params, ['parentId', 'limit', 'cursor']);
+    if (params.parentId !== undefined && params.parentId !== null) identity(params.parentId);
+    if (params.limit !== undefined) boundedInteger(params.limit, 1, 100);
+    if (params.cursor !== undefined) text(params.cursor, 8192);
+  }
   if (method === 'status') {
     fields(params, ['taskId', 'view'], ['taskId']); identity(params.taskId);
     insist(params.view === undefined || ['summary', 'full'].includes(params.view));
@@ -71,8 +76,33 @@ export function validateParams(method, input, mutation = false) {
     insist(params.match === undefined || ['exact', 'contains'].includes(params.match));
   }
   if (method === 'chat_status') { fields(params, ['messageId'], ['messageId']); identity(params.messageId); }
+  if (method === 'work_events' || method === 'work_reports') {
+    fields(params, ['taskId', 'generation', 'cursor', 'limit', 'recent'], ['taskId', 'generation']);
+    identity(params.taskId); boundedInteger(params.generation, 1, Number.MAX_SAFE_INTEGER);
+    if (params.cursor !== undefined) text(params.cursor, 8192);
+    if (params.limit !== undefined) boundedInteger(params.limit, 1, method === 'work_events' ? 64 : 16);
+    if (params.recent !== undefined) insist(typeof params.recent === 'boolean');
+  }
+  if (method === 'artifact_read') {
+    fields(params, ['taskId', 'generation', 'reference', 'maxBytes', 'view'], ['taskId', 'generation', 'reference']);
+    identity(params.taskId); boundedInteger(params.generation, 1, Number.MAX_SAFE_INTEGER); text(params.reference, 2048);
+    if (params.maxBytes !== undefined) boundedInteger(params.maxBytes, 1, 65536);
+    insist(params.view === undefined || ['content', 'diff'].includes(params.view));
+  }
+  if (method === 'work_control') {
+    // Worker acknowledgements/checkpoints remain in the worker MCP workflow.
+    fields(params, ['taskId', 'generation', 'action', 'blockerId', 'text', 'decision'], ['taskId', 'generation', 'action']);
+    identity(params.taskId); boundedInteger(params.generation, 1, Number.MAX_SAFE_INTEGER);
+    insist(['respond-blocker', 'resolve-blocker', 'request-pause', 'resume', 'review-result'].includes(params.action));
+    const blockerId = value => insist(typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value));
+    if (params.blockerId !== undefined) blockerId(params.blockerId);
+    if (params.text !== undefined) text(params.text, 4096);
+    if (['respond-blocker', 'resolve-blocker'].includes(params.action)) { blockerId(params.blockerId); text(params.text, 4096); }
+    if (params.action === 'review-result') insist(['reviewed', 'integrated'].includes(params.decision));
+    else insist(params.decision === undefined);
+  }
   if (method === 'start') {
-    fields(params, ['provider', 'cwd', 'prompt', 'permission', 'model', 'effort', 'projectRoot', 'readOnlyDirs', 'writableDirs'], ['provider', 'cwd', 'prompt']);
+    fields(params, ['provider', 'cwd', 'prompt', 'permission', 'model', 'effort', 'projectRoot', 'readOnlyDirs', 'writableDirs', 'observability'], ['provider', 'cwd', 'prompt']);
     provider(params.provider); absolute(params.cwd); text(params.prompt);
     params.permission ??= 'read-only';
     insist(['read-only', 'workspace-write'].includes(params.permission), 'PERMISSION_BOUND', 'Select read-only or workspace-write explicitly.');
@@ -81,6 +111,13 @@ export function validateParams(method, input, mutation = false) {
     if (params.projectRoot !== undefined) absolute(params.projectRoot);
     if (params.readOnlyDirs !== undefined) directories(params.readOnlyDirs);
     if (params.writableDirs !== undefined) directories(params.writableDirs);
+    if (params.observability !== undefined) {
+      fields(params.observability, ['timeline', 'reports', 'blockerNotifications']);
+      const policy = params.observability;
+      insist(policy.timeline === undefined || ['off', 'public'].includes(policy.timeline));
+      insist(policy.reports === undefined || ['off', 'milestones'].includes(policy.reports));
+      insist(policy.blockerNotifications === undefined || typeof policy.blockerNotifications === 'boolean');
+    }
   }
   if (method === 'send') {
     fields(params, ['taskId', 'message'], ['taskId', 'message']); identity(params.taskId); text(params.message);

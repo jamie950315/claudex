@@ -37,6 +37,35 @@ function runner(fake) {
     signalGroupImpl: () => {} });
 }
 
+test('native public work callback is opt-in, projected and drained before invocation returns', async () => {
+  for (const provider of ['codex', 'claude']) {
+    const events = provider === 'codex' ? [
+      { type: 'thread.started', thread_id: 'session-a' },
+      { type: 'item.started', item: { id: 'tool-a', type: 'command_execution', command: 'SECRET INPUT' } },
+      { type: 'item.completed', item: { id: 'tool-a', type: 'command_execution', aggregated_output: 'SECRET OUTPUT', exit_code: 0 } },
+      { type: 'item.completed', item: { id: 'message-a', type: 'agent_message', text: 'Public progress' } },
+      { type: 'turn.completed' },
+    ] : [
+      { type: 'assistant', session_id: 'session-b', uuid: 'message-b', message: { content: [
+        { type: 'thinking', thinking: 'SECRET THINKING' }, { type: 'text', text: 'Public progress' },
+        { type: 'tool_use', id: 'tool-b', name: 'Read', input: { path: 'SECRET INPUT' } },
+      ] } },
+      { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'tool-b', content: 'SECRET OUTPUT' }] } },
+      { type: 'result', session_id: 'session-b', is_error: false, result: 'Final result' },
+    ];
+    const fake = fakeSpawn(events), observed = [];
+    await runner(fake)({ provider, cwd: process.cwd(), prompt: 'SECRET PROMPT', onWorkEvent: async value => {
+      await Promise.resolve(); observed.push(value);
+    } });
+    assert.equal(observed.length, 4);
+    assert.equal(observed.at(-1).status, 'native-reported-success');
+    assert.equal(observed.at(-1).granularity, 'invocation');
+    assert.ok(observed.some(e => e.kind === 'tool-end'));
+    assert.ok(!JSON.stringify(observed).includes('SECRET'));
+    assert.ok(observed.every(e => e.nativeId && e.generation === undefined));
+  }
+});
+
 test('native work has no execution deadline and remains explicitly cancellable', async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   for (const provider of ['codex', 'claude']) {

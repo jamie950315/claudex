@@ -28,6 +28,37 @@ test('private socket forwards one request and one response', async t => {
   await assert.rejects(lstat(join(root, 'rpc.sock')), { code: 'ENOENT' });
 });
 
+test('MCP work observability reads and generation-fenced controls cross the Unix RPC allowlist', async t => {
+  const seen = [];
+  const { root } = await fixture(t, async request => { seen.push(request); return { method: request.method }; });
+  const input = new PassThrough(), output = new PassThrough();
+  let content = ''; output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'claude', token: 'worker', input, output });
+  const params = { taskId: 'task', generation: 2 };
+  const valid = [
+    ['work_events', { ...params, limit: 64, recent: true }],
+    ['work_reports', { ...params, limit: 16, cursor: 'exact-cursor' }],
+    ['artifact_read', { ...params, reference: 'result.txt', view: 'diff', maxBytes: 65536 }],
+    ['work_control', { ...params, action: 'respond-blocker', blockerId: 'need:decision', text: 'Proceed within scope', requestId: 'decision' }],
+    ['start', { provider: 'claude', cwd: root, prompt: 'Scoped work', requestId: 'opt-in', observability: { timeline: 'public', reports: 'milestones', blockerNotifications: false } }],
+    ['report', { taskId: 'task', requestId: 'milestone', report: { outcome: 'partial', summary: 'Validated', stage: 'checks', next: 'Review', checks: [{ name: 'unit', result: 'passed', at: 1 }] } }],
+  ];
+  const invalid = [
+    ['work_events', { ...params, limit: 65 }], ['work_reports', { ...params, limit: 17 }],
+    ['work_events', { ...params, recent: 'true' }], ['artifact_read', { ...params, reference: 'result.txt', view: 'raw-host' }],
+    ['work_control', { ...params, action: 'SIGSTOP', requestId: 'bad' }],
+    ['start', { provider: 'claude', cwd: root, prompt: 'work', requestId: 'bad-opt-in', observability: { timeline: 'everything' } }],
+  ];
+  [...valid, ...invalid].forEach(([method, args], id) => input.write(JSON.stringify({ jsonrpc: '2.0', id,
+    method: 'tools/call', params: { name: `claudex_${method}`, arguments: args } }) + '\n'));
+  input.end(); await running;
+  const rows = content.trim().split('\n').map(JSON.parse);
+  assert.equal(seen.length, valid.length);
+  assert.deepEqual(seen.map(request => request.method).sort(), valid.map(([method]) => method).sort());
+  assert.equal(rows.filter(row => row.result.isError).length, invalid.length);
+  assert.ok(seen.every(request => request.token === 'worker'));
+});
+
 test('dispatcher failure remains an error and is not retried', async t => {
   let calls = 0;
   const { root } = await fixture(t, async () => { calls++; throw Object.assign(new Error('blocked'), { code: 'CONFLICT' }); });
@@ -288,7 +319,7 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   const rows = content.trim().split('\n').map(JSON.parse);
   const byId = new Map(rows.map(row => [row.id, row]));
   assert.equal(byId.get(1).result.protocolVersion, '2025-06-18');
-  assert.equal(byId.get(2).result.tools.length, 11);
+  assert.equal(byId.get(2).result.tools.length, 15);
   const tools = byId.get(2).result.tools;
   assert.match(tools.find(tool => tool.name === 'claudex_start').description, /concurrent/i);
   assert.doesNotMatch(tools.find(tool => tool.name === 'claudex_start').description, /deferredUntilParentExit|CLAUDEX_YIELD/);

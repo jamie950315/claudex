@@ -36,6 +36,10 @@ The MCP interface exposes:
 | `claudex_send` | Queue a follow-up for the next completed boundary of an existing task. |
 | `claudex_handoff` | Transfer the same task to the other provider using its current `revision`, a handoff message, and an optional destination `model`. |
 | `claudex_report` | Active worker only: save a structured self-reported outcome for its own generation. |
+| `claudex_work_events` | Read an exact task/generation's bounded public event timeline, without acknowledging child outcomes. |
+| `claudex_work_reports` | Page through complete structured reports for an exact generation. |
+| `claudex_work_control` | Respond to a blocker, acknowledge an instruction, request/checkpoint/resume a cooperative pause, or explicitly record result review. |
+| `claudex_artifact_read` | Read a declared, scope-checked file or its current Git diff; observation is not authorship proof. |
 | `claudex_status` | Read progress, messages, last native identity and results. |
 | `claudex_wait` | Wait for a revision change or terminal result; default 5 minutes, explicit maximum 30 minutes. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
@@ -71,6 +75,106 @@ the broker still waits for successful native completion and process-group exit.
 Model response and shutdown latency is not an instantaneous-transfer guarantee.
 
 ## Reading progress and results
+
+### Opt-in work visibility
+
+Start new work with an explicit, independent visibility policy:
+
+```json
+{
+  "observability": {
+    "timeline": "public",
+    "reports": "milestones",
+    "blockerNotifications": true
+  },
+  "notifications": { "mode": "wake", "expiresInMs": 600000 }
+}
+```
+
+All three visibility options default off. Public collection does not authorize
+notifications, and notifications do not enable content collection. Root blocker
+notifications additionally require the existing native call/result origin proof
+and an explicit queue/wake notification policy. Managed parents use the child-work
+protocol instead of borrowing an external controller's native chat authority.
+
+The public timeline contains native assistant messages and allowlisted tool
+start/end metadata, not prompts, hidden reasoning, tool arguments, raw tool
+results, or arbitrary stdout/stderr. Collection reflects native message/item
+granularity, not a simulated token stream. Public messages can contain user work;
+opt in only when that content should be retained in the private broker ledger.
+Credential masking is defense in depth, not a promise that arbitrary public text
+is secret-free. Content-free activity diagnostics remain a separate facility.
+
+Call `claudex_work_events` with `taskId`, exact `generation`, optional `cursor`,
+`limit` (1–64), and `recent: true` for a newest-page snapshot. Reuse the returned
+cursor without `recent` for incremental reads. Cursors are query positions, never
+task revisions. Each event identifies its source, task, generation, timestamp and
+sequence. Duplicate native identities are suppressed. The task retains at most
+256 events / 512 KiB and 2,048 deduplication identities; eviction exposes a gap,
+and exhausted deduplication capacity explicitly pauses collection. Individual
+oversized fields are marked omitted. Original work, receipts and native histories
+are never pruned for this view. Older tasks without a ledger report not-collected;
+the broker does not scan native history to fill gaps.
+
+Milestone reporting asks the worker to report its direction, significant findings,
+changes ready for validation, blockers, and final checks. It does not require a
+report per tool or invent completion percentages. Reports may include `stage`,
+`next`, `checks` (name/result/reference/time), and a `blocker` with an optional
+stable `id`, `question`, `impact`, and `needs`. Existing `outcome`, `remaining`,
+`needs` and `artifacts` retain their meanings. Reports are explicitly worker
+self-statements; neither `done` nor a check marked `passed` is independent proof.
+The bounded history preserves up to 128 complete reports, refusing further writes
+at capacity rather than silently losing evidence. `claudex_work_reports` pages
+those reports independently of status, with an exact generation and at most 16
+reports per page. Missing reports remain unreported, not failed or stuck.
+
+Reports change task revisions and can release an existing wait; raw activity and
+public events do not. Reading events/reports/artifacts does not run a model,
+change revisions, acknowledge child outcomes, or acquire writer ownership.
+
+### Decisions, instructions and cooperative pause
+
+`claudex_work_control` requires a stable `requestId`, `taskId`, exact current
+`generation`, and an `action`. Use `respond-blocker` with `blockerId` and `text`
+to queue a decision, or `resolve-blocker` to explicitly close it. Unchanged repeat
+reports share the same blocker; resolved, answered and old-generation questions
+do not continue to request intervention. Notifications contain only bounded
+identifiers and a request to read current status. A notification is peer context,
+never new user authorization. Normal milestones do not wake a main agent.
+
+`send` remains next-completed-boundary delivery. Its receipt now includes an
+`instructionId`: queued, broker-delivered to a generation, and worker-reported
+accepted/rejected are distinct states. Only that active worker may call
+`ack-instruction` with the ID and `decision: "accepted"` or `"rejected"`.
+Delivery/acceptance is not completion of the requested change.
+
+`request-pause` only records a pending cooperative request. At its next supported
+checkpoint the worker reads current status and calls `checkpoint` with a boundary
+summary in `text`, then immediately ends with the returned `CLAUDEX_PAUSE` token.
+The broker marks the task paused only after successful native completion and
+verified process exit. Active child work prevents the safe checkpoint. `resume`
+starts a fresh generation from the saved work record, not a replay of the previous
+invocation. A long-running tool cannot be immediately paused by this protocol;
+if the worker cannot reach a checkpoint, the request remains pending. No SIGSTOP,
+second writer or forced model interruption is used. Cancel/handoff and generation
+fences remain authoritative. An end-turn receipt takes priority over further
+reports or tools.
+
+For completed results, `review-result` with `decision: "reviewed"` or
+`"integrated"` records an explicit controller/parent statement. Simply opening
+the Mod view or reading an artifact does not claim adoption or integration.
+
+### Delivery evidence
+
+File artifacts must have been declared in that generation's report and remain
+within the task's canonical authorized roots. `claudex_artifact_read` uses stable
+no-follow file and directory identities, rejects symlink/hardlink escapes, and
+bounds text size. Returned hashes/file observations are distinct from worker
+claims. A current Git diff is shared-checkout evidence with unknown authorship,
+not proof that one worker produced every change; no stash/reset or baseline
+overwrite is performed. URL and commit references are inert references, not
+arbitrary fetch or filesystem-read capabilities. Review declared tests, native
+tool outcomes, actual artifact observations and independent acceptance separately.
 
 ### Background completion and caller continuation
 

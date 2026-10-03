@@ -26,18 +26,25 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
     const serialized = JSON.stringify(value, null, 2) ?? '';
     return text(serialized.length <= 12000 ? serialized : `${serialized.slice(0, 12000)}\n${t('Preview truncated. Read the exact-ID status or receipt for the complete record.')}`);
   };
-  const details = (key, value, title = t('Technical details')) => {
+  const details = (key, value, title = t('Technical details'), complete = false) => {
     const visible = expanded.has(key);
     return Box({ flexDirection: 'column', children: [Button({ key: `details-${key}`, plain: true,
       label: `${visible ? '▾' : '▸'} ${title}`, onPress: () => {
         if (controller.state !== state) return;
         if (expanded.has(key)) expanded.delete(key); else expanded.add(key);
         host().redraw();
-      } }), ...(visible ? [raw(value)] : [])] });
+      } }), ...(visible ? [complete ? text(JSON.stringify(value, null, 2)) : raw(value)] : [])] });
   };
   const status = value => typeof value === 'string' && value.startsWith('blocked-')
     ? t('Blocked: {code}', { code: value.slice('blocked-'.length) }) : ({
-    ready: t('Ready'), running: t('Running'), waiting: t('Waiting'), queued: t('Queued'),
+    ready: t('Ready'), running: t('Running'), waiting: t('Waiting'), queued: t('Queued'), paused: t('Paused'),
+    'pause-pending': t('Pause pending'),
+    open: t('Open'), responded: t('Responded'), resolved: t('Resolved'), requested: t('Requested'),
+    checkpoint: t('Checkpoint acknowledged'), resumed: t('Resumed'), 'not-paused': t('Not paused'),
+    reviewed: t('Reviewed'), integrated: t('Integrated'),
+    passed: t('Passed'), 'not-run': t('Not run'), unverified: t('Unverified'),
+    collecting: t('Collecting'), 'not-collected': t('Not collected'), collected: t('Collected'),
+    'paused-capacity': t('Collection paused at capacity'),
     completed: t('Completed'), failed: t('Failed'), cancelled: t('Cancelled'), uncertain: t('Uncertain'),
     prepared: t('Prepared'), dispatching: t('Dispatching'), accepted: t('Accepted'), rejected: t('Rejected'),
     acknowledged: t('Acknowledged'), offered: t('Offered'), stopped: t('Stopped'), disabled: t('Disabled'),
@@ -55,6 +62,20 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
     field('Claude', value?.defaultModels?.claude ?? t('Native default')),
     ...(value?.defaultPermission ? [field(t('Default access'), permission(value.defaultPermission))] : []),
   ];
+  const taskCard = (task, depth = 0) => {
+    const branch = state.children?.[task.id];
+    return section(`${'↳ '.repeat(depth)}${task.owner} · ${status(task.phase ?? task.status)}`, [
+      field(t('Task ID'), task.id), ...(task.objective ? [text(task.objective)] : []),
+      ...(task.parentId ? [field(t('Parent task'), task.parentId)] : []),
+      ...(task.progress?.stage ? [field(t('Stage'), task.progress.stage)] : []),
+      row([button(`task-${task.id}-${depth}`, t('Inspect task'), () => controller.task(host(), task.id)),
+        ...(depth < 3 ? [button(`children-${task.id}-${depth}`, branch ? t('Collapse children') : t('Expand children'),
+          () => controller.children(host(), task.id))] : [])]),
+      ...(branch ? [...(branch.tasks ?? []).map(child => taskCard(child, depth + 1)),
+        ...(branch.nextCursor ? [button(`children-next-${task.id}`, t('Next page'),
+          () => controller.children(host(), task.id, branch.nextCursor))] : [])] : []),
+    ]);
+  };
   const body = [row([text('Claudex', { bold: true }), muted(t('Work & conversations'))]),
     Select({ key: 'language', label: t('Language'), value: language,
       options: [{ value: 'system', label: t('Follow system') }, ...languages.map(([value, label]) => ({ value, label }))],
@@ -106,25 +127,122 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
         first: tasks.length ? Math.min(state.taskOffset + 1, tasks.length) : 0,
         last: Math.min(state.taskOffset + 10, tasks.length) }))]));
     if (!tasks.length) body.push(muted(t('No tasks in this inventory. Create a reviewed task from Compose.')));
-    for (const task of tasks.slice(state.taskOffset, state.taskOffset + 10)) body.push(section(
-      `${task.owner} · ${status(task.phase ?? task.status)}`, [field(t('Task ID'), task.id),
-        button(`task-${task.id}`, t('Inspect task'), () => controller.task(host(), task.id))]));
+    for (const task of tasks.slice(state.taskOffset, state.taskOffset + 10)) body.push(taskCard(task));
     body.push(row([
       ...(state.taskOffset > 0 ? [button('tasks-prev', t('Previous 10'), () => controller.page(host(), -10))] : []),
       ...(state.taskOffset + 10 < tasks.length ? [button('tasks-next', t('Next 10'), () => controller.page(host(), 10))] : []),
+      ...(state.tasks?.nextCursor ? [button('tasks-page', t('Next page'), () => controller.taskPage(host(), state.tasks.nextCursor))] : []),
     ]));
   } else if (state.tab === 'detail') {
     const task = state.detail;
+    const activity = task?.execution?.activity;
+    const when = value => Number.isSafeInteger(value) ? new Date(value).toISOString() : value ?? t('Not reported');
     body.push(section(t('Task details'), [field(t('Task ID'), task?.id ?? state.selectedTask),
+      ...(task?.objective ? [field(t('Objective'), task.objective)] : []),
+      field(t('Generation'), task?.generation),
+      ...(task?.parentId ? [button('task-parent', `${t('Parent task')}: ${task.parentId}`, () => controller.task(host(), task.parentId))] : []),
       field(t('Owner'), task?.owner), field(t('Status'), status(task?.phase ?? task?.status)),
       field(t('Model'), task?.model ?? t('Native default')), field(t('Access'), permission(task?.permission)),
       field(t('Project'), task?.projectRoot), ...(task?.error ? [text(task.error)] : []),
       ...(task?.result ? [details('task-result', task.result, t('Task result'))] : []), details('task', task)]));
+    const control = (action, extra = {}) => ({ taskId: task.id, generation: task.generation, action, ...extra });
+    const canControl = task && ['ready', 'running', 'waiting', 'paused', 'completed'].includes(task.status)
+      && !task.pendingHandoff && !task.cancelRequested && !task.cancelPending
+      && !['handoff-pending', 'cancelling'].includes(task.phase) && task.pause?.state !== 'checkpoint';
+    if (task) {
+      if (Number.isSafeInteger(task.generation) && task.generation > 0) body.push(
+        Select({ key: 'history-generation', label: t('History generation'), value: String(state.workGeneration ?? task.generation),
+          options: Array.from({ length: Math.min(task.generation, 100) }, (_, index) => {
+            const value = String(task.generation - index); return { value, label: value };
+          }), onSelect: value => { if (controller.state === state) controller.generation(host(), value); } }));
+      body.push(section(t('Progress & evidence'), [
+        field(t('Stage'), task.progress?.stage ?? t('Not reported')),
+        field(t('Latest report'), when(task.progress?.lastReportedAt)),
+        field(t('Native activity'), when(activity?.lastNativeEventAt)),
+        ...(activity?.models ? [details('observed-models', activity.models, t('Observed models'))] : []),
+        ...(task.progress?.current === false && task.progress?.reportCount ? [muted(t('The latest report belongs to an earlier generation.'))] : []),
+        ...(task.outcome?.summary ? [text(task.outcome.summary)] : []),
+        ...(task.progress?.next ? [field(t('Next step'), task.progress.next)] : []),
+        field(t('Provenance'), task.outcome?.provenance ?? task.progress?.provenance ?? t('Not reported')),
+        ...(task.waitReason ? [details('wait-reason', task.waitReason, t('Waiting for'))] : []),
+        ...(task.children?.length ? [section(t('Child results'), task.children.map(child => row([
+          button(`child-result-${child.taskId}`, child.taskId, () => controller.task(host(), child.taskId)),
+          text(`${status(child.status)} · ${child.unread ? t('Unread result') : t('No unread result')}`),
+        ])))] : []),
+        field(t('Result review'), task.resultReview?.state ? status(task.resultReview.state) : t('Not reviewed')),
+        muted(t('Reading this view does not acknowledge or integrate child results.')),
+      ]));
+      body.push(section(t('Report history'), [
+        row([button('reports-recent', t('Recent reports'), () => controller.reports(host())),
+          button('reports-start', t('Read from beginning'), () => controller.reports(host(), false, true)),
+          ...(state.reports?.cursor ? [button('reports-more', t('Read after cursor'), () => controller.reports(host(), true))] : [])]),
+        ...(state.reports ? [field(t('Collection'), status(state.reports.collection)),
+          ...(state.reports.reports ?? []).map((report, index) => section(when(report.reportedAt), [
+            field(t('Generation'), report.generation), field(t('Provenance'), report.provenance), text(report.summary),
+            ...(report.artifacts ?? []).filter(artifact => artifact.kind === 'file').map((artifact, artifactIndex) =>
+              row([button(`report-artifact-${index}-${artifactIndex}`, `${t('Inspect artifact')}: ${artifact.reference}`,
+                () => controller.artifact(host(), artifact.reference, 'content', report.generation)),
+              button(`report-diff-${index}-${artifactIndex}`, t('Inspect file diff'),
+                () => controller.artifact(host(), artifact.reference, 'diff', report.generation))])),
+            details(`report-${index}`, report, t('Technical details'), true)]))] : []),
+      ]));
+      for (const blocker of task.blockers ?? []) body.push(section(`${t('Blocker')} · ${status(blocker.state)}`, [
+        field(t('Generation'), blocker.generation), field(t('Provenance'), blocker.provenance),
+        text(blocker.question), field(t('Impact'), blocker.impact), field(t('Needed action'), blocker.needs),
+        details(`blocker-${blocker.id}`, blocker),
+        ...(canControl && blocker.current !== false && ['open', 'responded'].includes(blocker.state) && blocker.generation === task.generation ? [
+          ...(blocker.state === 'open' ? [button(`respond-${blocker.id}`, t('Respond to blocker'), () => controller.template(host(), 'work_control',
+            control('respond-blocker', { blockerId: blocker.id, text: 'Describe the decision within the existing authorization.' })))] : []),
+          button(`resolve-${blocker.id}`, t('Resolve blocker'), () => controller.template(host(), 'work_control',
+            control('resolve-blocker', { blockerId: blocker.id, text: 'Describe the evidence that resolves this blocker.' }))),
+        ] : []),
+      ]));
+      body.push(section(t('Instructions & safe pause'), [
+        ...(task.instructions ?? []).map(instruction => section(`${instruction.id} · ${instruction.state === 'delivered' ? t('Included in invocation context') : status(instruction.state)}`, [
+          field(t('Generation'), instruction.generation ?? instruction.requestedGeneration),
+          field(t('Provenance'), instruction.acknowledgmentProvenance ?? instruction.deliveryProvenance ?? instruction.provenance),
+          ...(instruction.reason ? [text(instruction.reason)] : []), details(`instruction-${instruction.id}`, instruction),
+        ])),
+        field(t('Pause'), task.pause?.state ? status(task.pause.state) : t('Not requested')),
+        muted(t('Delivery is not adoption. Pause waits for a worker checkpoint and verified process exit.')),
+      ]));
+      body.push(section(t('Artifacts & checks'), [
+        ...(task.outcome?.checks ?? []).map((check, index) => details(`check-${index}`, check, `${check.name} · ${status(check.result)}`)),
+        ...(task.outcome?.artifacts ?? []).map((artifact, index) => section(artifact.reference, [
+          ...(artifact.description ? [text(artifact.description)] : []),
+          ...(artifact.kind === 'file' ? [button(`artifact-${index}`, t('Inspect artifact'), () => controller.artifact(host(), artifact.reference, 'content', task.outcome?.generation)),
+            button(`artifact-diff-${index}`, t('Inspect file diff'), () => controller.artifact(host(), artifact.reference, 'diff', task.outcome?.generation))] : []),
+        ])),
+        ...(state.artifact ? [field(t('Provenance'), state.artifact.provenance),
+          text(state.artifact.content ?? ''), details('artifact-evidence', { ...state.artifact, content: undefined }),
+          muted(t('Current file bytes do not prove exclusive worker authorship.'))] : []),
+      ]));
+      body.push(section(t('Work timeline'), [
+        row([button('events-recent', t('Recent events'), () => controller.events(host())),
+          button('events-start', t('Read from beginning'), () => controller.events(host(), false, true)),
+          ...(state.events?.cursor ? [button('events-more', t('Read after cursor'), () => controller.events(host(), true))] : [])]),
+        ...(state.events ? [field(t('Collection'), status(state.events.collection?.status)),
+          ...(state.events.gap ? [text(t('The retained timeline has a gap. Inspect collection details.'))] : []),
+          ...(state.events.events ?? []).map(event => section(`${event.sequence} · ${event.kind}`, [
+            field(t('Provenance'), event.source), field(t('Time'), when(event.at)),
+            ...(event.text ? [text(event.text)] : []), ...(event.summary ? [text(event.summary)] : []),
+            details(`event-${event.sequence}`, event),
+          ])), details('event-collection', { collection: state.events.collection, gap: state.events.gap,
+            cursor: state.events.cursor, hasMore: state.events.hasMore }),
+        ] : [muted(t('Read on demand. Event cursors are not task revisions.'))]),
+      ]));
+    }
     if (state.selectedTask) body.push(section(t('Task actions'), [
       button('task-refresh', t('Refresh exact task'), () => controller.task(host(), state.selectedTask)),
-      button('task-followup', t('Compose follow-up'), () => controller.template(host(), 'send', {
-        taskId: state.selectedTask, message: 'Describe the explicitly authorized follow-up.' })),
-      button('task-cancel', t('Preview cancellation'), () => controller.prepare(host(), 'cancel', { taskId: state.selectedTask })),
+      ...(canControl ? [button('task-followup', t('Compose follow-up'), () => controller.template(host(), 'send', {
+        taskId: state.selectedTask, message: 'Describe the explicitly authorized follow-up.' }))] : []),
+      ...(!['completed', 'failed', 'cancelled', 'uncertain'].includes(task?.status) ? [button('task-cancel', t('Preview cancellation'), () => controller.prepare(host(), 'cancel', { taskId: state.selectedTask }))] : []),
+      ...(canControl && task?.generation ? [
+        ...(task.status === 'running' && !['requested', 'checkpoint'].includes(task.pause?.state) ? [button('task-pause', t('Request safe pause'), () => controller.prepare(host(), 'work_control', control('request-pause')))] : []),
+        ...(task.pause?.state === 'paused' ? [button('task-resume', t('Resume work'), () => controller.prepare(host(), 'work_control', control('resume')))] : []),
+        ...(task.resultFinal ? [button('task-reviewed', t('Mark result reviewed'), () => controller.prepare(host(), 'work_control', control('review-result', { decision: 'reviewed' }))),
+          button('task-integrated', t('Mark result integrated'), () => controller.prepare(host(), 'work_control', control('review-result', { decision: 'integrated' })))] : []),
+      ] : []),
     ]));
   } else if (state.tab === 'chats') {
     body.push(section(t('Find a conversation'), [Input({ key: 'chat-query', label: t('Title search'),
@@ -165,7 +283,8 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       muted(t('Enter prepares a preview only. Review the complete action before confirming.')),
       text(t('Native model work consumes account allowance.')),
       details('compose-help', {
-        methods: ['start', 'send', 'cancel', 'chat_send', 'models'],
+        methods: ['start', 'send', 'cancel', 'work_control', 'chat_send', 'models'],
+        observability: { timeline: 'off | public', reports: 'off | milestones', blockerNotifications: false },
         modelAndEffort: t('Omit blank model or effort fields. null selects native CLI defaults.'),
         restrictions: t('Full-access and forced ownership changes stay outside this pane.'),
       }, t('Action format & limits')),
