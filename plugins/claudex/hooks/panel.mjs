@@ -1,4 +1,4 @@
-import { textChunks } from './controller.mjs';
+import { textChunks, taskInventoryCount } from './controller.mjs';
 import { localizedUsage } from './localization.mjs';
 
 // Presentation state belongs to the exact controller context, never a receipt.
@@ -78,7 +78,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       ...(options.nativeWake === true ? [field(t('Automatic delivery'), status(wake.state.status))] : []),
       button('refresh', t('Refresh status'), () => controller.refresh(host()), true)]));
     if (state.tasks) body.push(section(t('Work summary'), [
-      field(t('Tasks'), state.tasks.tasks?.length ?? 0),
+      field(t('Tasks'), taskInventoryCount(state.tasks)),
       ...(state.tasks.blockedByUncertainWork ? [text(t('Uncertain work needs inspection before overlapping writes.'))] : []),
       field(t('Worker limit'), state.tasks.limits?.maxWorkers),
       ...modelFields(state.tasks.limits), details('limits', state.tasks.limits),
@@ -93,7 +93,8 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
     ]));
     body.push(section(t('Session & runtime'), [field(t('Engine'), state.version?.version),
       ...(state.context ? [field(t('Directory'), state.context.cwd)] : []),
-      details('session', { session: state.context, runtime: state.version, usage: state.usage, doctor: state.doctor }),
+      details('session', { session: state.context, runtime: state.version, usage: state.usage, doctor: state.doctor,
+        configuration: state.configuration }),
       muted(t('Mod API baseline: 2.1.287; also validated on 2.1.286. Synchronization acceptance is separate.')),
     ]));
     if (options.nativeWake === true) body.push(details('delivery', wake.state,
@@ -101,7 +102,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
   } else if (state.tab === 'tasks') {
     const tasks = state.tasks?.tasks ?? [];
     body.push(section(t('Task inventory'), [button('tasks-refresh', t('Refresh tasks'), () => controller.refresh(host())),
-      muted(t('{count} tasks · showing {first}–{last}', { count: tasks.length,
+      muted(t('{count} tasks · showing {first}–{last}', { count: taskInventoryCount(state.tasks),
         first: tasks.length ? Math.min(state.taskOffset + 1, tasks.length) : 0,
         last: Math.min(state.taskOffset + 10, tasks.length) }))]));
     if (!tasks.length) body.push(muted(t('No tasks in this inventory. Create a reviewed task from Compose.')));

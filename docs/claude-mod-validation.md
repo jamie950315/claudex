@@ -1,13 +1,13 @@
 # Claude Mod integration validation
 
-Source candidate is now 0.5.0; installed-companion acceptance below remains the
+Source and installed companion are now 0.5.2; earlier acceptance below remains the
 historical 0.4.1 review from 2026-10-03. The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
-## Installed native origin acceptance in progress (2026-10-03)
+## Installed native origin and notification acceptance (2026-10-03)
 
 The user authorized local installation and minimal native inference. The signed
 candidate was installed at the normal app path after owned services stopped and
@@ -41,10 +41,63 @@ workers have active=null, one generation and confirmed absent recorded processes
 Claude's main response reported claude-opus-5-5 separately from requested opus;
 Codex did not expose an actual model ID and remains correctly unverified.
 
-Claude wake reception remains incomplete: the loaded receiver reported both
-opt-ins false despite saved true settings. Its message expired without fallback
-or replay. A normal reload and configuration roundtrip did not establish an
-enabled receiver; installation and binding are not claimed as wake delivery.
+The first wake notification expired while the receiver reported both opt-ins
+false despite saved marketplace settings. Its task and receipt remain intact,
+without fallback or replay. Installation and binding alone were not counted as
+wake delivery.
+
+The 0.5.1 diagnostic candidate passed 34 focused Node cases and all 17 official
+native kit cases, with zero strict-validator errors/warnings. A fresh zero-model
+Desktop Local session rendered its actual 0.5.1 cache root and registered boolean
+false/false, while the same session's native settings API returned user-layer
+boolean true/true and no flag/policy override. No secrets or unrelated settings
+were displayed. Native artifact analysis and native-manager queries identified
+the cause: Desktop injects installed plugins as SDK local plugins, whose storage
+identity is claudex@inline, not claudex@claudex-local. The intended values were
+saved to that inline identity through the supported native manager. The host
+reported options changed/reloaded and both old and fresh observers reported
+true/true. No default=true workaround, inbound-policy change, forced reload or
+app restart was used.
+
+A new final wake canary completed one Codex invocation, independently bound the
+exact Claude source and generated one mod-self notification. The same loaded
+source received the broker-authored peer message automatically, read the exact
+task once, rendered the expected nonce and emitted a real Stop ACK. Private
+mailbox evidence records a single claim, own-inbox submission, receive-once
+authorization and acknowledged state. No manual notification or acknowledgement
+was submitted. The final worker intentionally omitted structured reporting and
+status correctly remained unreported rather than inferring done from prose.
+The earlier expired message remained expired after receiver activation.
+
+Version 0.5.2 retains this delivery path and adds both known configuration
+identities to the bounded diagnostics, an explicit local /claudex response and
+accurate bounded task counts. Its 35 focused Node cases and 17 official native
+kit cases pass; the final delta does not alter authorization, routing or replay.
+The final normal installation matched 117 app engine/entrypoint/plugin hashes
+and all 22 installed Mod hashes; the app's nested strict signature passed.
+The installed read-only inspection returned ready for all components after its
+startup reconciliation. Actual 0.5.2 pixels/AX showed the native local command
+response, two-row translated panel, active delivery waiter and Tasks 100 / 134.
+On an empty native session's very first bootstrap command, the host briefly
+retained its invalid-command banner while initialization completed; the pane
+and local response still appeared, and the initialized command ran cleanly.
+This initial native-host presentation quirk is not a failed model invocation.
+
+### Handoff finding disposition
+
+| Finding | Disposition and evidence boundary |
+| --- | --- |
+| F01 | Fixed: bounded native event/tool activity; real worker streams and synthetic liveness separation. |
+| F02 | Fixed: native Claude response model evidence separate from requested alias/effort; absent Codex model metadata stays unverified. |
+| F03-F04 | Fixed: exact per-task wait reasons/blocker IDs; unrelated uncertainty and capacity covered in isolated contracts. |
+| F05 | Fixed: typed codes survive actual Unix RPC and MCP error envelopes. |
+| F06-F08 | Fixed: expiring per-session diagnosis, including reproduced unmapped targets; observations never grant dispatch authority. |
+| F09 | Implemented and natively accepted for the documented exact Codex and Desktop Local origin paths; unsupported sources remain explicit. |
+| F10 | Reproduced and documented as a retained receipt-namespace boundary; no unsafe migration or replay-based origin binding. |
+| F11-F12 | Implemented: fenced worker-self-reported outcomes and structured handoff context, independent of execution completion; report and unreported native cases verified. |
+| F13 | Implemented: bounded multi-wait, filters/cursors and response-before-ack bounds; large escaped responses and blocker inventories covered. |
+| F14 | Implemented: exact lifecycle/policy/capability/usage observations and safe option-source diagnostics, with native loaded-session evidence. |
+| F15 | Updated AI-first workflow guidance; the human pane remains optional. |
 
 ## 0.5 AI-first observation candidate (2026-10-03)
 

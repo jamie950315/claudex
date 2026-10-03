@@ -48,8 +48,8 @@ model allowance. Native PostToolUse plus independent call/result validation
 must bind the initiating chat before a notification can be queued. Missing,
 untrusted or unmapped native proof leaves it unbound; never synthesize origin
 IDs or resend an uncertain notification. Check notification.bindingStatus and
-continue using status/wait as the result authority. The new path still requires
-fresh native activation acceptance; do not claim a notification was delivered
+continue using status/wait as the result authority. Each installation needs
+native activation acceptance; do not claim a notification was delivered
 from an enqueue receipt. Mod observations expire and are diagnostic only:
 hold/refuse, missing receiver/tools and target mapping failures never authorize
 fallback, retries, permission changes or removal of dispatch guards.

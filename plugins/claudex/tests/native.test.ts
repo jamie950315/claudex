@@ -16,7 +16,7 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100,
     scroll: { offset: 0, bodyRows: 3 }, view: {} },
 } as const
-function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en') {
+function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en', settings?: (event: any) => any) {
   mock.env(on, worker ? { CLAUDEX_COLLABORATION_WORKER: '1' } : {})
   mock.store(on, { 'ui-language': language })
   mock.clock(on, { now: 1000 })
@@ -24,7 +24,7 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
   on('session.cwd', () => ({ value: '/fixture' }))
   on('session.version', () => ({ value: { version: '2.1.287' } }))
   on('session.usage', () => ({ value: { context: { percent: 42 }, rateLimits: [] } }))
-  on('settings.read', () => ({ value: { crossSessionInbound: 'hold' } }))
+  on('settings.read', (_: any, event: any) => ({ value: settings ? settings(event) : { crossSessionInbound: 'hold' } }))
   on('tool.list', () => ({ value: [] }))
   on('command.register', () => ({ value: undefined }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -42,7 +42,8 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
 test('pane draws for terminal and Desktop using native element validation', async ($, on) => {
   stubs(on)
   await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
-  await $.command.run({ command: 'claudex', args: '' })
+  const answer = await $.command.run({ command: 'claudex', args: '' })
+  expect(answer.text).toBe('Claudex')
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...PANE, surface })
     expect(await ui.find({ key: 'tab-compose' })).toBeDefined()
@@ -286,4 +287,29 @@ test('native lifecycle publishes bounded policy observations and clear retires t
   expect(observed[1].observation.observerId).toBe(observed[0].observation.observerId)
   expect(observed[2].observation.lifecycle).toBe('loaded')
   expect(observed[2].observation.observerId).not.toBe(observed[0].observation.observerId)
+})
+
+test('technical session details read supported setting scopes and show only exact public option diagnostics', async ($, on) => {
+  const sources: string[] = []
+  stubs(on, false, request => request.method === 'list'
+    ? { tasks: Array.from({ length: 100 }, (_, index) => ({ id: `task-${index}` })), totalCount: 133, nextCursor: '100' } : {}, 'en', event => {
+    if (!event.source) return { crossSessionInbound: 'hold' }
+    sources.push(event.source)
+    return { pluginConfigs: { 'claudex@claudex-local': { options: {
+      nativeWake: event.source === 'user', selfWake: event.source === 'user', secret: 'NEVER_COPY_NATIVE',
+    } }, 'claudex@inline': { options: { nativeWake: true, selfWake: true } },
+    'other@market': { options: { token: 'NEVER_COPY_NATIVE' } } } }
+  })
+  await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
+  await $.command.run({ command: 'claudex', args: '' })
+  expect(sources).toEqual(['user', 'flag', 'policy'])
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ type: 'Text', text: /100 \/ 133/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /"registration"/ })).toBeUndefined()
+  await ui.press({ key: 'details-session' })
+  expect(await ui.find({ type: 'Text', text: /"registration"/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /"claudex@claudex-local"/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /"claudex@inline"/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /NEVER_COPY_NATIVE/ })).toBeUndefined()
+  await ui.unmount()
 })

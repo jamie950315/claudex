@@ -1,4 +1,4 @@
-# Claudex native companion, 0.5.0
+# Claudex native companion, 0.5.2
 
 AI collaboration uses the existing MCP delegation, multi-task wait, structured
 worker report and handoff tools. The pane remains optional for human inspection

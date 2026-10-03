@@ -265,14 +265,16 @@ Keep write-ahead notification intents, absolute expiry through awaited preflight
 and the final native dispatch fence. Interrupted/unknown dispatch never retries.
 Coalesce undispatched terminal revisions and cap retained sends at 16/task and
 16/origin/minute. App-stop release is event-driven, not a polling loop. Status/wait
-remains the result authority. Fresh nonce-to-notification native acceptance and
-new live Mod activation are still unverified; historical native pairs prove only
-the read-path feasibility, not full live notification acceptance.
+remains the result authority. Fresh authorized native acceptance verifies both
+origin providers, queue-only Codex receipt and automatic Claude mod-self receipt
+with real Stop ACK. Preserve the earlier unbound and expired records without
+replay. This is bounded evidence for the reviewed installation, not a new
+synchronization-runtime allowlist or blanket acceptance of other versions/routes.
 
 The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
 not a companion load gate. The installed Desktop 2.1.286 passed the final native
-validator, 15 kit tests and earlier no-inference command registration without added
+validator, 17 kit tests and no-inference command registration without added
 feature flags; test the actual runtime before requiring an upgrade. This does not
 certify new synchronization runtimes. Keep the explicit app/stage allowlists;
 never install it as a setup side effect. `plugins/claudex/hooks/register.mjs` uses
@@ -288,6 +290,14 @@ Language changes only redraw presentation, preserving form edits and pending
 confirmations. Keep native IDs, models, user content and unknown diagnostics raw.
 The catalog's static JSON rows are validated without executing candidate source;
 stage and app packaging reject missing translations or mismatched placeholders.
+Desktop Code 2.1.286 loads installed plugins through SDK local delivery, whose
+configuration identity is claudex@inline rather than claudex@claudex-local.
+Configure only the intended public options through the native manager with the
+verified installed plugin path; preserve both identities, source defaults and
+inbound policy. Confirm actual registration/observer values, not only saved
+marketplace settings. Technical diagnostics expose only these two known identities
+and wake booleans/types, never complete settings or secrets. The local /claudex
+command returns explicit handled text after opening its pane, not an empty reply.
 User-authored controller writes use exact-context prepare/confirm and durable
 no-replay receipts; managed workers cannot borrow controller authority. Version
 0.3.1 provides explicit selfWake alongside nativeWake, both false by default.
@@ -297,8 +307,9 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has 0.4.1 installed with both opt-ins and route=mod-self.
-After normal Claude restart, one Desktop native session and one waiter delivered
+passes. The reviewed Mac has 0.5.2 installed with both native configuration
+identities enabled and route=mod-self. Earlier acceptance after a normal Claude
+restart verified that one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real
 Stop ACK. Native UI evidence retained the unsent draft. Explicit native hold and
 refuse passed in isolated tools:[] sessions with zero model turns. Preserve the

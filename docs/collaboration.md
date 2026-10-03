@@ -167,11 +167,13 @@ filesystem event, not polling. Ended origins retain normal native-resume rules.
 `notification.deliveries` contains the enqueue observation and message ID; read
 chat_status for current delivery/ACK/expiry, which is still not work completion.
 
-The implementation has synthetic broker, private RPC, native-record and hook
-coverage. Real existing native call/result pairs establish read-path feasibility
-for both providers, but fresh start nonce→origin→notification acceptance is not
-yet verified and the installed app has not been upgraded. Do not treat source
-or synthetic evidence as that live acceptance.
+The reviewed installation has fresh authorized native acceptance for both
+provider origins: exact start receipt binding, completed read-only workers,
+queue-only receipt through a real Codex hook, and automatic Claude mod-self
+reception with the returned nonce and real Stop ACK. Earlier failed/unbound and
+expired records remain preserved without replay. This is bounded acceptance,
+not every native runtime or every delivery mode. See the Mod validation record
+for distinct source, synthetic, installed and rendered evidence.
 
 `status`, `wait`, and list entries expose `phase`, `terminal`, `cancelPending`,
 `resultFinal`, `resultRole`, and `resultGeneration` in addition to existing fields.

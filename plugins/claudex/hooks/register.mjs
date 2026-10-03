@@ -1,4 +1,4 @@
-import { createController } from './controller.mjs';
+import { createController, configurationDiagnostic } from './controller.mjs';
 import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
 import { createLocalization, localizedUsage, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
@@ -11,6 +11,14 @@ function api($, options, observer = null) {
     worker: async () => await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1',
     context: async () => ({ sessionId: await $.session.id(), cwd: await $.session.cwd() }),
     usage: () => $.session.usage(), version: () => $.session.version(),
+    configuration: async () => {
+      const layers = {};
+      for (const source of ['user', 'flag', 'policy']) {
+        try { layers[source] = await $.settings.read({ source }); }
+        catch { layers[source] = null; }
+      }
+      return configurationDiagnostic({ options, plugin: { name: $.plugin.name, root: $.plugin.root }, layers });
+    },
     redraw: () => { $.ui.invalidate('ui.render'); },
     fill: args => $.prompt.fill(args),
     sendSession: args => $.session.send(args),
@@ -121,7 +129,8 @@ export function register(on, options = {}) {
     else if (words.length) return { text: localization.t('Use /claudex or /claudex receipt UUID.') };
     else await controller.refresh(api($, options));
     await $.ui.open({ id: PANE, title: 'Claudex', focus: true, closeOnEscape: true, columns: 64 });
-    return {};
+    // A text answer also gives headless/Desktop dispatch an explicit local result.
+    return { text: 'Claudex' };
   });
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const original = await next(e);

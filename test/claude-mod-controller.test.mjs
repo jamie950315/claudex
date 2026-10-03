@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createController, shortJSON, usageLine, textChunks } from '../plugins/claudex/hooks/controller.mjs';
+import { createController, shortJSON, usageLine, textChunks, configurationDiagnostic, taskInventoryCount } from '../plugins/claudex/hooks/controller.mjs';
 const CTX = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/fixture' };
 const OTHER = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/other' };
 const ID = '33333333-3333-4333-8333-333333333333';
@@ -52,6 +52,46 @@ test('status refresh performs only doctor/read and usage calls', async () => {
   const f = fixture(); await f.controller.refresh(f.api);
   assert.deepEqual(f.calls.map(call => call.op), ['doctor', 'read']);
   assert.equal(f.controller.state.usage.context.percent, 53); assert.equal(f.submissions.length, 0);
+});
+test('configuration diagnostics retain only exact non-sensitive option values and explicit types', () => {
+  const result = configurationDiagnostic({ options: { nativeWake: true, selfWake: 'false', secret: 'NEVER_COPY' },
+    plugin: { name: 'claudex', root: '/private/plugin' }, layers: {
+      user: { env: { TOKEN: 'NEVER_COPY' }, pluginConfigs: {
+        'claudex@claudex-local': { options: { nativeWake: 'true', selfWake: false, token: 'NEVER_COPY' } },
+        'claudex@inline': { options: { nativeWake: true, selfWake: true, token: 'NEVER_COPY' } },
+        'unrelated@other': { options: { nativeWake: 'NEVER_COPY' } },
+      } }, flag: null, policy: { pluginConfigs: { 'claudex@claudex-local': { options: { nativeWake: 'NEVER_COPY' } } } },
+    } });
+  assert.deepEqual(result.registration, { nativeWake: { type: 'boolean', value: true }, selfWake: { type: 'string', value: 'false' } });
+  assert.equal(result.settings.user.present, true); assert.equal(result.settings.user.nativeWake.value, 'true');
+  assert.equal(result.inlineConfigKey, 'claudex@inline');
+  assert.deepEqual(result.inlineSettings.user.nativeWake, { type: 'boolean', value: true });
+  assert.deepEqual(result.settings.flag, { available: false });
+  assert.deepEqual(result.settings.policy.nativeWake, { type: 'string' });
+  assert.deepEqual(result.settings.policy.selfWake, { type: 'undefined' });
+  assert.doesNotMatch(JSON.stringify(result), /NEVER_COPY|unrelated|TOKEN/);
+  assert.equal(configurationDiagnostic({ plugin: { root: '/' + 'x'.repeat(5000) } }).plugin.root, null);
+  assert.ok(JSON.stringify(result).length < 2000);
+});
+test('bounded task inventory counts distinguish loaded page from broker total', () => {
+  const tasks = Array.from({ length: 100 }, () => ({}));
+  assert.equal(taskInventoryCount({ tasks, totalCount: 133, nextCursor: '100' }), '100 / 133');
+  assert.equal(taskInventoryCount({ tasks, totalCount: 100, nextCursor: null }), '100');
+  assert.equal(taskInventoryCount({ tasks, totalCount: 133 }), '100 / 133');
+  assert.equal(taskInventoryCount({ tasks, nextCursor: '100' }), '100 / ?');
+  assert.equal(taskInventoryCount({ tasks }), '100');
+});
+test('configuration diagnostics remain visible if helper inspection fails but never cross session boundaries', async () => {
+  const f = fixture(), diagnostics = { diagnosticOnly: true, registration: { nativeWake: { type: 'boolean', value: false } } };
+  f.api.configuration = async () => diagnostics;
+  f.api.bridge = async () => { throw new Error('Helper unavailable'); };
+  await f.controller.refresh(f.api); assert.deepEqual(f.controller.state.configuration, diagnostics);
+  assert.equal(f.submissions.length, 0);
+  let release;
+  f.api.configuration = () => new Promise(resolve => { release = resolve; });
+  const refreshing = f.controller.refresh(f.api); await tick();
+  f.change(OTHER); await f.controller.bind(f.api); release(diagnostics); await refreshing;
+  assert.equal(f.controller.state.configuration, null);
 });
 test('stopped application does not query broker task inventory', async () => {
   const f = fixture(); f.api.bridge = async request => { f.calls.push(request); return { stopped: true }; };

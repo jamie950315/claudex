@@ -26,9 +26,37 @@ export function usageLine(usage) {
     .map(item => `${item.kind} ${item.percentUsed.toFixed(1)}%`).join(' | ') : '';
   return `Context ${context}${rates ? ` | ${rates}` : ''}`;
 }
+function optionDiagnostic(value) {
+  const type = value === null ? 'null' : typeof value;
+  return { type, ...(typeof value === 'boolean' || value === 'true' || value === 'false' ? { value } : {}) };
+}
+/** Exact public plugin options only; never retain the settings objects or secrets. */
+export function configurationDiagnostic({ options, plugin, layers }) {
+  const configKey = 'claudex@claudex-local';
+  const inlineConfigKey = 'claudex@inline';
+  const safePath = value => typeof value === 'string' && value.startsWith('/') && value.length <= 4096
+    && !/[\u0000-\u001f\u007f]/u.test(value) ? value : null;
+  const scoped = key => Object.fromEntries(['user', 'flag', 'policy'].map(source => {
+    const input = layers?.[source], entry = input?.pluginConfigs?.[key];
+    return [source, input === null || input === undefined ? { available: false } : {
+      available: true, present: entry !== undefined,
+      nativeWake: optionDiagnostic(entry?.options?.nativeWake), selfWake: optionDiagnostic(entry?.options?.selfWake),
+    }];
+  }));
+  return { diagnosticOnly: true, configKey,
+    plugin: { name: ['claudex', configKey, inlineConfigKey].includes(plugin?.name) ? plugin.name : null, root: safePath(plugin?.root) },
+    registration: { nativeWake: optionDiagnostic(options?.nativeWake), selfWake: optionDiagnostic(options?.selfWake) },
+    settings: scoped(configKey), inlineConfigKey, inlineSettings: scoped(inlineConfigKey) };
+}
+export function taskInventoryCount(inventory) {
+  const loaded = inventory?.tasks?.length ?? 0, total = inventory?.totalCount;
+  if (Number.isSafeInteger(total) && total >= loaded)
+    return inventory?.nextCursor || total !== loaded ? `${loaded} / ${total}` : String(loaded);
+  return inventory?.nextCursor ? `${loaded} / ?` : String(loaded);
+}
 function blank(context = null, epoch = 0) {
   return { context, epoch, enabled: false, busy: false, tab: 'overview', error: '', notice: '',
-    usage: null, version: null, doctor: null, tasks: null, chats: null, chatQuery: '', chatCursor: null,
+    usage: null, version: null, doctor: null, configuration: null, tasks: null, chats: null, chatQuery: '', chatCursor: null,
     taskOffset: 0, selectedTask: null, detail: null, pending: null, lastReceipt: null,
     wakes: [], wakeTarget: null, wakePreview: null, form: '' };
 }
@@ -75,6 +103,9 @@ export function createController({ nativeWake = false } = {}) {
     page(api, delta) { state.taskOffset = Math.max(0, state.taskOffset + delta); changed(api); },
     async refresh(api) {
       return run(api, async ticket => {
+        const configuration = api.configuration ? await api.configuration().catch(() => null) : null;
+        if (!await stillBound(api, ticket)) return;
+        state.configuration = configuration;
         const doctor = await call(api, ticket, 'doctor');
         // Even status calls stay tied to one root and one exact native session.
         const [usage, version] = await Promise.all([api.usage().catch(() => null), api.version().catch(() => null)]);

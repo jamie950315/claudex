@@ -2,6 +2,14 @@
 
 ## Version 0.5 AI-first observations
 
+Version 0.5.2 adds bounded configuration diagnostics inside the existing technical
+session details: registration option types/values, this plugin's name/root, and
+only its two wake options for the marketplace and inline identities in the native
+user/flag/policy layers. It never displays
+complete settings or secrets and does not override registration or inbound policy.
+If saved and loaded options differ, use the native configuration/activation flow;
+an installed manifest or a reload acknowledgement is not enabled-receiver proof.
+
 The AI-first workflow uses the existing MCP start/wait/status/report/handoff
 protocol; the panel is an optional observation and intervention surface. The
 Mod reports bounded session-local policy, capability and context-usage
@@ -11,12 +19,13 @@ state after broker restart. Unmapped targets, missing receivers, disabled self
 delivery, hold/refuse and missing SendMessage remain explicit; no route fallback,
 permission change or native dispatch is authorized by an observation.
 
-The changed observer has isolated Node/Unix RPC coverage and strict native
-validation. The official kit runs with the separate test-only opt-in stage;
-real Desktop activation remains unverified. Earlier Mod 0.4.1 Desktop acceptance
-is historical, not acceptance of this observer. The broker implements separately opt-in task-to-origin notifications
-with independent native provenance checks, but fresh nonce-to-notification
-activation acceptance is still unverified; see the collaboration protocol.
+The changed observer has isolated Node/Unix RPC coverage, strict native validation
+and actual loaded-session evidence. The official kit runs with a separate
+test-only opt-in stage. The reviewed installation also passed fresh native
+task-origin binding, Codex queue receipt and automatic Claude mod-self receipt
+with real Stop ACK. These bounded results are separate from the earlier 0.4.1
+acceptance and do not certify every runtime or route; see the validation record
+and collaboration protocol.
 
 ## Version 0.4 panel and language support
 
@@ -246,7 +255,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.5.0-review"
+STAGE="$PARENT/claudex-0.5.2-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -268,7 +277,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # The own-inbox test explicitly exercises both opt-ins. Use a separate,
 # never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.5.0-native-tests"
+TEST_STAGE="$PARENT/claudex-0.5.2-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"
@@ -308,6 +317,25 @@ Provide a JSON object on stdin with single-line string values for `stateRoot`,
 `nodeBinary`, `nativeWake`, and `selfWake` (booleans supplied as the string
 `"false"` or authorized `"true"`). Verify the result has no
 unconfigured options. The native writer parses the declared boolean type.
+
+On the reviewed Desktop Code 2.1.286, Desktop delivers installed plugins to the
+SDK as local plugin paths. The Mod's native configuration identity is therefore
+`claudex@inline`, separate from the marketplace manager's `claudex@claudex-local`.
+Use the actual installed cache path reported by the native plugin manager:
+
+```sh
+"$CLAUDE_VALIDATE" --plugin-dir="$INSTALLED_PLUGIN" plugin configure claudex@inline --json
+"$CLAUDE_VALIDATE" --plugin-dir="$INSTALLED_PLUGIN" plugin configure claudex@inline --values-stdin --json
+```
+
+Only if the installation is authorized for native delivery, save those same four
+intended values through this native command too. Keep both identities and source
+defaults intact; do not copy credentials, edit native registries or change the
+Mod's permission decisions. The reviewed host activated the new options through
+its normal module reload and reported true/true from exact live session observers,
+without an app restart. Verify the actual registration values and observer after
+configuration; marketplace configured status alone does not establish Desktop
+activation. An expired or uncertain message must never be resent to test it.
 
 For a CLI-only temporary smoke test, use a separate harmless checkout and
 `claude --plugin-dir "$STAGE/plugins/claudex"`. The source plugin directory itself
