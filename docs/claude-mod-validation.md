@@ -139,6 +139,11 @@ These annotations now preserve the completed work revision/timestamp, with their
 own timestamp/provenance retained. The 32-case affected protocol, notification,
 observability and Unix/MCP integration group passed after the repair. Actual
 execution, reports, active controls and new work retain their normal revisions.
+The installed broker then accepted an independent controller review of the
+verified acceptance result: revision remained 10, all three existing messages
+remained acknowledged, and no additional notification was created. Final source
+hash checks matched all 122 app files and 23 companion files; the stop hold was
+released and both earlier uncertain notification records remained unchanged.
 
 ## Codex main completion-wake acceptance (2026-10-03)
 
