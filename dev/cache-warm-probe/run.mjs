@@ -9,12 +9,13 @@ import { once } from 'node:events';
 import { parseArgs } from 'node:util';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { assessEvidence } from './evidence.mjs';
+import { createTokenLimitEvidence } from './token-limit-evidence.mjs';
 
 const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' },
   strategy: { type: 'string', default: 'fork' },
   run: { type: 'boolean', default: false } } });
 assert(values.root && values.claude, 'Supply --root (an empty private directory) and --claude.');
-assert(['fork', 'main'].includes(values.strategy), 'Strategy must be fork or main.');
+assert(['fork', 'main', 'one-token'].includes(values.strategy), 'Strategy must be fork, main or one-token.');
 const root = await realpath(values.root), binary = await realpath(values.claude);
 const rootInfo = await lstat(values.root);
 assert(rootInfo.isDirectory() && !rootInfo.isSymbolicLink() && rootInfo.uid === process.getuid()
@@ -41,17 +42,20 @@ async function client(arm) {
   const env = { ...process.env, CLAUDEX_COLLABORATION_WORKER: '1', CLAUDEX_CACHE_PROBE_AUTHORIZED: '1',
     CLAUDEX_CACHE_PROBE_STRATEGY: values.strategy,
     CLAUDEX_CACHE_PROBE_ARM: arm, CLAUDE_CODE_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m',
-    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '128', CLAUDE_CODE_EFFORT_LEVEL: EFFORT };
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: values.strategy === 'one-token' ? '1' : '128', CLAUDE_CODE_EFFORT_LEVEL: EFFORT };
   for (const key of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_OAUTH_TOKEN',
     'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY',
     'ENABLE_PROMPT_CACHING_1H', 'FORCE_PROMPT_CACHING_5M', 'DISABLE_PROMPT_CACHING', 'CLAUDE_CODE_ENABLE_FUNCTION_HOOKS']) delete env[key];
   let ended = false, wake, child, pending, failure;
+  let explicitTurn = 0;
+  const tokenLimitEvidence = createTokenLimitEvidence();
   const queue = [], receipts = [], nativeModels = new Set(), nativeSessions = new Set(), hostRows = [];
   const prompt = { async *[Symbol.asyncIterator]() {
     while (!ended) { if (queue.length) yield queue.shift(); else await new Promise(resolve => { wake = resolve; }); }
   } };
   const active = query({ prompt, options: { cwd, pathToClaudeCodeExecutable: binary,
     model: MODEL, effort: EFFORT, persistSession: false, settingSources: [], strictMcpConfig: true,
+    includePartialMessages: values.strategy === 'one-token',
     mcpServers: {}, plugins: observesNatively ? [{ type: 'local', path: plugin }] : [], tools: [], permissionMode: 'dontAsk',
     maxTurns: 1, maxBudgetUsd: 0.5, env,
     settings: { remoteControlAtStartup: false, crossSessionInbound: 'refuse', enabledPlugins: {},
@@ -65,11 +69,12 @@ async function client(arm) {
   const consumer = (async () => {
     try { for await (const e of active) {
       if (e.session_id) nativeSessions.add(e.session_id);
-      if (e.type === 'assistant' && e.message?.model) nativeModels.add(e.message.model);
+      if (e.type === 'assistant' && e.message?.model && !e.message.model.startsWith('<')) nativeModels.add(e.message.model);
+      if (values.strategy === 'one-token') tokenLimitEvidence.observe(e, explicitTurn);
       if (e.type !== 'result') continue;
       const receipt = { subtype: e.subtype, isError: e.is_error, turns: e.num_turns,
         usage: e.usage, modelUsage: e.modelUsage, cumulativeEstimatedUsd: e.total_cost_usd,
-        replyIsOK: e.result?.trim() === 'OK' };
+        stopReason: e.stop_reason ?? null, replyIsOK: e.result?.trim() === 'OK' };
       receipts.push(receipt); emit({ arm, kind: 'receipt', ...receipt });
       if (!observesNatively) hostRows.push({ at: Date.now(), kind: 'main-complete', usage: e.usage,
         provenance: 'native-sdk-result' });
@@ -81,6 +86,8 @@ async function client(arm) {
       : { arm, observation: 'host-dispatch-and-native-sdk-results', rows: hostRows }; },
     async send(text) {
       assert(!failure && !pending, 'Native error or overlapping request.');
+      explicitTurn++;
+      assert(values.strategy !== 'one-token' || explicitTurn <= 2, 'One-token experiment permits at most two user submissions.');
       let timer;
       const done = new Promise((resolve, reject) => { pending = { resolve, reject }; });
       if (!observesNatively) hostRows.push({ at: Date.now(), kind: 'request', main: true,
@@ -93,6 +100,7 @@ async function client(arm) {
     async close() { ended = true; wake?.(); active.close(); await consumer;
       if (child && child.exitCode === null && child.signalCode === null) await once(child, 'exit');
       report.arms[arm] = { receipts, nativeModels: [...nativeModels], nativeSessionCount: nativeSessions.size,
+        ...(values.strategy === 'one-token' && { tokenLimitEvidence: tokenLimitEvidence.summary() }),
         childExited: !child || child.exitCode !== null || child.signalCode !== null };
       try { report.arms[arm].probe = await api.inspect(); } catch { report.arms[arm].probe = null; }
     },
@@ -100,8 +108,8 @@ async function client(arm) {
   clients.push(api);
   await active.initializationResult();
   if (!observesNatively) {
-    hostRows.push({ at: Date.now(), kind: 'loaded', strategy: 'main', pluginLoaded: false });
-    emit({ arm, kind: 'initialized', strategy: 'main', pluginLoaded: false });
+    hostRows.push({ at: Date.now(), kind: 'loaded', strategy: values.strategy, pluginLoaded: false });
+    emit({ arm, kind: 'initialized', strategy: values.strategy, pluginLoaded: false });
     return api;
   }
   let proof;
@@ -118,6 +126,18 @@ async function client(arm) {
 try {
   const control = await client('control');
   if (!values.run) { report.outcome = 'load-only'; }
+  else if (values.strategy === 'one-token') {
+    // This measures the output-limit recovery path, not TTL extension. Reuse
+    // the earlier expiry/control proof rather than buying another six-minute run.
+    const seed = 'Synthetic reference for cache measurement:\n' + Array.from({ length: 180 }, (_, i) =>
+      `Record ${i}: the stable reference contains amber, cedar, lake, and north; this is inert test data.`).join('\n') + '\nReply only OK.';
+    const first = await control.send(seed);
+    assert(first.usage?.cache_creation_input_tokens > 1024 || first.usage?.cache_read_input_tokens > 1024,
+      'No measurable seed usage; stop without a second submission.');
+    const second = await control.send('Cache-retention measurement only. Reply with exactly OK. Do not call tools.');
+    report.outcome = 'one-token-measured';
+    report.secondTurnCachedTokens = second.usage?.cache_read_input_tokens ?? null;
+  }
   else {
     const warm = await client('warm');
     const seed = 'Synthetic reference for cache measurement:\n' + Array.from({ length: 180 }, (_, i) =>
@@ -164,6 +184,9 @@ try {
   report.outcome = 'blocked-or-failed'; report.error = error.message; process.exitCode = 1;
 } finally {
   for (const c of clients) await c.close();
-  report.assessment = assessEvidence(report);
+  report.assessment = values.strategy === 'one-token'
+    ? { status: 'output-limit-measurement-only', tokenLimit: 1, effectiveEffortVerified: false,
+      ttlExtensionRetested: false, explicitSubmissions: report.arms.control?.receipts.length ?? 0 }
+    : assessEvidence(report);
   await save(); emit({ kind: 'finished', outcome: report.outcome, error: report.error ?? null, report: join(root, 'report.json') });
 }

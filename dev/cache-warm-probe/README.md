@@ -6,6 +6,14 @@ against a no-refresh control. It is not a shipping Claudex feature, an installed
 plugin, or an unattended cache-warming service. It never uses an extracted OAuth
 token or another API route. It requires explicit authorization before `--run`.
 
+The separate `--strategy one-token` diagnostic tests native output-limit recovery
+with `CLAUDE_CODE_MAX_OUTPUT_TOKENS=1`. It submits at most two user messages to one
+new, nonpersistent, plugin-free session, without waiting through another TTL.
+Truncated/error outcomes are observations, not a reason for harness retries.
+Native continuation requests can exceed both the user-message count and the
+SDK's `maxTurns: 1`; inspect the response-level evidence rather than assuming a
+one-token cap also means one request. It does not claim TTL-extension acceptance.
+
 ## Protocol
 
 - Use the supplied, unmodified Claude Code executable and its normal native sign-in.
@@ -40,6 +48,10 @@ a $0.50 estimated query budget per session. **The installed Mod fork API has no
 independent output/budget cap**: do not describe those settings as a verified
 hard bound for fork spend. The finite invocation count is the experiment's
 primary bound. Native helpers are outside that explicit invocation count.
+The one-token diagnostic uses the same per-session estimated budget and timeout,
+but a cap of 1 rather than 128. Its two-submission limit does not disable or
+override native output-limit recovery. Native helpers can use different models
+and are separately visible in the cumulative native model usage.
 
 `--run` uses subscription quota (or whatever normal native authentication selects).
 Native dollar fields are estimates, not a billing statement. This is not a
@@ -74,6 +86,9 @@ For the main-conversation experiment, after explicit authorization:
 node dev/cache-warm-probe/run.mjs --run --strategy main --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"
 ```
 
+To run the separately authorized one-token diagnostic, use a new private directory
+and replace `--strategy main` with `--strategy one-token`.
+
 Only after authorization, use another new private directory and add `--run`.
 Allow approximately seven minutes. The default load-only path does not validate
 server cache behavior. No feature-rollout override is applied. A missing Mod
@@ -89,6 +104,14 @@ request effort, the fork receipt and before/after main equality. Its `probe.json
 contains content-free Mod observations; main mode records host dispatch/native
 response observations in the report instead. Do not commit runtime output or
 native generated declarations. Only fork mode copies and loads the source plugin.
+
+One-token mode adds `tokenLimitEvidence`: unique native response counts, the
+submitted turn each response belongs to, stop reasons, token totals, transport
+retry notices, and typed native errors. It deduplicates streaming/final frames
+by response ID in memory and saves neither those IDs nor generated text.
+An empty transport-retry list does not rule out output-limit continuation:
+several `max_tokens` responses can belong to one user submission. Result-envelope
+`subtype: success` also does not establish success when `is_error` is true.
 
 A positive experiment needs full-prefix reuse during the selected refresh and
 reuse of the seed prefix in the warm arm after the original TTL, while the control

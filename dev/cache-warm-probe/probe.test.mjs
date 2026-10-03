@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { register } from './plugin/hooks/register.mjs';
 import { assessEvidence } from './evidence.mjs';
+import { createTokenLimitEvidence } from './token-limit-evidence.mjs';
 
 function fixture({ arm = 'warm', authorized = true, mutate = false, strategy = 'fork' } = {}) {
   const hooks = {}, timers = [], records = [];
@@ -114,4 +115,22 @@ test('main refresh requires same-session, fixed-model requests and a cold contro
   report.arms.warm.nativeSessionCount = 1;
   report.arms.control.receipts[1].usage.cache_read_input_tokens = 4000;
   assert.equal(assessEvidence(report).status, 'inconclusive');
+});
+
+test('one-token accounting deduplicates native frames and counts recovery responses', () => {
+  const evidence = createTokenLimitEvidence();
+  const usage = { input_tokens: 2, cache_creation_input_tokens: 0, cache_read_input_tokens: 4000, output_tokens: 0 };
+  evidence.observe({ type: 'stream_event', event: { type: 'message_start', message: { id: 'a', model: 'claude-sonnet-5-5', usage } } }, 1);
+  evidence.observe({ type: 'stream_event', event: { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 1 } } }, 1);
+  evidence.observe({ type: 'assistant', message: { id: 'a', model: 'claude-sonnet-5-5', stop_reason: null, usage } }, 1);
+  assert.equal(evidence.summary().totals.output_tokens, 1);
+  evidence.observe({ type: 'assistant', message: { id: 'a', model: 'claude-sonnet-5-5', stop_reason: 'max_tokens', usage: { ...usage, output_tokens: 1 } } }, 1);
+  evidence.observe({ type: 'assistant', message: { id: 'synthetic', model: '<synthetic>', content: [{ text: 'Do not retain me' }] } }, 1);
+  evidence.observe({ type: 'assistant', message: { id: 'b', model: 'claude-sonnet-5-5', stop_reason: 'max_tokens', usage: { ...usage, output_tokens: 1 } } }, 1);
+  const result = evidence.summary();
+  assert.equal(result.responseCount, 2); assert.equal(result.totals.output_tokens, 2);
+  assert.equal(result.totals.cache_read_input_tokens, 8000);
+  assert.equal(JSON.stringify(result).includes('Do not retain me'), false);
+  evidence.observe({ type: 'system', subtype: 'api_retry', attempt: 1, max_retries: 2, error_status: 429 }, 2);
+  assert.equal(evidence.summary().retries[0].status, 429);
 });

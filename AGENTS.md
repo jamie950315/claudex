@@ -45,6 +45,10 @@ fixtures use placeholder paths and IDs.
   Keep its runtime evidence outside Git and its inference outside automated tests.
   Fork usage and unchanged main messages must be verified; a cached hit alone
   does not establish TTL extension. Native fork has no independent output cap.
+  `--strategy one-token` separately measures native output-limit recovery with
+  two explicit user submissions and content-free, deduplicated response usage.
+  A one-token cap or `maxTurns: 1` is not a one-request guarantee; preserve
+  native errors and distinguish continuation from transport retries.
 - Product repairs must apply through normal installation and runtime paths on
   other users' machines. Do not depend on one account, UID, project path, native
   conversation ID or manually repaired local state. Reproduce relevant failures
