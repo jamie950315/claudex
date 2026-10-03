@@ -27,20 +27,23 @@ async function fixture(t, tag = 'a', options = {}) {
 const sourceOf = async resource => inspectFolderCache(await readFile(resource.path),{targetURL:resource.url}).source;
 const withoutImports = source => { const imports=syntax(source).body.filter(n=>n.type==='ImportDeclaration');for(const n of imports.reverse())source=source.slice(0,n.start)+source.slice(n.end);return source; };
 
-test('split aggregation keeps hooks in the consumer and invalidates its native memo on map changes', async t => {
+test('split aggregation uses an unshadowed hook import and invalidates native memo on map changes', async t => {
   const f = await fixture(t, 'a', { split: true }), graph = await discoverClaudeFrontend(f);
   const matched = graph.adapters.folders;
   assert.equal(matched.status, 'matched'); assert.equal(matched.bindings.pure, true);
   const result = await ensureClaudeRendererAdapter({ ...f, adapter: 'folders', graph });
   assert.equal(result.status, 'installed'); assert.equal(result.consumer.changed, true);
   const helper = await sourceOf(f.resources.folders), consumer = await sourceOf(f.resources.consumer);
+  assert.equal(matched.consumer.bindings.subscription.local, 'suba');
+  assert.throws(() => runInNewContext(withoutImports(consumer).replace('__cldxFolderSubscribe(', 'suba(')
+    + ';sectiona([]);'), /Cannot access 'suba' before initialization/);
   patchContracts.folders(helper, matched.target.source, matched.bindings);
   folderConsumerPatchContract(consumer, matched.consumer.target.source, matched.consumer.bindings);
   assert.equal(nodes(syntax(helper), n => n.type === 'CallExpression' && n.callee.name === 'suba').length, 0);
   let contents = JSON.stringify({ version: 1, entries: [{ remoteId: 'cse_owned', canonicalCwd: '/synthetic/project', verified: true }] }), poll;
   let keys;
   const cache = [], context = { La: { readFileAtCwd: async () => ({ contents }) }, captureKeys: (...value) => { keys = value; },
-    memoa: size => { assert.equal(size, 12); return cache; }, suba: (subscribe, get) => { subscribe(() => {}); return get(); },
+    memoa: size => { assert.equal(size, 12); return cache; }, __cldxFolderSubscribe: (subscribe, get) => { subscribe(() => {}); return get(); },
     setTimeout: fn => { poll = fn; return 1; }, clearTimeout() {}, console: { warn() {} } };
   const projectionSource = await readFile(new URL('../src/claude-folder-projection.mjs', import.meta.url), 'utf8');
   const runtimeSource = await readFile(new URL('../src/claude-folder-runtime.mjs', import.meta.url), 'utf8');

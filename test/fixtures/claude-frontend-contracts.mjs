@@ -118,8 +118,13 @@ export function folderConsumerPatchContract(source, original, b) {
   const imp = ast.body.shift();
   assert.equal(imp.type, 'ImportDeclaration'); assert.equal(imp.source.value, b.importedPath);
   assert.deepEqual(imp.specifiers.map(n => n.imported.name), ['__cldxFolderStore', '__cldxNativeProjectKey']);
+  const subscription = ast.body.shift();
+  assert.equal(subscription.type, 'ImportDeclaration'); assert.equal(subscription.source.value, b.subscription.path);
+  assert.equal(subscription.specifiers.length, 1);
+  assert.equal(subscription.specifiers[0].imported.name, b.subscription.exported);
+  assert.equal(subscription.specifiers[0].local.name, '__cldxFolderSubscribe');
   const f = only(functionsFor(ast, b.component.id.name), 'consumer component');
-  assert.deepEqual(astValue(f.body.body.shift()), astValue(syntax(`const __cldxVersion=${b.subscribe}(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);`).body[0]));
+  assert.deepEqual(astValue(f.body.body.shift()), astValue(syntax('const __cldxVersion=__cldxFolderSubscribe(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);').body[0]));
   const prepare = only(f.body.body.filter(n => n.type === 'ExpressionStatement' && n.expression.callee?.object?.name === '__cldxFolderStore'), 'source rows preparation');
   assert.deepEqual(astValue(prepare.expression), expression(`__cldxFolderStore.setRows(${b.rows},__cldxNativeProjectKey)`));
   f.body.body.splice(f.body.body.indexOf(prepare), 1);

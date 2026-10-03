@@ -223,13 +223,16 @@ export function folderConsumerAnchors(source, graph, helper, importedPath) {
   const last = component.body.body.at(-1);
   if (last?.type !== 'ReturnStatement' || guards.some(g => g.end > last.start)) fail('folder consumer return boundary');
   return { component, memo, condition, guards, prepareAt, rows, last, cache, size, result, importedPath,
-    subscribe: importedAPI(source, graph, 'useSyncExternalStore').local };
+    subscription: importedAPI(source, graph, 'useSyncExternalStore') };
 }
 
 export function transformFolderConsumer(source, b) {
   return applyEdits(source, [
-    insert(0, `import{__cldxFolderStore,__cldxNativeProjectKey}from${JSON.stringify(b.importedPath)};`),
-    insert(b.component.body.start + 1, `const __cldxVersion=${b.subscribe}(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);`),
+    // A native import alias can be shadowed by parameters or later let/const
+    // declarations inside the component. Import the proved export under our
+    // reserved namespace instead of borrowing its minified local spelling.
+    insert(0, `import{__cldxFolderStore,__cldxNativeProjectKey}from${JSON.stringify(b.importedPath)};import{${b.subscription.exported} as __cldxFolderSubscribe}from${JSON.stringify(b.subscription.path)};`),
+    insert(b.component.body.start + 1, 'const __cldxVersion=__cldxFolderSubscribe(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);'),
     replace(b.memo.init.arguments[0], String(b.size + 1)),
     insert(b.prepareAt, `__cldxFolderStore.setRows(${b.rows},__cldxNativeProjectKey);`),
     ...b.guards.map(g => replace(g.test, `(${code(source, g.test)})||${b.cache}[${b.size}]!==__cldxVersion`)),

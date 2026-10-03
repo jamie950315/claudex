@@ -1536,7 +1536,11 @@ the one exact binding, including useMemo's version dependency; never choose a
 branch from host feature flags. Split builds export a pure grouping helper and
 one separately proved React consumer. Keep hooks only in the consumer; prepare
 the exact native rows before key lookups and invalidate all key/group memo guards
-with one subscription version. Preflight both complete candidates, publish the
+with one subscription version. Import injected hooks under reserved Claudex
+aliases: a proved module-level minified alias can still be shadowed by component
+parameters or later lexical declarations. AST preservation and syntax checks do
+not prove lexical resolution; exercise shadowing and verify the restarted native
+renderer before claiming UI acceptance. Preflight both complete candidates, publish the
 helper before its consumer, and restore dependent consumers before the helper.
 Each resource retains its own immutable original and recoverable journal; a
 partial pair is never ready. This is still restart-required, not live-load proof.
