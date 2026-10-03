@@ -16,15 +16,26 @@ queue notification and synthetic recipient hook/ACK for both registry-free
 CLI/SDK and managed Remote Control fixtures, including delayed native flush.
 Desktop Local and Codex paths remain covered. Imported codec output, copied
 ancestors, subagents, unsafe storage and replayed receipts remain refused.
-This is source/protocol evidence, not additional native model acceptance or an
-installed-app upgrade. Remote-host-only and nonpersistent sources still require
-readable native evidence; wake routing and recipient policy are unchanged.
+These are source/protocol checks, not additional native model acceptance.
+Remote-host-only and nonpersistent sources still require readable native
+evidence; wake routing and recipient policy are unchanged.
 
 Absent main-response model metadata is now `not-reported`, independent of task
 status. Unix RPC tests cover completed Claude/Codex tasks without model IDs and
 legacy `unverified` model labels normalized on read without rewriting history.
-Actual execution uncertainty remains unchanged. The installed acceptance below
-predates this diagnostic label change.
+Actual execution uncertainty remains unchanged. The native inference acceptance
+below predates this diagnostic label change.
+
+The user subsequently authorized installation and push. A development-signed
+app built from engine commit `1830397` was installed through the normal app
+shutdown/resume lifecycle, retaining the previous bundle. All 117 packaged
+engine/entrypoint/plugin files match the checkout and strict deep signature
+verification passes. The resumed broker presents an existing completed task's
+missing model evidence as `not-reported`; model/effort/permission preferences
+are unchanged. No Claude restart or additional model inference was performed.
+The companion remains 0.5.2. The existing 1,469-pass, zero-failure regression
+result (23 opt-in skips) was reused; the final strengthened origin test passed
+separately. This remains a development-signed, non-notarized installation.
 
 ## Installed native origin and notification acceptance (2026-10-03)
 
