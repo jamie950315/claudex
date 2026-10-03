@@ -7,6 +7,45 @@ defaults remain false. Installation, native invocation and actual Desktop displa
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
+## Installed native origin acceptance in progress (2026-10-03)
+
+The user authorized local installation and minimal native inference. The signed
+candidate was installed at the normal app path after owned services stopped and
+native ownership checks drained; prior app and marketplace artifacts were kept.
+The native plugin manager upgraded 0.4.1 to 0.5.0, preserving the plugin ID,
+language store and saved nativeWake/selfWake=true overrides. The original broker
+model/effort defaults were unchanged, and every canary explicitly used read-only.
+
+The new Codex PostToolUse definition was reviewed through the official CLI
+`/hooks` interface and trusted individually. The Desktop backend confirmed the
+same exact definition hash as trusted; no bypass flag or trust-file edit was used.
+
+Live acceptance found and repaired two fixture-hidden native contract defects:
+
+- Claude creates owned canonical project directories with 0755 under ordinary
+  umasks. Origin verification now accepts non-foreign-writable native directories
+  while retaining 0600, no-follow, stable identity and single-link transcript
+  checks. It does not chmod native files or loosen broker-private storage.
+- Claude 2.1.286 PostToolUse supplies an MCP content array, whereas Codex supplies
+  the MCP result envelope. The hook now recognizes the exact provider-specific
+  single-text shape, with unchanged error/replay/ambiguity refusals. Updated
+  real-shape integration fixtures reproduced the old refusal and pass after repair.
+
+The first completed but unbound task was retained without manual binding or
+replay. A new Claude Desktop Local canary then obtained native origin proof and
+completed its Codex worker once with a matching nonce and structured done report.
+A separate normal Codex CLI source obtained its own exact native proof, completed
+one Claude worker and received the queue-only result through the next real hook.
+Its native recipient read the exact result and emitted a genuine Stop ACK. Both
+workers have active=null, one generation and confirmed absent recorded processes.
+Claude's main response reported claude-opus-5-5 separately from requested opus;
+Codex did not expose an actual model ID and remains correctly unverified.
+
+Claude wake reception remains incomplete: the loaded receiver reported both
+opt-ins false despite saved true settings. Its message expired without fallback
+or replay. A normal reload and configuration roundtrip did not establish an
+enabled receiver; installation and binding are not claimed as wake delivery.
+
 ## 0.5 AI-first observation candidate (2026-10-03)
 
 - 106 affected Mod Node tests passed, including real Unix RPC observation and

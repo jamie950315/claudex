@@ -2,12 +2,12 @@ import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
-import { realpath } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import { CodexWebSocketClient } from './codex-websocket.mjs';
 import { codexChatSocket } from './native-chat-catalog.mjs';
 import { readDesktopSessionMappings } from './desktop.mjs';
 import { sessionPath } from './claude.mjs';
-import { privateDir, privateRead } from './claude-mod-storage.mjs';
+import { privateRead } from './claude-mod-storage.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const HEX = /^[a-f0-9]{64}$/;
@@ -43,7 +43,13 @@ function verifyCall(input, receipt, expected) {
 
 async function readClaudeSource(path, home) {
   requireValue(await realpath(home) === home, 'ORIGIN_PROOF_UNAVAILABLE');
-  await privateDir(dirname(path));
+  // Native Claude creates project directories with 0755 under the user's
+  // ordinary umask, while transcript files remain private 0600. These are not
+  // broker-owned state directories: require ownership/canonicality and reject
+  // foreign writes without chmodding native storage or demanding 0700.
+  const parent = dirname(path), directory = await lstat(parent);
+  requireValue(directory.isDirectory() && !directory.isSymbolicLink() && directory.uid === process.getuid()
+    && (directory.mode & 0o022) === 0 && await realpath(parent) === parent, 'ORIGIN_PROOF_UNAVAILABLE');
   requireValue(await realpath(path) === path, 'ORIGIN_PROOF_UNAVAILABLE');
   return privateRead(path, { maxBytes: MAX_SOURCE_BYTES });
 }

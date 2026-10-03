@@ -26,10 +26,13 @@ async function bindOrigin(options, input) {
   if (options['--provider'] === 'codex' && !identifier(input.turn_id)) return;
   let response = input.tool_response;
   if (typeof response === 'string') { try { response = JSON.parse(response); } catch { return; } }
-  if (!response || response.isError === true || !Array.isArray(response.content) || response.content.length !== 1
-    || response.content[0]?.type !== 'text' || typeof response.content[0].text !== 'string') return;
+  // Claude's native MCP executor exposes its content array to PostToolUse;
+  // Codex retains the MCP response envelope. Neither shape proves origin.
+  const content = options['--provider'] === 'claude' && Array.isArray(response) ? response : response?.content;
+  if (!response || response.isError === true || !Array.isArray(content) || content.length !== 1
+    || content[0]?.type !== 'text' || typeof content[0].text !== 'string') return;
   let receipt;
-  try { receipt = JSON.parse(response.content[0].text); } catch { return; }
+  try { receipt = JSON.parse(content[0].text); } catch { return; }
   if (!receipt || receipt.replayed === true || receipt.isError === true || !identifier(receipt.taskId)
     || typeof receipt.originChallenge !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.originChallenge)) return;
   // These fields are hints only. The broker independently reads the exact native

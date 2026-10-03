@@ -151,15 +151,21 @@ test('Claude permits a verified bounded intervening parent chain but rejects mis
     { code: 'ORIGIN_PROOF_UNAVAILABLE' });
 });
 
-test('default Claude reader rejects alias and hardlink native evidence, preserving source files', async t => {
+test('default Claude reader accepts native 0755 directories but rejects foreign writes, aliases and hardlinks', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-origin-')));
   await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
   const home = join(root, 'home'), path = sessionPath(home, CWD, ID);
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  // Set the native mode explicitly: a test-process umask must not hide this
+  // actual Desktop state and make a private-directory-only verifier look valid.
+  await chmod(home, 0o755); await chmod(dirname(path), 0o755);
   await writeFile(path, serialize(claudeRows()), { mode: 0o600 });
   const verify = createOriginVerifier({ claudeHome: home, mappings: async () => new Map([[ID,
     { nativeId: ID, sessionId: `local_${ID}`, cwd: CWD, isArchived: false }]]) });
   await verify(input('claude'));
+  await chmod(dirname(path), 0o775);
+  await assert.rejects(verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+  await chmod(dirname(path), 0o755);
   const alias = join(root, 'alias'); await link(path, alias);
   await assert.rejects(verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
   await rm(alias);

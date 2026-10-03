@@ -113,7 +113,9 @@ for (const provider of ['codex', 'claude']) for (const deferred of [false, true]
     assert.equal(f.syntheticInvocations(), 0);
     if (!deferred) await f.publishNativeResult(args, nativeResult);
     const event = { hook_event_name: 'PostToolUse', tool_name: 'mcp__claudex-work__claudex_start',
-      tool_use_id: TOOL, tool_input: args, tool_response: nativeResult,
+      // Claude 2.1.286 passes its MCP executor's raw data (content blocks) to
+      // PostToolUse. Codex passes the complete MCP result envelope instead.
+      tool_use_id: TOOL, tool_input: args, tool_response: provider === 'claude' ? nativeResult.content : nativeResult,
       ...(provider === 'codex' ? { turn_id: TURN } : {}) };
     assert.deepEqual(await f.hook(event), { code: 0, stdout: '', stderr: '' });
     if (deferred) {
@@ -149,7 +151,8 @@ for (const provider of ['codex', 'claude']) for (const deferred of [false, true]
     // task or make the native hook bind/notify again.
     const replay = await mcpStart(f.root, f.hub.controllerToken, provider, args);
     assert.equal(JSON.parse(replay.content[0].text).replayed, true);
-    assert.deepEqual(await f.hook({ ...event, tool_response: replay }), { code: 0, stdout: '', stderr: '' });
+    assert.deepEqual(await f.hook({ ...event, tool_response: provider === 'claude' ? replay.content : replay }),
+      { code: 0, stdout: '', stderr: '' });
     assert.equal(f.methods.filter(method => method === 'origin_bind').length, 1);
     assert.equal(f.hub.state.tasks[receipt.taskId].notification.deliveries.length, 1);
     assert.equal(f.syntheticInvocations(), 1);

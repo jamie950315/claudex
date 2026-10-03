@@ -257,6 +257,10 @@ and stable private native transcript. CLI-only, Remote Control and unmapped Clau
 unsupported. Native flush gaps retain one identity-only hint, rechecked on matching
 SessionStart/UserPromptSubmit/Stop only (four tasks/event, three attempts/task).
 The new PostToolUse trust diagnostic is separate from legacy sync readiness.
+Claude PostToolUse uses a single-text MCP content array; Codex uses the full
+MCP envelope. Native Claude project directories may be 0755: require canonical
+ownership and no group/world writes, retaining private stable single-link files.
+Do not demand broker-only directory modes or chmod originals to validate origin.
 Keep write-ahead notification intents, absolute expiry through awaited preflights,
 and the final native dispatch fence. Interrupted/unknown dispatch never retries.
 Coalesce undispatched terminal revisions and cap retained sends at 16/task and

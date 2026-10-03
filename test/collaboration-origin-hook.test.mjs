@@ -41,7 +41,7 @@ async function fixture(t) {
 test('PostToolUse forwards exact identity hints once over private RPC without storing prompts or sync hints', async t => {
   const f = await fixture(t);
   for (const provider of ['codex', 'claude']) {
-    const input = payload(provider === 'claude' ? { turn_id: undefined } : {});
+    const input = payload(provider === 'claude' ? { turn_id: undefined, tool_response: receipt().content } : {});
     assert.deepEqual(await f.hook(input, { provider }), { code: 0, stdout: '', stderr: '' });
     const envelope = f.seen.at(-1);
     assert.equal(envelope.method, 'origin_bind'); assert.equal(envelope.peer, provider);
@@ -72,6 +72,23 @@ test('serialized MCP response envelopes and narrowly matched underscore names re
   await f.hook(payload({ tool_name: 'mcp__claudex_work__claudex_start', tool_response: JSON.stringify(receipt()) }));
   assert.equal(f.seen.length, 1);
   assert.deepEqual(Object.keys(f.seen[0].params).sort(), ['cwd', 'sessionId', 'taskId', 'toolUseId', 'turnId']);
+});
+
+test('native Claude MCP content arrays bind only one successful receipt while Codex requires its envelope', async t => {
+  const f = await fixture(t);
+  for (const tool_response of [receipt().content, JSON.stringify(receipt().content)]) {
+    assert.deepEqual(await f.hook(payload({ tool_response, turn_id: undefined }), { provider: 'claude' }), { code: 0, stdout: '', stderr: '' });
+    assert.equal(f.seen.at(-1).peer, 'claude');
+    assert.deepEqual(f.seen.at(-1).params, { taskId, sessionId, cwd: '/fixture-project', toolUseId: 'native-tool-1' });
+    assert.deepEqual(await f.hook(payload({ tool_response })), { code: 0, stdout: '', stderr: '' });
+  }
+  assert.equal(f.seen.length, 2);
+  for (const tool_response of [[], [...receipt().content, ...receipt().content], receipt({ replayed: true }).content,
+    receipt({ isError: true }).content, [{ type: 'text', text: 'not-json' }], [{ type: 'image', text: receipt().content[0].text }]]) {
+    assert.deepEqual(await f.hook(payload({ tool_response }), { provider: 'claude' }), { code: 0, stdout: '', stderr: '' });
+  }
+  assert.equal(f.seen.length, 2);
+  assert.deepEqual(await readdir(f.root), ['collaboration']);
 });
 test('stopped and resuming holds suppress PostToolUse RPC without creating any sync state', async t => {
   const f = await fixture(t);
