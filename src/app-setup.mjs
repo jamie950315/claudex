@@ -22,6 +22,8 @@ import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { installAppLogin } from './app-login.mjs';
 import { installSyncHooks } from './sync-hook-install.mjs';
+import { inspectAppMod, ensureAppMod, defaultNativeModRun } from './app-mod.mjs';
+import { findAppModRuntime, ensureAppModRuntime } from './app-mod-runtime.mjs';
 
 const execute = promisify(execFile);
 const defaults = Object.freeze({ allProjects: true, allowWrite: true, defaultPermission: 'workspace-write' });
@@ -62,11 +64,14 @@ export class AppSetup {
     serviceInstall = installService, serviceStatus = controlService, ownership = inspectServiceStart,
     foldersInstall = ensureClaudeFolderPresentationCache, collaborationCall = callCollaboration, desktopWakeInstall = installClaudeDesktopWake,
     desktopWakeCacheInstall = ensureClaudeChatWakeCache, desktopOwnerWakeCacheInstall = ensureClaudeOwnerWakeCache,
-    interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks, appPath, readOnly = false } = {}) {
+    interfaceInstall = installAppLogin, syncHooksInstall = installSyncHooks,
+    modInspect = inspectAppMod, modEnsure = ensureAppMod, modFindRuntime = findAppModRuntime,
+    modEnsureRuntime = ensureAppModRuntime, modRun = defaultNativeModRun, appPath, readOnly = false } = {}) {
     if (![root, home, engineRoot].every(value => typeof value === 'string' && isAbsolute(value))) throw new Error('Setup paths must be absolute.');
     Object.assign(this, { root: resolve(root), home, engineRoot: resolve(engineRoot), runtimeDirectory: runtimeDirectory ?? resolve(engineRoot, '..', 'runtime'),
       run, platform, discover, ensure, collaborationInstall, collaborationControl, desktopInstall, serviceInstall, serviceStatus, ownership, foldersInstall, collaborationCall, desktopWakeInstall, desktopWakeCacheInstall, desktopOwnerWakeCacheInstall,
-      interfaceInstall, syncHooksInstall, appPath: appPath ?? resolve(engineRoot, '../../..'), readOnly });
+      interfaceInstall, syncHooksInstall, modInspect, modEnsure, modFindRuntime, modEnsureRuntime, modRun,
+      appPath: appPath ?? resolve(engineRoot, '../../..'), readOnly });
     this.cli = join(this.engineRoot, 'bin', 'claudex.mjs');
     this.collaborationCli = join(this.engineRoot, 'bin', 'claudex-collaboration.mjs');
     this.node = join(this.runtimeDirectory, 'bin', 'node');
@@ -116,7 +121,7 @@ export class AppSetup {
   }
 
   async collaborationRequest(method, params = {}) {
-    if (this.readOnly && (method !== 'list' && method !== 'models'
+    if (this.readOnly && (method !== 'list' && method !== 'models' && method !== 'mod_wake_status'
       || method === 'models' && (params.defaultModels !== undefined || params.defaultEfforts !== undefined || params.defaultPermission !== undefined)))
       this.requireWritable();
     const root = join(this.root, 'collaboration');
@@ -138,6 +143,41 @@ export class AppSetup {
 
   async collaborationStatus() {
     return this.collaborationRequest('list');
+  }
+
+  async modActivationStatus() {
+    try { return await this.collaborationRequest('mod_wake_status'); }
+    catch { return null; } // Missing/older/offline brokers are unobserved, never ready.
+  }
+
+  async inspectMod(providers, { install = false, receiver, enable = false } = {}) {
+    if (install) this.requireWritable();
+    if (receiver !== undefined && !['enabled', 'disabled'].includes(receiver)) throw new Error('Invalid Mod receiver choice.');
+    if (!providers?.claude?.app || !await this.runtimeReady())
+      return { runtime: { state: 'missing' }, installation: { state: 'missing', reason: 'prerequisites' } };
+    const options = { root: this.root, home: this.home, runtime: this.runtimeDirectory,
+      claudeBinary: providers.claude.binary, run: this.modRun };
+    const runtime = await (install ? this.modEnsureRuntime : this.modFindRuntime)(options);
+    if (runtime.state !== 'ready') return { runtime, installation: { state: runtime.state, reason: 'manager-unavailable' } };
+    const installation = await (install ? this.modEnsure : this.modInspect)({ root: this.root, home: this.home,
+      engineRoot: this.engineRoot, node: this.node, claudeBinary: runtime.binary, run: this.modRun,
+      readOnly: this.readOnly, ...(install ? { receiver, enable } : {}) });
+    return { runtime, installation };
+  }
+
+  /** Explicit App action; startup also maintains only this owned plugin, not
+   * native user work or unrelated plugins. Inspection remains mutation-free. */
+  async modSetup({ receiver, enable = false } = {}) {
+    this.requireWritable();
+    if (this.platform !== 'darwin') throw new Error('The Claudex app requires macOS.');
+    this.root = await privateDirectory(this.root);
+    return withLock(join(this.root, 'app-setup.lock'), async () => {
+      const providers = await this.providers(false);
+      const mod = await this.inspectMod(providers, { install: true, receiver, enable });
+      const report = await this.inspect({ providers, mod });
+      await writeJSON(join(this.root, 'app-setup-status.json'), { ...report, updatedAt: Date.now() });
+      return report;
+    }, { recoverDead: true });
   }
 
   async models(defaultModels, defaultEfforts, defaultPermission) {
@@ -173,7 +213,7 @@ export class AppSetup {
     return { resolved, failed };
   }
 
-  async inspect({ providers, notes = {} } = {}) {
+  async inspect({ providers, notes = {}, mod } = {}) {
     const rows = [component('projects', 'Project access', 'ready', 'All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.')];
     if (notes.lifecycle) rows.push(component('lifecycle', 'Claudex application', 'blocked', notes.lifecycle, 'diagnostics'));
     let interfaceError = notes.interface;
@@ -206,6 +246,51 @@ export class AppSetup {
         item?.app ? item.appSignature === 'local' ? 'The installed app is a locally re-signed build of the official app.'
           : 'The installed app has the expected vendor signature.' : item?.appIssue
           ?? 'Claudex expects this desktop app to be installed already. It will not download or replace it.', item?.appIssue ? 'retry' : `open-${name}`));
+    }
+    let modSettings, modInfo;
+    try {
+      mod ??= await this.inspectMod(found);
+      const item = mod.installation, runtime = mod.runtime;
+      const inline = item.modSettings?.inline;
+      if (typeof inline?.nativeWake === 'boolean' && typeof inline.selfWake === 'boolean')
+        modSettings = { nativeWake: inline.nativeWake, selfWake: inline.selfWake };
+      const messages = {
+        ready: item.reason === 'newer-installed-preserved'
+          ? 'A newer Claude Mod is installed. It was preserved instead of being downgraded.'
+          : 'The bundled Claude Mod is installed, enabled and verified.',
+        missing: 'The Claude Mod and its management runtime will be installed automatically.',
+        'update-available': 'A bundled Claude Mod update is available and will be installed automatically.',
+        disabled: 'Claude Mod is disabled. Your preference was preserved.',
+        blocked: runtime.state !== 'ready' ? 'The Claude Mod manager could not be verified. Existing tools and settings were preserved.'
+          : 'Claude Mod installation needs attention. Use Install or update Claude Mod to retry; existing data is preserved.',
+      };
+      rows.push(component('claude-mod', 'Claude Mod', item.state === 'ready' ? 'ready' : item.state === 'disabled' ? 'waiting'
+        : item.state === 'missing' || item.state === 'update-available' ? 'missing' : 'blocked',
+      messages[item.state] ?? messages.blocked, item.state === 'disabled' ? 'mod-enable' : 'mod-setup'));
+      modInfo = { bundledVersion: item.bundledVersion ?? null, installedVersion: item.installedVersion ?? null,
+        managerVersion: runtime.version ?? null, loadedVersion: null, reason: String(item.reason ?? '').slice(0, 128), route: null };
+      if (item.state === 'ready') {
+        const observation = await this.modActivationStatus();
+        const current = observation?.diagnosticOnly === true && observation.provenance === 'mod-self-reported' && !observation.brokerStopping
+          && Array.isArray(observation.versions)
+          ? observation.versions.find(v => v.version === item.installedVersion && v.build === 'observer-v1' && v.observers > 0) : null;
+        const matchingCount = !current || !modSettings ? 0 : modSettings.nativeWake
+          ? modSettings.selfWake ? current.bothEnabledCount : current.nativeWakeCount - current.bothEnabledCount
+          : modSettings.selfWake ? current.selfWakeCount - current.bothEnabledCount
+            : current.observers - current.nativeWakeCount - current.selfWakeCount + current.bothEnabledCount;
+        const matches = Number.isSafeInteger(matchingCount) && matchingCount > 0;
+        if (matches) modInfo.loadedVersion = current.version;
+        if (['mod-self', 'mod', 'renderer'].includes(observation?.route)) modInfo.route = observation.route;
+        rows.push(component('claude-mod-activation', 'Claude Mod activation', matches ? 'ready' : 'waiting',
+          matches ? 'The current Mod version is observed in a native Claude session. This is not proof of message delivery.'
+            : !observation ? 'The broker is unavailable, so native Mod activation cannot be observed yet.'
+              : current ? 'Claude Mod receiver settings changed. Open a new Claude Code session to apply them; existing sessions are preserved.'
+                : 'Open a new Claude Code session and run /claudex to load the installed Mod. Existing sessions are not restarted.',
+          matches ? undefined : 'open-claude'));
+      }
+    } catch {
+      rows.push(component('claude-mod', 'Claude Mod', 'blocked',
+        'Claude Mod installation needs attention. Use Install or update Claude Mod to retry; existing data is preserved.', 'mod-setup'));
     }
     try {
       const broker = await this.collaborationStatus();
@@ -257,7 +342,7 @@ export class AppSetup {
     for (const row of rows) if (notes[row.id]) { row.state = 'blocked'; row.detail = notes[row.id]; row.action = 'retry'; }
     const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked'
       : rows.some(row => ['missing', 'login-required'].includes(row.state)) ? 'needs-action' : 'waiting';
-    return { version: 1, phase, allProjects: true, allowWrite: true, components: rows,
+    return { version: 1, phase, allProjects: true, allowWrite: true, components: rows, modSettings, modInfo,
       message: phase === 'ready' ? 'Claudex is configured for all projects.'
         : phase === 'waiting' ? 'No setup changes are required. Claudex will continue automatically.'
           : 'Independent features stay available while the remaining requirements are resolved.' };
@@ -277,7 +362,8 @@ export class AppSetup {
       let providers;
       try { providers = await this.providers(true); }
       catch (error) { return this.inspect({ notes: { ...notes, providers: safeFailure(error) } }); }
-      if (!providers.codex?.app || !providers.claude?.app) return this.inspect({ providers, notes });
+      const mod = await this.inspectMod(providers, { install: true });
+      if (!providers.codex?.app || !providers.claude?.app) return this.inspect({ providers, notes, mod });
       const authenticated = Object.fromEntries(await Promise.all(['codex', 'claude'].map(async name => [name, await this.auth(name, providers[name]?.binary)])));
       const mappedRun = (command, args, options) => this.nativeRun(command === 'codex' ? providers.codex.binary : command === 'claude' ? providers.claude.binary : command, args, options);
       if (authenticated.codex.ready && authenticated.claude.ready) {
@@ -303,7 +389,7 @@ export class AppSetup {
         try { await this.configureSynchronization(providers); }
         catch (error) { notes.synchronization = safeFailure(error); }
       }
-      const report = await this.inspect({ providers, notes });
+      const report = await this.inspect({ providers, notes, mod });
       await writeJSON(join(this.root, 'app-setup-status.json'), { ...report, updatedAt: Date.now() });
       return report;
     }, { recoverDead: true });
@@ -331,7 +417,14 @@ export class AppSetup {
     catch (error) { notes.lifecycle = safeFailure(error); }
     try { await this.prepareInterface(); }
     catch (error) { notes.interface = safeFailure(error); }
-    return this.inspect({ notes });
+    let providers, mod;
+    try {
+      providers = await this.providers(false);
+      // App upgrades maintain the separately journaled Mod once at startup;
+      // status timers never call this mutation path or run model work.
+      mod = await withLock(join(this.root, 'app-setup.lock'), () => this.inspectMod(providers, { install: true }), { recoverDead: true });
+    } catch { mod = { runtime: { state: 'blocked' }, installation: { state: 'blocked', reason: 'startup-mod-maintenance' } }; }
+    return this.inspect({ providers, notes, mod });
   }
 
   serviceOptions() {

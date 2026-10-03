@@ -3,6 +3,7 @@
 import { expect, test, mock } from 'claude-code/testing'
 import { textChunks, usageLine } from '../hooks/controller.mjs'
 import { catalogs } from '../hooks/locales.mjs'
+import { MOD_VERSION, MOD_BUILD } from '../hooks/delivery.mjs'
 const ID = '11111111-1111-4111-8111-111111111111'
 const PANE = {
   plugin: 'claudex', component: 'Pane', requestId: 'claudex',
@@ -326,11 +327,14 @@ test('native lifecycle publishes bounded policy observations and clear retires t
   expect(observed[0].observation.inboundPolicy).toBe('hold')
   expect(observed[0].observation.usage).toEqual({ contextPercent: 42 })
   expect(observed[0].observation.capabilities).toEqual({ sendMessage: false })
+  expect(observed[0].observation.modVersion).toBe(MOD_VERSION)
+  expect(observed[0].observation.modBuild).toBe(MOD_BUILD)
   await $.classic.SessionStart({ source: 'clear' })
   expect(observed.length).toBe(3)
   expect(observed[1].observation.lifecycle).toBe('ended')
   expect(observed[1].observation.observerId).toBe(observed[0].observation.observerId)
   expect(observed[2].observation.lifecycle).toBe('loaded')
+  expect(observed[2].observation.modVersion).toBe(MOD_VERSION)
   expect(observed[2].observation.observerId).not.toBe(observed[0].observation.observerId)
 })
 

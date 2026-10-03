@@ -2,7 +2,13 @@
 
 ## Version 0.5 AI-first observations
 
-Version 0.6.2 adds the bounded work views described in
+Claudex.app 1.1.0 installs, updates and checks its bundled Mod automatically;
+see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
+below remain available for CLI-only installations and developer validation.
+Version 0.7.0 adds content-free loaded-version observations for the app; these
+observations are self-reported diagnostics, not delivery or work-completion proof.
+
+Version 0.6.2 added the bounded work views described in
 [the collaboration guide](collaboration.md#opt-in-work-visibility), generation-bound
 report/event history, instruction and blocker state, and declared artifact/diff
 inspection. Its standalone package includes the transport's complete dependency
@@ -564,6 +570,7 @@ source root downward. A symlinked parent is rejected before inspecting descendan
 
 Four added tests cover dependency coverage, staging from copied engine resources,
 exclusion of unlisted files, and symlink rejection. The existing full-runtime
-allowlist test also passes with these additions. No app setup step automatically
-installs or enables the Mod; the standalone stage/install flow stays explicit.
-A signed build verifies packaging, not installation or native Mod painting.
+allowlist test also passes with these additions. Current graphical setup uses the
+separate app-owned installation journal and official manager described in the app
+guide; the stager itself still only produces files. A signed build verifies
+packaging, not installation or native Mod painting.

@@ -64,6 +64,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var modelSaveButton: NSButton!
     private var modelReloadButton: NSButton!
     private var modelBusy = false
+    private var modSetupButton: NSButton!
+    private var modReceiverButton: NSButton!
+    private var modMessage: NSTextField!
+    private var modVersions: NSTextField!
     private var modelSettings: ModelSettings?
     private var modelMessageKey = ""
     private var modelErrorDetail: String?
@@ -497,6 +501,28 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         stack.addArrangedSubview(footer)
 
         advancedSection = verticalStack()
+        let modSection = verticalStack(spacing: 8)
+        modSection.addArrangedSubview(label("Claude Mod", size: 13, weight: .semibold))
+        let modHelp = wrapping("Claudex installs and updates its bundled Claude Mod automatically. Refresh status checks installation and loaded-session evidence separately. Existing Claude sessions may keep their previous Mod until you open a new session.", size: 11, color: .secondaryLabelColor)
+        modSection.addArrangedSubview(modHelp)
+        modHelp.widthAnchor.constraint(equalTo: modSection.widthAnchor).isActive = true
+        modVersions = wrapping("", size: 11, color: .secondaryLabelColor)
+        modSection.addArrangedSubview(modVersions)
+        modVersions.widthAnchor.constraint(equalTo: modSection.widthAnchor).isActive = true
+        modSetupButton = NSButton(title: L("Install or update Claude Mod"), target: self, action: #selector(installMod(_:)))
+        modSetupButton.bezelStyle = .rounded
+        modSection.addArrangedSubview(modSetupButton)
+        modMessage = wrapping("Checking Mod receiver permission…", size: 11, color: .secondaryLabelColor)
+        modSection.addArrangedSubview(modMessage)
+        modMessage.widthAnchor.constraint(equalTo: modSection.widthAnchor).isActive = true
+        let receiverHelp = wrapping("Receiver permission lets a loaded Claude Mod receive explicitly requested background notifications. Each task must still opt in; this does not change notification routes, start model work, or restart Claude.", size: 11, color: .secondaryLabelColor)
+        modSection.addArrangedSubview(receiverHelp)
+        receiverHelp.widthAnchor.constraint(equalTo: modSection.widthAnchor).isActive = true
+        modReceiverButton = NSButton(title: L("Enable receiver permission…"), target: self, action: #selector(changeModReceiver(_:)))
+        modReceiverButton.bezelStyle = .rounded
+        modSection.addArrangedSubview(modReceiverButton)
+        advancedSection.addArrangedSubview(modSection)
+        modSection.widthAnchor.constraint(equalTo: advancedSection.widthAnchor).isActive = true
         let modelSection = verticalStack(spacing: 8)
         modelSection.addArrangedSubview(label("Collaboration models", size: 13, weight: .semibold))
         let modelHelp = wrapping("Set a default model ID for each provider. Leave it blank to use the native CLI default. Individual tasks and handoffs can override these defaults.", size: 11, color: .secondaryLabelColor)
@@ -623,7 +649,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private func run(_ command: SetupCommand) {
         guard !busy && !stopping else { return }
         switch command {
-        case .setup, .login: setupFlowActive = true; checkingOnly = false
+        case .setup, .login, .modSetup, .modEnable: setupFlowActive = true; checkingOnly = false
         case .inspect, .startup: checkingOnly = true
         }
         updateRefreshTimer()
@@ -665,7 +691,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         else {
             switch phase {
             case .ready: title = "Ready to connect"; symbol = "checkmark.circle.fill"; color = .systemGreen
-            case .waiting: title = "Waiting automatically"; symbol = "clock"; color = .secondaryLabelColor
+            case .waiting: title = report?.attentionComponents.contains { $0.id == "claude-mod-activation" } == true
+                ? "Waiting for Claude Mod" : "Waiting automatically"; symbol = "clock"; color = .secondaryLabelColor
             case .settingUp: title = "Setup in progress"; symbol = "clock"; color = .controlAccentColor
             case .needsAction: title = "Action needed"; symbol = "person.crop.circle.badge.exclamationmark"; color = .systemOrange
             case .blocked: title = report?.needsSetupRetry == true ? "Setup needs attention" : "Action needed"; symbol = "exclamationmark.triangle"; color = .systemOrange
@@ -676,7 +703,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         let attention = report?.attentionComponents ?? []
         if !busy && failure == nil && !attention.isEmpty {
             statusDetail.stringValue = LF("Needs attention: %@", attention.map { L($0.label) }.joined(separator: ", "))
-                + "\n" + L(report?.needsSetupRetry == true ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
+                + "\n" + L(attention.contains { $0.action == .modSetup || $0.action == .modEnable || $0.action == .openClaude }
+                    ? "Follow the Claude Mod instructions below. Installation and loaded-session readiness are checked separately."
+                    : report?.needsSetupRetry == true ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
         } else { statusDetail.stringValue = LD(failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report.")) }
         statusIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: L(title))
         statusIcon.contentTintColor = color
@@ -710,7 +739,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 let row = componentRow(component)
                 diagnosticCards.addArrangedSubview(row)
                 row.widthAnchor.constraint(equalTo: diagnosticCards.widthAnchor).isActive = true
-                if [.blocked, .missing, .loginRequired].contains(component.state) {
+                if attention.contains(where: { $0.id == component.id }) {
                     let actionRow = componentRow(component)
                     cards.addArrangedSubview(actionRow)
                     actionRow.widthAnchor.constraint(equalTo: cards.widthAnchor).isActive = true
@@ -721,6 +750,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             cards.addArrangedSubview(placeholder)
             placeholder.widthAnchor.constraint(equalTo: cards.widthAnchor).isActive = true
         }
+        updateModelControls()
         scheduleWindowFit()
     }
 
@@ -752,12 +782,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         row.addArrangedSubview(textStack)
         row.setContentHuggingPriority(.defaultLow, for: .horizontal)
         if let action = component.action,
-           !(component.state == .ready && [.retry, .loginCodex, .loginClaude].contains(action)),
+           !(component.state == .ready && [.retry, .loginCodex, .loginClaude, .modSetup, .modEnable].contains(action)),
            !(action == .retry && component.state == .waiting) {
             let button = NSButton(title: L(actionTitle(action)), target: self, action: #selector(componentAction(_:)))
             button.bezelStyle = .rounded
             button.tag = actionTag(action)
             button.isEnabled = !busy && !stopping && (!inspectOnly || action == .diagnostics) && !uiSmoke
+                && (!modelBusy || ![.modSetup, .modEnable].contains(action))
             row.addArrangedSubview(button)
         }
         detail.widthAnchor.constraint(lessThanOrEqualTo: textStack.widthAnchor).isActive = true
@@ -765,20 +796,21 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     private func runUISmoke() {
+        let modSample = cliArguments.contains("--ui-smoke-mod-waiting")
         let waitingSample = cliArguments.contains("--ui-smoke-waiting")
         let readySample = cliArguments.contains("--ui-smoke-ready")
         let ids = ["projects", "runtime", "codex-cli", "codex-login", "codex-desktop", "claude-cli",
-                   "claude-login", "claude-desktop", "collaboration", "synchronization", "folders", "handoffs"]
+                   "claude-login", "claude-desktop", "collaboration", "synchronization", "folders", "handoffs", "claude-mod", "claude-mod-activation"]
         let labels = ["Project access", "Bundled runtime", "Codex", "ChatGPT sign-in", "Codex Desktop integration", "Claude Code",
-                      "Claude sign-in", "Claude Desktop integration", "Cross-model collaboration", "Conversation synchronization", "Native project folders", "Native predecessor archival"]
+                      "Claude sign-in", "Claude Desktop integration", "Cross-model collaboration", "Conversation synchronization", "Native project folders", "Native predecessor archival", "Claude Mod", "Claude Mod activation"]
         let components = zip(ids, labels).map { id, title in
             ["id": id, "label": title,
-             "state": id == "claude-login" && !readySample ? (waitingSample ? "waiting" : "login-required") : "ready",
-             "detail": "All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.",
-             "action": id == "claude-login" ? "login-claude" : "retry"]
+             "state": id == "claude-mod-activation" && modSample ? "waiting" : id == "claude-login" && !readySample && !modSample ? (waitingSample ? "waiting" : "login-required") : "ready",
+             "detail": id == "claude-mod-activation" ? "Open a new Claude Code session and run /claudex. Existing sessions may still have the previous Mod loaded." : "All projects are available by default. Agents work only on the task you assign; macOS permissions still apply.",
+             "action": id == "claude-mod-activation" ? "open-claude" : id == "claude-mod" ? "mod-setup" : id == "claude-login" ? "login-claude" : "retry"]
         }
-        let sample: [String: Any] = ["version": 1, "phase": readySample ? "ready" : waitingSample ? "waiting" : "needs-action", "allProjects": true,
-                                     "allowWrite": true, "components": components, "message": waitingSample ? "No setup changes are required. Claudex will continue automatically." : "Independent features stay available while the remaining requirements are resolved."]
+        let sample: [String: Any] = ["version": 1, "phase": readySample ? "ready" : waitingSample || modSample ? "waiting" : "needs-action", "allProjects": true,
+                                     "allowWrite": true, "components": components, "modSettings": ["nativeWake": false, "selfWake": false], "message": waitingSample ? "No setup changes are required. Claudex will continue automatically." : "Independent features stay available while the remaining requirements are resolved."]
         do {
             report = try SetupReport.parse(JSONSerialization.data(withJSONObject: sample))
             let legacy = try ModelSettings.parse(Data("{\"defaultModels\":{\"codex\":null,\"claude\":null}}".utf8))
@@ -863,11 +895,12 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                 && self.codexModelField.placeholderString == L("Native CLI default")
                 && self.claudeModelField.placeholderString == L("Native CLI default")
                 && !self.modelSaveButton.isEnabled && !self.modelReloadButton.isEnabled
+                && !self.modSetupButton.isEnabled && !self.modReceiverButton.isEnabled
                 && !self.codexEffortPicker.isEnabled && !self.claudeEffortPicker.isEnabled
                 && self.codexEffortPicker.numberOfItems == ModelSettings.codexEfforts.count + 1
                 && self.claudeEffortPicker.numberOfItems == ModelSettings.claudeEfforts.count + 1
                 && self.cards.arrangedSubviews.count == (readySample || waitingSample ? 0 : 1)
-                && (!(waitingSample || readySample) || self.setupButton.isHidden)
+                && (!(waitingSample || readySample || modSample) || self.setupButton.isHidden)
                 && (!readySample || self.attentionSection.isHidden && (document?.frame.height ?? 0) < self.pageScroll.contentView.bounds.height)
             self.advancedExpanded = false
             self.advancedSection.isHidden = true
@@ -901,6 +934,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .retry: return "Retry"
         case .diagnostics: return "Diagnostics"
         case .resolveUncertain: return "Resolve…"
+        case .modSetup: return "Install / update"
+        case .modEnable: return "Enable Claude Mod"
         }
     }
 
@@ -913,6 +948,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .retry: return 5
         case .diagnostics: return 6
         case .resolveUncertain: return 7
+        case .modSetup: return 8
+        case .modEnable: return 9
         }
     }
 
@@ -926,6 +963,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case 4: openClaude(nil)
         case 5: run(.setup)
         case 7: confirmResolveUncertain()
+        case 8: installMod(nil)
+        case 9: if !uiSmoke && !modelBusy { run(.modEnable) }
         default: break
         }
     }
@@ -975,9 +1014,46 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     }
 
     @objc private func retrySetup(_ sender: Any?) { if !inspectOnly { run(.setup) } }
+    private func updateModControls() {
+        let settings = report?.modSettings
+        let enabled = settings?.nativeWake == true && settings?.selfWake == true
+        modSetupButton?.isEnabled = !busy && !modelBusy && !stopping && !inspectOnly && !uiSmoke
+        modReceiverButton?.isEnabled = modSetupButton?.isEnabled == true && settings != nil
+        modReceiverButton?.title = L(enabled ? "Disable receiver permission…" : "Enable receiver permission…")
+        let message: String
+        if let settings {
+            message = enabled ? "Mod receiver permission: enabled" : !settings.nativeWake && !settings.selfWake
+                ? "Mod receiver permission: disabled" : "Mod receiver permission: partially enabled"
+        } else { message = "Mod receiver permission is not verified. Refresh status after installation." }
+        modMessage?.stringValue = L(message)
+        let info = report?.modInfo
+        modVersions?.stringValue = LF("Bundled Mod: %@ · Installed Mod: %@", info?.bundledVersion ?? L("Not verified"), info?.installedVersion ?? L("Not verified"))
+            + "\n" + LF("Mod manager: %@ · Loaded Mod: %@", info?.managerVersion ?? L("Not verified"), info?.loadedVersion ?? L("Not verified"))
+        if let route = info?.route { modVersions?.stringValue += "\n" + LF("Notification route: %@", route) }
+        if let reason = info?.reason { modVersions?.stringValue += "\n" + L("Diagnostic details:") + " " + reason }
+    }
+    @objc private func installMod(_ sender: Any?) {
+        guard !inspectOnly && !uiSmoke && !modelBusy else { return }
+        run(.modSetup())
+    }
+    @objc private func changeModReceiver(_ sender: Any?) {
+        guard !busy && !modelBusy && !stopping && !inspectOnly && !uiSmoke,
+              let settings = report?.modSettings else { return }
+        let enabled = !(settings.nativeWake && settings.selfWake)
+        let alert = NSAlert()
+        alert.messageText = L(enabled ? "Enable Claude Mod receiver permission?" : "Disable Claude Mod receiver permission?")
+        alert.informativeText = L("This changes both nativeWake and selfWake receiver preferences. It preserves task notification choices and the current notification route. Existing sessions may need a new Claude Code session to load the change. Claudex will not restart Claude or resend previous messages.")
+        alert.addButton(withTitle: L(enabled ? "Enable permission" : "Disable permission"))
+        alert.addButton(withTitle: L("Cancel"))
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard let self, response == .alertFirstButtonReturn, !self.modelBusy else { return }
+            self.run(.modSetup(receiver: enabled))
+        }
+    }
     private func updateModelControls() {
-        modelSaveButton?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
-        modelReloadButton?.isEnabled = !uiSmoke && !modelBusy && !stopping
+        updateModControls()
+        modelSaveButton?.isEnabled = !inspectOnly && !uiSmoke && !busy && !modelBusy && !stopping && modelSettings != nil
+        modelReloadButton?.isEnabled = !uiSmoke && !busy && !modelBusy && !stopping
         codexModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
         claudeModelField?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
         codexEffortPicker?.isEnabled = !inspectOnly && !uiSmoke && !modelBusy && !stopping && modelSettings != nil
@@ -991,7 +1067,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         scheduleWindowFit()
     }
     private func loadModels(codex: String? = nil, claude: String? = nil, codexEffort: String? = nil, claudeEffort: String? = nil, permission: String? = nil) {
-        guard !uiSmoke && !modelBusy && !stopping else { return }
+        guard !uiSmoke && !busy && !modelBusy && !stopping else { return }
         let saving = codex != nil
         guard !saving || !inspectOnly else { return }
         modelBusy = true

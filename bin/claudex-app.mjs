@@ -7,6 +7,7 @@ const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
   'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
   'default-permission': { type: 'string' }, 'read-only': { type: 'boolean' },
+  receiver: { type: 'string' }, enable: { type: 'boolean' },
 } });
 try {
   const app = new AppSetup({ ...(values.root ? { root: values.root } : {}), ...(values['runtime-directory'] ? { runtimeDirectory: values['runtime-directory'] } : {}),
@@ -16,6 +17,7 @@ try {
   if (action === 'inspect') result = await app.inspect();
   else if (action === 'startup') result = await app.startup();
   else if (action === 'setup') result = await app.setup();
+  else if (action === 'mod-setup') result = await app.modSetup({ receiver: values.receiver, enable: values.enable === true });
   else if (action === 'login') result = await app.login(values.provider);
   else if (action === 'stop') result = await app.stop();
   else if (action === 'stop-status') result = await app.stopStatus();

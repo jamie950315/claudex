@@ -36,6 +36,10 @@ apps. Place it in a stable Applications location, open it, and let setup configu
 the integrations. All projects and task-scoped file editing are enabled by default;
 there is no project-by-project enrollment. The app reuses existing native tools,
 adds missing CLI components, and guides any required official sign-in.
+It also installs and updates the bundled Claude Mod, preserves existing plugin
+preferences, and reports installed and loaded-session versions separately.
+No separate terminal Mod installation is needed; use `/claudex` in a Claude Code
+session for its work pane. Existing sessions may need a new session to load an update.
 
 It does not download or replace ChatGPT/Codex or Claude Desktop, copy credentials,
 force-close active work, or bypass macOS permissions and compatibility checks.

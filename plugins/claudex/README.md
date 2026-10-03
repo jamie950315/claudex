@@ -1,4 +1,13 @@
-# Claudex native companion, 0.6.2
+# Claudex native companion, 0.7.0
+
+The loaded observer reports its literal companion version and observation build
+alongside the existing content-free receiver flags. The broker's controller-only
+`mod_wake_status` private RPC returns at most 64 live observer counts grouped by
+version/build, plus bounded receiver-policy counts; it exposes no session IDs,
+paths or message content. Observations expire after 60 seconds and are never
+restored after restart. Older observers without version evidence remain unknown.
+This diagnostic read does not renew observations or prove delivery, ACK, or work
+completion, and it cannot dispatch, change receiver settings, or start inference.
 
 The Tasks view now exposes the bounded broker work hierarchy, generation-bound
 progress, blockers, instruction adoption, cooperative pause, declared checks and

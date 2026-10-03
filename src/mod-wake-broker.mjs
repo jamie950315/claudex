@@ -25,6 +25,38 @@ export function modSessionObservation(hub, target) {
   return [...records(hub).values()].filter(value => sameContext(value.context, target) && value.lifecycle === 'loaded')
     .reverse().sort((a, b) => b.lastSeenAt - a.lastSeenAt)[0] ?? null;
 }
+/** Aggregate loaded-code self-reports only. A read never renews an observation,
+ * exposes session identities or inspects native history, policy, or delivery. */
+export function modWakeStatus(hub, now = Date.now()) {
+  const live = hub.closed ? [] : [...(observations.get(hub)?.values() ?? [])]
+    .filter(value => value.lifecycle === 'loaded' && value.expiresAt > now);
+  const versions = new Map();
+  for (const value of live) {
+    if (!value.modVersion) continue;
+    const key = `${value.modVersion}:${value.modBuild ?? ''}`;
+    let entry = versions.get(key);
+    if (!entry) { entry = { version: value.modVersion, build: value.modBuild ?? null, observers: 0,
+      nativeWakeCount: 0, selfWakeCount: 0, bothEnabledCount: 0, allowCount: 0, holdCount: 0,
+      refuseCount: 0, unknownPolicyCount: 0, enabledAllowCount: 0 }; versions.set(key, entry); }
+    entry.observers++;
+    if (value.nativeWake) entry.nativeWakeCount++;
+    if (value.selfWake) entry.selfWakeCount++;
+    if (value.nativeWake && value.selfWake) entry.bothEnabledCount++;
+    entry[{ allow: 'allowCount', hold: 'holdCount', refuse: 'refuseCount', unknown: 'unknownPolicyCount' }[value.inboundPolicy]]++;
+    if (value.nativeWake && value.selfWake && value.inboundPolicy === 'allow') entry.enabledAllowCount++;
+  }
+  const count = predicate => live.filter(predicate).length;
+  return { diagnosticOnly: true, provenance: 'mod-self-reported', observedAt: now,
+    ttlMs: MOD_OBSERVATION_TTL, maxObservers: 64, liveObserverCount: live.length,
+    unknownVersionObservers: count(value => value.modVersion === undefined),
+    versions: [...versions.values()].sort((a, b) => a.version.localeCompare(b.version) || (a.build ?? '').localeCompare(b.build ?? '')),
+    receiver: { nativeWake: live.some(value => value.nativeWake), selfWake: live.some(value => value.selfWake),
+      bothEnabledCount: count(value => value.nativeWake && value.selfWake),
+      allowCount: count(value => value.inboundPolicy === 'allow'), holdCount: count(value => value.inboundPolicy === 'hold'),
+      refuseCount: count(value => value.inboundPolicy === 'refuse'), unknownPolicyCount: count(value => value.inboundPolicy === 'unknown') },
+    waitingModClients: hub.modWaiters, route: hub.state.nativeWakeRoute ?? 'renderer', brokerStopping: hub.closed,
+    note: 'Fresh loaded-observer counts are self-reported diagnostics, not unique sessions, dispatch readiness, delivery, ACK, or work completion.' };
+}
 /** Read-time diagnosis never claims a message, renews proof, or authorizes dispatch. */
 export async function modDeliveryDiagnosis(hub, message) {
   if (message.targetProvider !== 'claude' || !['mod', 'mod-self'].includes(message.wakeRoute) || message.state !== 'queued') return null;
@@ -63,6 +95,10 @@ export async function modDeliveryDiagnosis(hub, message) {
 export async function dispatchModWake(hub, envelope, actor) {
   const { method, params } = envelope;
   if (actor.task) throw new Error('Only an external controller may use native Mod delivery.');
+  if (method === 'mod_wake_status') {
+    fields(params, [], []);
+    return modWakeStatus(hub);
+  }
   if (method === 'native_wake') {
     fields(params, ['route']);
     if (params.route !== undefined) {

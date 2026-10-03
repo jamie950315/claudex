@@ -11,7 +11,7 @@ const MAX_FRAME = 1024 * 1024;
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
 const WAIT_RESPONSE_GRACE_MS = 5000;
-const METHODS = new Set(['start', 'send', 'handoff', 'report', 'work_events', 'work_reports', 'artifact_read', 'work_control', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
+const METHODS = new Set(['start', 'send', 'handoff', 'report', 'work_events', 'work_reports', 'artifact_read', 'work_control', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe', 'mod_wake_status']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);

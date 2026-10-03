@@ -47,7 +47,15 @@ async function fixture(t, options = {}) {
     foldersInstall: async input => { events.push(['folders', input]); },
     interfaceInstall: async input => { events.push(['interface', input]); },
     syncHooksInstall: async input => { events.push(['sync-hooks', input]); return { configured: true }; },
+    modFindRuntime: async () => ({ state: 'ready', binary: providers.claude.binary, version: '2.1.287' }),
+    modEnsureRuntime: async () => { events.push(['mod-runtime']); return { state: 'ready', binary: providers.claude.binary, version: '2.1.287' }; },
+    modInspect: async () => ({ state: 'ready', bundledVersion: '0.7.0', installedVersion: '0.7.0',
+      modSettings: { inline: { nativeWake: false, selfWake: false } } }),
+    modEnsure: async input => { events.push(['mod-install', input]); return { state: 'ready', bundledVersion: '0.7.0', installedVersion: '0.7.0',
+      modSettings: { inline: { nativeWake: false, selfWake: false } } }; },
   });
+  setup.modActivationStatus = async () => ({ diagnosticOnly: true, provenance: 'mod-self-reported', versions: [
+    { version: '0.7.0', build: 'observer-v1', observers: 1, nativeWakeCount: 0, selfWakeCount: 0, bothEnabledCount: 0 } ] });
   setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' } });
   return { base, root, home, runtimeDirectory, providers, setup, events };
 }
@@ -65,6 +73,7 @@ test('new setup enables all projects and task-scoped writes in broker and sync c
   assert.ok(events.some(([kind]) => kind === 'desktop'));
   assert.ok(events.some(([kind]) => kind === 'service'));
   assert.ok(events.some(([kind]) => kind === 'sync-hooks'));
+  assert.ok(events.some(([kind]) => kind === 'mod-install'));
   assert.ok(events.some(([kind, input]) => kind === 'desktop-wake' && input.args.includes('desktop-wake-mcp')));
   assert.ok(events.some(([kind]) => kind === 'desktop-wake-cache'));
   assert.equal(events.find(([kind]) => kind === 'desktop-wake-cache')[1].folders, true);
@@ -100,7 +109,45 @@ test('background startup integrates the display without installing providers or 
   const { setup, events } = await fixture(t);
   await setup.startup();
   assert.ok(events.some(([kind]) => kind === 'interface'));
+  assert.ok(events.some(([kind]) => kind === 'mod-install'), 'owned Mod maintenance runs once at startup');
   assert.ok(!events.some(([kind]) => ['ensure-providers', 'collaboration', 'desktop', 'service', 'folders'].includes(kind)));
+});
+
+test('Mod inspection stays read-only and installation is distinct from loaded-version evidence', async t => {
+  const { setup, events } = await fixture(t);
+  setup.modActivationStatus = async () => ({ diagnosticOnly: true, provenance: 'mod-self-reported', versions: [
+    { version: '0.6.2', build: 'observer-v1', observers: 1, nativeWakeCount: 0, selfWakeCount: 0, bothEnabledCount: 0 } ] });
+  let report = await setup.inspect();
+  assert.equal(report.components.find(r => r.id === 'claude-mod').state, 'ready');
+  assert.equal(report.components.find(r => r.id === 'claude-mod-activation').state, 'waiting');
+  assert.equal(report.modInfo.loadedVersion, null);
+  assert.ok(!events.some(([kind]) => kind === 'mod-install' || kind === 'mod-runtime'));
+  setup.modInspect = async () => ({ state: 'disabled', reason: 'disabled-by-user' });
+  report = await setup.inspect();
+  assert.equal(report.components.find(r => r.id === 'claude-mod').action, 'mod-enable');
+  assert.ok(!report.components.some(r => r.id === 'claude-mod-activation'));
+});
+
+test('native Mod receiver observations cannot combine different sessions into a ready claim', async t => {
+  const { setup } = await fixture(t);
+  setup.modInspect = async () => ({ state: 'ready', bundledVersion: '0.7.0', installedVersion: '0.7.0',
+    modSettings: { inline: { nativeWake: true, selfWake: true } } });
+  setup.modActivationStatus = async () => ({ diagnosticOnly: true, provenance: 'mod-self-reported', versions: [
+    { version: '0.7.0', build: 'observer-v1', observers: 2, nativeWakeCount: 1, selfWakeCount: 1, bothEnabledCount: 0 } ] });
+  const report = await setup.inspect();
+  assert.equal(report.components.find(r => r.id === 'claude-mod-activation').state, 'waiting');
+});
+
+test('explicit Mod actions are scoped, preserve unrelated setup and refuse read-only before any native operation', async t => {
+  const { setup, events } = await fixture(t);
+  await setup.modSetup({ receiver: 'enabled', enable: true });
+  const request = events.find(([kind]) => kind === 'mod-install')[1];
+  assert.equal(request.receiver, 'enabled'); assert.equal(request.enable, true);
+  assert.ok(!events.some(([kind]) => ['collaboration', 'desktop', 'service', 'sync-hooks'].includes(kind)));
+  events.length = 0; setup.readOnly = true;
+  await assert.rejects(setup.modSetup(), /Read-only/);
+  await assert.rejects(setup.inspectMod({ claude: { app: '/app' } }, { install: true }), /Read-only/);
+  assert.deepEqual(events, []);
 });
 
 test('quit requests both services stop and waits for native ownership before claiming stopped', async t => {

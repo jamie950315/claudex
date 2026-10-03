@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir } from 'node:fs/promises';
+import { access, lstat, mkdir, open } from 'node:fs/promises';
 import { delimiter, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { resolveBundledCodex } from './codex-app-layout.mjs';
@@ -133,7 +133,8 @@ export async function discoverProviders({ root, home = process.env.HOME, runtime
 async function installCli(name, root, runtime, home, run) {
   if (!absolute(root) || !absolute(runtime)) throw new Error('Private root and runtime paths are required to install a CLI.');
   const rootStat = await lstat(root);
-  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('Private root has an untrusted identity.');
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || rootStat.uid !== process.getuid() || (rootStat.mode & 0o022))
+    throw new Error('Private root has an untrusted identity.');
   const npm = join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
   const node = join(runtime, 'bin', 'node');
   await access(npm);
@@ -143,17 +144,49 @@ async function installCli(name, root, runtime, home, run) {
   const cache = join(providers, 'npm-cache');
   for (const path of [providers, prefix, cache]) if (await exists(path)) {
     const stat = await lstat(path);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Private provider directory has an untrusted identity.');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== process.getuid() || (stat.mode & 0o022))
+      throw new Error('Private provider directory has an untrusted identity.');
   }
   await mkdir(prefix, { recursive: true, mode: 0o700 });
+  // npm rejects a file loaded as both user and global configuration. Keep two
+  // different empty files instead of /dev/null, without inheriting ~/.npmrc or
+  // any credentials, scripts, or settings from an existing provider directory.
+  const configDirectory = join(providers, 'npm-config');
+  try { await mkdir(configDirectory, { mode: 0o700 }); }
+  catch (error) { if (error.code !== 'EEXIST') throw error; }
+  const configStat = await lstat(configDirectory);
+  if (!configStat.isDirectory() || configStat.isSymbolicLink() || configStat.uid !== process.getuid() || (configStat.mode & 0o077))
+    throw new Error('Private npm configuration directory has an untrusted identity.');
+  const userconfig = join(configDirectory, 'user.npmrc'), globalconfig = join(configDirectory, 'global.npmrc');
+  await emptyNpmConfig(userconfig);
+  await emptyNpmConfig(globalconfig);
+  await emptyNpmConfig(join(prefix, '.npmrc'));
   const packageName = name === 'codex' ? '@openai/codex@0.158.0-alpha.2.1' : '@anthropic-ai/claude-code@2.1.283';
   const cliEnv = { HOME: home, LANG: process.env.LANG || 'C.UTF-8',
     PATH: `${join(runtime, 'bin')}${delimiter}${process.env.PATH || ''}`,
     npm_config_cache: cache, npm_config_registry: 'https://registry.npmjs.org',
-    npm_config_userconfig: '/dev/null', npm_config_globalconfig: '/dev/null' };
+    npm_config_userconfig: userconfig, npm_config_globalconfig: globalconfig };
   await run(node, [npm, 'install', '--prefix', prefix, '--no-audit', '--no-fund', packageName], { cwd: prefix, env: cliEnv });
   const binary = join(prefix, 'node_modules', '.bin', name);
   if (!await versionOf(binary, run, cliEnv)) throw new Error(`Official ${name} CLI package did not provide a working binary.`);
+}
+
+async function emptyNpmConfig(path) {
+  let file;
+  try { file = await open(path, constants.O_RDWR | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600); }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  }
+  try {
+    const before = await file.stat({ bigint: true });
+    if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n
+      || (before.mode & 0o777n) !== 0o600n || before.size !== 0n)
+      throw new Error('Private npm configuration must be an empty owned regular file with mode 0600 and one link.');
+    const contents = await file.readFile(), after = await file.stat({ bigint: true }), named = await lstat(path, { bigint: true });
+    if (contents.length || ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'].some(key => before[key] !== after[key] || after[key] !== named[key]))
+      throw new Error('Private npm configuration changed during verification.');
+  } finally { await file.close(); }
 }
 
 export async function ensureProviders(options = {}) {

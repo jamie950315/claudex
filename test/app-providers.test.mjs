@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile, lstat, symlink, link, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverProviders, ensureProviders } from '../src/app-providers.mjs';
@@ -62,7 +62,24 @@ test('signed desktop prerequisites allow private installation of missing CLIs', 
   await app(options.home, 'ChatGPT.app');
   await app(options.home, 'Claude.app');
   const commands = [];
-  const found = await ensureProviders({ ...options, run: runner({ commands, install: true }) });
+  const configs = [], baseRunner = runner({ commands, install: true });
+  const run = async (command, args, runOptions) => {
+    if (args[1] === 'install') {
+      const { npm_config_userconfig: user, npm_config_globalconfig: global } = runOptions.env;
+      assert.notEqual(user, global);
+      assert.equal(user.startsWith(join(options.root, 'providers', 'npm-config')), true);
+      for (const path of [user, global, join(runOptions.cwd, '.npmrc')]) {
+        const info = await lstat(path);
+        assert.equal(info.mode & 0o777, 0o600);
+        assert.equal(info.uid, process.getuid());
+        assert.equal(info.nlink, 1);
+        assert.equal(await readFile(path, 'utf8'), '');
+      }
+      configs.push([user, global]);
+    }
+    return baseRunner(command, args, runOptions);
+  };
+  const found = await ensureProviders({ ...options, run });
   assert.equal(found.codex.binary, join(options.root, 'providers', 'codex-cli', 'node_modules', '.bin', 'codex'));
   assert.equal(found.claude.binary, join(options.root, 'providers', 'claude-cli', 'node_modules', '.bin', 'claude'));
   const installs = commands.filter(([command, , action]) => command === join(options.runtime, 'bin', 'node') && action === 'install');
@@ -71,6 +88,36 @@ test('signed desktop prerequisites allow private installation of missing CLIs', 
   assert.ok(installs.some(command => command.includes('@anthropic-ai/claude-code@2.1.283')));
   assert.equal(found.codex.issue, undefined);
   assert.equal(found.claude.issue, undefined);
+  assert.equal(configs.length, 2);
+  assert.deepEqual(configs[0], configs[1], 'both CLI installs reuse only the two verified empty config files');
+});
+
+test('provider bootstrap refuses and preserves nonempty, linked and foreign-writable npm config', async t => {
+  for (const kind of ['nonempty', 'symlink', 'hardlink', 'writable', 'project']) await t.test(kind, async t => {
+    const options = await fixture(t);
+    await app(options.home, 'ChatGPT.app'); await app(options.home, 'Claude.app');
+    const config = join(options.root, 'providers', 'npm-config');
+    await mkdir(config, { recursive: true, mode: 0o700 });
+    const outside = join(options.base, 'original');
+    await writeFile(outside, 'preserve-original', { mode: 0o600 });
+    let path = join(config, 'user.npmrc');
+    if (kind === 'symlink') await symlink(outside, path);
+    else if (kind === 'hardlink') await link(outside, path);
+    else {
+      if (kind === 'project') {
+        path = join(options.root, 'providers', 'codex-cli', '.npmrc');
+        await mkdir(join(options.root, 'providers', 'codex-cli'), { recursive: true, mode: 0o700 });
+      }
+      await writeFile(path, kind === 'writable' ? '' : 'ignore-scripts=true\n', { mode: 0o600 });
+      if (kind === 'writable') await chmod(path, 0o666);
+    }
+    const commands = [];
+    const found = await ensureProviders({ ...options, run: runner({ commands, install: true }) });
+    assert.match(found.codex.issue, /CLI installation failed/);
+    assert.equal(commands.some(args => args.includes('@openai/codex@0.158.0-alpha.2.1')), false);
+    assert.equal(await readFile(outside, 'utf8'), 'preserve-original');
+    if (kind !== 'project') assert.equal(commands.some(args => args.includes('@anthropic-ai/claude-code@2.1.283')), false);
+  });
 });
 
 test('existing apps and CLIs are reused without installer commands', async t => {

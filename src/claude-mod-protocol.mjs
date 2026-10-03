@@ -190,9 +190,13 @@ export function sameContext(a, b) { return a.sessionId === b.sessionId && a.cwd 
 
 /** Enumerated, content-free observations are diagnostic only, never capabilities. */
 export function validateModObservation(value) {
-  fields(value, ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage'],
+  fields(value, ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage', 'modVersion', 'modBuild'],
     ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage']);
   identity(value.observerId); boundedInteger(value.sequence, 1, Number.MAX_SAFE_INTEGER);
+  if (value.modVersion !== undefined) insist(typeof value.modVersion === 'string' && value.modVersion.length <= 48
+    && /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[a-zA-Z0-9]+(?:[.-][a-zA-Z0-9]+)*)?$/.test(value.modVersion));
+  if (value.modBuild !== undefined) insist(typeof value.modBuild === 'string' && /^[a-z][a-z0-9-]{0,47}$/.test(value.modBuild)
+    && value.modVersion !== undefined);
   insist(['loaded', 'ended'].includes(value.lifecycle));
   insist(typeof value.nativeWake === 'boolean' && typeof value.selfWake === 'boolean');
   insist(['allow', 'hold', 'refuse', 'unknown'].includes(value.inboundPolicy));

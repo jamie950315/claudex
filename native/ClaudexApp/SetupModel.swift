@@ -31,6 +31,8 @@ enum ComponentAction: String, Decodable {
     case retry
     case diagnostics
     case resolveUncertain = "resolve-uncertain"
+    case modSetup = "mod-setup"
+    case modEnable = "mod-enable"
 }
 
 struct SetupComponent: Decodable {
@@ -54,6 +56,8 @@ struct SetupReport: Decodable {
     let allowWrite: Bool
     let components: [SetupComponent]
     let message: String?
+    let modSettings: ModSettings?
+    let modInfo: ModInfo?
 
     private static let providerIDs: Set<String> = ["codex-cli", "claude-cli", "codex-login", "claude-login", "codex-desktop", "claude-desktop"]
 
@@ -71,13 +75,15 @@ struct SetupReport: Decodable {
     }
 
     var attentionComponents: [SetupComponent] {
-        components.filter { [.blocked, .missing, .loginRequired].contains($0.state) }
+        components.filter { [.blocked, .missing, .loginRequired].contains($0.state)
+            || ($0.state == .waiting && ["claude-mod", "claude-mod-activation"].contains($0.id)) }
     }
 
     var needsSetupRetry: Bool {
         attentionComponents.contains { component in
+            guard [.blocked, .missing, .loginRequired].contains(component.state) else { return false }
             guard let action = component.action else { return false }
-            return action != .diagnostics
+            return [.retry, .loginCodex, .loginClaude].contains(action)
         }
     }
 
@@ -101,6 +107,7 @@ struct SetupReport: Decodable {
             throw SetupParseError.invalid
         }
         _ = try report.components.map { try $0.validated() }
+        try report.modInfo?.validate()
         guard Set(report.components.map(\.id)).count == report.components.count else {
             throw SetupParseError.invalid
         }
@@ -108,6 +115,29 @@ struct SetupReport: Decodable {
             throw SetupParseError.invalid
         }
         return report
+    }
+}
+
+struct ModSettings: Decodable {
+    let nativeWake: Bool
+    let selfWake: Bool
+}
+
+struct ModInfo: Decodable {
+    let bundledVersion: String?
+    let installedVersion: String?
+    let managerVersion: String?
+    let loadedVersion: String?
+    let reason: String?
+    let route: String?
+
+    func validate() throws {
+        for value in [bundledVersion, installedVersion, managerVersion, loadedVersion, reason, route] {
+            if let value, value.isEmpty || value.utf8.count > 128
+                || value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) {
+                throw SetupParseError.invalid
+            }
+        }
     }
 }
 
@@ -147,6 +177,8 @@ enum SetupCommand {
     case startup
     case setup
     case login(String)
+    case modSetup(receiver: Bool? = nil)
+    case modEnable
 
     var arguments: [String] {
         switch self {
@@ -154,6 +186,8 @@ enum SetupCommand {
         case .startup: return ["startup"]
         case .setup: return ["setup"]
         case .login(let provider): return ["login", "--provider", provider]
+        case .modSetup(let receiver): return ["mod-setup"] + (receiver.map { ["--receiver", $0 ? "enabled" : "disabled"] } ?? [])
+        case .modEnable: return ["mod-setup", "--enable"]
         }
     }
 }

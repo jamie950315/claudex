@@ -1,5 +1,8 @@
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
+// Loaded-code evidence, not marketplace configuration or an undocumented host API.
+export const MOD_VERSION = '0.7.0';
+export const MOD_BUILD = 'observer-v1';
 
 /** One lifecycle-local reporter; no text, tool arguments, or history inspection. */
 export function createSessionObserver() {
@@ -8,7 +11,8 @@ export function createSessionObserver() {
     const sequence = ++binding.sequence;
     if (lifecycle === 'ended') return { observerId: binding.id, sequence, lifecycle,
       nativeWake: binding.api.nativeWakeEnabled, selfWake: binding.api.selfEnabled,
-      inboundPolicy: 'unknown', capabilities: { sendMessage: false }, usage: null };
+      inboundPolicy: 'unknown', capabilities: { sendMessage: false }, usage: null,
+      modVersion: MOD_VERSION, modBuild: MOD_BUILD };
     const [policy, tools, usage] = await Promise.all([
       binding.api.inbound().catch(() => 'unknown'), binding.api.tools().catch(() => null), binding.api.usage().catch(() => null),
     ]);
@@ -17,7 +21,8 @@ export function createSessionObserver() {
     return { observerId: binding.id, sequence, lifecycle, nativeWake: binding.api.nativeWakeEnabled,
       selfWake: binding.api.selfEnabled, inboundPolicy: ['allow', 'hold', 'refuse'].includes(policy) ? policy : 'unknown',
       capabilities: { sendMessage: Array.isArray(tools) ? tools.some(tool => tool.name === 'SendMessage') : null },
-      usage: Number.isFinite(percent) && percent >= 0 && percent <= 100 ? { contextPercent: percent } : null };
+      usage: Number.isFinite(percent) && percent >= 0 && percent <= 100 ? { contextPercent: percent } : null,
+      modVersion: MOD_VERSION, modBuild: MOD_BUILD };
   }
   async function publish(binding, lifecycle) {
     const observation = await snapshot(binding, lifecycle);

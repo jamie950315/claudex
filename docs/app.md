@@ -88,6 +88,9 @@ or the user's global Node.js installation.
 
 ## What setup configures
 
+- The bundled Claude Mod through the official native plugin manager, including
+  automatic initial installation and updates on app startup. Existing plugin
+  preferences, older versions and verified previous marketplace sources remain.
 - An independent collaboration broker and the `claudex-work` MCP connections.
 - The narrow `claudex-desktop-wake` MCP endpoint and supported Claude frontend
   bridge for authorized messages to existing native chats.
@@ -99,6 +102,37 @@ or the user's global Node.js installation.
   launcher runtime, not Claudex's own Node binary for that protected integration.
 - Native folder presentation and Local predecessor handoff when the existing
   frontend resource and lifecycle checks permit them.
+
+## Claude Mod lifecycle
+
+No separate CLI installation is needed for the Mod. The app stages its bundled
+version in private `app-mod/stages` storage, strictly validates it, installs or
+updates it through the native manager, and checks its complete payload hashes.
+Its durable installation journal retains the previous source and records progress
+for interrupted configuration recovery. It never edits native plugin caches,
+removes a marketplace, clears plugin data, or downgrades a newer installed Mod.
+Unexpected or modified installations stay explicit instead of being overwritten.
+
+An existing manager is selected by actual configure/validate capabilities. If no
+supported native manager is present, the app installs a separate pinned official
+management CLI with its bundled Node/npm, checks package integrity and disables
+installation scripts. This does not change the CLI used for existing model work.
+Initial component downloads require network access; vendor desktop apps and
+native account access are still prerequisites. No credentials are copied.
+
+The main window distinguishes installation from a fresh loaded-session observation.
+Open a new Claude Code session and run `/claudex` after an update; native SDK
+sessions may retain their old plugin root even after reload-plugins. The app does
+not restart them. Activation observations expire, contain no conversation content,
+and never prove message delivery or that every open session uses the new version.
+
+Advanced diagnostics shows bundled, installed, manager and observed Mod versions,
+plus **Install or update Claude Mod**. An intentionally disabled Mod stays disabled
+until **Enable Claude Mod** is selected. Receiver permission has a separate explicit
+confirmation and preserves per-task notification opt-in and the existing delivery
+route. Normal status refresh is read-only; it never starts installation, a model,
+or a native test suite. Runtime feature-flag overrides used in explicitly authorized
+developer tests are never applied by setup.
 - Background startup through the existing owned, journaled LaunchAgents.
 - One Claudex app and one menu bar item for setup, live synchronization status,
   diagnostics, and notification controls. Login opens the same app quietly;

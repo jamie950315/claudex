@@ -48,6 +48,29 @@ fixtures use placeholder paths and IDs.
 
 ## macOS app setup
 
+The graphical app now owns Mod installation and updates, by explicit product
+decision. Setup and normal startup maintain only its bundled Claudex Mod through
+the official native plugin manager and a private app-mod installation journal;
+inspection/status timers never install, configure or start model work. Preserve
+legacy verified sources, previous versions, other plugins, both configuration
+identities and explicit disabled/wake preferences. Use same-name marketplace add
+for verified source migration; never marketplace remove, which deletes native
+plugin state. Newer installed versions are not downgraded. Explicit receiver or
+enable requests must not report success if newer-version preservation refused them.
+Missing management capabilities use a separately pinned, integrity-checked Mod
+manager, not replacement of an existing inference CLI. Its bootstrap disables
+package scripts and selects the exact native platform package, not the wrapper's
+postinstall placeholder. Bundled source/runtime may be root-owned; private state
+and plugin caches must remain owned by the current user. Empty npm user/global
+configuration files must be distinct and protected; do not inherit credentials
+or a provider directory's npm settings. Native runtime guards and accounts remain.
+Show installed payload/version and fresh loaded-Mod self-report separately.
+mod_wake_status is controller-only, bounded and content-free, never a dispatch
+lease or delivery proof. Old/expired observers cannot certify current activation.
+App receiver controls require explicit confirmation, preserve per-task opt-in,
+and never change native routes/policy or restart Claude. Existing SDK sessions may
+retain old plugin roots; a new ordinary session loads the installed update.
+
 The main window uses one outer scroll view, with a width-constrained natural-height
 document. Never restore fixed-height nested checklist/diagnostic panes. Healthy
 operation shows only Codex/Claude prerequisite summaries; actual missing/login/
@@ -330,8 +353,8 @@ in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
 not a companion load gate. The installed Desktop 2.1.286 passed the final native
 validator, 17 kit tests and no-inference command registration without added
 feature flags; test the actual runtime before requiring an upgrade. This does not
-certify new synchronization runtimes. Keep the explicit app/stage allowlists;
-never install it as a setup side effect. `plugins/claudex/hooks/register.mjs` uses
+certify new synchronization runtimes. Keep the explicit app/stage allowlists and
+the app-owned journaled installation path described above. `plugins/claudex/hooks/register.mjs` uses
 top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and complete
 native test kit against a staged plugin after UI/API changes, in addition
