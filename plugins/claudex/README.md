@@ -1,4 +1,4 @@
-# Claudex native companion, 0.7.0
+# Claudex native companion, 0.7.1
 
 The loaded observer reports its literal companion version and observation build
 alongside the existing content-free receiver flags. The broker's controller-only

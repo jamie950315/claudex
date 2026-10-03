@@ -13,7 +13,8 @@ import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
 import { validateOutcome, outcomePresentation } from './collaboration-outcome.mjs';
 import { sanitizeNativeActivity } from './collaboration-activity.mjs';
-import { observabilityPolicy, instruction, recordProgress, progressPresentation, controlWork, validateProgress, queryWorkReports, assertProgressCapacity } from './collaboration-progress.mjs';
+import { observabilityPolicy, instruction, recordProgress, progressPresentation, controlWork, validateProgress, queryWorkReports, assertProgressCapacity,
+  checkInInstructions, inputConsumed } from './collaboration-progress.mjs';
 import { initializeWorkEvents, appendWorkEvent, queryWorkEvents, validateWorkEvents } from './collaboration-events.mjs';
 import { readCollaborationArtifact } from './collaboration-artifacts.mjs';
 import { DEFAULT_WAIT_MS, validWaitTimeout } from './collaboration-wait.mjs';
@@ -408,6 +409,25 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (method === 'worker_check_in') {
+      if (!actor.task) fail('CLAUDEX_WORKER_REQUIRED', 'Only an active worker may request its own response-boundary inbox.');
+      if (this.closed) throw new Error('Broker is stopping; worker boundary delivery is refused.');
+      if (Object.keys(params).some(key => !['requestId', 'limit', 'responseBudgetBytes'].includes(key))) fail('CLAUDEX_INVALID_CONTROL', 'Invalid worker boundary fields.');
+      requestId(params.requestId);
+      if (actor.task.pendingHandoff || actor.task.cancelRequested || actor.task.pause?.state === 'checkpoint') throw new Error('Worker has relinquished ownership; further mutations are refused.');
+      const controls = { ...params, taskId: actor.task.id, generation: actor.task.generation, action: 'check-in' };
+      const key = digest(`${actor.key}:${params.requestId}`);
+      if (!this.state.requests[key]) {
+        const preview = checkInInstructions(actor.task, controls, { apply: false });
+        // Response-boundary empty reads must not consume the durable request
+        // journal or publish revisions. Newly queued work remains for the next
+        // boundary if it arrives after this committed-state snapshot.
+        if (!preview.newlyDelivered && !preview.newlySeenProgress) return { taskId: actor.task.id,
+          revision: actor.task.revision, status: actor.task.status, owner: actor.task.owner,
+          handoffPending: false, returnTo: actor.task.returnTo, ...preview };
+      }
+      return this.dispatch({ ...envelope, method: 'work_control', params: controls });
+    }
     const notificationFence = envelope[NOTIFICATION_FENCE];
     if (method === 'origin_bind') return bindTaskOrigin(this, envelope, actor);
     if (method === 'origin_recheck') return recheckTaskOrigins(this, envelope, actor);
@@ -750,10 +770,13 @@ export class CollaborationHub extends EventEmitter {
         if (method === 'report') {
           if (!actor.task || actor.task.id !== task.id || task.status !== 'running')
             fail('CLAUDEX_REPORT_OWNER_REQUIRED', 'Only the active worker may report its own outcome.');
-          task.active.report = { ...validateOutcome(params.report), provenance: 'worker-self-reported',
+          const report = { ...validateOutcome(params.report), provenance: 'worker-self-reported',
             generation: task.generation, provider: actor.peer, reportedAt: Date.now() };
-          extraReceipt = recordProgress(task, task.active.report);
-          this.deliverProgressToParent(state, task, extraReceipt);
+          extraReceipt = recordProgress(task, report);
+          if (extraReceipt.reportChanged) {
+            task.active.report = report;
+            this.deliverProgressToParent(state, task, extraReceipt);
+          }
         } else if (method === 'work_control') {
           extraReceipt = controlWork(task, params, actor, state);
         } else if (method === 'resolve') {
@@ -823,7 +846,9 @@ export class CollaborationHub extends EventEmitter {
           };
           mark(task);
         }
-        if (method !== 'cancel' && !completedAnnotation) { task.revision++; task.updatedAt = Date.now(); }
+        const noChange = method === 'report' && !extraReceipt.reportChanged
+          || method === 'work_control' && params.action === 'check-in' && !extraReceipt.newlyDelivered && !extraReceipt.newlySeenProgress;
+        if (method !== 'cancel' && !completedAnnotation && !noChange) { task.revision++; task.updatedAt = Date.now(); }
         if (method === 'resolve') this.deliverToParent(state, task);
         if (bytes(task.messages) > 192 * 1024) throw new Error('Task context capacity reached; no messages were truncated.');
       }
@@ -839,6 +864,8 @@ export class CollaborationHub extends EventEmitter {
           cancelRequested: task.cancelRequested, terminal: terminal.has(task.status), phase: taskPresentation(task).phase } : {}),
         ...(method === 'handoff' ? { nextAction: 'end-turn', finalResponse: 'CLAUDEX_HANDOFF',
           instruction: 'The handoff context is saved. End this native turn now with exactly CLAUDEX_HANDOFF. Do not call tools, wait, or repeat the handoff summary. This boundary response replaces the normal final-report requirement. Ownership transfers only after successful native completion and process exit.' } : {}) };
+      if (bytes({ content: [{ type: 'text', text: JSON.stringify(receipt) }] }) > (params.responseBudgetBytes ?? 768 * 1024))
+        fail('CLAUDEX_RESPONSE_CAPACITY', 'Mutation response exceeds its byte bound; no receipt or delivery was committed.');
       state.requests[key] = { fingerprint, result: receipt };
       return receipt;
     });
@@ -897,8 +924,10 @@ export class CollaborationHub extends EventEmitter {
                 .filter(kind => ['request', 'message', 'child-result', 'child-progress', 'handoff'].includes(kind)))] };
             task.active = { generation: task.generation, tokenHash: digest(token), messageCount: task.messages.length,
               provider: task.owner, startedAt: Date.now(), pid: null, sessionId: null, seenChildren: {}, inputs };
-            for (const record of task.instructions ?? []) if (record.state === 'queued') {
-              Object.assign(record, { state: 'delivered', generation: task.generation, deliveredAt: Date.now(), deliveryProvenance: 'broker-context' });
+            for (const record of task.instructions ?? []) if (record.state === 'queued'
+              || record.state === 'delivered' && task.messages.slice(from).some(message => message.instructionId === record.id)) {
+              Object.assign(record, { state: 'delivered', generation: task.generation, deliveredAt: Date.now(),
+                deliveryProvenance: 'broker-context', deliveryCount: (record.deliveryCount ?? 0) + 1 });
               appendWorkEvent(task, { generation: task.generation, source: 'broker', kind: 'instruction', instructionId: record.id, status: 'delivered' });
             }
             if (this.run.tracksOwnedProcesses) task.active.processInventoryRequired = true;
@@ -941,6 +970,7 @@ export class CollaborationHub extends EventEmitter {
       + 'Before finishing, optionally use claudex_report with outcome done, partial, blocked or needs-input, summary, typed needs, artifacts and remaining work. This is your self-report, not independent verification; normal execution status remains separate. You may attach the same report structure to a handoff.\n'
       + (task.observability?.reports === 'milestones' ? 'Milestone reporting is enabled: use claudex_report when starting, finding a root cause or important plan change, preparing validation, meeting a blocker, and finishing validation. Include stage, next and checks as applicable. Do not report each tool or invented percentages. End-turn receipts override reporting.\n' : '')
       + 'Use claudex_work_events for exact-generation public work records; cursor positions are not task revisions. New reports and checks are worker declarations, never independent validation. Read artifacts only through authorized task scope.\n'
+      + 'At meaningful work boundaries, before consequential writes and before your final answer, call claudex_work_control action check-in with your exact taskId and generation to receive pending instructions and child-progress notices in THIS invocation. Managed worker MCP responses may include a separate workerInstructionIntake text block: read it before continuing. Ordinary status only observes. Explicitly acknowledge each delivered instruction as accepted or rejected, then handle accepted work before finishing; adoption is not completion. Child-progress inbox receipt is not acknowledgement of a child result: read its exact status/wait before integrating.\n'
       + 'Use claudex_work_control action ack-instruction with exact instructionId/generation and accepted or rejected only for instructions actually delivered to this invocation. Delivery is not adoption or completion. At meaningful work boundaries check your task status for pause requests; if requested, finish tools and child work, then acknowledge checkpoint with a summary. End immediately on its end-turn receipt. A request alone is not a pause; never freeze processes or start another writer.\n'
       + 'A tool receipt with nextAction=end-turn is a control boundary, not completed user work: immediately emit only its finalResponse token and end this native turn. No additional tools, explanation, summary or verification. Put all handoff context in the handoff message BEFORE requesting it.\n'
       + 'After a successful handoff acknowledgement emit exactly CLAUDEX_HANDOFF. This overrides the normal final-report format; ownership transfers only after successful native completion and process exit.\n'
@@ -1042,12 +1072,14 @@ export class CollaborationHub extends EventEmitter {
           current.status = 'paused'; current.pause.state = 'paused'; current.pause.pausedAt = Date.now();
           current.pause.boundaryProvenance = 'native-completion-and-exit';
         }
-        else if (current.messages.slice(active.messageCount, -1).some(message => message.kind === 'child-progress')) current.status = 'ready';
-        else if (activeChildren) { current.status = 'waiting'; current.pendingHandoff = null; }
         else if (current.pendingHandoff) {
           current.owner = current.pendingHandoff.provider; current.model = current.pendingHandoff.model ?? null; current.effort = current.pendingHandoff.effort ?? null; current.pendingHandoff = null; current.status = 'ready';
-        } else current.status = current.messages.slice(active.messageCount, -1).some(message => message.kind === 'message'
-          || message.kind === 'child-result' && active.seenChildren?.[message.from] !== message.sourceRevision) ? 'ready' : 'completed';
+        }
+        else if (current.messages.slice(active.messageCount, -1).some(message => ['message', 'child-progress'].includes(message.kind)
+          && !inputConsumed(current, message, active))) current.status = 'ready';
+        else if (activeChildren) { current.status = 'waiting'; current.pendingHandoff = null; }
+        else current.status = current.messages.slice(active.messageCount, -1).some(message => message.kind === 'child-result'
+          && !inputConsumed(current, message, active)) ? 'ready' : 'completed';
         if (bytes(current.messages) > 192 * 1024) { current.status = 'failed'; current.error = 'Task context capacity reached; output preserved but no further execution is allowed.'; }
       }
       if (current.pause?.state === 'requested' || current.pause?.state === 'checkpoint') {
@@ -1065,12 +1097,16 @@ export class CollaborationHub extends EventEmitter {
   deliverProgressToParent(state, task, progress) {
     const parent = state.tasks[task.parentId];
     if (!parent || terminal.has(parent.status)) return;
-    // Reports update the parent's revision, but only an explicitly enabled new
-    // blocker schedules parent work. Never borrow native controller wake authority.
+    // Changed reports update the parent's revision. The existing explicit
+    // milestone policy also permits intermediate managed-parent follow-up;
+    // neither this context nor its receipt grants native controller wake rights.
     parent.revision++; parent.updatedAt = Date.now();
-    if (!progress.blockerChanged || !task.observability?.blockerNotifications) return;
-    parent.messages.push({ kind: 'child-progress', from: task.id, at: Date.now(), text: JSON.stringify({
-      taskId: task.id, generation: task.generation, blockerId: progress.blockerId, nextAction: 'read-child-status', provenance: 'worker-self-reported' }) });
+    if (!(progress.blockerChanged && task.observability?.blockerNotifications)
+      && task.observability?.reports !== 'milestones') return;
+    parent.messages.push({ kind: 'child-progress', from: task.id, sourceRevision: task.revision + 1,
+      progressId: progress.reportId, at: Date.now(), text: JSON.stringify({ taskId: task.id,
+        generation: task.generation, reportId: progress.reportId, ...(progress.blockerId ? { blockerId: progress.blockerId } : {}),
+        nextAction: 'read-child-status', provenance: 'worker-self-reported' }) });
     if (bytes(parent.messages) > 192 * 1024) throw new Error('Parent context capacity reached; blocker report was not committed.');
     if (parent.status === 'waiting') parent.status = 'ready';
   }

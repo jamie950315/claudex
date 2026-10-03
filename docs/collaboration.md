@@ -33,12 +33,12 @@ The MCP interface exposes:
 | Tool | Operation |
 | --- | --- |
 | `claudex_start` | Start work with `provider`, `cwd`, `prompt`, and a stable `requestId`; worker calls create children. |
-| `claudex_send` | Queue a follow-up for the next completed boundary of an existing task. |
+| `claudex_send` | Send a proactive follow-up; running workers can receive it at a cooperative boundary in the same invocation. |
 | `claudex_handoff` | Transfer the same task to the other provider using its current `revision`, a handoff message, and an optional destination `model`. |
 | `claudex_report` | Active worker only: save a structured self-reported outcome for its own generation. |
 | `claudex_work_events` | Read an exact task/generation's bounded public event timeline, without acknowledging child outcomes. |
 | `claudex_work_reports` | Page through complete structured reports for an exact generation. |
-| `claudex_work_control` | Respond to a blocker, acknowledge an instruction, request/checkpoint/resume a cooperative pause, or explicitly record result review. |
+| `claudex_work_control` | Check in for current-generation instructions, respond to a blocker, acknowledge an instruction, request/checkpoint/resume a cooperative pause, or explicitly record result review. |
 | `claudex_artifact_read` | Read a declared, scope-checked file or its current Git diff; observation is not authorship proof. |
 | `claudex_status` | Read progress, messages, last native identity and results. |
 | `claudex_wait` | Wait for a revision change or terminal result; default 5 minutes, explicit maximum 30 minutes. |
@@ -64,7 +64,9 @@ The outgoing worker must stop work after handoff acknowledgement. It cannot issu
 further mutations with that generation's capability. No handoff occurs after a
 failure or an uncertain outcome. Idempotency keys reject changed request payloads
 and prevent duplicate dispatch; transport errors never cause automatic replay.
-Follow-ups reconstruct the bounded work record in a fresh native invocation.
+Follow-ups not consumed during the active invocation reconstruct the bounded work
+record at the next eligible native boundary. A follow-up acknowledged in the
+current invocation does not itself schedule another invocation.
 
 Handoff receipts include `nextAction: "end-turn"` and the short
 `finalResponse` token `CLAUDEX_HANDOFF`. At that boundary the
@@ -91,8 +93,8 @@ Start new work with an explicit, independent visibility policy:
 }
 ```
 
-All three visibility options default off. Public collection does not authorize
-notifications, and notifications do not enable content collection. Root blocker
+All three visibility options default off. Public timeline collection does not authorize
+native-chat notifications, and notifications do not enable content collection. Root blocker
 notifications additionally require the existing native call/result origin proof
 and an explicit queue/wake notification policy. Managed parents use the child-work
 protocol instead of borrowing an external controller's native chat authority.
@@ -140,13 +142,41 @@ to queue a decision, or `resolve-blocker` to explicitly close it. Unchanged repe
 reports share the same blocker; resolved, answered and old-generation questions
 do not continue to request intervention. Notifications contain only bounded
 identifiers and a request to read current status. A notification is peer context,
-never new user authorization. Normal milestones do not wake a main agent.
+never new user authorization. For managed children, `reports: "milestones"`
+also lets a new, distinct milestone resume a waiting parent while that child is
+still running. The parent can investigate and send a direction without waiting
+for a blocker or final result. Duplicate reports in the same generation do not
+schedule repeated parent work. This does not enable external native-chat wake;
+external controllers use status/wait unless their independent notification policy
+and verified origin permit an existing notification route.
 
-`send` remains next-completed-boundary delivery. Its receipt now includes an
-`instructionId`: queued, broker-delivered to a generation, and worker-reported
-accepted/rejected are distinct states. Only that active worker may call
-`ack-instruction` with the ID and `decision: "accepted"` or `"rejected"`.
-Delivery/acceptance is not completion of the requested change.
+`send` can proactively queue a question or direction while the target is running;
+it does not require a previous worker question. Its receipt includes an exact
+`instructionId`. The active worker calls `work_control` with `action: "check-in"`,
+its own `taskId`, current `generation`, a unique `requestId`, and optional `limit`
+(1–16, default 8). The broker atomically delivers bounded instruction text to that
+same invocation. Use `hasMore` to collect additional instructions, not an assumed
+complete inbox. Ordinary status reads remain observations, not delivery or adoption.
+
+Managed worker MCP responses also perform a separately identified inbox check at
+eligible tool-return boundaries. The original tool result is preserved; any
+instruction context is a separate text block. Controllers do not perform this
+automatic intake. A handoff or checkpoint end-turn receipt always wins. Failed
+intake never replays the original tool operation or silently claims delivery.
+This is cooperative tool-boundary delivery, not Codex `turn/steer`, Claude
+streaming-input injection, or a forced interrupt. No background polling or second
+native writer is introduced. A model still computing or executing a long native
+tool receives no instantaneous-delivery guarantee: check in between meaningful
+operations, before consequential writes, and before the final answer.
+
+Queued, broker-delivered to a generation, and worker-reported accepted/rejected
+are distinct states. Only the active worker may call `ack-instruction` with the
+exact ID and `decision: "accepted"` or `"rejected"`. An acknowledged instruction
+is consumed for continuation scheduling, not independent proof that the requested
+change succeeded. A new instruction arriving after the last check-in remains
+pending for normal continuation; cancellation, handoff and uncertain execution
+never authorize replay. Parent progress-notice consumption is separate from
+acknowledging an actual child outcome.
 
 `request-pause` only records a pending cooperative request. At its next supported
 checkpoint the worker reads current status and calls `checkpoint` with a boundary
@@ -811,3 +841,15 @@ for a separate-process-group cancellation leak. After its repair, live recorded
 descendants block uncertain resolution until verified cleanup; queued work then
 dispatches once. These checks preserve the same Desktop UI and general
 synchronization compatibility limits stated above.
+
+Separately authorized cooperative-follow-up acceptance on Codex
+`0.159.0-alpha.12.1` and Claude Code `2.1.283` verifies both real supervisor/child
+directions without a child blocker or question. Each supervisor sent one new
+target after work began; each child received and acknowledged it in generation
+one and returned the exact target before completing that same invocation.
+All four native invocations completed once, the read-only fixture was unchanged,
+and recorded process groups exited. Synthetic checks additionally cover a waiting
+parent resuming on a milestone, duplicate-notice suppression, late instructions,
+response bounds and capability fences. This proves cooperative check-in/MCP-return
+delivery, not instantaneous interruption of a native tool, external Desktop idle
+wake, or a newly certified synchronization runtime.

@@ -87,3 +87,48 @@ test('MCP and Unix RPC expose exact work evidence, blocker decision and next-gen
   assert.equal((await mcp('claudex_work_events', { taskId, generation: 1, cursor: events.cursor })).events
     .filter(e => e.nativeId === 'public-1').length, 0);
 });
+
+for (const peer of ['codex', 'claude']) test(`${peer} worker MCP receives proactive direction and adopts it in the same invocation`, async t => {
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'cwb-')));
+  await chmod(directory, 0o700);
+  const root = join(directory, 'collaboration');
+  const sessions = [], gates = [];
+  const hub = await new CollaborationHub({ root,
+    mcp: async ({ token }) => ({ token }),
+    run: async options => { sessions.push(options); return new Promise(resolve => gates.push(resolve)); },
+  }).initialize();
+  const server = await serveCollaborationSocket({ root, dispatch: request => hub.dispatch(request) });
+  t.after(async () => { for (const resolve of gates) resolve({ text: 'Cleanup' }); await hub.close(); await server.close(); await rm(directory, { recursive: true, force: true }); });
+  const mcp = async (name, args, worker = false) => {
+    const input = new PassThrough(), output = new PassThrough(); let wire = '';
+    output.on('data', bytes => { wire += bytes; });
+    const running = runCollaborationMcp({ root, peer, token: worker ? sessions[0].mcp.token : hub.controllerToken,
+      workerMode: worker, input, output });
+    input.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: `claudex_${name}`, arguments: args } }) + '\n');
+    await running;
+    const result = JSON.parse(wire.trim()).result;
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    return { value: JSON.parse(result.content[0].text), result };
+  };
+  const { value: started } = await mcp('start', { provider: peer, cwd: directory, prompt: 'Work without asking a question', requestId: 'start' });
+  const taskId = started.taskId;
+  await until(() => sessions.length === 1);
+  const { value: sent, result: controllerResult } = await mcp('send', { taskId, message: 'Change the validation target to SAME_TURN_TARGET.', requestId: 'proactive' });
+  assert.equal(controllerResult.content.length, 1, 'controller responses must not intake instructions');
+  assert.equal(hub.state.tasks[taskId].instructions[0].state, 'queued');
+  const { result: boundary } = await mcp('list', { limit: 1 }, true);
+  assert.equal(boundary.content.length, 2, 'a worker tool-return boundary includes separately labeled inbox context');
+  assert.match(boundary.content[1].text, /SAME_TURN_TARGET/);
+  assert.match(boundary.content[1].text, new RegExp(sent.instructionId));
+  assert.equal(hub.state.tasks[taskId].instructions[0].state, 'delivered');
+  assert.equal(hub.state.tasks[taskId].instructions[0].generation, 1);
+  const { result: acknowledgment } = await mcp('work_control', { taskId, generation: 1, action: 'ack-instruction',
+    instructionId: sent.instructionId, decision: 'accepted', requestId: 'adopt' }, true);
+  assert.equal(acknowledgment.content.length, 1, 'acknowledgments do not recursively intake');
+  const { value: check } = await mcp('work_control', { taskId, generation: 1, action: 'check-in', limit: 1, requestId: 'final-check' }, true);
+  assert.equal(check.instructions.length, 0);
+  gates[0]({ text: 'SAME_TURN_TARGET applied in generation one.' });
+  await until(() => hub.state.tasks[taskId].status === 'completed');
+  assert.equal(hub.state.tasks[taskId].generation, 1);
+  assert.equal(sessions.length, 1, 'an adopted mid-invocation message does not schedule duplicate work');
+});

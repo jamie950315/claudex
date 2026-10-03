@@ -63,7 +63,8 @@ test('fresh app installation stages every dependency, configures both identities
   assert.equal(result.modSettings.inline.stateRoot, o.root);
   const journal = JSON.parse(await readFile(join(o.root, 'app-mod', 'install.json')));
   assert.equal(journal.phase, 'complete');
-  assert.equal(Object.keys(journal.hashes).length, 23);
+  assert.equal(Object.keys(journal.hashes).length, 24);
+  assert.ok(journal.hashes['runtime/src/collaboration-worker-boundary.mjs']);
   model.calls.length = 0;
   assert.equal((await ensureAppMod(o)).state, 'ready');
   assert.equal(model.calls.some(c => c.input || c.args.includes('add') || c.args.includes('install') || c.args.includes('update') || c.args.includes('validate')), false);

@@ -1,17 +1,19 @@
 import net from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { chmod, lstat, unlink } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 import { validateOutcome, OUTCOMES, NEED_KINDS } from './collaboration-outcome.mjs';
 import { notificationPolicy } from './collaboration-notification-policy.mjs';
 import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from './collaboration-wait.mjs';
+import { attachWorkerBoundary } from './collaboration-worker-boundary.mjs';
 
 const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
 const WAIT_RESPONSE_GRACE_MS = 5000;
-const METHODS = new Set(['start', 'send', 'handoff', 'report', 'work_events', 'work_reports', 'artifact_read', 'work_control', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe', 'mod_wake_status']);
+const METHODS = new Set(['start', 'send', 'handoff', 'report', 'work_events', 'work_reports', 'artifact_read', 'work_control', 'worker_check_in', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe', 'mod_wake_status']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -178,7 +180,7 @@ const tool = (name, description, properties, required = []) => ({
         timeline: { type: 'string', enum: ['off', 'public'], default: 'off' },
         reports: { type: 'string', enum: ['off', 'milestones'], default: 'off' },
         blockerNotifications: { type: 'boolean', default: false } },
-      description: 'Explicit per-task opt-in. Public timeline retains bounded public assistant messages and allowlisted tool metadata, never prompts, reasoning or raw tool output. Milestone reports are worker self-reports. Blocker notifications independently opt into the existing authorized notification route.' },
+      description: 'Explicit per-task opt-in. Public timeline retains bounded public assistant messages and allowlisted tool metadata, never prompts, reasoning or raw tool output. Milestone reports are worker self-reports; for managed children, distinct milestones may resume a waiting parent for proactive follow-up before child completion. This does not enable external native-chat wake. Blocker notifications independently opt into the existing authorized notification route.' },
       notifications: { type: 'object', additionalProperties: false, required: ['mode'], properties: {
         mode: { type: 'string', enum: ['off', 'queue', 'wake'] }, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 } },
       description: 'Root tasks only; default off. When the user requests background delegation with a completion wake, select wake explicitly; it consumes model allowance. Queue delivers only at the next native hook and cannot wake an idle caller. After start, call status with checkNotification=true: await-notification permits ending the current turn with a pending-work handoff, not a completion claim; wait means retain status/wait monitoring; read-result means collect the result now. Native PostToolUse proof is mandatory. Route checks are snapshots, not delivery guarantees. On notification, read status and continue the original authorized work; never replay an uncertain send.' } } : {}) }, required, additionalProperties: false },
@@ -208,9 +210,9 @@ const targets = { type: 'array', minItems: 1, maxItems: 16, items: { type: 'obje
   required: ['taskId'], properties: { taskId: str, afterRevision: integer } } };
 const toolDefinitions = [
   tool('start', 'Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. Supply the goal and relevant context explicitly. Use a stable unique requestId. Tasks and children may run concurrently in the same workspace: assign disjoint file responsibilities and coordinate shared edits; there is no workspace lock or automatic conflict merge. Work has no execution deadline; explicitly cancel unwanted work. Use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. For whole-work handoff from an external chat, delegate the remaining work and stop your own work.', { provider: { type: 'string', enum: ['codex', 'claude'] }, cwd: str, prompt: str, permission: { type: 'string', enum: ['read-only', 'workspace-write'] }, model, requestId: str }, ['provider', 'cwd', 'prompt', 'requestId']),
-  tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
+  tool('send', 'Proactively send a follow-up to an existing task, including while it is running; no prior worker question is required. The worker can receive it during the same invocation at a cooperative check-in or worker MCP response boundary, then explicitly acknowledge accepted or rejected. Queued is not delivered or adopted. Unconsumed follow-ups retain normal next-boundary handling. Does not interrupt a running native tool or expand permissions.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
   tool('handoff', 'Transfer this same task to the other provider. Optional report carries structured self-reported outcome and remaining work, never independent proof. Optional model overrides the receiving provider default; omission uses that default, not the outgoing model. Read status for the revision first. Include progress, remaining work and constraints in the message. After acknowledgement end immediately with exactly CLAUDEX_HANDOFF: no further tools or summary. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, report, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
-  tool('report', 'Active worker only: record generation-bound structured progress for your own task. Does not complete execution, verify success or authorize work. Use unique requestIds at meaningful milestones; preserve remaining work and typed needs. Reuse an exact blocker ID for its updates. Only explicitly enabled blocker notifications may use an already authorized native route.', { taskId: str, report, requestId: str }, ['taskId', 'report', 'requestId']),
+  tool('report', 'Active worker only: record generation-bound structured progress for your own task. Does not complete execution, verify success or authorize work. Use unique requestIds at meaningful milestones; preserve remaining work and typed needs. With reports=milestones, a distinct report can resume your waiting managed parent for proactive follow-up while you keep working; unchanged same-generation reports are deduplicated. Reuse an exact blocker ID for its updates. Only explicitly enabled blocker notifications may use an already authorized native-chat route.', { taskId: str, report, requestId: str }, ['taskId', 'report', 'requestId']),
   tool('work_events', 'Read bounded public work events for one exact task and execution generation. No inference, revision change, child-result acknowledgement or native-history scan. Cursor is an event position, never a task revision. Old or disabled tasks report not collected; inspect gaps and collection limits. Use recent for a bounded tail, or cursor for incremental pages.', {
     taskId: str, generation: { type: 'integer', minimum: 1 }, cursor: str,
     limit: { type: 'integer', minimum: 1, maximum: 64 }, recent: { type: 'boolean' },
@@ -223,9 +225,10 @@ const toolDefinitions = [
     taskId: str, generation: { type: 'integer', minimum: 1 }, cursor: str,
     limit: { type: 'integer', minimum: 1, maximum: 16 }, recent: { type: 'boolean' },
   }, ['taskId', 'generation']),
-  tool('work_control', 'Generation-fenced cooperative work control. Respond to or resolve an exact blocker, acknowledge an instruction as the owning worker, request pause, checkpoint, resume or explicitly review/integrate a result. Pause requests do not freeze a process: the worker must checkpoint and finish and owned processes must exit before paused. Never bypass cancellation, handoff or writer guards. Responses are peer instructions, not new user permission. Each mutation requires a stable unique requestId.', {
+  tool('work_control', 'Generation-fenced cooperative work control. The active worker uses check-in at meaningful work boundaries and before consequential writes to receive queued instructions in its current invocation; acknowledge each delivered instruction as accepted or rejected before acting. Reading ordinary status never consumes instructions. Controllers may respond to or resolve an exact blocker, request pause, resume or explicitly review/integrate a result. Pause requests do not freeze a process: the worker must checkpoint and finish and owned processes must exit before paused. Never bypass cancellation, handoff or writer guards. Responses are peer instructions, not new user permission. Each mutation requires a stable unique requestId.', {
     taskId: str, generation: { type: 'integer', minimum: 1 }, requestId: str,
-    action: { type: 'string', enum: ['respond-blocker', 'resolve-blocker', 'ack-instruction', 'request-pause', 'checkpoint', 'resume', 'review-result'] },
+    action: { type: 'string', enum: ['check-in', 'respond-blocker', 'resolve-blocker', 'ack-instruction', 'request-pause', 'checkpoint', 'resume', 'review-result'] },
+    limit: { type: 'integer', minimum: 1, maximum: 16, description: 'Only for check-in; maximum instructions returned, default 8.' },
     blockerId: str, instructionId: str, text: { ...str, maxLength: 4096 },
     decision: { type: 'string', enum: ['accepted', 'rejected', 'reviewed', 'integrated'] },
   }, ['taskId', 'generation', 'requestId', 'action']),
@@ -295,7 +298,7 @@ function validateTool(name, args) {
 }
 
 /** Minimal newline JSON-RPC MCP facade. It emits protocol data only on output. */
-export async function runCollaborationMcp({ root, peer, token, input = process.stdin, output = process.stdout, desktopWakeOnly = false }) {
+export async function runCollaborationMcp({ root, peer, token, input = process.stdin, output = process.stdout, desktopWakeOnly = false, workerMode = false }) {
   if (!['codex', 'claude'].includes(peer)) fail('Invalid MCP peer');
   let active = 0;
   let buffer = Buffer.alloc(0);
@@ -322,6 +325,9 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
           const value = await callCollaboration({ root, peer, token, method, params,
             timeoutMs: method === 'wait' ? (args.timeoutMs ?? DEFAULT_WAIT_MS) + WAIT_RESPONSE_GRACE_MS : SOCKET_LIFETIME_MS });
           result = { content: [{ type: 'text', text: JSON.stringify(value) }] };
+          result = await attachWorkerBoundary({ enabled: workerMode === true && !desktopWakeOnly,
+            method, params, result, responseId: id, requestId: `boundary:${randomUUID()}`,
+            callCheckIn: intake => callCollaboration({ root, peer, token, method: 'worker_check_in', params: intake }) });
         } catch (error) { result = { content: [{ type: 'text', text: String(error.message) }], isError: true,
           structuredContent: { error: { code: typeof error.code === 'string' ? error.code : null, message: String(error.message) } } }; }
       } else { send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } }); return; }

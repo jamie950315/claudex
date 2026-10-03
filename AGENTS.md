@@ -263,7 +263,18 @@ Blocker transitions retain exact ID/generation, deduplicate unchanged reports,
 and revoke stale native dispatch after awaited preflights. Managed parents use
 child-progress context, never external native-chat controller privileges.
 Follow-up instruction context delivery is distinct from worker-reported adoption
-and actual completion. Cooperative pause remains pending until the worker's
+and actual completion. Worker-only generation-fenced check-in can deliver queued
+instructions during the current invocation; exact accepted/rejected acknowledgements
+consume them for continuation scheduling, never prove completed work. Ordinary
+status stays read-only. Eligible worker MCP response boundaries may append separate
+bounded inbox context through actor-derived worker_check_in RPC; controllers do
+not auto-consume, and end-turn receipts suppress intake. Preserve original tool
+results and explicit intake failures without retrying tools or uncertain work.
+This is cooperative delivery, not native steer/interrupt or a second writer.
+Opted-in managed child milestones can resume a waiting parent before child completion;
+deduplicate identical same-generation reports and consumed progress notices without
+acknowledging unrelated child outcomes or enabling external native-chat wake.
+Cooperative pause remains pending until the worker's
 checkpoint, successful native completion and owned-process exit; no SIGSTOP,
 forced interruption, second writer or uncertain replay. End-turn receipts
 override any report requirement. File evidence requires a declared artifact and
@@ -390,7 +401,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has 0.7.0 installed with both native configuration
+passes. The reviewed Mac has 0.7.1 installed with both native configuration
 identities enabled and route=mod-self. Earlier acceptance after a normal Claude
 restart verified that one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real

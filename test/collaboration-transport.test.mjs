@@ -40,6 +40,7 @@ test('MCP work observability reads and generation-fenced controls cross the Unix
     ['work_reports', { ...params, limit: 16, cursor: 'exact-cursor' }],
     ['artifact_read', { ...params, reference: 'result.txt', view: 'diff', maxBytes: 65536 }],
     ['work_control', { ...params, action: 'respond-blocker', blockerId: 'need:decision', text: 'Proceed within scope', requestId: 'decision' }],
+    ['work_control', { ...params, action: 'check-in', limit: 16, requestId: 'boundary' }],
     ['start', { provider: 'claude', cwd: root, prompt: 'Scoped work', requestId: 'opt-in', observability: { timeline: 'public', reports: 'milestones', blockerNotifications: false } }],
     ['report', { taskId: 'task', requestId: 'milestone', report: { outcome: 'partial', summary: 'Validated', stage: 'checks', next: 'Review', checks: [{ name: 'unit', result: 'passed', at: 1 }] } }],
   ];
@@ -47,6 +48,7 @@ test('MCP work observability reads and generation-fenced controls cross the Unix
     ['work_events', { ...params, limit: 65 }], ['work_reports', { ...params, limit: 17 }],
     ['work_events', { ...params, recent: 'true' }], ['artifact_read', { ...params, reference: 'result.txt', view: 'raw-host' }],
     ['work_control', { ...params, action: 'SIGSTOP', requestId: 'bad' }],
+    ['work_control', { ...params, action: 'check-in', limit: 17, requestId: 'bad-boundary' }],
     ['start', { provider: 'claude', cwd: root, prompt: 'work', requestId: 'bad-opt-in', observability: { timeline: 'everything' } }],
   ];
   [...valid, ...invalid].forEach(([method, args], id) => input.write(JSON.stringify({ jsonrpc: '2.0', id,

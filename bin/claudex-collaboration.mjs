@@ -130,7 +130,8 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   }
   const token = process.env.CLAUDEX_WORK_TOKEN ?? await controllerToken(root);
   const peer = values.peer ?? 'codex';
-  if (command === 'mcp') return runCollaborationMcp({ root, peer, token });
+  if (command === 'mcp') return runCollaborationMcp({ root, peer, token,
+    workerMode: Boolean(process.env.CLAUDEX_WORK_TOKEN) });
   if (command === 'desktop-wake-mcp') {
     if (peer !== 'claude' || process.env.CLAUDEX_WORK_TOKEN) throw new Error('Desktop wake requires the native Claude controller endpoint.');
     return runCollaborationMcp({ root, peer, token, desktopWakeOnly: true });

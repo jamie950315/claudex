@@ -5,6 +5,14 @@ import { validateOutcome } from './collaboration-outcome.mjs';
 const fail = (message, code = 'CLAUDEX_INVALID_CONTROL') => { throw Object.assign(new Error(message), { code }); };
 const text = (value, maximum = 4096) => typeof value === 'string' && value.trim() && !value.includes('\0') && Buffer.byteLength(value) <= maximum;
 const copy = value => structuredClone(value);
+export const CHECK_IN_MAX_RESPONSE_BYTES = 192 * 1024;
+const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
+  ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+const reportFingerprint = report => {
+  const { id, fingerprint, provenance, provider, generation, reportedAt, ...content } = report;
+  return createHash('sha256').update(JSON.stringify(canonical(content))).digest('hex');
+};
+const responseBytes = value => Buffer.byteLength(JSON.stringify({ content: [{ type: 'text', text: JSON.stringify(value) }] }));
 export function observabilityPolicy(value = {}) {
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some(key => !['timeline', 'reports', 'blockerNotifications'].includes(key))
@@ -28,10 +36,14 @@ export function instruction(task, actor, message, extra = {}) {
 }
 
 export function recordProgress(task, report) {
+  const fingerprint = reportFingerprint(report);
+  const previous = task.reportHistory?.find(item => item.generation === report.generation
+    && (item.fingerprint ?? reportFingerprint(item)) === fingerprint);
+  if (previous) return { reportId: previous.id, reportChanged: false, blockerChanged: false };
   // A bounded immutable history is separate from the latest report. Never silently
   // discard older declarations, which may still be referenced by review evidence.
   if ((task.reportHistory?.length ?? 0) >= 128) fail('Report history capacity reached; existing reports were preserved.', 'CLAUDEX_REPORT_CAPACITY');
-  const saved = { ...copy(report), id: randomUUID() };
+  const saved = { ...copy(report), id: randomUUID(), fingerprint };
   (task.reportHistory ??= []).push(saved);
   initializeWorkEvents(task);
   appendWorkEvent(task, { generation: report.generation, source: 'worker-self-report', kind: 'report', reportId: saved.id,
@@ -41,7 +53,7 @@ export function recordProgress(task, report) {
     const input = report.blocker;
     const id = input.id ?? createHash('sha256').update(JSON.stringify([report.generation, input.question, input.impact, input.needs])).digest('hex').slice(0, 32);
     let blocker = (task.blockers ??= []).find(item => item.id === id && item.generation === report.generation);
-    if (blocker && ['responded', 'resolved'].includes(blocker.state)) return { reportId: saved.id, blockerId: id, blockerChanged: false };
+    if (blocker && ['responded', 'resolved'].includes(blocker.state)) return { reportId: saved.id, reportChanged: true, blockerId: id, blockerChanged: false };
     if (!blocker) {
       if (task.blockers.length >= 64) fail('Blocker capacity reached; existing decisions were preserved.');
       blocker = { id, generation: report.generation, state: 'open', revision: 1, provenance: 'worker-self-reported', createdAt: Date.now() };
@@ -52,9 +64,77 @@ export function recordProgress(task, report) {
       appendWorkEvent(task, { generation: report.generation, source: 'worker-self-report', kind: 'blocker', blockerId: id,
         status: blocker.state, question: blocker.question, impact: blocker.impact, requestedAction: blocker.needs });
     }
-    return { reportId: saved.id, blockerId: id, blockerChanged };
+    return { reportId: saved.id, reportChanged: true, blockerId: id, blockerChanged };
   }
-  return { reportId: saved.id, blockerChanged };
+  return { reportId: saved.id, reportChanged: true, blockerChanged };
+}
+
+export function inputConsumed(task, message, active = task.active) {
+  if (message.kind === 'message') {
+    const record = message.instructionId && task.instructions?.find(item => item.id === message.instructionId);
+    return Boolean(record && ['accepted', 'rejected'].includes(record.state));
+  }
+  if (message.kind === 'child-result') return Number.isSafeInteger(message.sourceRevision)
+    && (active?.seenChildren?.[message.from] ?? -1) >= message.sourceRevision;
+  if (message.kind === 'child-progress') return Number.isSafeInteger(message.sourceRevision)
+    && (active?.seenProgress?.[message.from] ?? -1) >= message.sourceRevision;
+  return true;
+}
+
+/** Explicit inbox delivery, not instruction adoption or child-outcome ACK. The
+ * exact same helper can preview an internal no-op without committing a journal. */
+export function checkInInstructions(task, params, { apply = true } = {}) {
+  const limit = params.limit ?? 8, budget = params.responseBudgetBytes ?? CHECK_IN_MAX_RESPONSE_BYTES;
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 16 || !Number.isSafeInteger(budget)
+    || budget < 1024 || budget > CHECK_IN_MAX_RESPONSE_BYTES) fail('Invalid check-in count or response byte bound.');
+  const receipt = { generation: task.generation, instructions: [], childProgress: [], hasMore: false,
+    pause: task.pause?.generation === task.generation && task.pause.state === 'requested' ? copy(task.pause) : null,
+    newlyDelivered: 0, newlySeenProgress: 0 };
+  const fits = value => responseBytes({ taskId: task.id, revision: task.revision + 1, status: task.status,
+    owner: task.owner, handoffPending: false, returnTo: task.returnTo, replayed: true, ...value }) <= budget;
+  if (!fits(receipt)) fail('Check-in response budget cannot hold the current control state.', 'CLAUDEX_RESPONSE_CAPACITY');
+  const pending = (task.instructions ?? []).filter(record => record.state === 'queued'
+    || record.state === 'delivered' && record.generation === task.generation);
+  const deliveries = [];
+  for (const record of pending) {
+    if (receipt.instructions.length >= limit) { receipt.hasMore = true; break; }
+    const messages = task.messages.filter(message => message.kind === 'message' && message.instructionId === record.id);
+    if (messages.length !== 1) fail('Instruction context is missing or ambiguous.');
+    const item = { instructionId: record.id, text: messages[0].text, from: record.from,
+      provenance: record.provenance, generation: task.generation,
+      deliveryProvenance: record.state === 'queued' ? 'worker-check-in' : record.deliveryProvenance ?? 'broker-context' };
+    const proposed = { ...receipt, instructions: [...receipt.instructions, item],
+      newlyDelivered: receipt.newlyDelivered + (record.state === 'queued' ? 1 : 0) };
+    if (!fits(proposed)) { receipt.hasMore = true; break; }
+    Object.assign(receipt, proposed);
+    if (record.state === 'queued') deliveries.push(record);
+  }
+  const progress = task.messages.slice(task.active.messageCount)
+    .filter(message => message.kind === 'child-progress' && !inputConsumed(task, message));
+  for (const message of progress) {
+    if (receipt.childProgress.length >= limit) { receipt.hasMore = true; break; }
+    // Legacy identity-only notifications have no revision receipt; leave them
+    // for their normal next-generation context rather than guessing consumption.
+    if (!Number.isSafeInteger(message.sourceRevision) || typeof message.progressId !== 'string') continue;
+    let notification; try { notification = JSON.parse(message.text); } catch { fail('Malformed child progress context.'); }
+    const item = { taskId: message.from, generation: notification.generation, reportId: message.progressId,
+      revision: message.sourceRevision, nextAction: 'read-child-status', provenance: 'worker-self-reported' };
+    const proposed = { ...receipt, childProgress: [...receipt.childProgress, item], newlySeenProgress: receipt.newlySeenProgress + 1 };
+    if (!fits(proposed)) { receipt.hasMore = true; break; }
+    Object.assign(receipt, proposed);
+  }
+  if (apply) {
+    for (const record of deliveries) {
+      Object.assign(record, { state: 'delivered', generation: task.generation, deliveredAt: Date.now(),
+        deliveryProvenance: 'worker-check-in', deliveryCount: (record.deliveryCount ?? 0) + 1 });
+      appendWorkEvent(task, { generation: task.generation, source: 'broker', kind: 'instruction', instructionId: record.id, status: 'delivered' });
+    }
+    if (receipt.childProgress.length) {
+      task.active.seenProgress ??= {};
+      for (const item of receipt.childProgress) task.active.seenProgress[item.taskId] = Math.max(task.active.seenProgress[item.taskId] ?? 0, item.revision);
+    }
+  }
+  return receipt;
 }
 
 export function progressPresentation(task) {
@@ -90,18 +170,20 @@ export function queryWorkReports(task, { generation, cursor, limit = 8, recent =
 }
 
 export function controlWork(task, params, actor, state) {
-  if (Object.keys(params).some(key => !['requestId', 'taskId', 'generation', 'action', 'text', 'blockerId', 'instructionId', 'decision'].includes(key))) fail('Unknown control fields.');
+  if (Object.keys(params).some(key => !['requestId', 'taskId', 'generation', 'action', 'text', 'blockerId', 'instructionId', 'decision', 'limit', 'responseBudgetBytes'].includes(key))) fail('Unknown control fields.');
   if (!Number.isSafeInteger(params.generation) || params.generation !== task.generation)
     fail('Control generation does not match the current task.', 'CLAUDEX_STALE_GENERATION');
   const self = actor.task?.id === task.id;
   const at = Date.now(), provenance = self ? 'worker-self-reported' : actor.task ? 'parent-worker-reported' : 'controller-reported';
   const action = params.action;
-  if (!['respond-blocker', 'resolve-blocker', 'ack-instruction', 'request-pause', 'checkpoint', 'resume', 'review-result'].includes(action)) fail('Unknown work control action.');
+  if (!['respond-blocker', 'resolve-blocker', 'ack-instruction', 'check-in', 'request-pause', 'checkpoint', 'resume', 'review-result'].includes(action)) fail('Unknown work control action.');
+  if (action !== 'check-in' && (params.limit !== undefined || params.responseBudgetBytes !== undefined)) fail('Only check-in accepts response bounds.');
   if (params.text !== undefined && !text(params.text)) fail('Control text must be bounded nonempty text.');
-  if (['ack-instruction', 'checkpoint'].includes(action) && (!self || task.status !== 'running')) fail('Only the active worker may acknowledge its own instruction or checkpoint.');
+  if (['ack-instruction', 'checkpoint', 'check-in'].includes(action) && (!self || task.status !== 'running')) fail('Only the active worker may check in or acknowledge its own instruction or checkpoint.');
   if (['respond-blocker', 'request-pause', 'resume', 'review-result'].includes(action) && self) fail('This action requires the parent or external controller.');
   if (task.pendingHandoff || task.cancelRequested) fail('Task is already transferring or cancelling.');
   let receipt = {};
+  if (action === 'check-in') return checkInInstructions(task, params);
   if (action === 'respond-blocker' || action === 'resolve-blocker') {
     const blocker = task.blockers?.find(item => item.id === params.blockerId && item.generation === params.generation);
     if (!blocker) fail('Blocker does not belong to the exact generation.');
@@ -146,6 +228,11 @@ export function controlWork(task, params, actor, state) {
 export function validateProgress(task) {
   const generation = value => Number.isSafeInteger(value) && value >= 0 && value <= task.generation;
   const identity = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,128}$/.test(value);
+  for (const execution of [task.active, task.lastExecution]) if (execution?.seenProgress !== undefined) {
+    const receipts = execution.seenProgress;
+    if (!receipts || typeof receipts !== 'object' || Array.isArray(receipts) || Object.keys(receipts).length > 10000
+      || Object.entries(receipts).some(([id, revision]) => !identity(id) || !Number.isSafeInteger(revision) || revision < 1)) fail('Malformed child progress delivery receipts.');
+  }
   if (task.reportHistory !== undefined) {
     if (!Array.isArray(task.reportHistory) || task.reportHistory.length > 128) fail('Malformed report history.');
     const ids = new Set();
@@ -154,7 +241,8 @@ export function validateProgress(task) {
         || report.provenance !== 'worker-self-reported' || !['codex', 'claude'].includes(report.provider)
         || !Number.isSafeInteger(report.reportedAt) || report.reportedAt < 1) fail('Malformed persisted report.');
       ids.add(report.id);
-      const { id, generation: ignoredGeneration, provenance, provider, reportedAt, ...outcome } = report;
+      if (report.fingerprint !== undefined && (!/^[a-f0-9]{64}$/.test(report.fingerprint) || report.fingerprint !== reportFingerprint(report))) fail('Malformed report fingerprint.');
+      const { id, fingerprint, generation: ignoredGeneration, provenance, provider, reportedAt, ...outcome } = report;
       validateOutcome(outcome);
     }
   }
