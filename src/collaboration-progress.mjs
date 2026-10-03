@@ -85,7 +85,8 @@ export function queryWorkReports(task, { generation, cursor, limit = 8, recent =
   const page = recent ? rows.slice(-limit) : rows.slice(0, limit);
   return { taskId: task.id, generation, reports: copy(page.map(row => row.report)),
     cursor: Buffer.from(JSON.stringify({ taskId: task.id, generation, after: page.at(-1)?.index ?? after })).toString('base64url'),
-    hasMore: !recent && rows.length > page.length, collection: task.workEvents ? 'collected' : 'not-collected', limit: 128 };
+    hasMore: !recent && rows.length > page.length,
+    collection: task.reportHistory !== undefined || task.workEvents ? 'collected' : 'not-collected', limit: 128 };
 }
 
 export function controlWork(task, params, actor, state) {

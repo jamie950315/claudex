@@ -6,7 +6,18 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { validateOutcome } from '../src/collaboration-outcome.mjs';
+import { queryWorkReports } from '../src/collaboration-progress.mjs';
 import { serveCollaborationSocket, callCollaboration } from '../src/collaboration-transport.mjs';
+
+test('new reports on legacy tasks are collected independently of an absent public timeline', () => {
+  const task = { id: 'legacy-task', generation: 2 };
+  assert.equal(queryWorkReports(task, { generation: 2 }).collection, 'not-collected');
+  task.reportHistory = [{ generation: 2, summary: 'New explicit report', provenance: 'worker-self-reported' }];
+  const page = queryWorkReports(task, { generation: 2 });
+  assert.equal(page.collection, 'collected');
+  assert.equal(page.reports.length, 1);
+  assert.equal(task.workEvents, undefined);
+});
 
 async function until(predicate) {
   for (let i = 0; i < 200; i++) { if (await predicate()) return; await delay(5); }

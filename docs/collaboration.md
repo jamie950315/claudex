@@ -191,8 +191,9 @@ the native start call has returned, request
   native proof, unavailable ownership/receiver, native policy, app-stop, ended
   origins, quota limits and routes without observable readiness. Do not replay
   start or send, invent a source identity, or change native permissions.
-- `"read-result"` means a terminal boundary was observed; read current status and
-  inspect `resultFinal`, errors and blockers before continuing the original work.
+- `"read-result"` means a terminal boundary or current open blocker was observed;
+  read current status and inspect `resultFinal`, errors and blockers before
+  continuing the original work.
 
 This opt-in check is read-only: it never opens a chat, sends input, claims a
 message, changes revisions or runs inference. Codex checks exact metadata and its

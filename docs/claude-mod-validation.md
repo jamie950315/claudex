@@ -1,11 +1,88 @@
 # Claude Mod integration validation
 
-Source and installed companion are now 0.5.2; earlier acceptance below remains the
+The source companion is 0.6.0; the installed companion remains 0.5.2 pending the
+native test-kit gate below. Earlier acceptance remains the
 historical 0.4.1 review from 2026-10-03. The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## Work observability acceptance (2026-10-03)
+
+The source adds per-task public events, complete structured report history,
+generation-fenced blockers and instruction acknowledgements, scoped artifact/diff
+reads, explicit result review, and cooperative pause/resume. The existing Mod
+work view exposes the same authority, with nine-language catalogs, bounded
+generation selection and on-demand reads. Public content collection and
+intermediate notifications are independently opt-in; neither changes native
+origin proof or grants worker authority.
+
+Synthetic checks exercise the real MCP facade/private Unix RPC through report,
+blocker notification, exact decision, next-generation instruction adoption and
+final result. Event/report/artifact reads preserve revisions and child-outcome
+acknowledgements. Focused tests cover expiry during artifact reads, no-follow
+file identity, literal Git pathspecs, pagination/gaps/deduplication, pause/cancel/
+handoff/restart boundaries and notification rate-limit suppression. Full regression
+ran 1,534 cases: 1,510 passed and 23 opt-in cases skipped; the sole failure was an
+old CLI fixture expecting 11 tools rather than 15, repaired and passed in the
+affected CLI/Mod group. Later presentation deltas passed their focused tests;
+unchanged expensive checks were not repeated merely for packaging.
+
+Authorized source-runner native acceptance used Codex 0.159.0-alpha.12.1 with
+gpt-6.1-sol/xhigh and Claude Code 2.1.283 with opus/medium, through actual worker
+MCP and Unix RPC. Codex completed one invocation with 22 retained events. Claude
+completed a real checkpoint/process-exit pause and a second resumed invocation,
+with 26 retained events. Both returned final results and worker-provenance
+reports, and exact declared artifact hashes matched an unchanged fixture.
+Independent process-table inspection confirmed all recorded leaders and process
+groups, including the paused generation, absent. These were three new read-only
+invocations with notifications off, not blocker-wake or Desktop painting proof.
+
+The final 0.6.0 stage passes the official Claude Code 2.1.286 strict validator
+with zero errors/warnings. The complete native test kit was attempted but refused
+before running tests because the runtime's function-hooks rollout is disabled.
+No explicit disabling environment/settings entry was found in the bounded known
+locations, and no feature flag or policy override was applied. Synthetic rendered
+trees do not replace this gate or actual Desktop pixels. The live companion was
+therefore preserved rather than replaced with an unvalidated candidate.
+
+The normal Apple Development-signed app builder packaged the changed backend and
+the uninstalled companion source. All 121 allowlisted runtime/entrypoint/plugin
+files matched the source. Installation used the app's ordinary Quit drain,
+verified stopped services and zero native-owner blockers, preserved the previous
+bundle, copied with ditto, and passed strict deep signature verification. Normal
+startup resumed the exact owned services and cleared the app-stop hold without
+changing model/effort/permission defaults or restarting Codex/Claude. The app is
+still 1.0.3 and development-signed, not notarized; shipping a staged plugin inside
+the bundle is not installation or native validation of that companion.
+
+Installed blocker acceptance then used a fresh persistent Codex main and a new
+read-only Claude task. Native origin binding succeeded automatically. The main
+read exact work_events/work_reports on the real blocker wake, responded once to
+that blocker/generation, and the second Claude generation acknowledged the exact
+instruction as accepted before returning the requested final nonce. The main
+read resultFinal and the accepted-instruction evidence. Both the blocker native
+wake and the final native wake have actual recipient Stop ACKs. A first-generation
+terminal notice arrived while the main was busy and followed the normal hook
+path, also acknowledged; no second writer or custom delivery route was added.
+
+The initial CLI acceptance source was refused before dispatch by its MCP approval
+configuration. A fresh invocation used the already-supported, invocation-local
+tool approval option, without changing global settings. That source bound but
+had no native title, so exact recipient discovery refused both notices. Its two
+uncertain records remain unchanged; nothing was rebound or resent. A later peer
+setup was correctly refused because the earlier main request had authorized only
+one start. The successful fresh source explicitly authorized one later tagged
+setup in its initial request, received a title through the normal native API,
+and used new task/request IDs. These are fixture/lifecycle findings, not reasons
+to weaken title, peer-authority or no-replay guards.
+
+A final source inspection also repaired a presentation edge case: explicit new
+reports on a legacy task without a public event ledger now report collected
+history correctly, without enabling native content collection. Its focused
+regression passed; the prior native execution/delivery evidence remains valid
+because that one read-time label does not change execution or notifications.
 
 ## Codex main completion-wake acceptance (2026-10-03)
 
