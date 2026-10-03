@@ -111,7 +111,7 @@ test('Codex uses an ephemeral sandboxed CLI session with only the requested MCP 
     mcp: { command: '/usr/bin/node', args: ['server.mjs'], env: { CLAUDEX_WORK_TOKEN: 'private' } },
     onEvent: (event) => events.push(event.type) });
   const { activity, ...outcome } = result;
-  assert.equal(activity.models.status, 'unverified');
+  assert.equal(activity.models.status, 'not-reported');
   assert.deepEqual(outcome, { text: 'Done.', sessionId: 'codex-session', usage: { inputTokens: 3, cacheReadInputTokens: 0,
     cacheWriteInputTokens: 0, outputTokens: 1, reasoningOutputTokens: 0 } });
   assert.deepEqual(events, ['spawn', 'session', 'thread.started', 'item.completed', 'turn.completed']);
@@ -208,7 +208,7 @@ test('Claude uses nonpersistent restricted CLI with bounded file tools and expli
   const result = await run({ provider: 'claude', cwd: process.cwd(), prompt: 'Implement it.',
     permission: 'workspace-write', mcp: { command: '/usr/bin/node', args: ['server.mjs'] } });
   const { activity, ...outcome } = result;
-  assert.equal(activity.models.status, 'unverified');
+  assert.equal(activity.models.status, 'not-reported');
   assert.deepEqual(outcome, { text: 'Implemented.', sessionId: 'claude-session', usage: { inputTokens: 125,
     cacheReadInputTokens: 100, cacheWriteInputTokens: 20, outputTokens: 7, reportedCostUsd: 0.0125 } });
   const call = fake.calls[0];

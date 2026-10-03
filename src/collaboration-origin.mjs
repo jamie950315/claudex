@@ -5,7 +5,6 @@ import { isDeepStrictEqual } from 'node:util';
 import { lstat, realpath } from 'node:fs/promises';
 import { CodexWebSocketClient } from './codex-websocket.mjs';
 import { codexChatSocket } from './native-chat-catalog.mjs';
-import { readDesktopSessionMappings } from './desktop.mjs';
 import { sessionPath } from './claude.mjs';
 import { privateRead } from './claude-mod-storage.mjs';
 
@@ -47,24 +46,35 @@ async function readClaudeSource(path, home) {
   // ordinary umask, while transcript files remain private 0600. These are not
   // broker-owned state directories: require ownership/canonicality and reject
   // foreign writes without chmodding native storage or demanding 0700.
-  const parent = dirname(path), directory = await lstat(parent);
-  requireValue(directory.isDirectory() && !directory.isSymbolicLink() && directory.uid === process.getuid()
-    && (directory.mode & 0o022) === 0 && await realpath(parent) === parent, 'ORIGIN_PROOF_UNAVAILABLE');
+  const directories = [home, join(home, 'projects'), dirname(path)];
+  const identities = [];
+  for (const directory of directories) {
+    const stat = await lstat(directory);
+    requireValue(stat.isDirectory() && !stat.isSymbolicLink() && stat.uid === process.getuid()
+      && (stat.mode & 0o022) === 0 && await realpath(directory) === directory, 'ORIGIN_PROOF_UNAVAILABLE');
+    identities.push(stat);
+  }
   requireValue(await realpath(path) === path, 'ORIGIN_PROOF_UNAVAILABLE');
-  return privateRead(path, { maxBytes: MAX_SOURCE_BYTES });
+  const source = await privateRead(path, { maxBytes: MAX_SOURCE_BYTES });
+  for (const [index, directory] of directories.entries()) {
+    const after = await lstat(directory), before = identities[index];
+    requireValue(['dev', 'ino', 'uid', 'mode'].every(key => before[key] === after[key])
+      && await realpath(directory) === directory, 'ORIGIN_PROOF_UNAVAILABLE');
+  }
+  return source;
 }
 
 /** Hook fields are only lookup hints. Authority comes from a bounded independent
  * native call/result read matched to the broker's original one-use receipt.
  * This does not defend against a hostile same-UID process rewriting native data.
  * It never resumes a session, starts inference, writes native data, or scans
- * transcript directories. Claude CLI-only sources are intentionally unsupported.
+ * transcript directories. Claude proof uses the native primary transcript, not
+ * Desktop registry membership or the UI through which the session is accessed.
  */
 export function createOriginVerifier({ syncRoot,
   codexHome = process.env.CODEX_HOME ?? join(homedir(), '.codex'),
   claudeHome = join(homedir(), '.claude'),
-  registryRoot = join(homedir(), 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
-  clientFactory, mappings = readDesktopSessionMappings, readClaude = readClaudeSource,
+  clientFactory, readClaude = readClaudeSource,
   now = Date.now,
 } = {}) {
   return async function verify(input) {
@@ -131,31 +141,34 @@ export function createOriginVerifier({ syncRoot,
         } finally { await client.close(); }
       } else {
         requireValue(isAbsolute(claudeHome) && resolve(claudeHome) === claudeHome, 'ORIGIN_PROOF_UNAVAILABLE');
-        const mapping = (await mappings(registryRoot, [input.sessionId])).get(input.sessionId);
-        checkTime();
-        requireValue(mapping?.nativeId === input.sessionId && mapping.cwd === input.cwd && !mapping.isArchived
-          && typeof mapping.sessionId === 'string' && mapping.sessionId.startsWith('local_'), 'ORIGIN_PROOF_UNAVAILABLE');
-        const path = sessionPath(claudeHome, mapping.cwd, mapping.nativeId);
+        // cwd/sessionId only locate one candidate. Its independently read native
+        // call/result must prove both identities and the broker's one-use receipt.
+        // No Desktop registry, title lookup, directory scan or substitute path.
+        const path = sessionPath(claudeHome, input.cwd, input.sessionId);
         const source = await readClaude(path, claudeHome);
         checkTime();
         requireValue(typeof source === 'string' && Buffer.byteLength(source) <= MAX_SOURCE_BYTES,
           'ORIGIN_PROOF_BOUND_EXCEEDED');
         requireValue(source.endsWith('\n'), 'ORIGIN_PROOF_UNAVAILABLE');
         const rows = source.split('\n').filter(Boolean).map(line => JSON.parse(line));
-        requireValue(!rows.some(row => row?.type === 'claudex-owner'));
+        const projectionEnd = rows.findLastIndex(row => row?.type === 'claudex-owner');
         const calls = [], results = [], byId = new Map();
-        for (const row of rows) {
+        for (const [index, row] of rows.entries()) {
           requireValue(object(row));
           if (typeof row.uuid === 'string') {
             requireValue(!byId.has(row.uuid)); byId.set(row.uuid, row);
           }
           for (const block of Array.isArray(row.message?.content) ? row.message.content : []) {
-            if (block?.type === 'tool_use' && block.id === input.toolUseId) calls.push({ row, block });
-            if (block?.type === 'tool_result' && block.tool_use_id === input.toolUseId) results.push({ row, block });
+            if (block?.type === 'tool_use' && block.id === input.toolUseId) calls.push({ row, block, index });
+            if (block?.type === 'tool_result' && block.tool_use_id === input.toolUseId) results.push({ row, block, index });
           }
         }
         requireValue(calls.length === 1 && results.length === 1, 'ORIGIN_PROOF_UNAVAILABLE');
         const call = calls[0], result = results[0];
+        // A managed/Remote Control session may author new native calls after its
+        // bootstrap. Imported history is not origin proof; native tool-result
+        // provenance and the exact parent chain remain mandatory below.
+        requireValue(call.index > projectionEnd && result.index > call.index);
         for (const entry of [call, result]) requireValue(entry.row.sessionId === input.sessionId
           && entry.row.cwd === input.cwd && entry.row.isSidechain === false && !entry.row.agentId
           && typeof entry.row.uuid === 'string');
@@ -169,13 +182,11 @@ export function createOriginVerifier({ syncRoot,
           requireValue(!seen.has(parent)); seen.add(parent);
           if (parent === call.row.uuid) { linked = true; break; }
           const row = byId.get(parent);
-          requireValue(row?.sessionId === input.sessionId && row.cwd === input.cwd && row.isSidechain === false);
+          requireValue(row?.sessionId === input.sessionId && row.cwd === input.cwd && row.isSidechain === false && !row.agentId);
           parent = row.parentUuid;
         }
         requireValue(linked);
         verifyCall(call.block.input, receiptFromContent(result.block.content), input);
-        const after = (await mappings(registryRoot, [input.sessionId])).get(input.sessionId);
-        checkTime(); requireValue(isDeepStrictEqual(mapping, after), 'ORIGIN_PROOF_UNAVAILABLE');
       }
       checkTime();
       return { provider: input.provider, sessionId: input.sessionId, cwd: input.cwd, toolUseId: input.toolUseId,

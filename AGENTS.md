@@ -230,7 +230,10 @@ harness. Do not defer all new completions until a long cold sweep finishes.
 AI-first diagnostics retain bounded native activity on each execution without
 changing task revisions or child acknowledgements. Keep requested model/effort
 separate from native response-model evidence; initialization, auxiliary and
-aggregate model metadata are not main-response proof. No prompts, tool payloads
+aggregate model metadata are not main-response proof. Missing main-response model
+metadata is benign `not-reported`, never task `uncertain` or a dispatch gate.
+Normalize legacy model labels on presentation without rewriting history/revisions;
+preserve actual native execution/process uncertainty. No prompts, tool payloads
 or reasoning are diagnostic data. PID/process samples never update activity.
 Per-task waitReason contains exact blockers (up to 64 IDs plus truncation/count);
 the legacy global uncertain flag is not a per-task blocking claim. List supports
@@ -252,9 +255,16 @@ RPC. Root notifications default off; explicit queue/wake captures per-task inten
 but no message is created before independent native call/result origin proof.
 PostToolUse supplies hints only: match the exact start arguments fingerprint,
 one-use receipt challenge, primary session and call/result identity. Codex uses
-bounded exact-turn native items; Claude requires an exact Desktop Local registry mapping
-and stable private native transcript. CLI-only, Remote Control and unmapped Claude origins stay
-unsupported. Native flush gaps retain one identity-only hint, rechecked on matching
+bounded exact-turn native items; Claude verifies one exact native UUID/cwd transcript
+under its configured native home, without requiring Desktop registry membership.
+Persisted same-host CLI/SDK/Remote Control sessions qualify, including new native
+calls after a managed bootstrap; copied ancestors/imported calls do not. Preserve
+native result provenance and primary parent-chain checks, excluding agent nodes.
+Canonical owned home/projects/project directories must reject foreign writes.
+Nonpersistent, remote-host-only, missing or ambiguous evidence stays unbound;
+never scan or accept arbitrary hook transcript paths. Origin proof is separate
+from unchanged notification recipient/wake capability checks. Native flush gaps
+retain one identity-only hint, rechecked on matching
 SessionStart/UserPromptSubmit/Stop only (four tasks/event, three attempts/task).
 The new PostToolUse trust diagnostic is separate from legacy sync readiness.
 Claude PostToolUse uses a single-text MCP content array; Codex uses the full

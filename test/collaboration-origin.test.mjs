@@ -5,7 +5,7 @@ import { chmod, mkdtemp, mkdir, writeFile, rm, symlink, link, realpath } from 'n
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createOriginVerifier } from '../src/collaboration-origin.mjs';
-import { sessionPath } from '../src/claude.mjs';
+import { decodeClaude, encodeClaude, sessionPath } from '../src/claude.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const TASK = '22222222-2222-4222-8222-222222222222';
@@ -102,24 +102,21 @@ function claudeRows() {
   ];
 }
 const serialize = rows => rows.map(row => JSON.stringify(row)).join('\n') + '\n';
-function claudeFixture({ rows = claudeRows(), mapping = {}, changeMapping = false, readClaude, now } = {}) {
-  let reads = 0; const paths = [];
-  const map = { nativeId: ID, sessionId: `local_${ID}`, cwd: CWD, isArchived: false, registryPath: '/native/record', ...mapping };
+function claudeFixture({ rows = claudeRows(), readClaude, now } = {}) {
+  const paths = [];
   return { paths, verify: createOriginVerifier({ claudeHome: '/native/home', now,
-    mappings: async (_root, ids) => { assert.deepEqual(ids, [ID]); return new Map([[ID,
-      { ...map, ...(changeMapping && reads++ ? { isArchived: true } : {}) }]]); },
     readClaude: readClaude ?? (async path => { paths.push(path); return serialize(rows); }),
   }) };
 }
 
-test('Claude verifies the exact Desktop-mapped native call/result and exports no private content', async () => {
+test('Claude verifies the exact native call/result without Desktop membership and exports no private content', async () => {
   const f = claudeFixture({ now: () => 1234 });
   assert.deepEqual(await f.verify(input('claude')), { provider: 'claude', sessionId: ID, cwd: CWD,
     toolUseId: 'toolu_origin', source: 'claude-native-mcp-result', verifiedAt: 1234 });
   assert.deepEqual(f.paths, [sessionPath('/native/home', CWD, ID)]);
 });
 
-test('Claude rejects forged pair, copied session, sidechain, replay, projection and changed registry', async t => {
+test('Claude rejects forged pair, copied session, sidechain, replay and imported bootstrap', async t => {
   for (const [name, mutate] of Object.entries({
     source: rows => { rows[1].sourceToolAssistantUUID = 'other'; },
     parent: rows => { rows[1].parentUuid = 'missing'; },
@@ -127,6 +124,8 @@ test('Claude rejects forged pair, copied session, sidechain, replay, projection 
     session: rows => { rows[0].sessionId = TASK; },
     cwd: rows => { rows[1].cwd = '/other'; },
     sidechain: rows => { rows[0].isSidechain = true; },
+    agent: rows => { rows[1].agentId = 'child'; },
+    order: rows => { rows.reverse(); },
     tool: rows => { rows[0].message.content[0].name = 'Bash'; },
     failed: rows => { rows[1].message.content[0].is_error = true; },
     nonce: rows => { rows[1].message.content[0].content = content({ ...receipt, originChallenge: 'b'.repeat(64) }); },
@@ -137,15 +136,39 @@ test('Claude rejects forged pair, copied session, sidechain, replay, projection 
     const rows = claudeRows(); mutate(rows);
     await assert.rejects(claudeFixture({ rows }).verify(input('claude')), { code: 'ORIGIN_PROOF_INVALID' });
   });
-  for (const mapping of [{ nativeId: TASK }, { cwd: '/other' }, { isArchived: true }, { sessionId: null }])
-    await assert.rejects(claudeFixture({ mapping }).verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
-  await assert.rejects(claudeFixture({ changeMapping: true }).verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+});
+
+test('Claude accepts newly authored native calls in managed Remote Control sessions, not copied history', async () => {
+  const owner = { type: 'claudex-owner', sessionId: ID, owner: 'fixture-owner' };
+  await claudeFixture({ rows: [owner, ...claudeRows()] }).verify(input('claude'));
+  const copied = claudeRows().map(row => ({ ...row, sessionId: TASK }));
+  await assert.rejects(claudeFixture({ rows: [owner, ...copied] }).verify(input('claude')),
+    { code: 'ORIGIN_PROOF_INVALID' });
+  const ancestors = copied.map(row => ({ ...row, uuid: `ancestor-${row.uuid}`, message: { ...row.message,
+    content: row.message.content.map(block => ({ ...block, ...(block.id ? { id: 'ancestor-tool' } : { tool_use_id: 'ancestor-tool' }) })) } }));
+  await claudeFixture({ rows: [...ancestors, ...claudeRows()] }).verify(input('claude'));
+  // Exercise the actual import codec: imported tool blocks must not gain native
+  // result provenance merely because their destination is a primary session.
+  const projected = encodeClaude(decodeClaude(serialize(claudeRows())), ID).rows;
+  const importedCall = projected.find(row => row.message?.content?.some(block => block.id === 'toolu_origin'));
+  const importedResult = projected.find(row => row.message?.content?.some(block => block.tool_use_id === 'toolu_origin'));
+  assert.equal(importedCall.message.content[0].name, 'mcp__claudex-work__claudex_start');
+  assert.deepEqual(importedCall.message.content[0].input, params);
+  assert.ok(importedResult);
+  assert.equal(importedResult.sourceToolAssistantUUID, undefined);
+  for (const row of [importedCall, importedResult]) {
+    assert.equal(row.sessionId, ID); assert.equal(row.cwd, CWD); assert.equal(row.isSidechain, false);
+  }
+  await assert.rejects(claudeFixture({ rows: [owner, ...projected] }).verify(input('claude')),
+    { code: 'ORIGIN_PROOF_INVALID' });
 });
 
 test('Claude permits a verified bounded intervening parent chain but rejects missing output and partial input', async () => {
   const rows = claudeRows(); rows[1].parentUuid = 'intervening';
   rows.push({ type: 'system', uuid: 'intervening', parentUuid: 'assistant-1', sessionId: ID, cwd: CWD, isSidechain: false });
   await claudeFixture({ rows }).verify(input('claude'));
+  rows[2].agentId = 'child';
+  await assert.rejects(claudeFixture({ rows }).verify(input('claude')), { code: 'ORIGIN_PROOF_INVALID' });
   await assert.rejects(claudeFixture({ rows: claudeRows().slice(0, 1) }).verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
   await assert.rejects(claudeFixture({ readClaude: async () => serialize(claudeRows()).trimEnd() }).verify(input('claude')),
     { code: 'ORIGIN_PROOF_UNAVAILABLE' });
@@ -160,19 +183,24 @@ test('default Claude reader accepts native 0755 directories but rejects foreign 
   // actual Desktop state and make a private-directory-only verifier look valid.
   await chmod(home, 0o755); await chmod(dirname(path), 0o755);
   await writeFile(path, serialize(claudeRows()), { mode: 0o600 });
-  const verify = createOriginVerifier({ claudeHome: home, mappings: async () => new Map([[ID,
-    { nativeId: ID, sessionId: `local_${ID}`, cwd: CWD, isArchived: false }]]) });
+  const verify = createOriginVerifier({ claudeHome: home });
   await verify(input('claude'));
-  await chmod(dirname(path), 0o775);
+  for (const directory of [home, join(home, 'projects'), dirname(path)]) {
+    await chmod(directory, 0o775);
+    await assert.rejects(verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+    await chmod(directory, 0o755);
+  }
+  await chmod(path, 0o644);
   await assert.rejects(verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
-  await chmod(dirname(path), 0o755);
+  await chmod(path, 0o600);
   const alias = join(root, 'alias'); await link(path, alias);
   await assert.rejects(verify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
   await rm(alias);
   const homeAlias = join(root, 'home-alias'); await symlink(home, homeAlias);
-  const aliasVerify = createOriginVerifier({ claudeHome: homeAlias, mappings: async () => new Map([[ID,
-    { nativeId: ID, sessionId: `local_${ID}`, cwd: CWD, isArchived: false }]]) });
+  const aliasVerify = createOriginVerifier({ claudeHome: homeAlias });
   await assert.rejects(aliasVerify(input('claude')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+  await assert.rejects(verify({ ...input('claude'), sessionId: TASK }), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+  await assert.rejects(verify({ ...input('claude'), cwd: '/missing-project' }), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
 });
 
 test('receipt preconditions, byte bounds and deadline failures never expose native private details', async () => {

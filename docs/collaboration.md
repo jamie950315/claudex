@@ -104,9 +104,12 @@ arguments/results and reasoning content are not retained as diagnostics.
 Requested `model` and `effort` stay separate from `execution.modelEvidence`.
 Claude response model IDs carry their native event source; initialization config,
 auxiliary responses and aggregate usage models are separate. At most four models
-per category are retained. Missing main response evidence is `unverified`,
-including Codex events that do not provide it. Native-reported is not independent
-server verification, and requested effort is never an effective-budget claim.
+per category are retained. Missing main response evidence is `not-reported`,
+including Codex events the current extractor does not identify. This is optional
+diagnostic metadata, not task `uncertain`, failure or a reason to block work.
+Legacy `unverified` model labels are normalized on read without rewriting saved
+history or changing revisions. Native-reported is not independent server
+verification, and requested effort is never an effective-budget claim.
 
 `claudex_report` accepts `{taskId, requestId, report}` where report contains
 `outcome` (done/partial/blocked/needs-input), `summary`, optional `remaining`, typed
@@ -141,9 +144,22 @@ The narrowly matched native PostToolUse hook submits identity hints to the priva
 broker. The broker independently matches the original request fingerprint and
 complete challenge receipt against the exact primary native call/result. A
 model-supplied ID, title or hook JSON is never sufficient. Codex uses at most
-four 100-item pages of one exact native turn; Claude uses an exact Desktop Local
-registry mapping and a stable no-follow private transcript of at most 16 MiB.
-Remote Control, unmapped/CLI-only Claude origins and missing or ambiguous evidence stay unbound.
+four 100-item pages of one exact native turn; Claude uses the exact native UUID
+and cwd to locate one stable no-follow private transcript of at most 16 MiB in
+the broker's Claude home (`~/.claude` in the standard installation). Desktop Local
+registry membership is not required: persisted same-host CLI, SDK and Remote
+Control sessions use the same proof, including newly authored native calls in
+Claudex-managed sessions. Copied fork ancestors and imported history are not
+proof: exact native session/cwd, primary-thread records, native result provenance,
+parent chain, original arguments and one-use receipt must all match. Calls in a
+managed bootstrap are excluded; later imported tool records still lack native
+result provenance. Native home/projects/project directories must be canonical,
+owned and not group/world writable; transcript files remain private and single-link.
+Missing, nonpersistent, remote-host-only or ambiguous native evidence stays
+unbound. The verifier never scans for another path or trusts a hook-supplied path.
+Origin proof does not grant idle-wake capability: queue mode still uses the next
+eligible native hook, and wake mode retains its existing recipient/route/policy
+requirements with no fallback or new owner.
 No transcript content is retained as origin evidence. This shares the existing
 same-UID trust boundary; it does not defend against hostile same-user processes.
 

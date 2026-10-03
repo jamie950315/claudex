@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,7 @@ async function mcpStart(root, token, peer, args) {
   return response.result;
 }
 
-async function fixture(t, provider) {
+async function fixture(t, provider, claudeKind) {
   const parent = await realpath(await mkdtemp(join(tmpdir(), 'coi-')));
   await chmod(parent, 0o700);
   const root = join(parent, 'collaboration'), claudeHome = join(parent, 'claude'), registryRoot = join(parent, 'registry');
@@ -44,14 +44,16 @@ async function fixture(t, provider) {
   const methods = [];
   const transcript = sessionPath(claudeHome, parent, ID);
   if (provider === 'claude') {
-    const record = join(registryRoot, 'account', 'organization', `local_${ID}.json`);
-    await mkdir(dirname(record), { recursive: true, mode: 0o700 });
-    await writeFile(record, JSON.stringify({ sessionId: `local_${ID}`, cliSessionId: ID, cwd: parent,
-      title: 'Synthetic native origin', lastActivityAt: Date.now(), isArchived: false }), { mode: 0o600 });
+    if (claudeKind === 'desktop') {
+      const record = join(registryRoot, 'account', 'organization', `local_${ID}.json`);
+      await mkdir(dirname(record), { recursive: true, mode: 0o700 });
+      await writeFile(record, JSON.stringify({ sessionId: `local_${ID}`, cliSessionId: ID, cwd: parent,
+        title: 'Synthetic native origin', lastActivityAt: Date.now(), isArchived: false }), { mode: 0o600 });
+    }
     await mkdir(dirname(transcript), { recursive: true, mode: 0o700 });
     await writeFile(transcript, '\n', { mode: 0o600 });
   }
-  const verifier = createOriginVerifier({ syncRoot: parent, claudeHome, registryRoot,
+  const verifier = createOriginVerifier({ syncRoot: parent, claudeHome,
     clientFactory: () => ({ initialize: async () => {}, close: async () => {}, request: async (method, args) => {
       nativeReads++;
       if (method === 'thread/read') {
@@ -87,6 +89,7 @@ async function fixture(t, provider) {
     nativeArguments = args; nativeResult = result; nativeReady = true;
     if (provider !== 'claude') return;
     const rows = [
+      ...(claudeKind === 'managed-remote-control' ? [{ type: 'claudex-owner', sessionId: ID, owner: 'fixture-owner' }] : []),
       { type: 'assistant', uuid: 'native-assistant', parentUuid: null, sessionId: ID, cwd: parent,
         isSidechain: false, version: '2.1.281', message: { role: 'assistant', content: [{ type: 'tool_use',
           id: TOOL, name: 'mcp__claudex-work__claudex_start', input: args }] } },
@@ -96,13 +99,14 @@ async function fixture(t, provider) {
     ];
     await writeFile(transcript, rows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 });
   };
-  return { parent, root, hub, hook, methods, publishNativeResult,
+  return { parent, root, registryRoot, hub, hook, methods, publishNativeResult,
     nativeReads: () => nativeReads, syntheticInvocations: () => syntheticInvocations };
 }
 
-for (const provider of ['codex', 'claude']) for (const deferred of [false, true]) {
-  test(`${provider} MCP start -> native ${deferred ? 'late flush -> lifecycle recheck' : 'proof'} -> exact queue-only notification`, async t => {
-    const f = await fixture(t, provider);
+for (const [provider, claudeKind] of [['codex'], ['claude', 'desktop'], ['claude', 'cli-sdk'], ['claude', 'managed-remote-control']]) for (const deferred of [false, true]) {
+  test(`${provider} ${claudeKind ?? ''} MCP start -> native ${deferred ? 'late flush -> lifecycle recheck' : 'proof'} -> exact queue-only notification`, async t => {
+    const f = await fixture(t, provider, claudeKind);
+    if (provider === 'claude' && claudeKind !== 'desktop') await assert.rejects(access(f.registryRoot), { code: 'ENOENT' });
     assert.deepEqual(await f.hook({ hook_event_name: 'SessionStart' }), { code: 0, stdout: '', stderr: '' });
     const args = { provider: provider === 'codex' ? 'claude' : 'codex', cwd: f.parent,
       prompt: 'Private synthetic prompt must not enter notification evidence.', requestId: `integrated-${provider}-${deferred}`,
@@ -156,5 +160,18 @@ for (const provider of ['codex', 'claude']) for (const deferred of [false, true]
     assert.equal(f.methods.filter(method => method === 'origin_bind').length, 1);
     assert.equal(f.hub.state.tasks[receipt.taskId].notification.deliveries.length, 1);
     assert.equal(f.syntheticInvocations(), 1);
+    // Synthetic native lifecycle inputs exercise the same recipient hook path;
+    // they are protocol tests, not model-generated/native acceptance evidence.
+    const offered = await f.hook({ hook_event_name: 'Stop' });
+    assert.equal(offered.code, 0); assert.equal(offered.stderr, '');
+    const output = JSON.parse(offered.stdout);
+    assert.match(provider === 'claude' ? output.hookSpecificOutput.additionalContext : output.reason,
+      new RegExp(`CLAUDEX_ACK:${message.messageId}`));
+    assert.equal((await f.hub.chatMailbox.status(message.messageId)).state, 'offered');
+    assert.deepEqual(await f.hook({ hook_event_name: 'Stop', stop_hook_active: true,
+      last_assistant_message: `CLAUDEX_ACK:${message.messageId}` }), { code: 0, stdout: '', stderr: '' });
+    assert.equal((await f.hub.chatMailbox.status(message.messageId)).state, 'acknowledged');
+    assert.equal(f.hub.state.tasks[receipt.taskId].notification.deliveries.length, 1);
+    if (provider === 'claude' && claudeKind !== 'desktop') await assert.rejects(access(f.registryRoot), { code: 'ENOENT' });
   });
 }

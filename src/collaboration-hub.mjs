@@ -93,6 +93,9 @@ function addUsage(task, provider, usage) {
 function publicTask(task) {
   const result = copy(task);
   if (result.active) delete result.active.tokenHash;
+  for (const execution of [result.active, result.lastExecution]) {
+    if (execution?.activity) execution.activity = sanitizeNativeActivity(execution.activity);
+  }
   result.notification = notificationPresentation(task);
   Object.assign(result, taskPresentation(task));
   return result;
@@ -1070,6 +1073,7 @@ export class CollaborationHub extends EventEmitter {
       let response;
       if (view === 'full') response = publicTask(task);
       else {
+        const activity = sanitizeNativeActivity((task.active ?? task.lastExecution)?.activity);
         response = { id: task.id, taskId: task.id, parentId: task.parentId, owner: task.owner, model: task.model, effort: task.effort ?? null,
           projectRoot: task.projectRoot ?? task.cwd, readOnlyDirs: copy(task.readOnlyDirs ?? []), writableDirs: copy(task.writableDirs ?? []),
           permission: task.permission, status: task.status, revision: task.revision, generation: task.generation,
@@ -1077,8 +1081,8 @@ export class CollaborationHub extends EventEmitter {
           execution: { generation: task.active?.generation ?? task.lastExecution?.generation ?? task.generation,
             inputs: copy(task.active?.inputs ?? task.lastExecution?.inputs ?? null),
             usage: copy(task.active ? null : task.lastExecution?.usage ?? null),
-            activity: copy((task.active ?? task.lastExecution)?.activity ?? null),
-            modelEvidence: copy((task.active ?? task.lastExecution)?.activity?.models ?? { status: 'unverified', main: [] }) },
+            activity,
+            modelEvidence: copy(activity?.models ?? { status: 'not-reported', main: [] }) },
           usageTotals: copy(task.usageTotals ?? null),
           changed: task.revision > (baseline ?? afterRevision ?? -1), timedOut };
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }

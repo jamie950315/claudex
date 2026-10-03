@@ -39,7 +39,9 @@ export function sanitizeNativeActivity(value) {
     && ['success', 'failed'].includes(value.completion.outcome)
     ? { source: value.completion.source, outcome: value.completion.outcome, observedAt: value.completion.observedAt } : null;
   return { provider: value.provider, lastNativeEventAt: time(value.lastNativeEventAt), eventCount: count(value.eventCount),
-    recent, completion, models: { status: main.length ? 'native-reported' : 'unverified',
+    // Missing optional model metadata is not execution uncertainty. Derive this
+    // label from evidence so legacy persisted `unverified` labels normalize too.
+    recent, completion, models: { status: main.length ? 'native-reported' : 'not-reported',
       configuration, main, auxiliary, unclassified } };
 }
 

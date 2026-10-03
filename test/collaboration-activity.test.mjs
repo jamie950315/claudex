@@ -10,7 +10,7 @@ test('activity is native receipt evidence, not process liveness or a useful-prog
   const observer = createNativeActivity('codex', { now: () => clock });
   const before = observer.snapshot();
   assert.equal(before.lastNativeEventAt, null);
-  assert.equal(before.models.status, 'unverified');
+  assert.equal(before.models.status, 'not-reported');
   observer.observe({ type: 'thread.started', thread_id: 'private-session' });
   observer.observe({ type: 'item.started', item: { type: 'command_execution', command: 'secret command' } });
   const working = observer.snapshot();
@@ -30,7 +30,7 @@ test('activity is native receipt evidence, not process liveness or a useful-prog
 test('native configuration, primary response, sidechain and aggregate models remain separate', () => {
   const observer = createNativeActivity('claude', { now: () => 123 });
   observer.observe({ type: 'system', subtype: 'init', model: 'configured-model' });
-  assert.equal(observer.snapshot().models.status, 'unverified', 'configuration is not actual response evidence');
+  assert.equal(observer.snapshot().models.status, 'not-reported', 'configuration is not actual response evidence');
   observer.observe({ type: 'assistant', message: { model: 'primary-model', content: [{ type: 'text', text: 'private reply' }] } });
   observer.observe({ type: 'assistant', parent_tool_use_id: 'private-tool-id', message: { model: 'side-model', content: [] } });
   observer.observe({ type: 'stream_event', isSidechain: true,
@@ -77,7 +77,7 @@ test('auxiliary completion and aggregate model accounting do not identify the pr
   observer.observe({ type: 'result', parent_tool_use_id: 'child', is_error: false,
     modelUsage: { 'aggregate-model': {} } });
   assert.equal(observer.snapshot().completion, null);
-  assert.equal(observer.snapshot().models.status, 'unverified');
+  assert.equal(observer.snapshot().models.status, 'not-reported');
   assert.deepEqual(observer.snapshot().models.main, []);
 });
 
@@ -117,7 +117,7 @@ test('runner adds bounded in-flight evidence where existing callbacks only expos
   assert.equal(snapshots[1].lastNativeEventAt, 2100);
   assert.equal(snapshots[2].lastNativeEventAt, 3200);
   assert.deepEqual(result.activity, snapshots.at(-1));
-  assert.equal(result.activity.models.status, 'unverified');
+  assert.equal(result.activity.models.status, 'not-reported');
   assert.deepEqual(result.activity.models.main, [], 'requested model must never fill absent native response metadata');
   assert.doesNotMatch(JSON.stringify(snapshots), /private token|requested-model-only/);
 });

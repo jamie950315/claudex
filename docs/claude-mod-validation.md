@@ -7,6 +7,25 @@ defaults remain false. Installation, native invocation and actual Desktop displa
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
+## Source origin support and model diagnostics (2026-10-03)
+
+The origin verifier now uses an exact stable primary native Claude transcript
+without Desktop Local registry membership. Isolated integration tests exercise
+the real MCP facade, private Unix RPC, hook subprocess, native-format transcript,
+queue notification and synthetic recipient hook/ACK for both registry-free
+CLI/SDK and managed Remote Control fixtures, including delayed native flush.
+Desktop Local and Codex paths remain covered. Imported codec output, copied
+ancestors, subagents, unsafe storage and replayed receipts remain refused.
+This is source/protocol evidence, not additional native model acceptance or an
+installed-app upgrade. Remote-host-only and nonpersistent sources still require
+readable native evidence; wake routing and recipient policy are unchanged.
+
+Absent main-response model metadata is now `not-reported`, independent of task
+status. Unix RPC tests cover completed Claude/Codex tasks without model IDs and
+legacy `unverified` model labels normalized on read without rewriting history.
+Actual execution uncertainty remains unchanged. The installed acceptance below
+predates this diagnostic label change.
+
 ## Installed native origin and notification acceptance (2026-10-03)
 
 The user authorized local installation and minimal native inference. The signed
@@ -39,7 +58,8 @@ one Claude worker and received the queue-only result through the next real hook.
 Its native recipient read the exact result and emitted a genuine Stop ACK. Both
 workers have active=null, one generation and confirmed absent recorded processes.
 Claude's main response reported claude-opus-5-5 separately from requested opus;
-Codex did not expose an actual model ID and remains correctly unverified.
+Codex did not expose an actual model ID; its optional model evidence was labeled
+`unverified` in that build (now presented as `not-reported` by current source).
 
 The first wake notification expired while the receiver reported both opt-ins
 false despite saved marketplace settings. Its task and receipt remain intact,
@@ -88,11 +108,11 @@ This initial native-host presentation quirk is not a failed model invocation.
 | Finding | Disposition and evidence boundary |
 | --- | --- |
 | F01 | Fixed: bounded native event/tool activity; real worker streams and synthetic liveness separation. |
-| F02 | Fixed: native Claude response model evidence separate from requested alias/effort; absent Codex model metadata stays unverified. |
+| F02 | Fixed: native Claude response model evidence separate from requested alias/effort; absent model metadata is now not-reported, never execution uncertainty. |
 | F03-F04 | Fixed: exact per-task wait reasons/blocker IDs; unrelated uncertainty and capacity covered in isolated contracts. |
 | F05 | Fixed: typed codes survive actual Unix RPC and MCP error envelopes. |
 | F06-F08 | Fixed: expiring per-session diagnosis, including reproduced unmapped targets; observations never grant dispatch authority. |
-| F09 | Implemented and natively accepted for the documented exact Codex and Desktop Local origin paths; unsupported sources remain explicit. |
+| F09 | Native acceptance covers the documented Codex and Desktop Local paths. Current source also has registry-free CLI/SDK and managed Remote Control protocol coverage; unreadable evidence remains explicit. |
 | F10 | Reproduced and documented as a retained receipt-namespace boundary; no unsafe migration or replay-based origin binding. |
 | F11-F12 | Implemented: fenced worker-self-reported outcomes and structured handoff context, independent of execution completion; report and unreported native cases verified. |
 | F13 | Implemented: bounded multi-wait, filters/cursors and response-before-ack bounds; large escaped responses and blocker inventories covered. |

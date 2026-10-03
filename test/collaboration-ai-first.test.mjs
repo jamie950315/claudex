@@ -151,6 +151,49 @@ test('activity diagnostics persist without task revision or child acknowledgemen
   assert.deepEqual((await call('status', { taskId: task.taskId })).lastExecution.activity, ended.lastExecution.activity);
 });
 
+test('missing response-model metadata is benign across completion, legacy records and Unix RPC views', async t => {
+  const { hub, root, call, start } = await fixture(t, { run: async ({ provider }) => {
+    const activity = createNativeActivity(provider, { now: () => 123 });
+    if (provider === 'claude') activity.observe({ type: 'system', subtype: 'init', model: 'configured-only' });
+    activity.observe(provider === 'claude' ? { type: 'result', is_error: false } : { type: 'turn.completed' });
+    return { text: 'completed without response-model metadata', activity: activity.snapshot() };
+  } });
+  const server = await serveCollaborationSocket({ root, dispatch: envelope => hub.dispatch(envelope) });
+  t.after(() => server.close());
+  const rpc = (method, params) => callCollaboration({ root, peer: 'codex', token: hub.controllerToken, method, params });
+  const tasks = [];
+  for (const provider of ['codex', 'claude']) tasks.push(await start(`no-model-${provider}`, { provider, model: 'requested-only' }));
+  const queued = await rpc('status', { taskId: tasks[0].taskId, view: 'summary' });
+  assert.equal(queued.status, 'ready');
+  assert.equal(queued.execution.modelEvidence.status, 'not-reported');
+  delete hub.schedule; hub.schedule();
+  await until(() => tasks.every(task => hub.state.tasks[task.taskId].status === 'completed'));
+  for (const task of tasks) {
+    const summary = await rpc('status', { taskId: task.taskId, view: 'summary' });
+    assert.equal(summary.status, 'completed'); assert.equal(summary.phase, 'completed');
+    assert.equal(summary.resultFinal, true); assert.equal(summary.model, 'requested-only');
+    assert.equal(summary.execution.modelEvidence.status, 'not-reported');
+    assert.deepEqual(summary.execution.modelEvidence.main, []);
+    assert.equal(summary.execution.activity.completion.outcome, 'success');
+    // Prior versions persisted this diagnostic label. Reads normalize it without
+    // rewriting task history, changing completion or requesting another model turn.
+    await hub.mutate(state => { state.tasks[task.taskId].lastExecution.activity.models.status = 'unverified'; });
+    const before = structuredClone(hub.state.tasks[task.taskId]);
+    const full = await rpc('status', { taskId: task.taskId });
+    const wait = await rpc('wait', { targets: [{ taskId: task.taskId }], timeoutMs: 0 });
+    assert.equal(full.lastExecution.activity.models.status, 'not-reported');
+    assert.equal(wait.tasks[0].execution.modelEvidence.status, 'not-reported');
+    assert.equal(wait.tasks[0].status, 'completed'); assert.equal(wait.tasks[0].resultFinal, true);
+    assert.deepEqual(hub.state.tasks[task.taskId], before, 'presentation must not rewrite legacy evidence or revisions');
+  }
+  assert.equal((await call('list')).blockedByUncertainWork, false);
+  await hub.mutate(state => { state.tasks[tasks[0].taskId].status = 'uncertain'; });
+  const uncertain = await rpc('status', { taskId: tasks[0].taskId, view: 'summary' });
+  assert.equal(uncertain.status, 'uncertain'); assert.equal(uncertain.phase, 'uncertain');
+  assert.equal(uncertain.resultFinal, false); assert.equal(uncertain.execution.modelEvidence.status, 'not-reported');
+  assert.equal((await call('list')).blockedByUncertainWork, true, 'actual task uncertainty must retain its safeguards');
+});
+
 test('structured errors and multi-wait survive actual Unix RPC and MCP facade', async t => {
   const { hub, root, start } = await fixture(t);
   const server = await serveCollaborationSocket({ root, dispatch: envelope => hub.dispatch(envelope) });
