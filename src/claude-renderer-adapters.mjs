@@ -7,9 +7,9 @@ import { buildClaudeFolderCandidate, ensureClaudeFolderCache, restoreClaudeFolde
 import { buildClaudeChatWakeSource } from './claude-chat-wake-cache.mjs';
 import { buildClaudeOwnerWakeSource } from './claude-owner-wake-cache.mjs';
 import { claudeCacheDirectory, discoverClaudeFrontend, verifyClaudeFrontendGraph, captureClaudeFrontendHints } from './claude-frontend-graph.mjs';
-import { transformFolderConsumer, syntax } from './claude-frontend-anchors.mjs';
+import { transformFolderConsumer, transformCommandCatalog, syntax } from './claude-frontend-anchors.mjs';
 
-const directories = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake' };
+const directories = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake', commands: 'ui-commands' };
 const runtime = name => readFile(new URL(`./${name}.mjs`, import.meta.url), 'utf8');
 function publicationFailure(error, cachePath) {
   if (error?.code === 'CLAUDEX_FRONTEND_CACHE_MISSING') return 'cache-entry-missing';
@@ -32,6 +32,7 @@ export async function buildClaudeRendererCandidate({ root, home = homedir(), ada
   const entry = inspectFolderCache(original, options);
   if (entry.sourceHash !== target.sourceHash) throw new Error('Claude renderer original changed after graph validation');
   const common = { root, bindings, assetName };
+  if (adapter === 'commands') return replaceFolderCacheSource(original, transformCommandCatalog(entry.source, bindings), options);
   if (adapter === 'folders') {
     const candidate = await buildClaudeFolderCandidate({ ...common, original, registryRoot, targetURL: target.url,
     // Chat wake is independent and starts at module load. Folders retain only

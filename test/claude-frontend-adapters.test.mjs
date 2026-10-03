@@ -112,7 +112,7 @@ test('maintenance shutdown drains publication without reporting its stop fence a
 
 for (const tag of ['a','b']) test(`renamed build ${tag} preserves folder memo, native API, selection and submit behavior`,async t=>{
   const f=await fixture(t,tag),graph=await discoverClaudeFrontend(f);assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));
-  const results=await ensureClaudeRendererAdapters({...f,graph});assert.deepEqual(Object.values(results.adapters).map(a=>a.status),['installed','installed','installed']);
+  const results=await ensureClaudeRendererAdapters({...f,graph});assert.deepEqual(Object.values(results.adapters).map(a=>a.status),['installed','installed','installed','installed']);
   const projectionSource=await readFile(new URL('../src/claude-folder-projection.mjs',import.meta.url),'utf8'),runtimeSource=await readFile(new URL('../src/claude-folder-runtime.mjs',import.meta.url),'utf8');
   const folder=graph.adapters.folders;const transformed=buildDynamicFolderSource(folder.target.source,{root:f.root,bindings:folder.bindings,assetName:f.build.names.folders,projectionSource,runtimeSource});
   let contents=JSON.stringify({version:1,entries:[{remoteId:'cse_owned',canonicalCwd:'/synthetic/project',verified:true}]}),poll;

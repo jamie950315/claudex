@@ -11,16 +11,16 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { inspectFolderCache, sha256 } from '../src/claude-folder-cache.mjs';
 import { snapshotClaudeCache, validateClaudeCacheManifest } from '../src/claude-folder-install.mjs';
-import { assetImports, folderAnchors, chatAnchors, ownerAnchors, syntax } from '../src/claude-frontend-anchors.mjs';
+import { assetImports, folderAnchors, chatAnchors, ownerAnchors, commandCatalogAnchors, syntax } from '../src/claude-frontend-anchors.mjs';
 import { FRONTEND_ASSET_ROOT, claudeCacheDirectory, discoverClaudeFrontend } from '../src/claude-frontend-graph.mjs';
 import { buildClaudeRendererCandidate, ensureClaudeRendererAdapters, restoreClaudeRendererAdapter } from '../src/claude-renderer-adapters.mjs';
 import { startClaudeRendererMaintenance } from '../src/claude-renderer-maintenance.mjs';
 import { patchContracts, folderConsumerPatchContract } from '../test/fixtures/claude-frontend-contracts.mjs';
 import { transformFolderConsumer } from '../src/claude-frontend-anchors.mjs';
 
-const run = promisify(execFile), adapters = ['folders', 'chatWake', 'ownerWake'];
-const dirs = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake' };
-const probes = { folders: folderAnchors, chatWake: chatAnchors, ownerWake: ownerAnchors };
+const run = promisify(execFile), adapters = ['folders', 'chatWake', 'ownerWake', 'commands'];
+const dirs = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake', commands: 'ui-commands' };
+const probes = { folders: folderAnchors, chatWake: chatAnchors, ownerWake: ownerAnchors, commands: commandCatalogAnchors };
 const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 const isJS = u => u.startsWith(FRONTEND_ASSET_ROOT) && /^[A-Za-z0-9_-]+\.js$/.test(u.slice(FRONTEND_ASSET_ROOT.length));
 const args = process.argv.slice(2), options = {};
@@ -116,6 +116,7 @@ async function validateTarget(adapter, matched, f) {
 }
 
 async function historicalPin(adapter, module) {
+  if (adapter === 'commands') return null;
   const path = `src/${adapter === 'folders' ? 'claude-folder' : adapter === 'chatWake' ? 'claude-chat-wake' : 'claude-owner-wake'}-cache.mjs`;
   const { stdout } = await run('git', ['log', '--format=%H', '377c704^', '--', path], { cwd: repository });
   for (const ref of stdout.trim().split('\n').filter(Boolean)) {

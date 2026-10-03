@@ -240,6 +240,46 @@ export function transformFolderConsumer(source, b) {
   ]);
 }
 
+/** Presentation only: the native cold catalogue disables hooks, but advertises
+ * the enabled companion's shipped workflow. Its panel command is dispatched by
+ * the ordinary native session, never by this catalogue or by a prompt skill. */
+export function exposeClaudexCommand(commands, sessionId) {
+  if (sessionId != null || !Array.isArray(commands)
+    || commands.some(c => c?.name === 'claudex' || Array.isArray(c?.aliases) && c.aliases.includes('claudex'))
+    || !commands.some(c => c?.name === 'claudex:claudex-workflow')) return commands;
+  return [{ name: 'claudex', description: 'Open the Claudex control pane.', argumentHint: '[receipt UUID]' }, ...commands];
+}
+
+export function commandCatalogAnchors(source, graph) {
+  const ast = syntax(source), native = importedAPI(source, graph, 'LocalSessions', true).local;
+  const call = unique(nodes(ast, n => n.type === 'CallExpression' && member(n.callee, 'getSupportedCommands')
+    && id(n.callee.object) === native), 'local command catalogue call');
+  const fn = unique(functions(ast).filter(f => f.async && f.start < call.start && f.end > call.end), 'local command catalogue function');
+  if (fn.params.length !== 2 || !fn.params.every(id) || fn.body.body.length !== 1
+    || fn.body.body[0].type !== 'ReturnStatement' || fn.params.some(p => id(p) === native)) fail('command catalogue scope');
+  const result = fn.body.body[0].argument, [cwd, session] = fn.params.map(id);
+  const voidZero = n => n?.type === 'UnaryExpression' && n.operator === 'void' && n.argument.value === 0;
+  const fallback = (n, name) => n?.type === 'LogicalExpression' && n.operator === '??' && id(n.left) === name && voidZero(n.right);
+  if (result?.type !== 'ConditionalExpression' || result.consequent !== call
+    || !member(result.test, 'getSupportedCommands') || id(unwrap(result.test).object) !== native
+    || result.alternate.type !== 'ArrayExpression' || result.alternate.elements.length
+    || call.arguments.length !== 1 || call.arguments[0].type !== 'ObjectExpression') fail('command catalogue native branch');
+  const fields = call.arguments[0].properties;
+  if (fields.length !== 2) fail('command catalogue request fields');
+  const project = unique(fields.filter(n => prop(n, 'cwd')), 'command catalogue cwd').value;
+  const target = unique(fields.filter(n => prop(n, 'sessionId')), 'command catalogue session').value;
+  if (!fallback(target, session) || project.type !== 'ConditionalExpression' || id(project.test) !== session
+    || !voidZero(project.consequent) || !fallback(project.alternate, cwd)) fail('command catalogue target routing');
+  return { fn, result, session, native };
+}
+
+export function transformCommandCatalog(source, b) {
+  return applyEdits(source, [
+    replace(b.result, `__cldxCommandCatalog(await (${code(source, b.result)}),${b.session})`),
+    insert(source.length, `\n;${exposeClaudexCommand.toString().replace('exposeClaudexCommand', '__cldxCommandCatalog')}\n`),
+  ]);
+}
+
 export function chatAnchors(source, graph) {
   const native = importedAPI(source, graph, 'LocalSessions', true);
   // The mount-independent wake belongs to the session-action module, not an

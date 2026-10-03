@@ -141,4 +141,16 @@ export function folderConsumerPatchContract(source, original, b) {
   assert.deepEqual(astValue(ast), astValue(originalAST), 'all native consumer AST retained');
 }
 
-export const patchContracts = { folders: folderPatchContract, chatWake: chatPatchContract, ownerWake: ownerPatchContract };
+export function commandCatalogPatchContract(source, original, b) {
+  const ast = syntax(source), orig = syntax(original);
+  const helper = ast.body.pop();
+  assert.equal(helper.type, 'FunctionDeclaration'); assert.equal(helper.id.name, '__cldxCommandCatalog');
+  const fn = only(functionsFor(ast, b.fn.id.name), 'catalogue query');
+  const call = fn.body.body[0].argument;
+  assert.equal(call.callee.name, '__cldxCommandCatalog'); assert.equal(call.arguments.length, 2);
+  assert.equal(call.arguments[0].type, 'AwaitExpression'); assert.equal(call.arguments[1].name, b.session);
+  fn.body.body[0].argument = call.arguments[0].argument;
+  assert.deepEqual(astValue(ast), astValue(orig), 'native request, routing and validation remain unchanged');
+}
+
+export const patchContracts = { folders: folderPatchContract, chatWake: chatPatchContract, ownerWake: ownerPatchContract, commands: commandCatalogPatchContract };

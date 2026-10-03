@@ -6,7 +6,7 @@ import { FRONTEND_ASSET_ROOT, claudeCacheDirectory } from '../../src/claude-fron
 
 export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shared = false, split = false } = {}) {
   const names = { entry: `index-${tag}.js`, native: `native-${tag}.js`, react: `vendor-${tag}.js`, client: `mcp-${tag}.js`,
-    folders: `sidebar-${tag}.js`, chatWake: `actions-${tag}.js`, ownerWake: `code-${tag}.js` };
+    folders: `sidebar-${tag}.js`, chatWake: `actions-${tag}.js`, ownerWake: `code-${tag}.js`, commands: `commands-${tag}.js` };
   const nativeImport = `import{Native${tag} as L${tag}}from"./${names.native}";`;
   const native = `var A${tag}=globalThis["claude.web"]?.LocalSessions,B${tag}=globalThis["claude.web"]?.LocalAgentModeSessions;export{A${tag} as Native${tag},B${tag} as Agent${tag}};`;
   const react = `var R${tag}={};var E${tag}=R${tag}.useEffect,S${tag}=R${tag}.useSyncExternalStore,U${tag}=R${tag}.useMemo;var getters${tag}={useEffect:()=>E${tag},useSyncExternalStore:()=>S${tag},useMemo:()=>U${tag}};export{E${tag} as Effect${tag},S${tag} as Subscribe${tag},U${tag} as Memo${tag}};`;
@@ -34,7 +34,8 @@ export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shar
       + `function section${tag}(rows,env,sort,order){let cache=memo${tag}(${memoSize}),out,before,after,sub${tag};if(cache[5]!==rows){before=[];for(let row of rows)before.push(key${tag}(row));cache[5]=rows;cache[6]=before}else before=cache[6];cache[0]!==rows||cache[1]!==env||cache[2]!==sort||cache[3]!==order?(out=group${tag}(rows,env,sort,order),cache[0]=rows,cache[1]=env,cache[2]=sort,cache[3]=order,cache[4]=out):out=cache[4];if(cache[7]!==rows){after=[];for(let row of rows)after.push(key${tag}(row));cache[7]=rows;cache[8]=after}else after=cache[8];captureKeys(before,after);return out}`;
   }
   const entry = [...new Set(Object.values(names).filter(f => f !== names.entry))].map(f => `import"./${f}";`).join('') + 'document.getElementById("root");';
-  const sources = { entry, native, react, client, folders, chatWake: shared ? folders : chatWake, ownerWake, ...(split ? { consumer } : {}) };
+  const commands = nativeImport + `async function commands${tag}(cwd,session){return L${tag}?.getSupportedCommands?L${tag}.getSupportedCommands({cwd:session?void 0:cwd??void 0,sessionId:session??void 0}):[]}function selected${tag}(e){return e.trustedSelectedFolder}const cold${tag}="empty slash-command list (cold CLI bridge)";`;
+  const sources = { entry, native, react, client, folders, chatWake: shared ? folders : chatWake, ownerWake, commands, ...(split ? { consumer } : {}) };
   return { names, sources, tag };
 }
 export function cacheBytes(url, source, fetchedAt) {

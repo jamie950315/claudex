@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { inspectFolderCache, sha256 } from './claude-folder-cache.mjs';
 import { snapshotClaudeCache, validateClaudeCacheManifest } from './claude-folder-install.mjs';
-import { assetImports, folderAnchors, folderConsumerAnchors, chatAnchors, ownerAnchors, unique, syntax } from './claude-frontend-anchors.mjs';
+import { assetImports, folderAnchors, folderConsumerAnchors, commandCatalogAnchors, chatAnchors, ownerAnchors, unique, syntax } from './claude-frontend-anchors.mjs';
 
 export const FRONTEND_ASSET_ROOT = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/';
 export const claudeCacheDirectory = (home = homedir()) => join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
@@ -93,7 +93,7 @@ async function originalEntry(root, name, current, targetURL) {
   // Re-discovery resolves imports and anchors against immutable vendor bytes,
   // including interrupted prepared installs. A missing/foreign journal is never
   // permission to strip an injected patch or adopt another original.
-  for (const adapter of ['ui-folders', 'ui-chat-wake', 'ui-owner-wake']) {
+  for (const adapter of ['ui-folders', 'ui-chat-wake', 'ui-owner-wake', 'ui-commands']) {
     const state = join(root, adapter, name, 'ui-folder-compat');
     const manifestPath = join(state, 'manifest.json');
     // An installation need not exist. Once its receipt is observed, however,
@@ -171,6 +171,7 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
     ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('isScratchWorkspace')],
     ['chatWake', chatAnchors, s => s.includes('forkSession') && s.includes('amber_tributary_lantern_overview_toggle') && s.includes('reopenClosed')],
     ['ownerWake', ownerAnchors, s => s.includes('submitMessage') && s.includes('getComposerSnapshot') && s.includes('initialSessionId')],
+    ['commands', commandCatalogAnchors, s => s.includes('empty slash-command list (cold CLI bridge)') && s.includes('trustedSelectedFolder') && s.includes('getSupportedCommands')],
   ]) {
     try {
       const target = unique([...modules.values()].filter(m => plausible(m.source)), `${adapter} target module`);

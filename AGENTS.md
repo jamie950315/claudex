@@ -1553,6 +1553,17 @@ reopenClosed and amber_tributary_lantern_overview_toggle shortcut anchors. Folde
 bootstrap no longer embeds another chat-wake consumer. Every adapter's entire
 transformed module must pass Acorn syntax validation before any cache publication.
 
+The independent `commands` adapter journals the exact LocalSessions cold-command
+query under `ui-commands`. Desktop's temporary catalogue disables hooks, so it
+cannot run the Mod's session.start registration. For a sessionless local query
+only, advertise the literal `/claudex` panel command when the native catalogue
+already advertises `claudex:claudex-workflow`. This is presentation metadata, not
+activation or execution authority. Preserve live-session lists, native errors,
+existing commands/aliases and exact cwd/session routing. Never enable hooks in
+the temporary query, create a model session, replace a native command, install a
+same-name prompt skill, or change submission/dispatch to make the item appear.
+Use reserved identifiers and the normal original/journal and reload boundaries.
+
 src/claude-renderer-maintenance.mjs is owned by the normal Desktop watcher under
 watch.lock. It performs one startup cache pass, then debounces cache-directory
 notifications and serially re-discovers/reapplies all enabled adapters. Exact

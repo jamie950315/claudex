@@ -128,11 +128,16 @@ native account access are still prerequisites. No credentials are copied.
 
 The main window distinguishes installation from a fresh loaded-session observation.
 Open a new Claude Code session and submit the literal `/claudex` command after an update;
-before the native session initializes, the homepage autocomplete may show only
-`claudex:claudex-workflow`, which is a skill, not the Mod panel command. On the
-reviewed Desktop build, the first command could leave an invalid-command warning
-even though the panel opened; confirm the visible pane and loaded-version report,
-not the suggestion list or warning alone. Native SDK
+the supported frontend catalogue adapter exposes `/claudex` before that first
+submission when Claude's native catalogue already lists the enabled companion's
+`claudex:claudex-workflow`. The latter remains a separate skill. The adapter adds
+only menu metadata; selecting `/claudex` uses the ordinary native Mod command,
+not a model prompt. An existing native command or alias takes precedence, and
+initialized-session lists remain native. After installing this frontend update,
+a normal idle Claude restart is required; first-use menu rendering remains a
+separate acceptance check from package installation. On earlier frontend builds,
+the first command could leave an invalid-command warning even though the pane
+opened. Confirm the pane and loaded-version report, not a menu item alone. Native SDK
 sessions may retain their old plugin root even after reload-plugins. The app does
 not restart them. Activation observations expire, contain no conversation content,
 and never prove message delivery or that every open session uses the new version.
