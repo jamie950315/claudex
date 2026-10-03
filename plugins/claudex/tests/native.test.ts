@@ -99,13 +99,13 @@ test('work pane exposes exact-generation evidence and reviewed controls without 
   expect(seen.filter(item => item.op === 'commit').length).toBe(0)
   await ui.unmount()
 })
-test('band composes with later mods instead of replacing their content', async ($, on) => {
+test('prompt area preserves native and peer-mod content without a Claudex band', async ($, on) => {
   stubs(on)
   await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
   for (const surface of ['terminal', 'desktop'] as const) {
     const ui = await $.ui.mount({ ...BAND, surface })
     expect(await ui.find({ type: 'Text', text: 'Existing native or peer-mod content' })).toBeDefined()
-    expect(await ui.find({ type: 'Text', text: /Claudex/ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: /Claudex/ })).toBeUndefined()
     await ui.unmount()
   }
 })

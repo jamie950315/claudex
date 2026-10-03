@@ -1,6 +1,6 @@
 import { createController, configurationDiagnostic } from './controller.mjs';
 import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
-import { createLocalization, localizedUsage, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
+import { createLocalization, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -131,18 +131,6 @@ export function register(on, options = {}) {
     await $.ui.open({ id: PANE, title: 'Claudex', focus: true, closeOnEscape: true, columns: 64 });
     // A text answer also gives headless/Desktop dispatch an explicit local result.
     return { text: 'Claudex' };
-  });
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const original = await next(e);
-    if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return original;
-    const ticket = await controller.bind(api($, options));
-    if (!ticket) return original;
-    await localization.load(api($, options));
-    const { Box, Text } = $.ui.resolve(e);
-    if (e.props.maxRows < 1) return original;
-    const children = [Text({ wrap: 'truncate', children: [`Claudex | ${localizedUsage(controller.state.usage, localization.t)} | /claudex`] })];
-    if (original !== null && original !== undefined) children.push(original);
-    return Box({ flexDirection: 'column', children });
   });
   on('ui.render', { component: 'Pane' }, async ($, e, next) => {
     if (e.requestId !== PANE || await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return next(e);

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.1.2 packages Claude Mod 0.7.2. Keep application and Mod versions
+Claudex.app 1.1.2 packages Claude Mod 0.7.3. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -395,6 +395,7 @@ Verify an actual staged helper read over Unix RPC after its source copy is
 removed; doctor-only checks and mocked transports do not prove a deployable
 companion. Pane artifact reads share the broker's 64 KiB limit and retain a
 bounded, typed scope/identity/size refusal instead of claiming service failure.
+The Mod does not render an AbovePrompt status band; usage remains in its pane.
 The native panel uses grouped summaries, two wrapping navigation rows and collapsed
 technical records; never collapse or truncate the complete confirmation payload.
 Its native plugin-store language preference is independent of the app's preference,

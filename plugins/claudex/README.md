@@ -1,4 +1,4 @@
-# Claudex native companion, 0.7.2
+# Claudex native companion, 0.7.3
 
 Claudex.app 1.1.2 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
@@ -43,7 +43,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.7.2-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.7.3-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local
@@ -65,7 +65,7 @@ Traditional/Simplified Chinese, Japanese, Korean, Spanish, German, French and
 Italian. Follow system reads the macOS preferred-language list, including Chinese
 script/region selection. An explicit choice is saved in the native plugin store.
 This preference is independent of the Claudex app's own language setting. Changing
-it only redraws the pane and usage band; it does not dispatch work, restart services
+it only redraws the pane; it does not dispatch work, restart services
 or discard unsubmitted form text or a pending action preview. Native identifiers,
 model names, user content and unknown diagnostics stay unchanged.
 
