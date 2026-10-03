@@ -1,12 +1,14 @@
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { isAbsolute, join, dirname } from 'node:path';
 import { privateDirectory, readJSON, writeJSON, publishExclusive } from './storage.mjs';
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
+import { CacheWarmManager } from './cache-warm.mjs';
+import { readAppStopState } from './app-stop-state.mjs';
 import { dispatchModWake, modSessionObservation, modDeliveryDiagnosis } from './mod-wake-broker.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
 import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
@@ -184,6 +186,11 @@ export class CollaborationHub extends EventEmitter {
 
   async initialize() {
     this.root = await privateDirectory(this.root);
+    this.cacheWarm = new CacheWarmManager({ root: this.root, stopped: async () => {
+      if (this.closed) return true;
+      const state = await readAppStopState(dirname(this.root));
+      return this.closed || state?.stopped === true || state?.resuming === true;
+    } });
     const info = await lstat(this.root);
     if (info.uid !== process.getuid() || (info.mode & 0o777) !== 0o700) throw new Error('Collaboration root must be owner-private (0700).');
     const keyPath = join(this.root, 'controller-key');
@@ -262,6 +269,7 @@ export class CollaborationHub extends EventEmitter {
     }, AUTO_RESOLVE_INTERVAL_MS);
     this.autoResolveTimer.unref?.();
     observeNotificationResume(this);
+    await this.cacheWarm.initialize();
     return this;
   }
 
@@ -409,6 +417,34 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (method.startsWith('cache_warm_')) {
+      if (actor.task) throw new Error('Only an external controller or its native Mod may manage cache warming.');
+      const action = method.slice('cache_warm_'.length);
+      if (!['list', 'configure', 'observe', 'claim', 'check', 'receipt'].includes(action)) throw new Error('Unsupported cache-warm operation.');
+      const allowed = {
+        list: ['sessionId', 'cwd'],
+        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
+        observe: ['sessionId', 'cwd', 'instanceId', 'sequence', 'phase', 'epoch', 'sample', 'attemptId'],
+        claim: ['sessionId', 'cwd', 'instanceId', 'epoch'],
+        check: ['sessionId', 'cwd', 'instanceId', 'epoch', 'attemptId'],
+        receipt: ['sessionId', 'cwd', 'instanceId', 'epoch', 'attemptId', 'outcome'],
+      }[action];
+      if (Object.keys(params).some(key => !allowed.includes(key))) throw new Error('Unsupported cache-warm fields.');
+      if (!['list', 'configure'].includes(action) && actor.peer !== 'claude') throw new Error('Native cache-warm observations and dispatch require the Claude session companion.');
+      if (action === 'list') {
+        if (Object.keys(params).some(key => !['sessionId', 'cwd'].includes(key))) throw new Error('Invalid cache-warm list filters.');
+        const result = await this.cacheWarm.list();
+        if (params.sessionId !== undefined) {
+          if (typeof params.sessionId !== 'string' || typeof params.cwd !== 'string') throw new Error('Exact cache-warm context is required.');
+          return { ...result, policies: result.policies.filter(item => item.sessionId === params.sessionId && item.cwd === params.cwd),
+            attempts: result.attempts.filter(item => item.sessionId === params.sessionId && item.cwd === params.cwd) };
+        }
+        return result;
+      }
+      if (this.closed && !['receipt'].includes(action) && !(action === 'configure' && params.enabled === false)
+        && !(action === 'observe' && params.phase === 'ended')) throw new Error('Broker is stopping; cache warming is refused.');
+      return this.cacheWarm[action](params);
+    }
     if (method === 'worker_check_in') {
       if (!actor.task) fail('CLAUDEX_WORKER_REQUIRED', 'Only an active worker may request its own response-boundary inbox.');
       if (this.closed) throw new Error('Broker is stopping; worker boundary delivery is refused.');
@@ -1247,6 +1283,8 @@ export class CollaborationHub extends EventEmitter {
 
   async close() {
     this.closed = true; this.emit('change');
+    let cacheCloseError;
+    try { await this.cacheWarm?.close(); } catch (error) { cacheCloseError = error; }
     clearInterval(this.autoResolveTimer);
     // A pump may already be waiting on a journal commit. Drain its launch boundary
     // before taking the worker snapshot so no invocation escapes shutdown.
@@ -1256,5 +1294,6 @@ export class CollaborationHub extends EventEmitter {
     await drainNotifications(this);
     await this.serial;
     await Promise.allSettled([...this.modReads]);
+    if (cacheCloseError) throw cacheCloseError;
   }
 }

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { randomUUID } from 'node:crypto';
 import { prepareCodexChatWake, preflightCodexChatWake } from '../src/codex-chat-wake.mjs';
 import { discoverCodexChats } from '../src/native-chat-catalog.mjs';
 import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.mjs';
@@ -32,6 +33,12 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Read JSON parameters from stdin
   claudex collaboration native-wake [--route mod|mod-self|renderer]
                                                 Inspect or select Claude delivery for new messages
+  claudex collaboration cache-warm [status]
+                                                Inspect opt-in native cache warming (no inference)
+  claudex collaboration cache-warm off --session ID --cwd PATH [--provider claude]
+                                                Revoke one exact conversation's warming policy
+Enable only inside the intended loaded conversation with /claudex warm on,
+then its explicit confirmation command. No conversation is enabled by default.
 
 --root PATH selects the private collaboration root, not the synchronization root.
 --default-permission read-only|workspace-write selects the policy for new root tasks.
@@ -119,6 +126,7 @@ export async function collaborationMain(args = process.argv.slice(2)) {
     'default-permission': { type: 'string' }, 'codex-binary': { type: 'string' }, 'claude-binary': { type: 'string' },
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
     'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
+    session: { type: 'string' }, cwd: { type: 'string' }, provider: { type: 'string' },
   } });
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { console.log(help); return; }
@@ -132,6 +140,16 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   }
   const token = process.env.CLAUDEX_WORK_TOKEN ?? await controllerToken(root);
   const peer = values.peer ?? 'codex';
+  if (command === 'cache-warm') {
+    const action = positionals[1] ?? 'status';
+    if (!['status', 'list', 'off'].includes(action)) throw new Error('Use cache-warm status or off. Enable from the intended native conversation.');
+    const params = action === 'off' ? { provider: values.provider ?? 'claude', sessionId: values.session,
+      cwd: values.cwd, enabled: false, requestId: `cli-cache-warm:${randomUUID()}` } : {};
+    if (action === 'off' && (!values.session || !values.cwd)) throw new Error('Both --session and --cwd are required; titles are not dispatch identities.');
+    console.log(JSON.stringify(await callCollaboration({ root, peer, token,
+      method: action === 'off' ? 'cache_warm_configure' : 'cache_warm_list', params }), null, 2));
+    return;
+  }
   if (command === 'mcp') return runCollaborationMcp({ root, peer, token,
     workerMode: Boolean(process.env.CLAUDEX_WORK_TOKEN) });
   if (command === 'desktop-wake-mcp') {

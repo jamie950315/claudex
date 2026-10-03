@@ -111,7 +111,18 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       const recovered = await outbox.recover();
       if (recovered.remaining) return { state: 'receipt-recovery', messages: [] };
     }
-    if (request.op !== 'wake-receipt' && !(request.op === 'wake-observe' && request.observation.lifecycle === 'ended')) await active();
+    const cacheFinishing = request.op === 'cache-warm' && (request.action === 'list' || request.action === 'receipt'
+      || request.action === 'configure' && request.params.enabled === false
+      || request.action === 'observe' && request.params.phase === 'ended');
+    if (request.op !== 'wake-receipt' && !(request.op === 'wake-observe' && request.observation.lifecycle === 'ended') && !cacheFinishing) await active();
+    if (request.op === 'cache-warm') {
+      const params = { ...request.params, sessionId: request.context.sessionId, cwd: request.context.cwd,
+        ...(request.action === 'configure' ? { provider: 'claude' } : {}) };
+      if (request.action !== 'configure') delete params.provider;
+      const result = await requestRpc(`cache_warm_${request.action}`, params);
+      if (['claim', 'check'].includes(request.action)) await active();
+      return result;
+    }
     if (request.op === 'wake-observe') return requestRpc('mod_wake_observe', { source: request.context, observation: {
       ...request.observation, nativeWake: allowNativeWake, selfWake: allowSelfWake,
     } });

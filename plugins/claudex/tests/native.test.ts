@@ -362,3 +362,18 @@ test('technical session details read supported setting scopes and show only exac
   expect(await ui.find({ type: 'Text', text: /NEVER_COPY_NATIVE/ })).toBeUndefined()
   await ui.unmount()
 })
+
+test('cache warming status stays read-only and plugin-origin commands cannot opt in', async ($, on) => {
+  const seen: any[] = []
+  stubs(on, false, request => { seen.push(request); return { policies: [] } })
+  await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
+  seen.length = 0
+  const status = await $.command.run({ command: 'claudex', args: 'warm status' })
+  expect(JSON.parse(status.text).local.enabled).toBe(false)
+  expect(seen.map(item => item.action)).toEqual(['list'])
+  expect(seen[0].op).toBe('cache-warm')
+  expect(seen[0].context).toEqual({ sessionId: ID, cwd: '/fixture' })
+  const enable = await $.command.run({ command: 'claudex', args: 'warm on' })
+  expect(enable.text).toMatch(/explicit native user command/)
+  expect(seen.length).toBe(1)
+})

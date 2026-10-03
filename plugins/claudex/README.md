@@ -1,4 +1,15 @@
-# Claudex native companion, 0.7.3
+# Claudex native companion, 0.8.0
+
+Cache warming is default-off and separately confirmed in the selected loaded
+conversation: `/claudex warm on` prints a bounded confirmation command;
+`/claudex warm status` reads status and `/claudex warm off` revokes it. Optional
+`maxMinutes`, `maxRefreshes`, `maxReadTokens` and `maxOutputTokens` key=value
+bounds default to 60, 3, 250000 and 256. Warming creates real plugin-origin OK
+turns using the existing native account/model, not a fork or another API key.
+Budgets are admission estimates and observed stop thresholds, not hard native
+output caps. Busy/draft/context changes suppress submission. Native acceptance
+must be verified separately from installation and static validation; no feature
+gate is overridden. Codex warming is unsupported.
 
 Claudex.app 1.1.2 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
@@ -43,7 +54,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.7.3-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.0-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

@@ -19,11 +19,13 @@ export const ENGINE_PLUGIN_FILES = Object.freeze([
   'plugins/claudex/hooks/localization.mjs',
   'plugins/claudex/hooks/locales.mjs',
   'plugins/claudex/hooks/delivery.mjs',
+  'plugins/claudex/hooks/cache-warm.mjs',
   'plugins/claudex/tests/native.test.ts',
   'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
 ]);
 export const ENGINE_SRC = Object.freeze([
+  'cache-warm.mjs',
   'claude-mod-bridge.mjs', 'claude-mod-install.mjs', 'claude-mod-protocol.mjs', 'claude-mod-storage.mjs',
   'claude-mod-wake-outbox.mjs', 'claude-mod-self-inbox.mjs', 'mod-wake-broker.mjs',
   'app-setup.mjs', 'app-providers.mjs', 'app-signature-cache.mjs', 'app-login.mjs',

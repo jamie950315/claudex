@@ -11,6 +11,7 @@ export const MOD_STAGE_FILES = [
   'plugins/claudex/hooks/panel.mjs', 'plugins/claudex/hooks/localization.mjs',
   'plugins/claudex/hooks/locales.mjs',
   'plugins/claudex/hooks/delivery.mjs',
+  'plugins/claudex/hooks/cache-warm.mjs',
   'plugins/claudex/tests/native.test.ts', 'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
   'bin/claudex-mod-bridge.mjs', 'src/claude-mod-bridge.mjs',

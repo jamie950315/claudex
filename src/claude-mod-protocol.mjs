@@ -160,12 +160,21 @@ export function validateRequest(value) {
     'wake-next': ['excludeIds', 'observation'], 'wake-observe': ['observation'], 'wake-check': ['messageId', 'claimId', 'target'],
     'wake-self-send': ['messageId', 'claimId', 'target'],
     'wake-self-receive': ['messageId', 'claimId', 'target'],
+    'cache-warm': ['action', 'params'],
   }[value.op];
   insist(extras !== undefined, 'UNSUPPORTED_OPERATION', 'Unsupported companion operation.');
   if (value.op === 'wake-receipt') extras.push('reason');
   if (value.op.startsWith('wake-')) extras.push('route');
   fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason', 'route'].includes(key) && !(key === 'observation' && value.op === 'wake-next'))]);
   const request = { ...value, context: context(value.context) };
+  if (value.op === 'cache-warm') {
+    insist(['list', 'configure', 'observe', 'claim', 'check', 'receipt'].includes(value.action), 'UNSUPPORTED_OPERATION');
+    insist(record(value.params ?? {}) && Buffer.byteLength(JSON.stringify(value.params ?? {})) <= 16384, 'INVALID_PARAMS');
+    request.params = structuredClone(value.params ?? {});
+    for (const key of ['sessionId', 'cwd']) if (request.params[key] !== undefined)
+      insist(request.params[key] === request.context[key], 'CONTEXT_CHANGED');
+    if (request.params.provider !== undefined) insist(request.params.provider === 'claude', 'INVALID_PROVIDER');
+  }
   if (value.op.startsWith('wake-')) {
     request.target = context(value.target ?? value.context);
     if (value.route !== undefined) insist(['mod', 'mod-self'].includes(value.route));

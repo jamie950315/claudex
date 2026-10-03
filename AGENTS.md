@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.1.2 packages Claude Mod 0.7.3. Keep application and Mod versions
+Claudex.app 1.2.0 packages Claude Mod 0.8.0. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -278,6 +278,20 @@ Retain the old activity-interleaved scheduler only for the injected non-event
 harness. Do not defer all new completions until a long cold sweep finishes.
 
 ## Cross-model collaboration
+
+Cache warming is separately opt-in per loaded Claude session. `src/cache-warm.mjs`
+owns bounded durable policies and one-use attempts; the Mod's cache-warm client
+observes per-request native usage and submits only into its own native owner.
+Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
+proof. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
+uncertain submission, read-only status and explicit bounded confirmation. Codex
+is unsupported. TTL without an explicit native setting is labeled a conservative
+five-minute estimate, not inferred subscription retention. Token reservations
+limit admission, not native output; count recovery requests even after a policy
+stops. A native accepted prompt has no atomic dequeue API; preserve that limit.
+No startup/inspection path enables warming, starts another owner, changes model
+settings or resumes expired work. See docs/cache-warming.md for operation and
+native activation limits. The older developer probe remains separate evidence.
 
 Work observability is broker-owned and independently opt-in per task:
 `observability.timeline=public`, `reports=milestones`, and `blockerNotifications`.

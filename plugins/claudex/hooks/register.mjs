@@ -2,6 +2,7 @@ import { createController, configurationDiagnostic } from './controller.mjs';
 import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
 import { createLocalization, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
+import { createCacheWarmClient, cacheWarmTtl } from './cache-warm.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validPath = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n\0]/u.test(value);
@@ -28,6 +29,18 @@ function api($, options, observer = null) {
     observation: observer ? () => observer.snapshot() : undefined,
     inbound: async () => (await $.settings.read()).crossSessionInbound,
     after: (ms, callback) => $.clock.after(ms, callback),
+    now: () => $.clock.now(),
+    pluginName: $.plugin.name,
+    readPrompt: () => $.prompt.read(),
+    submitPrompt: args => $.prompt.submit(args),
+    cacheConfiguration: async () => {
+      const model = await $.session.model(), settings = await $.settings.read();
+      const ttl = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL');
+      const force5m = await $.env.get('FORCE_PROMPT_CACHING_5M');
+      const effort = await $.env.get('CLAUDE_CODE_EFFORT_LEVEL') ?? settings.effortLevel ?? null;
+      const cacheTtl = cacheWarmTtl({ ttl, force5m, setting: settings.promptCacheTtl });
+      return { ttl: cacheTtl, fingerprint: JSON.stringify({ model, effort, ...cacheTtl }) };
+    },
     readLanguage: () => $.store.get(LANGUAGE_PREFERENCE_KEY),
     writeLanguage: value => $.store.set(LANGUAGE_PREFERENCE_KEY, value),
     preferredLanguages: () => $.process.run(['/usr/bin/defaults', 'read', '-g', 'AppleLanguages'], { timeoutMs: 2000 }),
@@ -58,6 +71,7 @@ export function register(on, options = {}) {
   const wake = createNativeWakePump({ enabled: options.nativeWake === true });
   const observer = createSessionObserver();
   const localization = createLocalization();
+  const cacheWarm = createCacheWarmClient();
   on('session.start', async ($, e, next) => {
     const ticket = ++lifecycle;
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') !== '1') {
@@ -67,6 +81,7 @@ export function register(on, options = {}) {
       await controller.refreshUsage(api($, options));
       if (ticket !== lifecycle) return next(e);
       await observer.start(api($, options));
+      if (ticket === lifecycle) await cacheWarm.start(api($, options));
       if (ticket === lifecycle) wake.start(api($, options, observer));
     }
     return next(e);
@@ -76,14 +91,31 @@ export function register(on, options = {}) {
     controller.reset();
     const ticket = ++lifecycle;
     wake.stop();
+    await cacheWarm.stop();
     await observer.stop();
     if (ticket !== lifecycle) return next(e);
     await observer.start(api($, options));
+    if (ticket === lifecycle) await cacheWarm.start(api($, options));
     if (ticket === lifecycle) wake.start(api($, options, observer));
     $.ui.invalidate('ui.render');
     return next(e);
   });
-  on('session.end', async ($, e, next) => { lifecycle++; controller.reset(); wake.stop(); await observer.stop(); $.ui.invalidate('ui.render'); return next(e); });
+  on('session.end', async ($, e, next) => { lifecycle++; controller.reset(); wake.stop(); await cacheWarm.stop(); await observer.stop(); $.ui.invalidate('ui.render'); return next(e); });
+  on('prompt.submit', async ($, e, next) => {
+    const refusal = await cacheWarm.prompt(e);
+    return refusal ?? next(e);
+  });
+  on('turn.start', async ($, e, next) => { await cacheWarm.turnStart(e); return next(e); });
+  on('turn.step', async function* ($, e, next) {
+    let ticket = null;
+    try { ticket = await cacheWarm.stepStart(e); } catch { cacheWarm.invalidate(); }
+    const result = yield* next(e);
+    try { await cacheWarm.stepEnd(ticket, result); } catch { cacheWarm.invalidate(); }
+    return result;
+  });
+  on('tool.call', async ($, e, next) => cacheWarm.deniesTool(e)
+    ? { deny: 'Tools are disabled for this explicitly authorized cache-warming turn. Reply only OK.' } : next(e));
+  on('config.set', async ($, e, next) => { cacheWarm.invalidate(); return next(e); });
   on('session.receive', async ($, e, next) => {
     if (!e.text.startsWith('CLAUDEX_SELF_INBOX_V1\n')) return next(e);
     // This prefix is a routing hint, never authority. Read the original peer text
@@ -115,6 +147,7 @@ export function register(on, options = {}) {
   });
   on('turn.complete', async ($, e, next) => {
     const result = await next(e);
+    await cacheWarm.turnComplete(e);
     await controller.refreshUsage(api($, options));
     await observer.refresh();
     $.ui.invalidate('ui.render');
@@ -125,6 +158,10 @@ export function register(on, options = {}) {
     await localization.load(api($, options));
     await controller.bind(api($, options));
     const words = (e.args ?? '').trim().split(/\s+/u).filter(Boolean);
+    if (words[0] === 'warm') {
+      try { return { text: JSON.stringify(await cacheWarm.command(api($, options), words.slice(1), e.origin), null, 2) }; }
+      catch (error) { return { text: `Cache warming: ${error.message}` }; }
+    }
     if (words[0] === 'receipt' && UUID.test(words[1] ?? '') && words.length === 2) await controller.receipt(api($, options), words[1]);
     else if (words.length) return { text: localization.t('Use /claudex or /claudex receipt UUID.') };
     else await controller.refresh(api($, options));
