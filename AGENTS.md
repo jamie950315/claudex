@@ -35,6 +35,12 @@ fixtures use placeholder paths and IDs.
 - Run `npm test` for the coordinator and adapter contracts.
 - Native integration checks use isolated temporary homes and synthetic transcripts.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
+- `dev/cache-warm-probe` is a manual, authorization-gated Sonnet 5.5/medium
+  cache-retention experiment, not an installed warming service. It uses private
+  nonpersistent sessions, a single native Mod fork and a no-refresh control.
+  Keep its runtime evidence outside Git and its inference outside automated tests.
+  Fork usage and unchanged main messages must be verified; a cached hit alone
+  does not establish TTL extension. Native fork has no independent output cap.
 - Product repairs must apply through normal installation and runtime paths on
   other users' machines. Do not depend on one account, UID, project path, native
   conversation ID or manually repaired local state. Reproduce relevant failures

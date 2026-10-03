@@ -1,0 +1,6 @@
+{
+  "name": "cache-warm-probe",
+  "version": "0.1.0",
+  "description": "Explicitly authorized, bounded native prompt-cache experiment. Not installed or auto-enabled.",
+  "author": { "name": "Claudex contributors" }
+}
