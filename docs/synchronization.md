@@ -17,6 +17,9 @@ Run all commands from the repository directory.
 - [Native integration](#native-integration) and [compacted conversations](#compacted-conversations)
 - [Claude Desktop boundary](#claude-desktop-boundary)
 - [Verification](#verification)
+- [Completion-driven synchronization](#completion-driven-synchronization)
+- [Restart verification](#restart-verification-and-unchanged-history)
+- [Native project relocation](#native-project-relocation)
 
 ## Runtime compatibility
 
@@ -24,9 +27,10 @@ Requires macOS and Node.js 22.15+ (22.x) or 23.8+. The earlier 22.x and 23.x
 runtimes lack the Zstandard/CRC32 APIs used by the Desktop resource adapters.
 The app supplies its own compatible runtime. Validated native baselines are Codex CLI
 `0.155.0-alpha.16.3`/`0.155.0-alpha.16.4` and Claude Code `2.1.210`/`2.1.281`.
-The default `versionPolicy: "strict"` enforces these baselines. An explicit
-`versionPolicy: "warn"` attempts newer or otherwise unvalidated runtimes without
-blocking synchronization solely on their version numbers. Both tools retain
+Manual CLI initialization defaults to `versionPolicy: "strict"`, which enforces
+these baselines. New graphical installations use `warn` unless an existing policy
+was explicitly selected. `versionPolicy: "warn"` attempts newer or otherwise
+unvalidated runtimes without version-only blocking or warnings. Both tools retain
 their own authentication and permission settings.
 
 ## Desktop integration
@@ -200,7 +204,7 @@ Codex Desktop stores a screenshot of the browser or app surface with every
 Browser Use and computer-use call so its own window can preview the tool. That
 picture is not part of what the model saw (the call's own result keeps any
 model-visible image), yet it can make up most of a long history. Conversations
-enrolled from this version on replace exactly those display screenshots with a
+enrolled since the 1.0.3 representation change replace exactly those display screenshots with a
 record of their type, size and SHA-256 hash; everything else is kept. Conversations
 already being synchronized keep their existing representation.
 
@@ -429,28 +433,29 @@ reload. Native checks have verified cold startup and adding/removing an exact
 mapping while the interface remains open, with the continuation in the original
 `claudex` folder and its Remote Control route unchanged.
 
-This is a **version-pinned presentation compatibility patch**, not an official
-Claude folder-assignment API. It updates one Zstandard-compressed HTTP cache
-resource, with validated stream checksums, exact source hash and anchor checks,
-an immutable backup and a recovery journal under
-`ui-folders/9cebfb8fc5a9f22f_0/ui-folder-compat`. Earlier resource journals and
-originals are preserved. It does not
-modify the signed app or credentials, or directly edit session registries or
-transcripts. Optional native archival is the separate guarded action below. Node must
-provide Zstandard and CRC32 support. The checked frontend asset is
-`shared-19-DDVvTIwQ.js`, cache file `9cebfb8fc5a9f22f_0`, original decoded SHA-256
-`c036136315a82ada3fcca90ea62ed77c5696d49c97509b186364cf0ad9713784`.
-Setup and `desktop folders enable` advance the exact previously supported
-`15bc54146dcdb4ce_0` configuration path after successful installation. Unknown
-custom resource names are refused; failed installation preserves the previous configuration.
-Explicitly disabled folders and native handoffs stay disabled during setup.
-The watcher retains its configuration for its current run; after deployment and
-successful path migration, restart it only through the normal verified service
-shutdown/start workflow so it reads the new resource path. Do not terminate busy
-native owners to apply this presentation update.
-Claude app/web frontend updates or cache eviction may require revalidation and
-reinstallation; unknown assets are not patched automatically. Status reports
-map/resource readiness, not which version a running renderer has loaded.
+This is a **structurally validated presentation compatibility patch**, not an
+official Claude folder-assignment API. The current installer discovers the latest
+fetched frontend entry and its reachable cached import graph. Unique native API,
+component and import/export relationships select the resource; a renamed asset
+does not by itself require a new hard-coded pin. Unsupported or ambiguous
+structures remain explicitly refused. Source hashes bind immutable originals and
+recovery journals, not a blanket runtime allowlist.
+
+It updates verified Zstandard-compressed cache resources with stream checksums,
+full transformed-source syntax validation and journals under
+`ui-folders/<cache filename>/ui-folder-compat`. Shared folder/chat resources use
+one combined publication and journal. Earlier originals remain recoverable.
+It does not modify the signed app, credentials, native registries or transcripts.
+Explicitly disabled folder and archival settings stay disabled.
+
+The normal Desktop watcher revalidates enabled adapters on cache notifications,
+not a recurring history scan. Missing reachable modules, altered installer-owned
+bytes or unsupported native bindings remain explicit instead of selecting an older
+graph. A normal idle Claude restart is required for a newly installed graph;
+the maintenance adapter never reloads the app. Status separates map/resource
+readiness from actual loaded-renderer reception. See
+[renderer maintenance](app.md#messages-to-existing-chats) for detailed recovery
+and shared-resource behavior.
 
 The watcher publishes `folder-map.json` atomically, using only verified current
 owner IDs and canonical directories. The renderer uses Claude's existing guarded
@@ -471,7 +476,7 @@ Disabling folders also disables native Local handoffs.
 
 ### Activating a disconnected managed owner
 
-Graphical setup installs a separate pinned conversation adapter alongside the
+Graphical setup installs a separate structurally validated conversation adapter alongside the
 existing `claudex-desktop-wake` MCP endpoint. When the Code component
 mounts or changes its current session reference, or its native submit callback runs, the adapter checks
 the fresh private `folder-map.json` for that exact RC identity. Only verified
@@ -479,16 +484,17 @@ published IDs qualify; titles, unrelated sessions and prompt content are never
 used. Only native `bridge` session references qualify; their `session_` ID is
 normalized to the published `cse_` ID. The submit signal runs before native early
 refusals, without awaiting, replacing or retrying the native send.
-It reads `Oe()`, the native current-reference getter also used by send, rather
-than the submit closure's captured `X`. This keeps a retained callback bound to
+It reads the native current-reference getter also used by send, rather
+than the submit closure's captured reference. This keeps a retained callback bound to
 the current selection after a pane/session change.
 Requests are debounced for five seconds per identity and bounded to sixteen
 identities in a thirty-second window. There is no periodic owner keepalive.
 
 The identity-only `claudex_desktop_owner_wake` tool uses the already attached
-user-config stdio client from the native renderer registry: `Ga` in
-`shared-common-mcp-msg-4-EwhHCIE8.js` looks up its exact UUID
-`claudex-desktop-wake`. Require the pinned open MessagePort transport and the
+user-config stdio client from the native renderer registry. Discovery resolves
+the exact-UUID lookup by its validated source relationships, not a minified symbol
+name or fixed asset filename. It looks up `claudex-desktop-wake` and requires the
+validated open MessagePort transport and the
 Claudex server identity/capabilities. Local/Cowork session proxy clients are
 refused; the adapter never connects, replaces or closes clients or changes
 connector approval. An absent/closed/unvalidated client produces a bounded
@@ -515,7 +521,11 @@ Rejected hints are consumed with bounded status diagnostics, without recovery or
 automatic retry. Hints wait for the watcher's current operation boundary; this
 does not guarantee a reconnect deadline during long native operations.
 
-The checked Code asset is `cc43287c9-6nYyeS-m.js`, decoded SHA-256
+#### Historical owner-wake asset evidence
+
+The following names identify earlier inspected resources, not current setup
+requirements or selectors. Current discovery validates the installed graph anew.
+An earlier checked Code asset was `cc43287c9-6nYyeS-m.js`, decoded SHA-256
 `62d14b5c968d83d64bc392656dafa4a5610409ad9757e168be6b7367a466a35a`,
 cache file `6ce7062c8d22ac79_0`. Its immutable original and recovery journal live
 under `ui-owner-wake/6ce7062c8d22ac79_0/ui-folder-compat`, independently of the
@@ -545,7 +555,9 @@ The independently connected LocalMcpServerManager pool also remains separate
 from the direct registry. Check the subsequent
 `initialize`/`tools/list` and the exact `claudex_desktop_owner_wake` `tools/call`.
 
-After deploying the updated bundle, the coordinator installs with:
+#### Current setup and activation checks
+
+After deploying an updated bundle, the coordinator installs with:
 
 ```sh
 /Applications/Claudex.app/Contents/Resources/runtime/bin/node \
@@ -555,14 +567,14 @@ After deploying the updated bundle, the coordinator installs with:
 
 Then restart Claude only at an idle boundary and open a managed conversation in Code. In
 `~/Library/Logs/Claude/claude.ai-web.log`, expect
-`[Claudex owner wake] loaded cc43287c9-6nYyeS-m.js`,
+`[Claudex owner wake] loaded <validated asset name>`,
 `[Claudex owner wake] started`,
 `[Claudex owner wake] native APIs map=available mcp=available`,
-`[Claudex chat wake] loaded shared-18-C2EdCha1.js`,
+`[Claudex chat wake] loaded <validated asset name>`,
 `[Claudex chat wake] started`, and
-`[Claudex folder mapping] loaded shared-19-DDVvTIwQ.js`.
+`[Claudex folder mapping] loaded <validated asset name>`.
 These lines prove only bootstrap execution. The Code asset may load lazily;
-the earlier shared-16 bootstrap's lines are not acceptance of the new Code pin.
+an earlier bootstrap's lines are not acceptance of the current Code binding.
 Selection should then report `signal selection received`, `matched published`,
 `mcp lookup`, `mcp connected`, `called` and `accepted` under the same prefix.
 Submit uses `signal submit`;
@@ -579,12 +591,13 @@ Opening an evicted managed conversation should produce an owner-wake MCP call an
 `watcher-status.json.ownerWake.handled`/`woken`; verify the same native/RC identity
 and actual reconnect. Submitting user input is a separate authorized live check.
 
-Automated acceptance is synthetic, with an isolated real-cache installation
-check and no inference. Live owner-wake, folder and chat-wake reception remain
-unverified for these new pins:
-confirm the native configured stdio client is attached, opening an evicted owner and submitting a queued
-message with Codex unavailable, same RC/native identities, app-stop refusal and
-subsequent idle eviction. Cache installation alone is not that acceptance.
+Automated adapter checks are synthetic or isolated real-cache installation checks
+without inference. Every newly discovered frontend graph still needs independent
+live reception evidence: confirm the configured stdio client is attached, an
+evicted owner reconnects under the same RC/native identities, and app-stop and
+subsequent idle eviction work. Submitting a queued message with Codex unavailable
+is a separately authorized live check. Historical bootstrap or cache-installation
+evidence alone does not establish those outcomes for a new graph.
 
 ### Native Local predecessor archival
 
@@ -625,7 +638,7 @@ another copy each round. It is not disposable quota data. Generated previous
 disposable copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
 the audit remains capped at 50 entries.
 
-This path is version-pinned and guarded, not an external writer lease. A manifest
+This path is native-structure-validated and lifecycle-guarded, not an external writer lease. A manifest
 or ready service is not native UI acceptance: verify the old Local entry is
 archived, the same-title continuation remains in the original folder, and its
 history still opens normally. Automated protocol coverage does not alone prove
@@ -650,30 +663,29 @@ Remote Control writer.
 Idle historical imports do not each reserve a long-lived SDK process. For these
 `cold-import` pairs only, the watcher may skip repeated full reads after a
 successful complete, unchanged verification. It compares every record, including
-superseded originals, and file identities/timestamps before and after verification.
-The default 60-second expiry makes another full check due. Errors, pending work,
-changed or missing files invalidate those hints. Hints never advance a history checkpoint.
+superseded originals, and exact file identities before and after verification.
+Pure verified unmanaged pairs can reuse a durable signed proof after restart,
+without timer-based expiry; see [restart verification](#restart-verification-and-unchanged-history).
+Other eligible cold-history hints have a bounded 60-second lifetime, but expiry
+alone does not schedule a production idle history sweep. Errors, pending work,
+changed or missing files invalidate reuse. Proofs/hints never advance a checkpoint.
 Once a current managed Remote Control owner exists, normal per-pass inspection
 resumes when synchronization needs it. Its process starts on demand and remains
 subject to the idle eviction described above; there is no unlimited-active-session
 resource guarantee.
 
-New conversations, active owners, and changed historical imports are checked
-before unchanged historical imports. During the fair historical-validation sweep,
-the watcher refreshes foreground synchronization between complete native
-operations, with a default two-second interval. Discovery and newly enrolled
-deliveries use a separate clock and also run between individual active-owner
-checks, so a long foreground sweep cannot hold new conversations until its end.
-Changed existing conversations also receive priority between native operations,
-using file and lifecycle observations for scheduling only. This includes changes
-in either current side or a preserved original. A boundary serves at most one
-queued existing change before continuing the regular sweep; unchanged managed
-owners are still fully checked, and repeated busy activity cannot monopolize it.
-These refreshes are serial and nonrecursive; the original sweep keeps advancing.
-Failed or incomplete dirty
-checks keep their foreground priority until stable full verification succeeds.
-The interval is not a delivery guarantee: foreground reads, a single in-flight
-native operation, handoff verification, and app UI refresh still take time. The
+Production Desktop mode is completion-event driven. Its startup/reconnection
+pass prioritizes foreground work, then advances the cold backlog fairly. Between
+scheduled conversations it checks bounded durable event metadata and can service
+at most one exact completion/session target. It does not repeat broad discovery
+or full transcript reads merely because streaming file metadata changed. Only
+consumed event revisions are acknowledged; newer events and unfinished tails stay
+pending. Native operations remain serialized at safe boundaries.
+
+The former activity-interleaved scheduler, including its two-second foreground
+refresh interval, remains only in the dependency-injected non-event test harness;
+it is not a production fallback or a delivery guarantee. Foreground reads, a
+single native operation, handoff verification and app UI refresh still take time. The
 bounded watcher status includes foreground and discovery completion/duration,
 the maximum observed discovery gap, and the last and slowest complete sync
 operation. These timings contain no transcript content and do not measure UI
@@ -794,13 +806,16 @@ node bin/claudex.mjs service status
 The service runs at login. `status` shows errors without transcript contents.
 Unsupported histories found during discovery are left untouched and skipped,
 so they do not stop unrelated projects. Status reports their count and at most
-20 source paths/reasons; this diagnostic list does not accumulate over time.
+20 source paths/reasons. Targeted event checks preserve unrelated unsupported
+source diagnostics; only exact reinspection or a full discovery replaces them.
 In Desktop mode, recognized tracked-history conflicts and export guards pause
 synchronization while keeping the watcher and existing Claude Remote Control
 owners alive. Status reports `synchronization: blocked` for a coordinator-wide
-hold or `degraded` for individually held syncs, with bounded reasons and the next
-revalidation time. Revalidation is spaced at least 30 seconds apart; it does not
-clear failed operations or resend uncertain inputs. A pending transaction blocks
+hold or `degraded` for individually held syncs, with bounded reasons. Production
+completion-event history holds wait for a relevant native event rather than
+showing a scheduled retry countdown. Only actual supervisor backoff supplies a
+recovery time. The injected non-event harness retains bounded timed revalidation;
+neither path clears failed operations or resends uncertain input. A pending transaction blocks
 all discovery, new syncs and collection until verified recovery succeeds. Without
 a pending transaction, other conversations continue their normal checks, including
 global original-history and quota guards that may still block new deliveries.
@@ -814,13 +829,15 @@ permission to resend an uncertain native write or choose a history branch.
 `service uninstall` removes its LaunchAgent but preserves conversation data.
 Only one watcher can run for a state root.
 
-For a visible macOS menu-bar status and native notifications:
+For an existing CLI-only installation that needs a standalone menu-bar display:
 
 ```sh
 node bin/claudex.mjs status-app install
 ```
 
-This builds and signs the small native app with a valid local Apple Development
+Graphical Claudex.app already owns this interface and blocks a second standalone
+installation after its verified login-item migration. The CLI-only command
+builds and signs the small native app with a valid local Apple Development
 identity and enables login startup. Approve notifications once when macOS asks.
 The window distinguishes readiness, waiting, blocked recovery, offline processes
 and stale status. **Notifications…** tests delivery; **Diagnostics** opens the
@@ -840,9 +857,10 @@ unchanged, and recovered a lost archive receipt after restart without repeating
 the archive request. These checks use synthetic histories without inference;
 they do not extend the general synchronization runtime allowlist.
 
-The current App's CLI entrypoint is
-`/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex`.
-Claudex recognizes the old flat and new packaged layouts in the same App,
+The reviewed packaged Codex executable is
+`/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`.
+Claudex recognizes the old flat executable and packaged `bin/codex` entrypoint
+and resolves the verified native executable within the same App,
 verifies the native OpenAI signature and preserves its signed Node runtime.
 It never edits the App bundle or switches to an unrelated PATH binary.
 
@@ -879,8 +897,10 @@ recent 50 audit entries. It does not accumulate per-turn state snapshots or
 service log files. The service uses a bounded `watcher-status.json`; stdout and
 stderr are not appended to an unbounded log.
 
-The watcher checks retirement on a 60-second cadence and during handoffs.
-`gc` applies it on demand. When the service is stopped, no cleanup runs.
+Normal handoffs perform their guarded collection. Broad startup/reconnection
+passes may collect when at least 60 seconds have elapsed since the prior collection;
+the production idle status heartbeat does not run a recurring collection/history
+sweep. `gc` applies collection on demand. When the service is stopped, no cleanup runs.
 Policy overrides live in `config.json` under `policy`: `previousPerSide`,
 `maxAgeMs`, `maxBackupBytes`, and `maxAuditEntries`.
 
@@ -932,9 +952,11 @@ Visible reasoning is labeled as imported transcript text, not replayed as an
 unsigned provider thinking block. Opaque encrypted reasoning, approval state,
 live processes, and provider-specific runtime state are not portable.
 
-Synchronization explicitly pauses on unsupported compaction, interrupted/incomplete
-turns, dependent histories, unsupported external attachments/artifacts, a changed
-working directory, or conversion differences. Auxiliary asset/checkpoint/task
+Synchronization withholds incomplete tails and refuses unsupported compaction,
+unresolved dependent histories, unsupported external attachments/artifacts,
+unverified working-directory changes or conversion differences. Supported closed
+interrupted-image turns and proven native project relocation use their specific
+identity/history guards; they are not blanket exceptions. Auxiliary asset/checkpoint/task
 directories also block automatic retirement until their dependencies can be
 verified. These cases are not silently flattened or deleted.
 
@@ -1033,8 +1055,10 @@ archived flag, an absent PID, or a successful reload alone.
 Claude SDK process is the only transcript writer, and Claude Desktop connects
 through native Remote Control. Synchronization submits `shouldQuery: false`
 messages; normal user requests from Desktop remain native user turns. The
-component pins SDK `0.3.281` and CLI `2.1.281` and requires normal subscription
-OAuth. It does not copy credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
+component pins SDK `0.3.281` and records CLI `2.1.281` as its strict validated
+baseline; `warn` permits other runtimes to attempt the existing protocol without
+claiming compatibility. It requires normal subscription OAuth and does not copy
+credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
 even to the default path selects a different native credential namespace, so
 the owner omits that variable for the standard home.
 
@@ -1244,6 +1268,7 @@ isolated native stores for testing. Runtime data stays outside the repository.
 - [Claude storage and retention](https://code.claude.com/docs/en/claude-directory)
 - [Thinking signatures](https://platform.claude.com/docs/en/build-with-claude/thinking)
 - [txcript usage](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
+
 ## Completion-driven synchronization
 
 Desktop mode uses completion hooks and native lifecycle events instead of a
@@ -1264,8 +1289,12 @@ Desktop CLI installation, run `claudex hooks install` and inspect with
 `claudex hooks status`. In Codex, review and trust the exact Claudex definitions via
 the native `/hooks` interface; configuration alone is not proof that hooks can run.
 Do not use a hook-trust bypass. Existing user hooks and native credentials remain
-unchanged. The installed command is synchronous, bounded and returns no model
-instructions; it only records session identity and the event type.
+unchanged. The synchronization publisher is synchronous and bounded, recording
+identity-only hints rather than transcript content. The combined hook can also
+participate in separately authorized collaboration-origin proof or native-chat
+delivery; any resulting peer context/Stop ACK follows that protocol, not a
+permission to synchronize an unfinished turn. See
+[native-chat messaging](collaboration.md#messages-to-existing-native-chats).
 
 Authorized live native-model checks verify Codex-origin and Claude Code-origin
 replies are delivered automatically, including a new Claude conversation created

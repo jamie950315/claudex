@@ -1,15 +1,44 @@
 # Claude Mod integration validation
 
-The source and installed companion are 0.7.0, managed by Claudex.app 1.1.0.
-The initial native test-kit gate
-and its explicitly authorized resolution are recorded below. Earlier acceptance remains the
-historical 0.4.1 review from 2026-10-03. The reviewed Mac
+The current source and reviewed installed companion are 0.7.1, managed by
+Claudex.app 1.1.1. The current checkpoint is followed by version-scoped historical
+records; their versions, counts and transient machine states remain unchanged
+as evidence of those earlier runs, not claims about the current installation.
+The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
-## App-managed Mod lifecycle acceptance (2026-10-03)
+## Current 1.1.1 / 0.7.1 checkpoint (2026-10-03)
+
+The 0.7.1 stage passed all 18 official native kit cases on Claude Code 2.1.286,
+using the previously approved function-hooks option only in the isolated test
+process. End-user setup does not set that option. The public v1.1.1 artifact was
+built from `a066217`; its 127 engine files and nine app locale catalogs matched
+source after extraction, and strict deep signature verification passed. Its ZIP
+SHA256 is `1ea3bfc0d5559abb18cd279afdcd550a114ca32b3b257f22395f4c7318029c8a`.
+It is development-signed, not notarized. Subsequent documentation-only corrections
+do not imply the existing release archive was rebuilt or retagged.
+
+The current Desktop check observed the actual 0.7.1 pane and its fresh
+loaded-version self-report. This proves that the reviewed session loaded and
+painted the current companion, not that every pane action or a new native-wake
+message was accepted. No new Stop ACK is inferred from the version display.
+
+Separately authorized two-direction supervisor/child acceptance verified that
+proactive follow-ups were received and acknowledged in generation one through
+the cooperative worker protocol. All four native invocations completed once,
+the read-only fixture remained unchanged and recorded process groups exited;
+see [the collaboration verification scope](collaboration.md#verification-scope).
+That evidence does not certify instantaneous native steering or interruption,
+external Desktop idle wake, or a new synchronization runtime.
+
+The historical records below retain earlier test-kit refusals, approved isolated
+test exceptions, unsuccessful messages and subsequent successful cases. They
+must not be reset, replayed or rewritten into newer acceptance claims.
+
+## Historical 1.1.0 / 0.7.0 app-managed lifecycle acceptance (2026-10-03)
 
 Graphical setup and normal startup now install/update only the bundled Mod through
 the official manager, with an app-owned journal and immutable versioned stages.
@@ -64,7 +93,7 @@ required component downloads. Existing sessions can retain old Mod code; a new
 session loads an update. Receiver observations are bounded self-reports, not a
 guarantee of delivery. The app remains development-signed and not notarized.
 
-## Work observability acceptance (2026-10-03)
+## Historical 0.6 work observability acceptance (2026-10-03)
 
 The source adds per-task public events, complete structured report history,
 generation-fenced blockers and instruction acknowledgements, scoped artifact/diff
@@ -201,7 +230,7 @@ remained acknowledged, and no additional notification was created. Final source
 hash checks matched all 122 app files and 23 companion files; the stop hold was
 released and both earlier uncertain notification records remained unchanged.
 
-## Codex main completion-wake acceptance (2026-10-03)
+## Historical Codex main completion-wake acceptance (2026-10-03)
 
 The user authorized a bounded native completion-wake check. A persistent Codex
 CLI source was opened in its exact existing Desktop conversation, using Codex
@@ -242,7 +271,7 @@ affected origin/catalog/continuation/notification/Desktop-wake group passed all
 66 tests. Packaged changed runtime files matched source and strict deep signature
 verification passed. The installed app remains development-signed, not notarized.
 
-## Source origin support and model diagnostics (2026-10-03)
+## Historical 0.5.2 origin support and model diagnostics (2026-10-03)
 
 The origin verifier now uses an exact stable primary native Claude transcript
 without Desktop Local registry membership. Isolated integration tests exercise
@@ -272,7 +301,7 @@ The companion remains 0.5.2. The existing 1,469-pass, zero-failure regression
 result (23 opt-in skips) was reused; the final strengthened origin test passed
 separately. This remains a development-signed, non-notarized installation.
 
-## Installed native origin and notification acceptance (2026-10-03)
+## Historical 0.5 installed origin and notification acceptance (2026-10-03)
 
 The user authorized local installation and minimal native inference. The signed
 candidate was installed at the normal app path after owned services stopped and
@@ -365,7 +394,7 @@ This initial native-host presentation quirk is not a failed model invocation.
 | F14 | Implemented: exact lifecycle/policy/capability/usage observations and safe option-source diagnostics, with native loaded-session evidence. |
 | F15 | Updated AI-first workflow guidance; the human pane remains optional. |
 
-## 0.5 AI-first observation candidate (2026-10-03)
+## Historical 0.5 AI-first observation candidate (2026-10-03)
 
 - 106 affected Mod Node tests passed, including real Unix RPC observation and
   typed-error ingress, per-session expiry/end/disconnect/restart behavior,
@@ -437,7 +466,7 @@ the two provider paths. The production verifier still requires exact
 receipt. The complete new live flow and optional-hook native trust remain
 unverified until separately authorized acceptance.
 
-## 0.4 panel and localization acceptance (2026-10-03)
+## Historical 0.4 panel and localization acceptance (2026-10-03)
 
 - The package provides 170 English-keyed strings in all nine app languages,
   grouped panel summaries, wrapping navigation and collapsed technical details.
@@ -470,7 +499,7 @@ unverified until separately authorized acceptance.
   correctly formed slash commands used native command handling. No history or
   uncertain message record was erased to clean up the acceptance transcript.
 
-## Single-session own-inbox evidence
+## Historical 0.3.1 single-session own-inbox evidence
 
 | Check | Observed result | Evidence boundary |
 | --- | --- | --- |
@@ -569,7 +598,7 @@ wait; these separate guards were not altered or waived by Mod acceptance.
 Pane-origin model delegation and new synchronization-runtime compatibility are
 also outside this evidence.
 
-## Reproduced repairs
+## Historical 0.2 reproduced repairs
 
 Version 0.2.1 added two malformed-reply regressions: dispatch requires literal
 ready:true and receipt publication must confirm the exact message, claim, source,
@@ -594,7 +623,7 @@ module-top-level $ helpers, intrinsic $.plugin.root property access, complete
 native callback coverage, clear/end redraw, source-parent symlink rejection and
 strict manifest attribution. Automated tests never start model inference.
 
-## Native capability and availability boundaries
+## Native capability boundaries and historical availability observations
 
 Claude Code 2.1.287 is the documented public Mod baseline, not a load gate.
 The installed Desktop Code 2.1.286 actually validates and runs this companion.
@@ -606,9 +635,9 @@ account-wide availability.
 
 Hooks cover session.start, classic.SessionStart, session.end, session.receive,
 turn.complete, command.run and ui.render. Calls include command.register, env.get, process.run,
-prompt.fill, session.cwd/id/send/usage/version, settings.read, tool.list, clock.after and
+prompt.fill, session.cwd/id/send/usage/version, settings.read, store.get/set, tool.list, clock.after and
 ui.invalidate/open/resolve. The only environment read is the managed-worker marker.
-plugin.root is intrinsic metadata. Timers drive bounded broker waits/reconnection,
+plugin.root and plugin.name are intrinsic metadata. Timers drive bounded broker waits/reconnection,
 not conversation-history sweeps. No prompt submission, permission approval or
 new sender model process is introduced. Recipient delivery can trigger authorized
 model work and consume account allowance.

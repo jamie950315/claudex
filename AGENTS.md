@@ -4,6 +4,14 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
+Claudex.app 1.1.1 packages Claude Mod 0.7.1. Keep application and Mod versions
+distinct; their authoritative manifests are package.json and
+plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
+their own releases, not the current setup or permission defaults.
+Before a release, compare current guide headings, staging examples, CLI help and
+release notes against both manifests and the packaged payload. Do not update only
+the manifest while leaving a previous-version heading as the current guide.
+
 ## Documentation
 
 Keep README.md focused on current capabilities, requirements, setup and concrete
@@ -85,6 +93,9 @@ outer scroll view for overflow. Do not resize fullscreen or during live dragging
 Runtime history/ownership blocks offer diagnostics, not setup retries. Show the
 global setup retry only for actionable installation/account requirements or a
 failed setup operation; keep the instructions consistent with available actions.
+Mod installation, enablement and loaded-session waiting use their scoped actions.
+Show Mod activation waits in the main window without implying a setup retry or
+restarting existing sessions; keep installed and loaded versions distinct.
 Initial verification reports unique checked/total conversations and the known
 current conversation with elapsed seconds. A ten-second status-only heartbeat
 keeps long native operations observable; it must never publish archival intents,
@@ -258,7 +269,9 @@ assistant messages and tool identity/status/exit metadata, never prompts,
 reasoning, tool payloads or arbitrary output. Event reads use task/generation
 cursors, not revisions, and expose eviction/collection-capacity gaps. Complete
 reports use the separate bounded work_reports API; do not put their entire
-history back in status. All reads preserve child-result acknowledgement state.
+history back in status. These observability reads preserve child-result
+acknowledgement state; ordinary status/wait retain their existing worker outcome
+acknowledgement contract.
 Blocker transitions retain exact ID/generation, deduplicate unchanged reports,
 and revoke stale native dispatch after awaited preflights. Managed parents use
 child-progress context, never external native-chat controller privileges.
@@ -266,8 +279,9 @@ Follow-up instruction context delivery is distinct from worker-reported adoption
 and actual completion. Worker-only generation-fenced check-in can deliver queued
 instructions during the current invocation; exact accepted/rejected acknowledgements
 consume them for continuation scheduling, never prove completed work. Ordinary
-status stays read-only. Eligible worker MCP response boundaries may append separate
-bounded inbox context through actor-derived worker_check_in RPC; controllers do
+status does not consume the instruction queue. Eligible worker MCP response
+boundaries may append separate bounded inbox context through actor-derived
+worker_check_in RPC; controllers do
 not auto-consume, and end-turn receipts suppress intake. Preserve original tool
 results and explicit intake failures without retrying tools or uncertain work.
 This is cooperative delivery, not native steer/interrupt or a second writer.
@@ -361,22 +375,23 @@ synchronization-runtime allowlist or blanket acceptance of other versions/routes
 
 The Claude Mod companion is staged by `bin/claudex-mod.mjs` and documented
 in `docs/claude-mod.md`. Claude Code 2.1.287 is the documented public baseline,
-not a companion load gate. The installed Desktop 2.1.286 passed the final native
-validator, 17 kit tests and no-inference command registration without added
-feature flags; test the actual runtime before requiring an upgrade. This does not
+not a companion load gate. Earlier Desktop 2.1.286 acceptance passed the native
+validator, the then-current 17 kit tests and no-inference command registration
+without added feature flags; test the actual runtime before requiring an upgrade. This does not
 certify new synchronization runtimes. Keep the explicit app/stage allowlists and
 the app-owned journaled installation path described above. `plugins/claudex/hooks/register.mjs` uses
 top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and complete
 native test kit against a staged plugin after UI/API changes, in addition
 to affected Node tests. Native tree tests are not real Desktop painting evidence.
-Standalone staging must include the transport's pure notification-policy and
-wait modules. Keep broker-only imports out of that transport dependency graph.
+Standalone staging must include the transport's pure notification-policy, wait
+and worker-boundary modules. Keep broker-only imports out of that transport
+dependency graph.
 Verify an actual staged helper read over Unix RPC after its source copy is
 removed; doctor-only checks and mocked transports do not prove a deployable
 companion. Pane artifact reads share the broker's 64 KiB limit and retain a
 bounded, typed scope/identity/size refusal instead of claiming service failure.
-The 0.4 panel uses grouped summaries, two wrapping navigation rows and collapsed
+The native panel uses grouped summaries, two wrapping navigation rows and collapsed
 technical records; never collapse or truncate the complete confirmation payload.
 Its native plugin-store language preference is independent of the app's preference,
 with the same nine languages and script/region-aware macOS system resolution.
@@ -393,8 +408,8 @@ marketplace settings. Technical diagnostics expose only these two known identiti
 and wake booleans/types, never complete settings or secrets. The local /claudex
 command returns explicit handled text after opening its pane, not an empty reply.
 User-authored controller writes use exact-context prepare/confirm and durable
-no-replay receipts; managed workers cannot borrow controller authority. Version
-0.3.1 provides explicit selfWake alongside nativeWake, both false by default.
+no-replay receipts; managed workers cannot borrow controller authority. Since
+0.3.1, explicit selfWake accompanies nativeWake; both default to false.
 `collaboration native-wake --route mod-self|mod|renderer` captures the route on
 new wake-enabled Claude messages; existing messages and receipts keep their
 original route. The same loaded recipient Mod can receive with both opt-ins and
@@ -599,7 +614,8 @@ roots before dispatch and refuse replaced symlinks. Codex adds only writable ext
 and excludes implicit temp write grants when references are declared. Claude uses
 restricted file tools plus absolute Edit deny rules for reference roots, covering
 Write too; reject unrepresentable path patterns. Preserve native permission checks,
-not a new claim of an OS read jail. No full-filesystem/home write grant is implied.
+not a new claim of an OS read jail. Directory grants alone do not imply
+full-filesystem/home write access; full-access requires its separate authorization.
 Reasoning effort follows the same destination-provider capture rules. Persist
 defaultEfforts separately from defaultModels; settings may update either full
 provider pair atomically. Optional start/handoff effort=null explicitly requests
@@ -624,8 +640,10 @@ the same or overlapping canonical access roots is allowed, including ancestor/
 descendant paths, reference readers and writable parent/child tasks. Callers must
 assign disjoint file responsibilities and coordinate shared-file edits; there is
 no workspace lock or automatic conflict merge. Delegated children may start while
-their parent runs. A waiting parent resumes with durable child results once all its
-children finish; this is explicit new work, not replay of an uncertain invocation.
+their parent runs. A waiting parent normally resumes with durable child results
+once all its children finish; opted-in milestones or blocker progress may also
+resume it before child completion. This is explicit new work, not replay of an
+uncertain invocation.
 Handoff receipts use nextAction=end-turn with CLAUDEX_HANDOFF.
 Worker instructions prioritize that single-token response over
 normal final-report formatting; put handoff context in the request before it.
@@ -686,9 +704,16 @@ both directions of child file editing and parent yield/resumption, plus sequenti
 Codex-to-Claude-to-Codex edits under one task ID. Nine native executions completed;
 exact final bytes and recorded serial ownership boundaries were checked. Only a
 temporary broker enabled writes and it was stopped afterward. The installed
-service remains read-only by default. This is bounded collaboration file-editing
-evidence, not a new synchronization version allowlist entry, generic build/test
+service retained its then-current read-only default. This is historical bounded
+collaboration file-editing evidence, not a new synchronization version allowlist entry, generic build/test
 execution in Claude, or proof of Desktop UI chat transfer.
+
+Claudex 1.1.1 cooperative-follow-up acceptance also verifies both real
+supervisor/child directions: a proactive follow-up sent after work started was
+received, acknowledged and completed by the child in generation one, without a
+prior blocker or question. See docs/collaboration.md for exact native versions
+and verification scope. This is cooperative check-in/MCP-return delivery, not
+instantaneous interruption, external idle wake or synchronization certification.
 
 ## Current boundary
 
@@ -895,9 +920,11 @@ conversations and dirty cold imports run before the fair cold-validation sweep.
 Proof misses run full verification directly; only failed reads require durable
 revocation. A successful refresh replaces its proof once, without a preceding
 tombstone flush. Restoring an old context never revives a failed proof.
-During startup/reconnection reconciliation, between complete cold operations,
-refresh discovery and changed work after two
-seconds, not the entire unchanged foreground queue. Every managed owner retains
+The injected non-event test harness refreshes discovery and changed work between
+complete cold operations after two seconds, not the entire unchanged foreground
+queue. Production completion-event mode instead services bounded exact durable
+event targets between startup checks as described above; streaming metadata
+alone never triggers broad rediscovery. Every scheduled managed owner retains
 its full lifecycle check once per pass; changed owners are prioritized. Running
 Claude owners use live lifecycle state. Stopped current owners use matched saved
 state under the native writer lock and stable transcript reads, without starting a
@@ -905,9 +932,10 @@ process. Pending appends/resets require explicit recovery. Preserve archive,
 image restoration and retained-generation checks. Idle assertions and maintenance
 discovery must not start an owner; actual reset plans still require a fresh cold
 native owner. Reconcile legacy display titles only when an owner runs for work.
-Discovery and new deliveries also refresh between individual foreground syncs,
-using their own clock; a long active-owner sweep must not block new enrollment.
-Stable file/lifecycle observations also prioritize changed existing conversations
+In that non-event harness, discovery and new deliveries also refresh between
+individual foreground syncs, using their own clock; a long active-owner sweep
+must not block new enrollment. Its stable file/lifecycle observations also
+prioritize changed existing conversations
 between native operations. This includes superseded originals and both current
 sides, not just new enrollment or cold imports. These observations only reorder
 full syncs; unchanged managed owners still receive normal lifecycle verification.
@@ -971,8 +999,9 @@ Reuse the verified read returned by assertUnchanged for that snapshot's byte
 count instead of immediately exporting the same history a second time.
 
 Validated native baselines are Codex `0.155.0-alpha.16.3`/`.16.4` and Claude Code
-`2.1.210`/`2.1.281`. versionPolicy defaults to strict; an explicit warn policy
-allows unvalidated runtime versions to be attempted without version-only pauses.
+`2.1.210`/`2.1.281`. Low-level/CLI versionPolicy defaults to strict; new graphical
+installations select warn while preserving an existing explicit strict choice.
+Warn permits unvalidated runtime versions without version-only pauses or warnings.
 Never label an unvalidated version as verified. Codex has cross-process writer locks.
 Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
@@ -994,8 +1023,9 @@ The native watcher, six synthetic roundtrips, real Claude rendering, and desktop
 task-reading integration are verified without inference. Separately authorized
 real Desktop acceptance verifies two model-authored roundtrips, history-based
 nonce recall on both sides, and automatic delivery. Do not
-claim production readiness for opaque/dependent compaction, external asset dependencies, changed
-working directories, or unsigned reasoning replay. Visible reasoning is labeled
+claim production readiness for opaque/dependent compaction, external asset dependencies,
+unverified project relocations, or unsigned reasoning replay. Verified project
+moves use the explicit relocation protocols above. Visible reasoning is labeled
 text; encrypted reasoning and native permissions do not migrate.
 
 Readable native compaction summaries plus complete continuation are supported.
@@ -1130,7 +1160,7 @@ summary; do not silently export only their local tail. Earlier readable original
 can remain in prior rollouts, but prefix ordinals, byte boundaries, item identity,
 and complete-turn coverage must agree before publishing a reconstruction.
 
-Experimental SDK path: `ClaudeOwner` is the sole native writer; Desktop views it
+Desktop SDK path: `ClaudeOwner` is the sole native writer; Desktop views it
 through Remote Control. Actual native/desktop tests verify shouldQuery:false,
 zero-inference receipts, same remote ID after restart, exact UUID/content
 persistence, and duplicate suppression. SDK0.3.281/CLI2.1.281 are validated baselines
@@ -1355,7 +1385,8 @@ Launcher, DesktopRuntime, legacy adapters and ClaudeOwner honor the same policy.
 Warn mode keeps shared transport for unknown Codex versions and attempts unknown
 Claude CLI/SDK versions. Native version tags in the existing exact image/reset
 formats honor this choice too; no structural/provenance/receipt checks are removed.
-Watcher status exposes bounded deduplicated warnings. Settings take effect for
+Version-only watcher warnings remain silent; actual protocol, schema, ownership
+and history failures still surface. Settings take effect for
 newly loaded workers; never replace active work to apply them. Claudex no longer
 injects DISABLE_AUTOUPDATER=1; preserve explicit inherited/override preferences.
 Runtime updater behavior and npm dependency upgrades remain the native tools'

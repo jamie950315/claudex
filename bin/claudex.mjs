@@ -65,7 +65,8 @@ const help = `Claudex: bounded conversation synchronization and opt-in model col
 
 Global: --root PATH (default ~/.local/share/claudex). Service installation is opt-in.
 Only generated copies are retired. Original imported sessions are never deleted.
-Close the destination session before switching; active writers block handoff.
+CLI-only sync: close the destination session before switching; active writers block handoff.
+Desktop sync: use the current same-title continuation after verified delivery.
 `;
 
 async function main() {

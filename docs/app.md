@@ -2,6 +2,10 @@
 
 [Back to README](../README.md)
 
+Current release: **Claudex.app 1.1.1**, with **Claude Mod 0.7.1** bundled.
+See [release notes](releases/1.1.1.md) and the
+[published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v1.1.1).
+
 ## Who this is for
 
 Claudex.app is for Mac users who already have the official ChatGPT/Codex and
@@ -54,7 +58,9 @@ waiting does not offer a misleading setup retry button.
 After resolving a missing requirement, use that button to continue configuration;
 it does not resend messages or bypass synchronization guards. The menu has one
 **Open Claudex…** entry, not separate status, settings or retry entries. Later login starts stay quiet,
-and reopening Claudex inspects the configuration rather than rerunning setup.
+and opening an already configured app does not rerun full setup or restart live
+owners. Normal startup does maintain its bundled Mod as described below;
+periodic inspection remains read-only.
 Read-only inspection and synthetic UI checks do not mark onboarding as presented.
 
 Under **Show advanced diagnostics**, **Collaboration models** provides separate
@@ -121,7 +127,12 @@ Initial component downloads require network access; vendor desktop apps and
 native account access are still prerequisites. No credentials are copied.
 
 The main window distinguishes installation from a fresh loaded-session observation.
-Open a new Claude Code session and run `/claudex` after an update; native SDK
+Open a new Claude Code session and submit the literal `/claudex` command after an update;
+before the native session initializes, the homepage autocomplete may show only
+`claudex:claudex-workflow`, which is a skill, not the Mod panel command. On the
+reviewed Desktop build, the first command could leave an invalid-command warning
+even though the panel opened; confirm the visible pane and loaded-version report,
+not the suggestion list or warning alone. Native SDK
 sessions may retain their old plugin root even after reload-plugins. The app does
 not restart them. Activation observations expire, contain no conversation content,
 and never prove message delivery or that every open session uses the new version.
@@ -133,6 +144,9 @@ confirmation and preserves per-task notification opt-in and the existing deliver
 route. Normal status refresh is read-only; it never starts installation, a model,
 or a native test suite. Runtime feature-flag overrides used in explicitly authorized
 developer tests are never applied by setup.
+
+## Background operation and permissions
+
 - Background startup through the existing owned, journaled LaunchAgents.
 - One Claudex app and one menu bar item for setup, live synchronization status,
   diagnostics, and notification controls. Login opens the same app quietly;
@@ -155,6 +169,15 @@ do not record wake events while the app is stopped. No conversations or settings
 are deleted. Opening Claudex again resumes its verified installed services;
 ordinary reopen without a preceding Quit does not restart running services.
 Login startup remains installed. The legacy CLI-only status display is unchanged.
+
+An app update replaces files, not every already-running process or native session.
+An old Claudex window may retain its loaded executable, a running broker its
+engine modules, and a native client its MCP tool catalog. Verify installed and
+active state separately. Use normal, safe Quit/reopen for Claudex when its engine
+needs replacement; this stops its services as described above. Reconnect native
+MCP clients through their normal lifecycle after active work has finished. An
+accepted reload request alone is not proof that an existing connection exposes
+the current tools. Do not force-close native work or replay input to refresh a client.
 
 Advanced diagnostics include collaboration defaults: a model and reasoning effort
 per provider, and the **Sub-agent permission** for new top-level tasks (Read only,
@@ -181,10 +204,12 @@ This continues the original conversation, not a newly created replacement.
 Sending normally requests a native wake and can consume model account allowance;
 callers may choose hook-only queued delivery with `wake: false`.
 
-Keep Claude Desktop open with the bridge loaded. You do **not** need to select or
-open the specific recipient chat. Busy work, an existing draft or a permission
-prompt can postpone delivery, and a closed app cannot receive an immediate
-frontend wake. Known ended chats can retain queued notes until resumption, subject
+Keep Claude Desktop open with the selected delivery route available. The renderer
+route can open an unloaded recipient; Mod routes need the eligible recipient
+session to be loaded. `mod-self` does not create a new owner for a closed session,
+and the older `mod` route also requires another loaded sender. Native policy,
+busy work, drafts or permission prompts can postpone or refuse delivery; a closed
+app cannot receive an immediate frontend wake. Known ended chats can retain queued notes until resumption, subject
 to message expiry. Check the message receipt: queued, native acceptance and the
 recipient's ACK are different states. ACK means receipt, not completion of the
 requested action.
@@ -231,8 +256,10 @@ still pause unsafe operations. A missing or changed frontend resource prevents t
 there is no guessed resource or signature bypass. Refer to
 [synchronization](synchronization.md) for the exact boundaries.
 
-Developer diagnostics can invoke `bin/claudex-app.mjs inspect` for a read-only
-JSON report. `Claudex.app --inspect-only` exposes that report in the native UI
+Developer diagnostics can invoke `node bin/claudex-app.mjs inspect --read-only`
+for a non-mutating JSON report. Plain `inspect` does not run setup or models but
+may record a successful signature-verification cache entry; `--read-only` forbids
+that write too. `Claudex.app --inspect-only` exposes that report in the native UI
 without setup or login actions. `--ui-smoke` renders a synthetic checklist and
 tests native layout without invoking the backend; it is not deployment evidence.
 `--diagnose` reads the same bounded health report used by the menu bar.
@@ -276,7 +303,9 @@ instead of packaging an app whose Desktop adapters would fail later.
 It uses an explicit engine-file allowlist, lockfile-based production
 dependency installation, portable Mach-O dependency checks, and nested code
 signatures. Existing output bundles are not overwritten. Transcripts, account
-files, tests, local Git history and private configuration are not bundled.
+files, the general repository test suite, local Git history and private configuration
+are not bundled. The Mod's explicitly allowlisted native test fixture is included
+with its plugin payload for native validation.
 Generated bundles, archives and signing details stay outside the repository.
 
 Automated setup tests use isolated private directories and injected installers.

@@ -1,10 +1,34 @@
 # Claude Mod integration: deployment handoff
 
-Reviewed on 2026-10-02. The companion is integrated; do not reapply the downloaded
-revision-2 patch. Read AGENTS.md, [the guide](claude-mod.md),
+Current operational handoff: Claudex.app 1.1.1 and Mod 0.7.1, reviewed on
+2026-10-03. The companion is integrated; do not reapply any historical downloaded
+patch. Read AGENTS.md, [the guide](claude-mod.md),
 [acceptance gates](claude-mod-acceptance.md) and [validation](claude-mod-validation.md).
 
-Version 0.3.1 is installed with nativeWake=true, selfWake=true and broker
+## Current state and next maintenance steps
+
+- The graphical app owns bundled Mod installation, updates and checks through
+  the official manager. Use [its lifecycle controls](app.md#claude-mod-lifecycle),
+  not a separate manual install, for normal graphical deployments.
+- The current work views include generation-bound reports/events, blockers,
+  instruction adoption, declared artifacts, explicit result review and
+  cooperative pause. Same-invocation follow-ups use worker check-in and eligible
+  MCP response boundaries, not a forced native interruption.
+- Keep bundled/installed integrity, fresh loaded-version observations, actual
+  pane rendering and delivery/Stop ACK evidence separate. Actual Desktop 0.7.1
+  panel evidence is recorded in validation; it does not manufacture a new wake ACK.
+- Preserve both known plugin identities, language preferences, explicit disabled
+  and wake settings, previous versions and app-owned journals. New installations
+  keep wake defaults off, and the app never changes native routes automatically.
+- Reuse applicable unchanged evidence and test changed inputs. Do not alter
+  runtime allowlists, native trust, accounts or user work to make checks pass.
+
+## Historical 0.3.1 deployment checkpoint
+
+The following checkpoint records the earlier single-session rollout. Its versions,
+test counts and machine status are historical, not the current installation.
+
+Version 0.3.1 was installed with nativeWake=true, selfWake=true and broker
 route=mod-self. After normal Claude restart, one Desktop-owned native session and
 one eligible waiter automatically delivered a new authorized message to that same
 session. Sonnet 5.5 returned the requested nonce and real Stop ACK in 4.253 seconds;
@@ -26,7 +50,7 @@ remained. Both installed app signatures verified deeply; Claude app.asar stayed
 unchanged. Collaboration/folder inspection is ready; existing synchronization
 waits remain separate.
 
-## Current scope and evidence
+### Scope and evidence at that checkpoint
 
 - /claudex Overview, Tasks, Chats, Compose, Inbox, task details and durable receipts.
 - AbovePrompt context/rate-limit display composed with the native tree.
@@ -106,7 +130,13 @@ fences to make a candidate pass.
 
 ## Installation and recovery
 
-Use the native local marketplace and plugin manager, preserving active work:
+For graphical installations, use the app's Install or update Claude Mod action
+and its explicit Enable/receiver controls. The installer preserves app-owned
+stages and verified legacy sources, uses same-name marketplace add for migration,
+and never downgrades newer installed versions. Read-only inspection never installs.
+
+For CLI-only installations, use a capability-verified native local marketplace
+manager, preserving active work:
 
 ```sh
 claude plugin marketplace add /canonical/persistent/claudex-mod-stage
@@ -114,9 +144,10 @@ claude plugin install claudex@claudex-local --scope user
 ```
 
 For an existing installation use its native update flow. Verify the exact
-synchronization root, trusted Node executable and intended nativeWake/selfWake options,
-including retained overrides. A fresh suitable session or supported restart is
-needed when an existing module remains loaded; install receipts and cache versions
+synchronization root, trusted Node executable and intended nativeWake/selfWake options
+for both claudex@claudex-local and claudex@inline, including retained overrides.
+Use a fresh suitable session when an existing module remains loaded; do not
+restart active apps merely to update a pane. Install receipts and cache versions
 alone do not establish the running version. Inspect the real pane and broker
 response. Keep safe recoverable app backups and private evidence outside Git.
 Open the installed `/Applications/Claudex.app` by its exact path: development
@@ -133,7 +164,10 @@ existing Mod messages and unknown outcomes retain their original evidence. Keep
 the modern broker reader: older brokers do not understand mod-self, submitted
 outcomes and receive-once records. Never downgrade over new mailbox data or reset a claim.
 
-Disable/uninstall only the companion through the native manager if required.
+Prefer disabling the companion through the native manager when opting out;
+the app preserves explicit disablement. Removing an app-managed Mod is not a
+persistent opt-out because normal maintenance can reinstall it. Never remove the
+marketplace as a recovery shortcut: that native command can delete plugin data.
 Retain its stage while loaded sessions use it, action receipts/locks, own-dispatch
 journal, outbox and mailbox. Removing the pane does not cancel accepted work; use normal explicit
 cancellation and verify process closure separately. Preserve histories, credentials,

@@ -16,7 +16,10 @@ The `desktop install` command selects the shared Desktop coordinator instead.
 
 CLI-only synchronization uses the Codex runtime allowlist in
 `src/codex-versions.mjs` and validated Claude Code baselines `2.1.210` and
-`2.1.281`. Version warnings do not waive native writer or history checks.
+`2.1.281`. Manual initialization defaults to strict version checks. An explicit
+`warn` policy permits attempts on other versions without version-only warnings;
+it never waives native writer or history checks. New graphical installations use
+`warn` unless an existing policy was explicitly selected.
 
 ## CLI-only setup
 

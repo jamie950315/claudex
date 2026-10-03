@@ -37,7 +37,9 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
 --default-permission read-only|workspace-write selects the policy for new root tasks.
 --codex-binary PATH and --claude-binary PATH select explicit native executables.
 Default: ~/.local/share/claudex/collaboration. Requests may start real model work.
-Reads, startup, installation and status never request inference. No API keys are copied.
+Reads, installation and status do not request new model work. Broker startup can
+continue previously authorized queued work, never replay an interrupted invocation.
+No API keys are copied.
 Writes require broker authorization (--allow-write, --allow-full-access, or a saved
 controller default) and a task permission of workspace-write or full-access.
 full-access runs native tools without a sandbox or prompts and loads user config.

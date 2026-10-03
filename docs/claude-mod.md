@@ -1,12 +1,18 @@
 # Claude native Mod companion
 
-## Version 0.5 AI-first observations
+## Current companion: 0.7.1
 
-Claudex.app 1.1.0 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.1.1 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
 Version 0.7.0 adds content-free loaded-version observations for the app; these
 observations are self-reported diagnostics, not delivery or work-completion proof.
+Version 0.7.1 packages cooperative running-worker follow-ups: a supervisor can
+send a direction before a child finishes, and that child can receive it in the
+same invocation through explicit check-in or an eligible managed-worker MCP
+response boundary. Delivery, worker-reported adoption and completion remain
+separate. This does not inject input into a long-running native tool or interrupt
+the model. See [decisions and instructions](collaboration.md#decisions-instructions-and-cooperative-pause).
 
 Version 0.6.2 added the bounded work views described in
 [the collaboration guide](collaboration.md#opt-in-work-visibility), generation-bound
@@ -39,7 +45,7 @@ with real Stop ACK. These bounded results are separate from the earlier 0.4.1
 acceptance and do not certify every runtime or route; see the validation record
 and collaboration protocol.
 
-## Version 0.4 panel and language support
+## Panel and language support
 
 Version 0.4.1 keeps the existing delivery and confirmation protocol and improves
 the native panel's presentation: selected two-row navigation, grouped status and
@@ -58,12 +64,12 @@ Native IDs, paths, protocol JSON, models, user text and unknown diagnostics are
 not translated. Complete catalogs and placeholder parity are checked before
 staging or app packaging.
 
-## Version 0.3 single-session delivery
+## Single-session delivery
 
 Version 0.3.1 provides an explicit `mod-self` route in the existing Mod. It does not
 require another Mod, another loaded sender session or the SendMessage tool.
 The recipient's own loaded Mod obtains its already-authorized broker message and
-uses native own-child inbox delivery. The reviewed Mac has 0.3.1 installed with
+uses native own-child inbox delivery. Historical 0.3.1 acceptance used
 both opt-ins enabled and route `mod-self`; a single Desktop session produced the
 requested Sonnet 5.5 reply and real Stop ACK after normal restart. Its original
 unsent draft remained unchanged. Source defaults remain off. Exact native policy,
@@ -130,7 +136,10 @@ The outbox is `<root>/mod-wake-receipts/`; own-inbox dispatch intents are in
 lower). Completed outcomes and receive-once evidence are retained. Keep them and
 the original mailbox when investigating. Never remove a claim to force redelivery.
 
-Activation procedure for another installation:
+Claudex.app handles ordinary installation, updates and explicit receiver controls;
+these do not automatically change the broker route or certify delivery on a new
+runtime. The following is the developer acceptance procedure for another target
+runtime, not a requirement for every end user to run tests manually:
 
 1. Run affected tests, stage the candidate with `--native-wake --self-wake`, and run that runtime's strict
    validator and native test kit. Do not override a vendor/policy refusal.
@@ -148,7 +157,7 @@ Activation procedure for another installation:
    rollback is `native-wake --route renderer`; unresolved Mod messages keep their
    original route and evidence. Never automatically replay them on rollback.
 
-Rollback here means changing the route while retaining the 0.3 broker, not
+Rollback here means changing the route while retaining a current broker, not
 downgrading its data reader. Older brokers do not understand `mod-self`, submitted
 outcomes or receive-once records. Do not restore an old broker binary
 over a mailbox that has used the new route, or rewrite the mailbox to make an
@@ -190,7 +199,7 @@ connection. A second MCP registration or an independently authenticated service
 is unnecessary. This also avoids sending a UI request to one MCP installation
 while inspecting another installation's local state.
 
-| Area | Implementation in this change | Boundary |
+| Area | Current implementation | Boundary |
 | --- | --- | --- |
 | Native UI | `/claudex` pane and composed AbovePrompt band | Desktop Code and CLI; local runtime validation required |
 | Context/plan use | Native `session.usage()` at load, completed turns, and Refresh | Unknown values display as unknown; no fabricated weekly figures |
@@ -219,10 +228,11 @@ registered, without additional feature flags. Native UI evidence then verified
 the pane and broker response on that engine. These historical checks do not
 replace the current candidate's complete native kit or own-inbox acceptance.
 Test the installed runtime's actual capabilities before requiring an upgrade.
-The reviewed repo records a stricter, earlier synchronization acceptance baseline:
+The repository also records a separate earlier synchronization acceptance baseline:
 Claude Code 2.1.281, SDK 0.3.281, and the repo's allowlisted Codex builds.
-Its collaboration evidence also predates 2.1.287. Check the actual source version
-policy and current installed executables before deployment.
+Consult [current collaboration evidence](collaboration.md#verification-scope) and
+the actual source version policy and installed executables before deployment;
+these independent records must not be inferred from the Mod version.
 
 Keep three independent gates:
 
@@ -246,15 +256,15 @@ Linux own-inbox delivery and Windows named-pipe support are not implemented.
 Desktop WSL plugin support must be confirmed against current official runtime
 support before use.
 
-## Stage and validate
+## Standalone staging and developer validation
 
 From a source checkout:
 
 ```sh
 node --version
-node --test --test-concurrency=4 test/claude-mod-*.test.mjs
 npm ci --ignore-scripts --no-audit --no-fund
-npm test
+node --test --test-concurrency=4 test/claude-mod-*.test.mjs
+# Run npm test when the change affects shared core, persistence, or concurrency.
 ```
 
 Select the **synchronization root**, with `collaboration/` underneath it. The
@@ -267,7 +277,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.6.2-review"
+STAGE="$PARENT/claudex-0.7.1-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -289,7 +299,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # The own-inbox test explicitly exercises both opt-ins. Use a separate,
 # never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.6.2-native-tests"
+TEST_STAGE="$PARENT/claudex-0.7.1-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"
@@ -303,12 +313,13 @@ Inspect emitted types for that exact build when an API differs from the public
 GitHub type snapshot. Preserve the report and resolve validation errors before
 installation; preserve the existing synchronization policy throughout.
 
-After all applicable gates are satisfied, installation is a separate explicit
-local operation:
+For CLI-only installations, use the same capability-verified manager after all
+applicable gates are satisfied. Graphical users use the app's managed lifecycle
+instead of these manual commands:
 
 ```sh
-claude plugin marketplace add "$STAGE"
-claude plugin install claudex@claudex-local --scope user
+"$CLAUDE_VALIDATE" plugin marketplace add "$STAGE"
+"$CLAUDE_VALIDATE" plugin install claudex@claudex-local --scope user
 ```
 
 Use `/plugin configure claudex@claudex-local` to verify the state root, Node
@@ -322,7 +333,7 @@ The native installer may report options as unset despite staged defaults. Save
 them through its supported configuration command instead of editing settings:
 
 ```sh
-claude plugin configure claudex@claudex-local --values-stdin --json
+"$CLAUDE_VALIDATE" plugin configure claudex@claudex-local --values-stdin --json
 ```
 
 Provide a JSON object on stdin with single-line string values for `stateRoot`,
@@ -340,8 +351,9 @@ Use the actual installed cache path reported by the native plugin manager:
 "$CLAUDE_VALIDATE" --plugin-dir="$INSTALLED_PLUGIN" plugin configure claudex@inline --values-stdin --json
 ```
 
-Only if the installation is authorized for native delivery, save those same four
-intended values through this native command too. Keep both identities and source
+Save the intended state root, Node executable and wake preferences for both
+identities. False/false supports a default-disabled installation; only explicitly
+authorized receiver changes should enable the wake options. Keep source
 defaults intact; do not copy credentials, edit native registries or change the
 Mod's permission decisions. The reviewed host activated the new options through
 its normal module reload and reported true/true from exact live session observers,
@@ -350,7 +362,7 @@ configuration; marketplace configured status alone does not establish Desktop
 activation. An expired or uncertain message must never be resent to test it.
 
 For a CLI-only temporary smoke test, use a separate harmless checkout and
-`claude --plugin-dir "$STAGE/plugins/claudex"`. The source plugin directory itself
+`"$CLAUDE_VALIDATE" --plugin-dir "$STAGE/plugins/claudex"`. The source plugin directory itself
 has blank configuration and no packaged runtime by design.
 
 ## Using the pane
@@ -360,6 +372,9 @@ The displayed socket flag means a private socket pathname exists; a successful
 work-inventory response provides broker response evidence.
 
 Tasks provides exact-ID status, follow-up composition, and cancellation preview.
+Its work detail also provides generation-bound reports, public-event history,
+blockers, instruction state, cooperative controls and declared artifact reads.
+Opening these views never implies adoption of an instruction or review of a result.
 Chats preserves duplicate titles and unavailable-title records, offers explicit
 recipient selection, and follows `nextCursor`. Compose accepts one JSON object;
 Enter prepares a durable preview and the separate confirmation button dispatches
@@ -558,7 +573,7 @@ manifest, application Stop state, and the native synchronization hook. Treat the
 archived test report as the exact record of what was executed; synthetic tests
 are deliberately separate from native deployment evidence.
 
-## App engine packaging in bundle revision 2
+## Current app engine packaging
 
 `src/app-bundle.mjs` includes both companion commands and the companion runtime
 modules through explicit allowlists, including the Mod broker route, own-inbox
@@ -568,7 +583,7 @@ modules, workflow skill, plugin README and native test fixture.
 `copyAllowed` copies only these assets and validates plugin directories from the
 source root downward. A symlinked parent is rejected before inspecting descendants.
 
-Four added tests cover dependency coverage, staging from copied engine resources,
+The packaging tests cover dependency coverage, staging from copied engine resources,
 exclusion of unlisted files, and symlink rejection. The existing full-runtime
 allowlist test also passes with these additions. Current graphical setup uses the
 separate app-owned installation journal and official manager described in the app

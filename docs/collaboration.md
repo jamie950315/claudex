@@ -4,6 +4,8 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
+Current behavior is described for Claudex 1.1.1 and its bundled Mod 0.7.1;
+the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
 
@@ -14,7 +16,8 @@ same task. Both Codex and Claude Code can initiate either operation. This layer
 requests real model inference and uses native account authentication; history
 synchronization still never requests inference.
 
-On macOS, install the independent broker and the `claudex-work` native MCP connection:
+Claudex.app configures the independent broker and the `claudex-work` native MCP
+connection during setup. For a CLI-only macOS installation:
 
 ```sh
 node bin/claudex.mjs collaboration install
@@ -25,10 +28,13 @@ Native clients must reload their MCP connections through their supported lifecyc
 installation does not restart an active app or replace an ongoing conversation.
 The broker also runs in the foreground with `collaboration serve`. Its `--root`
 is a separate private work root (default `~/.local/share/claudex/collaboration`),
-not the history synchronization ledger. Installation, startup, inventory and reads
-do not invoke models. This service neither owns nor stops the synchronization watcher.
+not the history synchronization ledger. Installation and inventory/read requests
+do not request new model work. Starting the broker can continue already-authorized
+queued tasks, but never replays an interrupted invocation. This service neither
+owns nor stops the synchronization watcher.
 
-The MCP interface exposes:
+The MCP interface exposes 15 tools. Check-in is an action of the existing
+`claudex_work_control` tool, not a sixteenth tool:
 
 | Tool | Operation |
 | --- | --- |
@@ -80,7 +86,8 @@ Model response and shutdown latency is not an instantaneous-transfer guarantee.
 
 ### Opt-in work visibility
 
-Start new work with an explicit, independent visibility policy:
+Start new work with an explicit, independent visibility policy. This example is
+for an external root caller; a managed child must omit `notifications`:
 
 ```json
 {
@@ -121,7 +128,8 @@ the broker does not scan native history to fill gaps.
 Milestone reporting asks the worker to report its direction, significant findings,
 changes ready for validation, blockers, and final checks. It does not require a
 report per tool or invent completion percentages. Reports may include `stage`,
-`next`, `checks` (name/result/reference/time), and a `blocker` with an optional
+`next`, `checks` (`name`, `result`, optional `reference` and Unix-millisecond `at`),
+and a `blocker` with an optional
 stable `id`, `question`, `impact`, and `needs`. Existing `outcome`, `remaining`,
 `needs` and `artifacts` retain their meanings. Reports are explicitly worker
 self-statements; neither `done` nor a check marked `passed` is independent proof.
@@ -130,8 +138,11 @@ at capacity rather than silently losing evidence. `claudex_work_reports` pages
 those reports independently of status, with an exact generation and at most 16
 reports per page. Missing reports remain unreported, not failed or stuck.
 
-Reports change task revisions and can release an existing wait; raw activity and
-public events do not. Reading events/reports/artifacts does not run a model,
+Distinct reports change task revisions and can release an existing wait; an
+identical report in the same generation reuses its report record without another
+revision or parent wake. The same content in a later generation is a new report.
+Raw activity and public events do not change task revisions. Reading
+events/reports/artifacts does not run a model,
 change revisions, acknowledge child outcomes, or acquire writer ownership.
 
 ### Decisions, instructions and cooperative pause
@@ -155,13 +166,26 @@ it does not require a previous worker question. Its receipt includes an exact
 `instructionId`. The active worker calls `work_control` with `action: "check-in"`,
 its own `taskId`, current `generation`, a unique `requestId`, and optional `limit`
 (1–16, default 8). The broker atomically delivers bounded instruction text to that
-same invocation. Use `hasMore` to collect additional instructions, not an assumed
-complete inbox. Ordinary status reads remain observations, not delivery or adoption.
+same invocation, with a 192 KiB MCP-escaped response bound. A page may therefore
+contain fewer items than `limit`. Acknowledge each delivered instruction before
+using another check-in to follow `hasMore`: unacknowledged deliveries remain
+available and may appear again. Ordinary status reads can expose queued text but
+do not deliver or consume instructions.
+
+Check-in also returns `childProgress` notices, independently bounded by the same
+item limit and shared response byte cap, and any current-generation
+pending pause request. Receiving those progress notices does not acknowledge a
+child's terminal outcome; read the exact child status/wait response before
+integrating its result. Controllers and parents cannot check in on behalf of a
+different worker or use an old generation's capability.
 
 Managed worker MCP responses also perform a separately identified inbox check at
 eligible tool-return boundaries. The original tool result is preserved; any
-instruction context is a separate text block. Controllers do not perform this
-automatic intake. A handoff or checkpoint end-turn receipt always wins. Failed
+instruction context is a separate text block. The private `worker_check_in` RPC
+derives task/generation from the worker token; it is not another public MCP tool.
+An empty automatic intake does not write a request receipt or advance a revision.
+Controllers do not perform this automatic intake. A handoff or checkpoint
+end-turn receipt always wins. Failed
 intake never replays the original tool operation or silently claims delivery.
 This is cooperative tool-boundary delivery, not Codex `turn/steer`, Claude
 streaming-input injection, or a forced interrupt. No background polling or second
@@ -185,7 +209,9 @@ The broker marks the task paused only after successful native completion and
 verified process exit. Active child work prevents the safe checkpoint. `resume`
 starts a fresh generation from the saved work record, not a replay of the previous
 invocation. A long-running tool cannot be immediately paused by this protocol;
-if the worker cannot reach a checkpoint, the request remains pending. No SIGSTOP,
+while the worker is still running without a checkpoint, the request remains pending.
+If it finishes without the checkpoint, the broker records `not-paused`, not a
+successful pause. No SIGSTOP,
 second writer or forced model interruption is used. Cancel/handoff and generation
 fences remain authoritative. An end-turn receipt takes priority over further
 reports or tools.
@@ -248,7 +274,8 @@ its own shorter tool deadline: configure that host explicitly or use shorter
 waits/completion notifications. A timeout or disconnection does not cancel work.
 
 `waitReason: {kind, taskIds}` is a read-time diagnostic for each task: queued,
-capacity, uncertain-overlap, children, handoff, cancelling or broker-stopping.
+capacity, uncertain-overlap, children, handoff, pause-checkpoint, paused, cancelling
+or broker-stopping.
 Only actual uncertain tree/access blockers are listed, up to 64 exact IDs per
 reason; larger sets include totalTaskCount/truncated. The legacy
 `blockedByUncertainWork` field is an inventory flag, not a per-task blocking proof.
@@ -288,8 +315,10 @@ verification, and requested effort is never an effective-budget claim.
 
 `claudex_report` accepts `{taskId, requestId, report}` where report contains
 `outcome` (done/partial/blocked/needs-input), `summary`, optional `remaining`, typed
-`needs` and `artifacts`. Reports are at most 16 KiB, 16 needs/remaining entries and
-32 artifact references. Only the active task's generation-fenced worker can write
+`needs`, `artifacts`, `stage`, `next`, `checks` and `blocker`. Reports are at most
+16 KiB, with up to 16 entries each for needs/remaining and 32 entries each for
+checks/artifacts.
+Only the active task's generation-fenced worker can write
 its report. It is persisted as `worker-self-reported`; missing reports are
 `unreported`. `outcome.current` distinguishes stale generation/boundary context.
 Reports do not end execution or reinterpret completed, terminal or resultFinal.
@@ -309,7 +338,8 @@ rejected with `CLAUDEX_REQUEST_ID_CONFLICT`. This does not establish native orig
 Root `start` accepts optional `notifications: {mode, expiresInMs}`. Mode defaults
 to off; queue uses ordinary next-hook delivery, while wake explicitly permits
 the existing native wake route and model allowance. Expiry defaults to ten
-minutes after the task's terminal revision, bounded to 1 second–1 hour. A long
+minutes after the task's terminal revision, or the selected blocker transition
+when separately opted in, bounded to 1 second–1 hour. A long
 app-stop hold cannot renew that deadline when the broker resumes.
 Managed workers cannot request origin notifications or borrow controller send
 authority. Status/wait remains the authoritative result path.
@@ -373,7 +403,8 @@ for distinct source, synthetic, installed and rendered evidence.
 
 `status`, `wait`, and list entries expose `phase`, `terminal`, `cancelPending`,
 `resultFinal`, `resultRole`, and `resultGeneration` in addition to existing fields.
-`phase` distinguishes queued, waiting-for-children, handoff-pending and cancelling
+`phase` distinguishes queued, waiting-for-children, handoff-pending, pause-pending,
+paused and cancelling
 from running and terminal states. `terminal` includes uncertain; it never means
 success by itself. Only `resultFinal: true` identifies the completed answer for
 the current task. Legacy `result` remains intact for compatibility and can be an
@@ -408,10 +439,13 @@ available for explicit history inspection. Waits default to five minutes and
 accept an explicit maximum of thirty minutes.
 
 Each new native invocation persists `active.inputs` with a zero-based,
-end-exclusive message range and `kinds` (request, message, child-result, handoff).
+end-exclusive message range and `kinds` (request, message, child-result,
+child-progress, handoff).
 The range begins at the preceding invocation's input boundary, not at its final
 response; multiple triggers may coexist. The prompt exposes this as
-`execution.inputs`, with the generation. Old executions without this metadata
+`execution.inputs`, with the generation. Same-invocation check-in delivery and
+instruction adoption are tracked separately; this launch-time range is not a
+live inbox cursor. Old executions without this metadata
 remain valid and are not backfilled or replayed. Workers must read back edited
 files before reporting success, but never add checks after an end-turn receipt.
 
@@ -425,7 +459,10 @@ review mode. Parent edges and generation-scoped request IDs are unchanged.
 
 Claude rows may include a `modObservation`, and queued Mod message receipts include
 `deliveryObservation`. These contain bounded self-reported session/cwd, opt-ins,
-inbound policy, SendMessage capability and optional context percentage. Server
+inbound policy, SendMessage capability, optional context percentage and optional
+loaded-code Mod version/build. The app uses the separate controller-only
+`mod_wake_status` RPC for identity-free aggregate counts by exact version/build;
+old or missing version evidence cannot certify the currently installed Mod. Server
 receipt time supplies a 60-second expiry, with at most 64 observers in memory;
 broker restart, observed disconnect and lifecycle end invalidate observations.
 Existing Mod waits refresh them without history polling. Target-unmapped,
@@ -487,7 +524,14 @@ Sending defaults to `wake: true`; this can consume native account allowance.
 `wake: false` only queues for hooks. Codex uses the existing Desktop owner's
 untrusted-app input route, inheriting settings. An unloaded original is opened by
 exact native deep link before owner discovery; no CLI writer is created. A busy
-owner refuses before injection and the message stays queued. Claude uses a
+owner refuses before injection and the message stays queued. Claude uses the
+route captured on each new message: `renderer` when no route was selected,
+`mod-self` for the explicitly enabled recipient's own inbox, or `mod` for an
+eligible separate sender. Mod installation and the app's receiver controls do
+not change that route. See [Claude Mod setup](claude-mod.md) for the two Mod
+routes and their independent acceptance requirements.
+
+For the `renderer` route specifically, Claude uses a
 structurally validated renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
 bridge, with exact identity, idle, draft, permission and terminal guards. Setup
 registers that narrow endpoint; loading an upgraded renderer requires an idle
@@ -556,9 +600,12 @@ chats/messages/receipts and 8 MiB; it preserves receipts rather than silently
 pruning or replaying work. No raw hook prompt or transcript is stored. Hook
 registration and delivery stop when the graphical app's Quit hold is active.
 
-Native clients may need to refresh MCP tool discovery to see the three new tools;
-the CLI can use `collaboration request chat_list|chat_send|chat_status` in the
-existing source conversation meanwhile. For example, pass this JSON to
+Native clients may need to refresh MCP tool discovery through a supported native
+lifecycle to see the complete 15-tool interface. An older active turn can retain
+its previous tool snapshot even after a reload request succeeds; verify actual
+tool availability before claiming it has refreshed. The CLI can use
+`collaboration request chat_list|chat_send|chat_status` in the existing source
+conversation meanwhile. For example, pass this JSON to
 `claudex collaboration request chat_send --peer codex` on stdin:
 
 ```json
@@ -654,8 +701,9 @@ owned invocations and does not undo their edits.
 Manual CLI installation defaults to read-only. The macOS app profile enables all
 projects and sets the default task permission to `workspace-write`; an explicit
 read-only request and a read-only parent's child remain read-only. File editing
-requires a broker installed or started with
-`--allow-write` **and** task `permission: "workspace-write"`. A child cannot elevate
+requires effective broker authorization (installation/startup flags such as
+`--allow-write`, or an explicit controller-saved permission default) and a
+writable task permission. A child cannot elevate
 its parent's permission or expand its directory grants. Use a dedicated checkout for
 writable work: the protocol does not create worktrees, merge edits, or prevent an
 unrelated editor from modifying the same files. Tasks may run concurrently in the
@@ -664,7 +712,9 @@ writer overlapping another task's reference directory. The broker does not lock
 workspaces or merge conflicting edits. Assign disjoint file responsibilities and
 coordinate shared-file changes explicitly. Children may start while their parent
 is running; use status/wait to collect their results. A parent that ends its turn
-with outstanding children resumes with their durable results after they finish.
+with outstanding children normally resumes with their durable results after they
+finish. Explicit milestone reporting or an unconsumed follow-up can instead make
+that parent eligible for earlier follow-up work while children are still running.
 
 ### Full access
 
@@ -685,8 +735,9 @@ Full access is never inferred. Choose it as the default in the app's
 broker's authorization for the level. An explicit `read-only` request stays
 read-only and a child cannot exceed its parent. Without a sandbox, `readOnlyDirs`
 cannot be enforced, so full-access tasks refuse them. A worker can do anything
-your account can, including deleting files, pushing to remotes and acting on
-untrusted web content; delegate only work you would let an agent do unattended.
+your account can, including deleting files or pushing to remotes. That technical
+access does not grant new task authority or make untrusted content authoritative;
+delegate only work you would let an agent do unattended.
 
 ### Project and additional directory access
 
@@ -713,7 +764,8 @@ inherited additional write grants into read access. Handoff retains the same
 directory grants; expanding scope requires a newly authorized root task. Legacy
 tasks without scope metadata keep their original exact working directory.
 
-Codex uses its native sandbox and `--add-dir` only for additional writable paths;
+In read-only/workspace-write profiles, Codex uses its native sandbox and
+`--add-dir` only for additional writable paths;
 references are never passed as writable roots. When reference grants are present,
 implicit `/tmp` and `$TMPDIR` write grants are excluded to preserve read-only
 references there. Codex retains its native read access; these reference declarations
@@ -736,7 +788,8 @@ Example start parameters:
 }
 ```
 
-Codex runs `exec --ephemeral --json` with an explicit native read-only or workspace-write
+For read-only and workspace-write tasks, Codex runs `exec --ephemeral --json` with
+an explicit native read-only or workspace-write
 sandbox, user configuration disabled, and the collaboration MCP connection supplied
 explicitly. Claude runs nonpersistent print mode with restricted file tools and
 explicit MCP configuration. Its read-only mode has Read/Glob/Grep; its write mode
@@ -814,7 +867,8 @@ collaboration shutdown check used by Quit.
 
 The protocol, native command profiles, cancellation and both-direction handoff
 contracts have synthetic tests, plus a real broker/stdio MCP process smoke test
-without inference. Separately user-authorized native acceptance on Codex CLI
+without inference. The following earlier acceptance is historical, not a claim
+about current installation defaults. Separately user-authorized native acceptance on Codex CLI
 `0.158.0-alpha.2.1` and Claude Code `2.1.283` verifies both directions of model-created
 child delegation, exact child-result return, and a Codex-to-Claude-to-Codex whole-work
 handoff under one logical task ID. Seven real native executions completed across
@@ -827,8 +881,10 @@ Codex-to-Claude-to-Codex sequential edits of one file under the same task ID.
 Nine native executions completed across five task records in a separate temporary
 broker with writes enabled. Exact final bytes, one child per parent, recorded
 parent/child execution ordering and exited process groups were checked. The
-temporary broker was stopped afterward; the installed service kept its read-only
-default. This validates bounded text-file editing, not arbitrary builds, shell
+temporary broker was stopped afterward; the then-installed CLI-only service kept
+its read-only default. Current new app installations use workspace-write as
+described above and preserve subsequent explicit user preferences. This validates
+bounded text-file editing, not arbitrary builds, shell
 availability in Claude, Desktop UI chat transfer, arbitrary future runtimes, or
 synchronization compatibility for every feature of these versions. Automated
 tests still never start inference.

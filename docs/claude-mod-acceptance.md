@@ -1,14 +1,38 @@
 # Claude Mod acceptance and deployment gates
 
-This checklist is for the next local Claude Code/Codex agent. Start with
-`claude-mod-handoff.md`. Mark a gate as passed only with observed evidence on the
+This is the reusable checklist for the current Claudex.app 1.1.1 / Mod 0.7.1
+workflow. Start with [the current handoff](claude-mod-handoff.md) and
+[app lifecycle](app.md#claude-mod-lifecycle). Mark a gate as passed only with
+observed evidence on the
 specified runtime. A written test is not an executed test; a stubbed UI tree is
 not a painted Desktop pane.
 
-## 0.3.1 single-session main-route gate
+## Current app-managed lifecycle gate
 
-The reviewed Mac has 0.3.1 installed with nativeWake=true, selfWake=true and broker
-route=mod-self. Actual 2.1.286 strict validation and 12 native kit cases pass in a
+1. Verify app-owned initial installation, update and repeated-startup idempotence
+   through the official manager. Read-only inspections must perform no install,
+   configuration write or model work.
+2. Preserve verified legacy sources, other plugins, previous caches, both native
+   configuration identities and explicit disabled/wake preferences. Same-name
+   marketplace add may migrate a verified source; never remove the marketplace.
+3. Exercise an empty-profile manager bootstrap using its pinned package integrity,
+   disabled package scripts and distinct private npm configuration files. A
+   manager help/version response alone does not prove the installation path works.
+4. Verify bundled/installed payload hashes separately from a fresh loaded-version
+   observation and actual Desktop pane. Existing native sessions may retain old
+   roots; use a normal new session without restarting active user work.
+5. Verify explicit receiver controls require confirmation, preserve per-task
+   opt-in and do not change routes or native inbound policy. A newer installed
+   version is never downgraded; refused explicit changes must not report success.
+
+See [validation](claude-mod-validation.md) for completed, version-scoped evidence.
+The procedures below remain applicable when their respective behavior changes;
+old counts and observations are not a claim that every current gate was rerun.
+
+## Historical 0.3.1 single-session main-route evidence
+
+The historical review installed 0.3.1 with nativeWake=true, selfWake=true and broker
+route=mod-self. Actual 2.1.286 strict validation and 12 native kit cases passed in a
 fresh normal process, with no rollout override. All 16 installed plugin assets
 match the final stage. After normal Claude restart, one Desktop session and one
 eligible waiter delivered to that same session; Sonnet 5.5 replied with the nonce
@@ -18,7 +42,10 @@ pixel claim. Isolated tools:[] native tests confirmed hold/refuse with zero mode
 turns and no global settings edits. Full regression passed 1,325 tests, with zero
 failures and 23 existing opt-in skips before the final narrow queued-hook exclusion;
 affected mailbox/Mod tests cover that backend delta. See [validation](claude-mod-validation.md)
-for boundaries; the checklist remains a procedure, not proof of every case below.
+for boundaries; these historical numbers do not describe the current installed
+version or test inventory.
+
+## Single-session main-route acceptance procedure
 
 1. Run `test/mod-self-wake.test.mjs`, `test/claude-mod-self-inbox.test.mjs`,
    `test/mod-wake.test.mjs` and affected core/transport tests. Verify full
@@ -73,9 +100,10 @@ and a modern mailbox reader when rolling back.
 6. Verify tests cover duplicate click, concurrent commit, reload deduplication,
    commit ambiguity, context/cwd switches, expired preview, Stop/resuming hold,
    managed worker exclusion and missing broker behavior.
-7. Verify the stage is create-only and contains only its allowlisted files. Move
-   an isolated source copy away and verify the staged helper's no-inference
-   doctor still works. Check the production Node executable's canonical path and
+7. Verify the stage is create-only and contains only its allowlisted files. Remove
+   an isolated source copy and verify the staged helper can read the real private
+   Unix RPC without inference; a doctor-only check does not establish transport
+   completeness. Check the Node executable's canonical path and
    group/world write bits; select a trusted runtime rather than weakening checks.
 
 ## B. Official native validator and test kit (no inference)
@@ -84,18 +112,26 @@ Record the exact `claude --version` used; it must support Mods. The public basel
 is 2.1.287; actual 2.1.286 Desktop runtime validation/registration also passed
 without added flags. Verify capabilities rather than inferring a hard refusal
 from the version number alone. Stage against an
-isolated private root with nativeWake=false. The source plugin intentionally has
-empty configuration defaults and is not the installable machine configuration.
+isolated private root. Keep nativeWake/selfWake false in the shipping stage; use
+a separate never-installed test stage with both enabled for the kit's own-inbox
+case. The source plugin intentionally has empty configuration defaults and is not
+the installable machine configuration.
 
-Run the intended build's supported forms of:
+Use the separate `STAGE` and `TEST_STAGE` directories from
+[the staging guide](claude-mod.md#standalone-staging-and-developer-validation),
+then run the intended build's supported forms of:
 
 ```sh
 claude plugin validate "$STAGE/plugins/claudex" --strict --json
-claude plugin test "$STAGE/plugins/claudex"
+claude plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
+claude plugin test "$TEST_STAGE/plugins/claudex"
 ```
 
-Read the emitted types and validation errors. The candidate includes 12 native
-kit tests; final 0.3.1 execution passed on the actual Desktop Code 2.1.286 binary.
+Read the emitted types and validation errors. The current source includes 18 native
+kit tests; record the executed count and candidate version rather than reusing
+the historical 0.3.1 count of 12. The 0.7.1 kit passed on Desktop Code 2.1.286 with
+an explicitly approved isolated test-process function-hooks option. Do not apply
+that option to end-user setup or infer default availability on every runtime.
 They stub process execution, native state and other external calls;
 no sign-in, model request or real network is required. Resolve any native kit or
 UI/event schema mismatch before installation. Keep this evidence separate from
@@ -111,6 +147,7 @@ Calls:
   env.get (literal CLAUDEX_COLLABORATION_WORKER)
   session.id, session.cwd, session.usage, session.version, session.send
   settings.read (native inbound policy)
+  store.get, store.set (independent plugin language preference)
   tool.list, clock.after (bounded wait/reconnection scheduling)
   process.run (plugin.root is an intrinsic property, not a call)
   command.register
@@ -183,13 +220,20 @@ with read-only tasks. Keep any existing sync watcher and user work unchanged.
    Never interrupt real user work simply to manufacture this fault.
 5. Test model/default updates through an explicit full-pair preview. Exact model
    IDs are preserved. Native rejection stays visible; no substituted model is
-   selected. Full-access is rejected by this new pane's allowlist.
+   selected. Full-access is rejected by the pane's allowlist.
 6. For authorized workspace-write acceptance, use disjoint files in a dedicated
    checkout and inspect exact final bytes. Keep existing broker permission and
    scope ceilings; record the requested grants and native outcomes.
 7. Test the included workflow skill with existing MCP. Managed-task handoff must
    come from its current generation-scoped owner using the latest revision;
    controller drafts do not transfer an unrelated native chat's ownership.
+8. For changed cooperative-follow-up behavior, send a direction while a worker
+   is still running, without waiting for a blocker. Verify exact-generation
+   check-in or eligible worker MCP-return delivery, explicit instruction adoption
+   and the requested result separately. Preserve the original tool response,
+   end-turn precedence and child-outcome acknowledgement state. A long native
+   tool has no instantaneous-delivery guarantee, and no second writer or forced
+   interruption may be introduced to make this test pass.
 
 ## E. Exact-recipient native delivery
 
@@ -273,15 +317,16 @@ new terminal runtime is not evidence that a Claudex-owned sync process can be
 upgraded. Keep production binaries and SDK dependencies unchanged until this
 gate is resolved.
 
-Install via the local marketplace only after the candidate passes
+Use the app-owned installer for graphical installations and the supported local
+marketplace manager for CLI-only installations, after the candidate passes
 its relevant gates. Inspect installed configuration and stage hashes. Keep the
 existing settings hooks, MCP, folder/archive/activation adapters and services.
 Retire any old adapter only with a documented replacement scope and separate
-migration/rollback proof. The app engine packaging allowlist and resource-copy tests are included in bundle revision 2.
-A development-signed macOS app is installed and the actual Desktop pane has been
-observed; build, installation and painting remain separate evidence.
-Native localization and graphical opt-in setup require
-additional source changes outside this companion's current scope.
+migration/rollback proof. The app engine packaging allowlist and resource-copy
+tests cover the current staged runtime. Nine-language presentation, app-managed
+installation and graphical receiver controls are implemented. Build, installation,
+loaded-version observation and painting remain separate evidence; receiver
+configuration does not establish delivery or new synchronization compatibility.
 
 ## G. Rollback acceptance
 
@@ -290,7 +335,10 @@ modern broker. Existing Mod claims, submitted outcomes and receive-once records
 must not be downgraded, rewritten or replayed. No older reader may overwrite the
 new mailbox format.
 
-Disable/uninstall the companion through the normal plugin lifecycle. Verify the
+Prefer disabling the companion through the normal plugin lifecycle, which the
+app preserves. Removing an app-managed installation is not a persistent opt-out:
+normal app maintenance can reinstall a missing Mod. Never use marketplace removal
+as a rollback shortcut because it can delete native plugin state. Verify the
 original collaboration/sync configuration and native history remain intact.
 Ensure the new band/pane disappears after normal reload, while original MCP and
 settings hooks still work. Preserve action receipts/locks and broker work already

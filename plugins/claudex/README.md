@@ -1,5 +1,12 @@
 # Claudex native companion, 0.7.1
 
+Claudex.app 1.1.1 installs and maintains this bundled companion during setup and
+normal startup through the official native plugin manager. Read-only inspection
+never installs or configures it. Existing disabled/receiver preferences, other
+plugins and newer installed versions are preserved. Installed files and fresh
+loaded-session evidence are separate: an existing session can retain an older
+plugin root until its supported native lifecycle loads the update.
+
 The loaded observer reports its literal companion version and observation build
 alongside the existing content-free receiver flags. The broker's controller-only
 `mod_wake_status` private RPC returns at most 64 live observer counts grouped by
@@ -14,8 +21,9 @@ progress, blockers, instruction adoption, cooperative pause, declared checks and
 artifacts. Exact-task timelines and report histories are read on demand with
 separate event cursors; viewing them never acknowledges a child result. File
 inspection and working-tree-versus-index diffs retain unknown authorship rather
-than attributing shared-checkout edits to one worker. Every intervention still
-uses the complete prepare/confirm workflow. Public collection and blocker wakes
+than attributing shared-checkout edits to one worker. Human mutations in the pane
+still use the complete prepare/confirm workflow; this is not a confirmation gate
+for a managed worker's authorized MCP workflow. Public collection and blocker wakes
 remain separate per-task opt-ins, disabled by default.
 
 AI collaboration uses the existing MCP delegation, multi-task wait, structured
@@ -24,10 +32,18 @@ and reviewed intervention. Session-local observations of policy, capabilities
 and context usage expire at the broker and never authorize dispatch or fallback.
 See [the workflow](skills/claudex-workflow/SKILL.md) for the model-driven path.
 
-This plugin is staged from the Claudex repository with:
+The 15-tool MCP interface supports proactive follow-ups while a child runs.
+Workers receive queued instructions through explicit `work_control` check-in or
+a separate inbox block at eligible managed-worker MCP response boundaries, then
+acknowledge accepted/rejected instruction IDs in the same generation. Milestone
+opt-in can resume a waiting managed parent before child completion; it does not
+enable an external native-chat wake. Delivery is not adoption or completion, and
+neither path forcibly interrupts a long native tool or opens a second writer.
+
+For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.7.1-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local
@@ -60,6 +76,10 @@ messages. The same Mod in the recipient session receives its own authorized
 broker messages: no second loaded session, extra Mod or SendMessage tool is
 required. A closed/unloaded recipient still waits for its normal native resume;
 the feature does not create an extra model session.
+The app's receiver controls require explicit confirmation and change only those
+receiver options, not the route, native inbound policy or per-task notification
+choice. Installing the companion does not opt a task into content collection or
+native wake, and it does not restart Claude.
 
 The macOS-only own-inbox helper uses Claude's documented own-child socket
 ingress. It verifies the native parent process and its exact private socket,
@@ -83,7 +103,7 @@ event-backed waits inspect mailbox metadata, never native history. Only outcome
 receipt publication may be retried, never the native dispatch.
 
 The existing MCP tools, synchronization engine, history storage, Desktop
-organization patches, lifecycle hooks, and unloaded-session fallbacks remain in
+organization patches, lifecycle hooks, and unloaded-session waiting rules remain in
 place. The integration preserves the repository's existing runtime allowlists.
 The documented public Mod API baseline is 2.1.287, not a companion version gate.
 Validate the actual runtime's emitted API declarations, strict validator and
