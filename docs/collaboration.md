@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.1.1 and its bundled Mod 0.7.1;
+Current behavior is described for Claudex 1.1.2 and its bundled Mod 0.7.2;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol

@@ -4,13 +4,17 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.1.1 packages Claude Mod 0.7.1. Keep application and Mod versions
+Claudex.app 1.1.2 packages Claude Mod 0.7.2. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
 Before a release, compare current guide headings, staging examples, CLI help and
 release notes against both manifests and the packaged payload. Do not update only
 the manifest while leaving a previous-version heading as the current guide.
+Every shipping MOD_STAGE_FILES change, including README or skill text, needs a
+new Mod version and matching loaded-observer version. Equal-version installation
+checks compare the entire payload; never weaken them or overwrite a live cache
+to accommodate a documentation-only rebuild.
 
 ## Documentation
 
@@ -1529,7 +1533,14 @@ aggregation. Retain its native key/label fallback and extend its compiled memo
 cache with the map subscription version. Older conditional bindings retain a
 compiler and an uncompiled implementation: validate and patch both branches of
 the one exact binding, including useMemo's version dependency; never choose a
-branch from host feature flags. Graphs are bounded to 2,048 cached modules and
+branch from host feature flags. Split builds export a pure grouping helper and
+one separately proved React consumer. Keep hooks only in the consumer; prepare
+the exact native rows before key lookups and invalidate all key/group memo guards
+with one subscription version. Preflight both complete candidates, publish the
+helper before its consumer, and restore dependent consumers before the helper.
+Each resource retains its own immutable original and recoverable journal; a
+partial pair is never ready. This is still restart-required, not live-load proof.
+Graphs are bounded to 2,048 cached modules and
 2,048 missing imports (observed older entries reach 1,171 cached modules).
 The independent chat-wake adapter uses the session-action module's unique native
 import binding and optional forkSession capability relationship (older branches

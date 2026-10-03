@@ -7,7 +7,7 @@ import { runInNewContext } from 'node:vm';
 import { EventEmitter } from 'node:events';
 import { frontendBuild, writeFrontend, cacheBytes } from './fixtures/claude-frontend.mjs';
 import { discoverClaudeFrontend } from '../src/claude-frontend-graph.mjs';
-import { syntax, nodes, folderAnchors, chatAnchors, ownerAnchors } from '../src/claude-frontend-anchors.mjs';
+import { syntax, nodes, folderAnchors, folderConsumerAnchors, chatAnchors, ownerAnchors } from '../src/claude-frontend-anchors.mjs';
 import { inspectFolderCache, buildDynamicFolderSource } from '../src/claude-folder-cache.mjs';
 import { buildClaudeChatWakeSource, ensureClaudeChatWakeCache } from '../src/claude-chat-wake-cache.mjs';
 import { buildClaudeOwnerWakeSource } from '../src/claude-owner-wake-cache.mjs';
@@ -16,7 +16,7 @@ import { startClaudeRendererMaintenance } from '../src/claude-renderer-maintenan
 import { ensureClaudeFolderPresentationCache, restoreClaudeFolderPresentationCache } from '../src/claude-folder-presentation-cache.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { createSyncEventSource } from '../src/sync-event-source.mjs';
-import { patchContracts } from './fixtures/claude-frontend-contracts.mjs';
+import { patchContracts, folderConsumerPatchContract } from './fixtures/claude-frontend-contracts.mjs';
 
 async function fixture(t, tag = 'a', options = {}) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'claudex-frontend-')));t.after(()=>rm(base,{recursive:true,force:true}));
@@ -26,6 +26,86 @@ async function fixture(t, tag = 'a', options = {}) {
 }
 const sourceOf = async resource => inspectFolderCache(await readFile(resource.path),{targetURL:resource.url}).source;
 const withoutImports = source => { const imports=syntax(source).body.filter(n=>n.type==='ImportDeclaration');for(const n of imports.reverse())source=source.slice(0,n.start)+source.slice(n.end);return source; };
+
+test('split aggregation keeps hooks in the consumer and invalidates its native memo on map changes', async t => {
+  const f = await fixture(t, 'a', { split: true }), graph = await discoverClaudeFrontend(f);
+  const matched = graph.adapters.folders;
+  assert.equal(matched.status, 'matched'); assert.equal(matched.bindings.pure, true);
+  const result = await ensureClaudeRendererAdapter({ ...f, adapter: 'folders', graph });
+  assert.equal(result.status, 'installed'); assert.equal(result.consumer.changed, true);
+  const helper = await sourceOf(f.resources.folders), consumer = await sourceOf(f.resources.consumer);
+  patchContracts.folders(helper, matched.target.source, matched.bindings);
+  folderConsumerPatchContract(consumer, matched.consumer.target.source, matched.consumer.bindings);
+  assert.equal(nodes(syntax(helper), n => n.type === 'CallExpression' && n.callee.name === 'suba').length, 0);
+  let contents = JSON.stringify({ version: 1, entries: [{ remoteId: 'cse_owned', canonicalCwd: '/synthetic/project', verified: true }] }), poll;
+  let keys;
+  const cache = [], context = { La: { readFileAtCwd: async () => ({ contents }) }, captureKeys: (...value) => { keys = value; },
+    memoa: size => { assert.equal(size, 12); return cache; }, suba: (subscribe, get) => { subscribe(() => {}); return get(); },
+    setTimeout: fn => { poll = fn; return 1; }, clearTimeout() {}, console: { warn() {} } };
+  const projectionSource = await readFile(new URL('../src/claude-folder-projection.mjs', import.meta.url), 'utf8');
+  const runtimeSource = await readFile(new URL('../src/claude-folder-runtime.mjs', import.meta.url), 'utf8');
+  const executableHelper = withoutImports(buildDynamicFolderSource(matched.target.source,
+    { root: f.root, bindings: matched.bindings, projectionSource, runtimeSource }))
+    .replace(/export\{[^}]+\};/g, '') + ';const __cldxFolderStore=__cldx;';
+  runInNewContext(executableHelper, context); runInNewContext(withoutImports(consumer).replace('const staticFixture=', 'const consumerFixture='), context);
+  const rows = [{ id: 'session_owned', type: 'bridge', repoInfo: { name: 'remote' }, sessionStatus: 'idle', timestamp: 0 },
+    { id: 'local_original', type: 'local', cwd: '/synthetic/project', repoInfo: { name: 'project' }, sessionStatus: 'idle', timestamp: 0 }];
+  const original = structuredClone(rows);
+  context.sectiona(rows); await new Promise(r => setImmediate(r));
+  const mapped = context.sectiona(rows); assert.equal(mapped[0].key, '/synthetic/project');
+  assert.ok(keys.every(values => values[0] === '/synthetic/project'));
+  assert.equal(context.sectiona(rows), mapped);
+  contents = JSON.stringify({ version: 1, entries: [] }); await poll();
+  assert.equal(context.sectiona(rows)[0].key, 'remote'); assert.deepEqual(rows, original);
+  assert.ok(keys.every(values => values[0] === 'remote'));
+  assert.equal((await ensureClaudeRendererAdapter({ ...f, adapter: 'folders' })).changed, false);
+  await restoreClaudeFolderPresentationCache({ ...f, cachePath: f.resources.folders.path });
+  for (const kind of ['folders', 'consumer']) assert.deepEqual(await readFile(f.resources[kind].path), f.resources[kind].bytes);
+});
+
+test('split grouping refuses disconnected dependencies and preserves both originals before preflight failure', async t => {
+  const f = await fixture(t, 'a', { split: true }), graph = await discoverClaudeFrontend(f), m = graph.adapters.folders;
+  const c = m.consumer, lookup = { get: p => graph.modules.get(new URL(p, c.target.url).href) };
+  for (const changed of [c.target.source.replace('cache[0]!==rows', 'cache[0]!==other'),
+    c.target.source.replace('cache[4]=out', 'cache[4]=other'),
+    c.target.source + ';groupa(rows,env,sort,order);']) {
+    assert.throws(() => folderConsumerAnchors(changed, lookup, m.bindings, c.bindings.importedPath), /missing or ambiguous/);
+  }
+  m.consumer.bindings.component.body.start = -10;
+  await assert.rejects(ensureClaudeRendererAdapter({ ...f, adapter: 'folders', graph }));
+  for (const kind of ['folders', 'consumer']) assert.deepEqual(await readFile(f.resources[kind].path), f.resources[kind].bytes);
+});
+
+test('split consumer publication interruption recovers without replacing either immutable original', async t => {
+  const f = await fixture(t, 'a', { split: true });
+  await assert.rejects(ensureClaudeRendererAdapter({ ...f, adapter: 'folders' }, {
+    afterReplace({ cachePath }) { if (cachePath === f.resources.consumer.path) throw new Error('synthetic interruption'); },
+  }), /synthetic interruption/);
+  const result = await ensureClaudeRendererAdapter({ ...f, adapter: 'folders' });
+  assert.equal(result.status, 'installed');
+  for (const kind of ['folders', 'consumer']) assert.deepEqual(await readFile(join(f.root, 'ui-folders', f.resources[kind].filename,
+    'ui-folder-compat', 'original.cache')), f.resources[kind].bytes);
+});
+
+test('maintenance shutdown drains publication without reporting its stop fence as a new fault', async t => {
+  const f = await fixture(t), watcher = new EventEmitter(), reports = [];
+  watcher.close = () => {};
+  let calls = 0, release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const maintenance = await startClaudeRendererMaintenance({ ...f, settleMs: 0,
+    watchFactory: (_path, notify) => { watcher.notify = notify; return watcher; },
+    writeStatus: async () => {}, onStatus: s => reports.push(s),
+    maintain: async (_options, hooks) => {
+      if (++calls === 1) return { adapters: { folders: { status: 'installed' } } };
+      entered(); await new Promise(resolve => { release = resolve; });
+      await assert.rejects(hooks.beforePublish(), /stopped/);
+      return { adapters: { folders: { status: 'skipped', failure: { code: 'validation-refused' } } } };
+    } });
+  watcher.notify('change', null);
+  await new Promise(resolve => setTimeout(resolve, 10)); await started;
+  const closing = maintenance.close(); release(); await closing;
+  assert.deepEqual(reports.map(s => s.state), ['ready']);
+});
 
 for (const tag of ['a','b']) test(`renamed build ${tag} preserves folder memo, native API, selection and submit behavior`,async t=>{
   const f=await fixture(t,tag),graph=await discoverClaudeFrontend(f);assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));

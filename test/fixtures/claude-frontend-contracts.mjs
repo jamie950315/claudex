@@ -78,8 +78,11 @@ export function folderPatchContract(source, original, b) {
   assert.equal(patched.length, variants.length);
   for (const [i, v] of variants.entries()) {
     const f = patched[i];
-    const version = f.body.body.shift(), rows = f.body.body.shift();
-    assert.deepEqual(astValue(version), astValue(syntax(`const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);`).body[0]));
+    if (!v.pure) {
+      const version = f.body.body.shift();
+      assert.deepEqual(astValue(version), astValue(syntax(`const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);`).body[0]));
+    }
+    const rows = f.body.body.shift();
     assert.deepEqual(astValue(rows), astValue(syntax(`__cldx.setRows(${v.rows},__cldxNativeProjectKey);`).body[0]));
     const mappedLabel = n => n.type === 'ChainExpression' && member(n.expression, 'label')
       && n.expression.object.type === 'CallExpression' && n.expression.object.callee.object?.name === '__cldx';
@@ -90,7 +93,7 @@ export function folderPatchContract(source, original, b) {
     if (v.plainMemo) {
       const deps = only(nodes(f, n => n.type === 'ArrayExpression' && n.elements.some(e => e?.name === '__cldxVersion')), 'useMemo invalidation');
       assert.equal(deps.elements.pop().name, '__cldxVersion');
-    } else {
+    } else if (!v.pure) {
       const memo = only(nodes(f.body.body[0], n => n.type === 'VariableDeclarator' && n.id.name === v.cache), 'compiled cache');
       assert.equal(memo.init.arguments[0].value, v.size + 1); memo.init.arguments[0].value = v.size;
       const condition = only(nodes(f, n => n.type === 'IfStatement' && n.test.type === 'LogicalExpression'
@@ -108,6 +111,29 @@ export function folderPatchContract(source, original, b) {
   // chat wake; the new adapter intentionally owns that separate consumer.
   return { wrapper: astValue(wrapper), variants: variants.map(v => ({ rows: v.rows, row: v.row, size: v.size ?? null })),
     readMap: astValue(only(opts.properties.filter(p => p.key.name === 'readMap'), 'readMap').value) };
+}
+
+export function folderConsumerPatchContract(source, original, b) {
+  const ast = syntax(source), originalAST = syntax(original);
+  const imp = ast.body.shift();
+  assert.equal(imp.type, 'ImportDeclaration'); assert.equal(imp.source.value, b.importedPath);
+  assert.deepEqual(imp.specifiers.map(n => n.imported.name), ['__cldxFolderStore', '__cldxNativeProjectKey']);
+  const f = only(functionsFor(ast, b.component.id.name), 'consumer component');
+  assert.deepEqual(astValue(f.body.body.shift()), astValue(syntax(`const __cldxVersion=${b.subscribe}(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);`).body[0]));
+  const prepare = only(f.body.body.filter(n => n.type === 'ExpressionStatement' && n.expression.callee?.object?.name === '__cldxFolderStore'), 'source rows preparation');
+  assert.deepEqual(astValue(prepare.expression), expression(`__cldxFolderStore.setRows(${b.rows},__cldxNativeProjectKey)`));
+  f.body.body.splice(f.body.body.indexOf(prepare), 1);
+  const memo = only(nodes(f.body.body[0], n => n.type === 'VariableDeclarator' && n.id.name === b.cache), 'consumer cache');
+  assert.equal(memo.init.arguments[0].value, b.size + 1); memo.init.arguments[0].value = b.size;
+  const guards = nodes(f, n => ['IfStatement', 'ConditionalExpression'].includes(n.type) && n.test.right?.right?.name === '__cldxVersion');
+  assert.equal(guards.length, b.guards.length);
+  for (const g of guards) {
+    assert.deepEqual(astValue(g.test.right), expression(`${b.cache}[${b.size}]!==__cldxVersion`));
+    g.test = g.test.left;
+  }
+  const footer = f.body.body.splice(-2, 1)[0];
+  assert.deepEqual(astValue(footer.expression), expression(`${b.cache}[${b.size}]=__cldxVersion`));
+  assert.deepEqual(astValue(ast), astValue(originalAST), 'all native consumer AST retained');
 }
 
 export const patchContracts = { folders: folderPatchContract, chatWake: chatPatchContract, ownerWake: ownerPatchContract };

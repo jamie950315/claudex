@@ -122,11 +122,22 @@ export function folderAnchors(source, graph) {
       // The uncompiled implementation has one useMemo callback over the exact
       // rows/environment/sort/order dependencies. Add the subscription version
       // there too, otherwise a map change can leave useMemo's result stale.
-      const memo = unique(nodes(grouping, n => n.type === 'CallExpression' && id(n.callee)
+      const plainMemos = nodes(grouping, n => n.type === 'CallExpression' && id(n.callee)
         && n.arguments.length === 2 && n.arguments[0].type === 'ArrowFunctionExpression'
         && n.arguments[0].body.type === 'BlockStatement' && n.arguments[0].start < loop.start
         && n.arguments[0].end > loop.end && n.arguments[1].type === 'ArrayExpression'
-        && n.arguments[1].elements.some(e => id(e) === rows)), 'sidebar uncompiled memo');
+        && n.arguments[1].elements.some(e => id(e) === rows));
+      // Newer bundles export a pure aggregation helper. Hooks belong in its
+      // separately validated React consumer, never inside this conditional call.
+      if (!plainMemos.length && binding.variants.length === 1
+        && grouping.type === 'FunctionDeclaration' && grouping.body.body.includes(loop)
+        && grouping.params.length === 4 && grouping.params.slice(2).every(p => p.type === 'AssignmentPattern')
+        && grouping.body.body.at(-1)?.type === 'ReturnStatement') {
+        if (nodes(key.body, n => n.type === 'CallExpression' && id(n.callee) === id(key.id)).length) fail('recursive project key');
+        return { key, grouping, label, rows, row, pure: true,
+          groupingExport: exportedName(ast, binding.name), keyExport: exportedName(ast, id(key.id)) };
+      }
+      const memo = unique(plainMemos, 'sidebar uncompiled memo');
       if (importedAPI(source, graph, 'useMemo').local !== id(memo.callee)) fail('sidebar useMemo binding');
       return { key, grouping, label, rows, row, plainMemo: memo.arguments[1] };
     }
@@ -146,7 +157,84 @@ export function folderAnchors(source, graph) {
   const key = unique([...new Set(variants.map(v => v.key))], 'sidebar shared native key');
   return { ...variants[0], key, variants, groupingBinding: binding.name,
     native: importedAPI(source, graph, 'LocalSessions', true).local,
+    subscribe: variants[0].pure ? null : importedAPI(source, graph, 'useSyncExternalStore').local };
+}
+
+/** Resolve the sole reachable caller of a split pure grouping export. All
+ * native data dependencies and the actual result cache must remain connected. */
+export function folderConsumerAnchors(source, graph, helper, importedPath) {
+  const ast = syntax(source);
+  const imp = unique(ast.body.filter(n => n.type === 'ImportDeclaration' && n.source.value === importedPath), 'folder helper import');
+  const grouping = unique(imp.specifiers.filter(n => id(n.imported) === helper.groupingExport), 'folder grouping import');
+  const key = unique(imp.specifiers.filter(n => id(n.imported) === helper.keyExport), 'folder key import');
+  const calls = nodes(ast, n => n.type === 'CallExpression' && id(n.callee) === id(grouping.local));
+  const call = unique(calls, 'folder grouping consumer');
+  if (call.arguments.length !== 4 || !call.arguments.every(id)) fail('folder grouping arguments');
+  const component = unique(functions(ast).filter(n => n.start < call.start && n.end > call.end), 'folder consumer component');
+  const memo = unique(nodes(component.body.body[0], n => n.type === 'VariableDeclarator'
+    && n.init?.type === 'CallExpression' && n.init.arguments.length === 1
+    && Number.isInteger(n.init.arguments[0]?.value)), 'folder consumer cache');
+  const cache = id(memo.id), size = memo.init.arguments[0].value;
+  if (!cache || size < 1 || size > 4096) fail('folder consumer cache bound');
+  const condition = unique(nodes(component, n => n.type === 'ConditionalExpression'
+    && n.consequent.start < call.start && n.consequent.end > call.end), 'folder consumer invalidation');
+  const tests = nodes(condition.test, n => n.type === 'BinaryExpression' && n.operator === '!=='
+    && n.left.type === 'MemberExpression' && id(n.left.object) === cache && n.left.computed
+    && Number.isInteger(n.left.property.value) && id(n.right));
+  if (tests.length !== 4 || nodes(condition.test, n => n.type === 'CallExpression').length
+    || new Set(tests.map(n => n.left.property.value)).size !== 4
+    || !call.arguments.every(arg => tests.some(n => id(n.right) === id(arg)))) fail('folder consumer dependencies');
+  if (condition.consequent.type !== 'SequenceExpression') fail('folder consumer stores');
+  const expressions = condition.consequent.expressions, result = expressions.at(-1);
+  if (result?.type !== 'AssignmentExpression' || result.operator !== '='
+    || result.left.type !== 'MemberExpression' || id(result.left.object) !== cache || !result.left.computed
+    || !Number.isInteger(result.left.property.value) || !id(result.right)
+    || code(source, result.left) !== code(source, condition.alternate.right)
+    || condition.alternate.type !== 'AssignmentExpression' || id(condition.alternate.left) !== id(result.right)
+    || expressions[0]?.type !== 'AssignmentExpression' || id(expressions[0].left) !== id(result.right)
+    || expressions[0].right !== call) fail('folder consumer result');
+  if (expressions.length !== 6 || tests.some(test => !expressions.slice(1, -1).some(n =>
+    n.type === 'AssignmentExpression' && n.operator === '=' && code(source, n.left) === code(source, test.left)
+    && id(n.right) === id(test.right))) || [...tests.map(n => n.left.property.value), result.left.property.value]
+    .some(index => index < 0 || index >= size)) fail('folder consumer cache writes');
+  const keyCalls = nodes(component, n => n.type === 'CallExpression' && id(n.callee) === id(key.local));
+  const guards = [condition];
+  let prepareAt = condition.start, rows = id(call.arguments[0]);
+  if (keyCalls.length) {
+    const first = keyCalls[0];
+    const rowLoop = unique(nodes(component, n => n.type === 'ForOfStatement' && id(n.right)
+      && n.body.start < first.start && n.body.end > first.end), 'folder consumer source rows');
+    rows = id(rowLoop.right);
+    if (id(call.arguments[0]) !== rows) {
+      unique(nodes(component, n => n.type === 'VariableDeclarator' && id(n.id) === id(call.arguments[0])
+        && n.init?.type === 'ConditionalExpression' && id(n.init.alternate) === rows), 'folder consumer grouping rows');
+    }
+    for (const keyCall of keyCalls) {
+      const candidates = nodes(component, n => ['IfStatement', 'ConditionalExpression'].includes(n.type)
+        && n.consequent.start < keyCall.start && n.consequent.end > keyCall.end
+        && nodes(n.test, x => x.type === 'MemberExpression' && id(x.object) === cache && x.computed).length);
+      const guard = unique(candidates, 'folder key memo guard');
+      if (!nodes(guard.consequent, n => n.type === 'AssignmentExpression' && n.left.type === 'MemberExpression'
+        && id(n.left.object) === cache).length) fail('folder key memo store');
+      if (!guards.includes(guard)) guards.push(guard);
+    }
+    prepareAt = unique(component.body.body.filter(n => n.start <= rowLoop.start && n.end >= rowLoop.end), 'folder rows preparation').start;
+  }
+  const last = component.body.body.at(-1);
+  if (last?.type !== 'ReturnStatement' || guards.some(g => g.end > last.start)) fail('folder consumer return boundary');
+  return { component, memo, condition, guards, prepareAt, rows, last, cache, size, result, importedPath,
     subscribe: importedAPI(source, graph, 'useSyncExternalStore').local };
+}
+
+export function transformFolderConsumer(source, b) {
+  return applyEdits(source, [
+    insert(0, `import{__cldxFolderStore,__cldxNativeProjectKey}from${JSON.stringify(b.importedPath)};`),
+    insert(b.component.body.start + 1, `const __cldxVersion=${b.subscribe}(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);`),
+    replace(b.memo.init.arguments[0], String(b.size + 1)),
+    insert(b.prepareAt, `__cldxFolderStore.setRows(${b.rows},__cldxNativeProjectKey);`),
+    ...b.guards.map(g => replace(g.test, `(${code(source, g.test)})||${b.cache}[${b.size}]!==__cldxVersion`)),
+    insert(b.last.start, `${b.cache}[${b.size}]=__cldxVersion;`),
+  ]);
 }
 
 export function chatAnchors(source, graph) {
@@ -249,14 +337,15 @@ export function transformAnchoredFolder(source, b, bootstrap) {
     insert(b.key.start, bootstrap), replace(b.key.id, '__cldxNativeProjectKey'),
     insert(b.key.end, `function ${name}(${param}){return __cldx.lookup(${param})?.projectKey??__cldxNativeProjectKey(${param})}`),
     ...variants.flatMap(v => [
-      insert(v.grouping.body.start + 1, `const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);__cldx.setRows(${v.rows},__cldxNativeProjectKey);`),
-      ...(v.plainMemo ? [insert(v.plainMemo.end - 1, ',__cldxVersion')] : [
+      insert(v.grouping.body.start + 1, `${v.pure ? '' : `const __cldxVersion=${b.subscribe}(__cldx.subscribe,__cldx.getSnapshot,__cldx.getSnapshot);`}__cldx.setRows(${v.rows},__cldxNativeProjectKey);`),
+      ...(v.pure ? [] : v.plainMemo ? [insert(v.plainMemo.end - 1, ',__cldxVersion')] : [
         replace(v.memo.init.arguments[0], String(v.size + 1)),
         replace(v.condition.test, `(${code(source, v.condition.test)})||${v.cache}[${v.size}]!==__cldxVersion`),
         insert(v.condition.consequent.end - 1, `;${v.cache}[${v.size}]=__cldxVersion;`),
       ]),
       replace(v.label.value, `__cldx.lookup(${v.row})?.label??${code(source, v.label.value)}`),
     ]),
+    ...(b.pure ? [insert(source.length, ';export{__cldx as __cldxFolderStore,__cldxNativeProjectKey};')] : []),
   ]);
 }
 export function transformAnchoredOwner(source, b, bootstrap) {

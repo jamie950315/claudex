@@ -15,7 +15,8 @@ import { assetImports, folderAnchors, chatAnchors, ownerAnchors, syntax } from '
 import { FRONTEND_ASSET_ROOT, claudeCacheDirectory, discoverClaudeFrontend } from '../src/claude-frontend-graph.mjs';
 import { buildClaudeRendererCandidate, ensureClaudeRendererAdapters, restoreClaudeRendererAdapter } from '../src/claude-renderer-adapters.mjs';
 import { startClaudeRendererMaintenance } from '../src/claude-renderer-maintenance.mjs';
-import { patchContracts } from '../test/fixtures/claude-frontend-contracts.mjs';
+import { patchContracts, folderConsumerPatchContract } from '../test/fixtures/claude-frontend-contracts.mjs';
+import { transformFolderConsumer } from '../src/claude-frontend-anchors.mjs';
 
 const run = promisify(execFile), adapters = ['folders', 'chatWake', 'ownerWake'];
 const dirs = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake' };
@@ -24,8 +25,12 @@ const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 const isJS = u => u.startsWith(FRONTEND_ASSET_ROOT) && /^[A-Za-z0-9_-]+\.js$/.test(u.slice(FRONTEND_ASSET_ROOT.length));
 const args = process.argv.slice(2), options = {};
 for (let i = 0; i < args.length; i += 2) {
-  if (!['--home', '--root', '--report'].includes(args[i]) || !args[i + 1]) throw new Error('Usage: node dev/verify-claude-frontend-builds.mjs [--home HOME] [--root ROOT] [--report FILE]');
-  options[args[i].slice(2)] = resolve(args[i + 1]);
+  if (!['--home', '--root', '--report', '--last-builds'].includes(args[i]) || !args[i + 1]) throw new Error('Usage: node dev/verify-claude-frontend-builds.mjs [--home HOME] [--root ROOT] [--report FILE] [--last-builds COUNT]');
+  if (args[i] === '--last-builds') {
+    const count = Number(args[i + 1]);
+    if (!Number.isInteger(count) || count < 2 || count > 64) throw new Error('last-builds must be between 2 and 64');
+    options.lastBuilds = count;
+  } else options[args[i].slice(2)] = resolve(args[i + 1]);
 }
 const home = await realpath(options.home ?? homedir()), root = await realpath(options.root ?? join(home, '.local', 'share', 'claudex'));
 const temporary = await realpath(await mkdtemp(join(tmpdir(), 'claudex-real-frontends-')));
@@ -97,9 +102,17 @@ async function validateTarget(adapter, matched, f) {
   const source = inspectFolderCache(candidate, { targetURL: target.url }).source;
   await nodeCheck(source, target.name);
   patchContracts[adapter](source, vendor.source, bindings);
+  let consumer;
+  if (adapter === 'folders' && matched.consumer) {
+    const c = matched.consumer, transformed = transformFolderConsumer(c.target.source, c.bindings);
+    await nodeCheck(transformed, c.target.name);
+    folderConsumerPatchContract(transformed, c.target.source, c.bindings);
+    consumer = { asset: basename(c.target.url), originalSourceSHA256: c.target.sourceHash,
+      memoGuards: c.bindings.guards.length, nodeCheck: 'passed', vendorASTAndWiring: 'passed' };
+  }
   return { status: 'passed', asset: basename(target.url), cacheFilename: target.name, originalSourceSHA256: target.sourceHash,
     targetCount: 1, anchors: 'resolved', nodeCheck: 'passed', vendorASTAndWiring: 'passed',
-    variants: bindings.variants?.length ?? 1, ...(bindings.client ? { client: bindings.client } : { native: bindings.native }) };
+    variants: bindings.variants?.length ?? 1, ...(consumer ? { consumer } : {}), ...(bindings.client ? { client: bindings.client } : { native: bindings.native }) };
 }
 
 async function historicalPin(adapter, module) {
@@ -158,8 +171,8 @@ try {
   const entries = [...modules.values()].filter(m => /^index-[A-Za-z0-9_-]+\.js$/.test(basename(m.url)))
     .sort((a, b) => Number(a.metadata.readBigInt64LE(20) - b.metadata.readBigInt64LE(20)));
   assert.ok(entries.length, 'No real entry assets available'); report.availableEntries = entries.length;
-  const graphs = [];
-  for (const [i, entry] of entries.entries()) {
+  const graphs = [], consumers = new Map();
+  for (const [i, entry] of (options.lastBuilds ? entries.slice(-options.lastBuilds) : entries).entries()) {
     const g = reachable(entry); graphs.push({ entry, ...g });
     const f = await isolated(`build-${i}`); await copyGraph(f, g);
     const row = { entry: basename(entry.url), fetchedAt: new Date(Number((entry.metadata.readBigInt64LE(20) - 11644473600000000n) / 1000n)).toISOString(),
@@ -167,6 +180,7 @@ try {
     report.builds.push(row); process.stderr.write(`Checking ${row.entry} (${g.found.size} cached modules)\n`);
     try {
       const graph = await discoverClaudeFrontend(f);
+      if (graph.adapters.folders.consumer) consumers.set(graph.adapters.folders.consumer.target.url, graph.adapters.folders.consumer);
       for (const adapter of adapters) {
         try {
           row.adapters[adapter] = await validateTarget(adapter, graph.adapters[adapter], f);
@@ -203,6 +217,16 @@ try {
       entries: graphs.filter(g => g.found.has(j.url)).map(g => basename(g.entry.url)), missingDirectModules: dependencies(m).filter(u => !modules.has(u)).map(basenameSafe) };
     report.journals.push(row);
     try {
+      const consumer = j.adapter === 'folders' ? consumers.get(j.url) : null;
+      if (consumer) {
+        assert.equal(m.sourceHash, consumer.target.sourceHash);
+        const transformed = transformFolderConsumer(m.source, consumer.bindings);
+        await nodeCheck(transformed, `journal-${m.name}`);
+        folderConsumerPatchContract(transformed, m.source, consumer.bindings);
+        row.transform = { status: 'passed', role: 'folder-consumer', nodeCheck: 'passed', vendorASTAndWiring: 'passed' };
+        row.handPinEquivalence = { status: 'not-available', reason: 'Split consumer has no historical hand-pin' };
+        continue;
+      }
       const bindings = probes[j.adapter](m.source, { get: p => modules.get(new URL(p, m.url).href) });
       const f = { root, home }; row.transform = await validateTarget(j.adapter, { status: 'matched', target: m, bindings }, f);
       row.handPinEquivalence = await comparePin(j.adapter, m, bindings);
@@ -243,7 +267,7 @@ try {
       }
       report.transitions.push({ from: basename(previous.entry.url), to: targetEntry, status: 'passed', entryPoint: 'startClaudeRendererMaintenance',
         actualFilesystemNotifications: true, adapters: statuses.at(-1).adapters, oldOriginalsAndReceipts: 'unchanged', idempotentReinstall: 'passed', restore: 'passed' });
-    } catch (e) { report.transitions.push({ status: 'failed', reason: e.message.slice(0, 300) }); }
+    } catch (e) { report.transitions.push({ status: 'failed', reason: e.message.slice(0, 300), observations: statuses.slice(-3) }); }
     finally { await maintenance?.close(); await rm(f.base, { recursive: true }); }
   }
   for (const [p, hash] of observed) assert.equal((await snapshotClaudeCache(p, p.endsWith('manifest.json') ? 16384 : undefined)).hash, hash, 'Live source changed during verification');
@@ -259,7 +283,7 @@ finally {
   // Keep only metadata reports, never private vendor bytes or historical code.
   for (const name of await readdir(temporary)) if (join(temporary, name) !== reportPath) await rm(join(temporary, name), { recursive: true, force: true });
 }
-process.stdout.write(JSON.stringify({ report: reportPath, passed: report.passed, entries: report.availableEntries,
+process.stdout.write(JSON.stringify({ report: reportPath, passed: report.passed, adapterAcceptancePassed: report.adapterAcceptancePassed, entries: report.availableEntries,
   builds: report.builds.map(b => ({ entry: b.entry, adapters: Object.fromEntries(Object.entries(b.adapters).map(([a, r]) => [a, r.status])) })),
   transitions: report.transitions, fatal: report.fatal }, null, 2) + '\n');
 process.exitCode = report.passed ? 0 : 1;

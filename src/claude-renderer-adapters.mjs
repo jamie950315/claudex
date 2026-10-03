@@ -7,6 +7,7 @@ import { buildClaudeFolderCandidate, ensureClaudeFolderCache, restoreClaudeFolde
 import { buildClaudeChatWakeSource } from './claude-chat-wake-cache.mjs';
 import { buildClaudeOwnerWakeSource } from './claude-owner-wake-cache.mjs';
 import { claudeCacheDirectory, discoverClaudeFrontend, verifyClaudeFrontendGraph, captureClaudeFrontendHints } from './claude-frontend-graph.mjs';
+import { transformFolderConsumer, syntax } from './claude-frontend-anchors.mjs';
 
 const directories = { folders: 'ui-folders', chatWake: 'ui-chat-wake', ownerWake: 'ui-owner-wake' };
 const runtime = name => readFile(new URL(`./${name}.mjs`, import.meta.url), 'utf8');
@@ -57,6 +58,18 @@ export async function ensureClaudeRendererAdapter({ root, home = homedir(), adap
   const matched = graph.adapters[adapter];
   if (matched?.status !== 'matched') return { status: 'skipped', reason: matched?.reason ?? 'Target is unavailable', entry: graph.entry };
   const { target } = matched;
+  // Prove/build both resources before publishing either. The helper is safe
+  // without a subscriber; publish it first, then the consumer that imports its
+  // store. Each keeps an independent recoverable original/journal. Never mark
+  // the folder adapter installed until both exact resources have committed.
+  let consumerCandidate;
+  if (adapter === 'folders' && matched.consumer) {
+    await buildClaudeRendererCandidate({ root, home, adapter, matched, original: target.originalBytes, registryRoot });
+    const c = matched.consumer;
+    consumerCandidate = replaceFolderCacheSource(c.target.originalBytes,
+      transformFolderConsumer(c.target.source, c.bindings), { targetURL: c.target.url });
+    await verifyClaudeFrontendGraph(graph);
+  }
   const shared = ['folders', 'chatWake'].includes(adapter) && graph.adapters.folders?.status === 'matched'
     && graph.adapters.chatWake?.status === 'matched' && graph.adapters.folders.target.url === graph.adapters.chatWake.target.url;
   if (shared && !['combined', 'chat-only'].includes(sharedResourceMode))
@@ -82,9 +95,29 @@ export async function ensureClaudeRendererAdapter({ root, home = homedir(), adap
   const installed = await snapshotClaudeCache(target.path);
   if (installed.hash !== result.cacheHash) throw new Error('Claude renderer cache changed after publication');
   target.currentHash = installed.hash; target.identity = installed.info;
+  let consumerResult;
+  if (consumerCandidate) {
+    const c = matched.consumer.target, consumerRoot = join(root, directories.folders, c.name);
+    await verifyClaudeFrontendGraph(graph);
+    await privateDirectory(consumerRoot);
+    consumerResult = await ensureClaudeFolderCache({ root: consumerRoot, cachePath: c.path }, {
+      ...dependencies, sourceHash: c.sourceHash, targetURL: c.url,
+      beforePublish: async input => { await verifyClaudeFrontendGraph(graph); await dependencies.beforePublish?.(input); },
+      buildCandidate: async ({ original }) => {
+        if (inspectFolderCache(original, { targetURL: c.url }).sourceHash !== c.sourceHash)
+          throw new Error('Folder consumer original changed after graph validation');
+        return consumerCandidate;
+      },
+    });
+    const installedConsumer = await snapshotClaudeCache(c.path);
+    if (installedConsumer.hash !== consumerResult.cacheHash) throw new Error('Claude renderer cache changed after publication');
+    c.currentHash = installedConsumer.hash; c.identity = installedConsumer.info;
+  }
+  const changed = result.changed || consumerResult?.changed === true;
   return { ...result, cachePath: target.path, asset: basename(target.url), entry: graph.entry,
+    changed, ...(consumerResult ? { consumer: { asset: basename(matched.consumer.target.url), changed: consumerResult.changed } } : {}),
     ...(shared ? { sharedResource: true, journalAdapter: 'folders' } : {}),
-    activation: result.changed ? 'restart-required' : 'load-not-verified' };
+    activation: changed ? 'restart-required' : 'load-not-verified' };
 }
 export async function ensureClaudeRendererAdapters({ root, home = homedir(), folders = true, graph }, dependencies = {}) {
   graph ??= await discoverClaudeFrontend({ root, home });
@@ -124,6 +157,26 @@ export async function restoreClaudeRendererAdapter({ root, cachePath, adapter })
   const keyLength = original.bytes.readUInt32LE(12);
   const targetURL = original.bytes.subarray(24, 24 + keyLength).toString().slice(4);
   const entry = inspectFolderCache(original.bytes, { targetURL });
+  if (adapter === 'folders') {
+    const current = inspectFolderCache((await snapshotClaudeCache(cachePath)).bytes, { targetURL });
+    if (current.source.includes('export{__cldx as __cldxFolderStore')) {
+      const names = await readdir(join(root, directories.folders));
+      if (names.length > 32768) throw new Error('Claude folder restore inventory exceeds its bound');
+      for (const name of names.filter(n => /^[a-f0-9]{16}_0$/.test(n) && n !== basename(cachePath))) {
+        const path = join(dirname(cachePath), name);
+        let bytes;
+        try { bytes = (await snapshotClaudeCache(path)).bytes; }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        const url = bytes.subarray(24, 24 + bytes.readUInt32LE(12)).toString().slice(4);
+        const source = inspectFolderCache(bytes, { targetURL: url }).source;
+        if (!source.includes('__cldxFolderStore')) continue;
+        if (syntax(source).body.some(n => n.type === 'ImportDeclaration'
+          && n.specifiers.some(s => s.imported?.name === '__cldxFolderStore')
+          && new URL(n.source.value, url).href === targetURL))
+          await restoreClaudeRendererAdapter({ root, cachePath: path, adapter: 'folders' });
+      }
+    }
+  }
   return restoreClaudeFolderCache({ root: stateRoot, cachePath }, { targetURL, sourceHash: entry.sourceHash });
 }
 export async function restoreClaudeFolderGenerations({ root, cachePath }) {

@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { inspectFolderCache, sha256 } from './claude-folder-cache.mjs';
 import { snapshotClaudeCache, validateClaudeCacheManifest } from './claude-folder-install.mjs';
-import { assetImports, folderAnchors, chatAnchors, ownerAnchors, unique } from './claude-frontend-anchors.mjs';
+import { assetImports, folderAnchors, folderConsumerAnchors, chatAnchors, ownerAnchors, unique, syntax } from './claude-frontend-anchors.mjs';
 
 export const FRONTEND_ASSET_ROOT = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/';
 export const claudeCacheDirectory = (home = homedir()) => join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
@@ -112,11 +112,11 @@ async function originalEntry(root, name, current, targetURL) {
     if (sha256(original.bytes) !== m.originalHash || entry.sourceHash !== m.sourceHash) fail('resource original changed');
     const latest = await evidenceRead(() => snapshotClaudeCache(manifestPath, 16 * 1024));
     if (latest.hash !== receipt.hash || !same(latest.info, receipt.info)) fail('resource journal changed during discovery');
-    return entry;
+    return { ...entry, originalBytes: original.bytes };
   }
   const entry = inspectFolderCache(current.bytes, { targetURL });
   if (entry.source.includes('[Claudex ') || entry.source.includes('__cldx')) fail('unowned patched resource');
-  return entry;
+  return { ...entry, originalBytes: current.bytes };
 }
 
 /** Read-only graph discovery. Cache recency identifies the latest fetched entry,
@@ -176,7 +176,21 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
       const target = unique([...modules.values()].filter(m => plausible(m.source)), `${adapter} target module`);
       const graph = { get: path => modules.get(new URL(path, target.url).href) };
       const bindings = probe(target.source, graph);
-      adapters[adapter] = { status: 'matched', target, bindings };
+      let consumer;
+      if (adapter === 'folders' && bindings.pure) {
+        const consumers = [];
+        for (const module of modules.values()) {
+          if (!module.source.includes(basename(target.url))) continue;
+          for (const imp of syntax(module.source).body.filter(n => n.type === 'ImportDeclaration'
+            && new URL(n.source.value, module.url).href === target.url
+            && n.specifiers.some(s => s.imported?.name === bindings.groupingExport))) {
+            consumers.push({ target: module, bindings: folderConsumerAnchors(module.source,
+              { get: path => modules.get(new URL(path, module.url).href) }, bindings, imp.source.value) });
+          }
+        }
+        consumer = unique(consumers, 'folder grouping consumer module');
+      }
+      adapters[adapter] = { status: 'matched', target, bindings, ...(consumer ? { consumer } : {}) };
     } catch (error) { adapters[adapter] = { status: 'skipped', reason: String(error.message).slice(0, 240) }; }
   }
   return { entry: { asset: basename(entry.url), cacheFilename: entry.name, fetchedAt: new Date(Number((newest - 11644473600000000n) / 1000n)).toISOString() },

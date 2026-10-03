@@ -72,6 +72,9 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           if (!changed) continue;
           phase = 'discovery-or-installation';
           const result = await maintain({ root, home, folders }, { beforeReplace: checkHold, beforePublish: checkHold });
+          // A drained publication may report the intentional shutdown fence as
+          // a refusal. Do not overwrite the last health report after close.
+          if (closed || signal?.aborted) break;
           const refused = Object.values(result.adapters).some(a => a.status === 'skipped');
           cacheRevalidationNeeded = Object.values(result.adapters).some(a =>
             a.status === 'skipped' && ['cache-entry-missing', 'cache-changed'].includes(a.failure?.code));
