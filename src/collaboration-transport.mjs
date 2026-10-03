@@ -4,11 +4,13 @@ import { isAbsolute, join } from 'node:path';
 import { collaborationEfforts, validateCollaborationEffort } from './collaboration-effort.mjs';
 import { validateOutcome, OUTCOMES, NEED_KINDS } from './collaboration-outcome.mjs';
 import { notificationPolicy } from './collaboration-notifications.mjs';
+import { DEFAULT_WAIT_MS, MAX_WAIT_MS } from './collaboration-wait.mjs';
 
 const MAX_FRAME = 1024 * 1024;
 // Leave room for controller/status clients when all 64 workers are waiting.
 const MAX_CONNECTIONS = 128;
 const SOCKET_LIFETIME_MS = 65000;
+const WAIT_RESPONSE_GRACE_MS = 5000;
 const METHODS = new Set(['start', 'send', 'handoff', 'report', 'origin_bind', 'origin_recheck', 'status', 'wait', 'cancel', 'list', 'resolve', 'models', 'chat_list', 'chat_send', 'chat_status', 'desktop_wake_claim', 'desktop_wake_receipt', 'desktop_owner_wake', 'native_wake', 'mod_wake_wait', 'mod_wake_claim', 'mod_wake_receipt', 'mod_wake_check', 'mod_wake_receive', 'mod_wake_observe']);
 const VERSIONS = new Set(['2024-11-05', '2025-03-26', '2025-06-18']);
 const socketPath = root => join(root, 'rpc.sock');
@@ -52,6 +54,14 @@ function validateEnvelope(value) {
   return { peer: value.peer, token: value.token, method: value.method, params: value.params ?? {} };
 }
 
+function requestTimeoutLimit(method, params) {
+  if (method !== 'wait') return SOCKET_LIFETIME_MS;
+  // Only a bounded, structurally valid task wait may retain a longer socket.
+  // The broker still authenticates the caller and verifies task access.
+  validateTool('claudex_wait', params);
+  return Math.max(SOCKET_LIFETIME_MS, (params.timeoutMs ?? DEFAULT_WAIT_MS) + WAIT_RESPONSE_GRACE_MS);
+}
+
 /** One request per connection; the owner supplies the authoritative dispatcher. */
 export async function serveCollaborationSocket({ root, dispatch }) {
   await privateRoot(root);
@@ -79,6 +89,7 @@ export async function serveCollaborationSocket({ root, dispatch }) {
       if (newline !== data.length - 1) { socket.destroy(); return; }
       try {
         const request = validateEnvelope(decode(data.subarray(0, newline)));
+        socket.setTimeout(requestTimeoutLimit(request.method, request.params));
         if (request.method === 'wait' || request.method === 'mod_wake_wait') {
           const controller = new AbortController();
           // Internal connection lifetime only; never read cancellation from the
@@ -117,9 +128,11 @@ export async function serveCollaborationSocket({ root, dispatch }) {
 }
 
 /** No retry: a failed connection can have an unknown dispatch outcome. */
-export async function callCollaboration({ root, peer, token, method, params = {}, timeoutMs = SOCKET_LIFETIME_MS }) {
+export async function callCollaboration({ root, peer, token, method, params = {}, timeoutMs }) {
   validateEnvelope({ peer, token, method, params });
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > SOCKET_LIFETIME_MS) fail('Invalid collaboration timeout');
+  const limit = requestTimeoutLimit(method, params);
+  if (timeoutMs === undefined) timeoutMs = limit;
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > limit) fail('Invalid collaboration timeout');
   await privateSocket(root);
   const request = encode({ peer, token, method, params });
   return await new Promise((resolve, reject) => {
@@ -163,7 +176,7 @@ const tool = (name, description, properties, required = []) => ({
     ...(name === 'start' ? { projectRoot: str, readOnlyDirs: directories, writableDirs: directories,
       notifications: { type: 'object', additionalProperties: false, required: ['mode'], properties: {
         mode: { type: 'string', enum: ['off', 'queue', 'wake'] }, expiresInMs: { type: 'integer', minimum: 1000, maximum: 3600000 } },
-      description: 'Root tasks only; default off. Queue or wake opts into bounded result notifications to the independently verified initiating native chat. Wake consumes model allowance. No notification without native PostToolUse proof. Missing/expired notifications never lose task results; use status/wait.' } } : {}) }, required, additionalProperties: false },
+      description: 'Root tasks only; default off. When the user requests background delegation with a completion wake, select wake explicitly; it consumes model allowance. Queue delivers only at the next native hook and cannot wake an idle caller. After start, call status with checkNotification=true: await-notification permits ending the current turn with a pending-work handoff, not a completion claim; wait means retain status/wait monitoring; read-result means collect the result now. Native PostToolUse proof is mandatory. Route checks are snapshots, not delivery guarantees. On notification, read status and continue the original authorized work; never replay an uncertain send.' } } : {}) }, required, additionalProperties: false },
 });
 const str = { type: 'string', minLength: 1 };
 const directories = { type: 'array', maxItems: 16, items: str };
@@ -188,8 +201,8 @@ const toolDefinitions = [
   tool('send', 'Deliver a message at the next task boundary.', { taskId: str, message: str, requestId: str }, ['taskId', 'message', 'requestId']),
   tool('handoff', 'Transfer this same task to the other provider. Optional report carries structured self-reported outcome and remaining work, never independent proof. Optional model overrides the receiving provider default; omission uses that default, not the outgoing model. Read status for the revision first. Include progress, remaining work and constraints in the message. After acknowledgement end immediately with exactly CLAUDEX_HANDOFF: no further tools or summary. Transfer occurs only after successful native completion and process exit. Finish active children first.', { taskId: str, provider: { type: 'string', enum: ['codex', 'claude'] }, model, message: str, report, requestId: str, revision: integer }, ['taskId', 'provider', 'message', 'requestId', 'revision']),
   tool('report', 'Active worker only: record a structured self-reported outcome for your own task. Does not complete execution, verify success, authorize work or notify a native chat. Use a unique requestId for each update; preserve remaining work and typed needs.', { taskId: str, report, requestId: str }, ['taskId', 'report', 'requestId']),
-  tool('status', 'Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default.', { taskId: str, view }, ['taskId']),
-  tool('wait', 'Wait up to 30 seconds without starting a model. Supply taskId/afterRevision for the compatible single-task response, OR 1–16 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.', { taskId: str, targets, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: 30000 } }),
+  tool('status', 'Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default. External callers can set checkNotification=true after wake-enabled start to inspect notification.continuation.nextAction: await-notification, wait, or read-result. This read-only route snapshot never opens a chat, sends input, grants permission, or guarantees future delivery. After a completion notification, collect the exact task result here and continue within the original user scope.', { taskId: str, view, checkNotification: { type: 'boolean' } }, ['taskId']),
+  tool('wait', 'Wait without starting a model: 30 seconds by default, up to 5 minutes with explicit timeoutMs. Returns early on a task revision or terminal outcome; activity heartbeats do not wake it. Client disconnect or timeout does not cancel work. Supply taskId/afterRevision for the compatible single-task response, OR 1–16 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.', { taskId: str, targets, view, afterRevision: integer, timeoutMs: { type: 'integer', minimum: 0, maximum: MAX_WAIT_MS, default: DEFAULT_WAIT_MS } }),
   tool('cancel', 'Request cancellation. Check cancelAccepted, cancelPending and terminal: acceptance is not proof of process exit. Wait for a terminal outcome; an unsafe shutdown may remain uncertain. Completed, failed or cancelled tasks are no-ops; uncertain tasks require operator inspection and reject cancellation.', { taskId: str, requestId: str }, ['taskId', 'requestId']),
   tool('list', 'List visible tasks with per-task observed waitReason and exact blockers. Global blockedByUncertainWork is a legacy inventory flag, not proof this task is blocked. Follow nextCursor with identical filters; pages are live, not frozen snapshots.', {
     status: { type: 'string', enum: ['ready', 'running', 'waiting', 'completed', 'failed', 'cancelled', 'uncertain'] },
@@ -273,7 +286,8 @@ export async function runCollaborationMcp({ root, peer, token, input = process.s
           if (!(desktopWakeOnly ? desktopWakeTools : toolDefinitions).some(tool => tool.name === name)) throw new Error('Unknown tool for this endpoint.');
           const method = validateTool(name, args);
           const params = args;
-          const value = await callCollaboration({ root, peer, token, method, params, timeoutMs: method === 'wait' ? Math.min(SOCKET_LIFETIME_MS, (args.timeoutMs ?? 30000) + 5000) : SOCKET_LIFETIME_MS });
+          const value = await callCollaboration({ root, peer, token, method, params,
+            timeoutMs: method === 'wait' ? (args.timeoutMs ?? DEFAULT_WAIT_MS) + WAIT_RESPONSE_GRACE_MS : SOCKET_LIFETIME_MS });
           result = { content: [{ type: 'text', text: JSON.stringify(value) }] };
         } catch (error) { result = { content: [{ type: 'text', text: String(error.message) }], isError: true,
           structuredContent: { error: { code: typeof error.code === 'string' ? error.code : null, message: String(error.message) } } }; }

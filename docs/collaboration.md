@@ -37,7 +37,7 @@ The MCP interface exposes:
 | `claudex_handoff` | Transfer the same task to the other provider using its current `revision`, a handoff message, and an optional destination `model`. |
 | `claudex_report` | Active worker only: save a structured self-reported outcome for its own generation. |
 | `claudex_status` | Read progress, messages, last native identity and results. |
-| `claudex_wait` | Wait up to 30 seconds for a revision change or terminal result. |
+| `claudex_wait` | Wait for a revision change or terminal result; default 30 seconds, explicit maximum 5 minutes. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
 | `claudex_list` | Read the bounded work inventory and broker limits. |
 | `claudex_chat_list` | List exact native chat identities observed by installed hooks. |
@@ -71,6 +71,43 @@ the broker still waits for successful native completion and process-group exit.
 Model response and shutdown latency is not an instantaneous-transfer guarantee.
 
 ## Reading progress and results
+
+### Background completion and caller continuation
+
+For user-authorized background delegation, the external main agent starts a
+root task with `notifications: {mode: "wake"}`. Defaults remain off; queue mode
+only delivers at the next native hook and does not wake an idle caller. After
+the native start call has returned, request
+`claudex_status({taskId, view: "summary", checkNotification: true})`:
+
+- `notification.continuation.nextAction: "await-notification"` means the exact
+  origin is bound and its current native route has been observed. The caller may
+  end its current turn with a pending-work handoff, not a completion claim.
+- `"wait"` means retain status/wait monitoring. The reason distinguishes missing
+  native proof, unavailable ownership/receiver, native policy, app-stop, ended
+  origins, quota limits and routes without observable readiness. Do not replay
+  start or send, invent a source identity, or change native permissions.
+- `"read-result"` means a terminal boundary was observed; read current status and
+  inspect `resultFinal`, errors and blockers before continuing the original work.
+
+This opt-in check is read-only: it never opens a chat, sends input, claims a
+message, changes revisions or runs inference. Codex checks exact metadata and its
+existing native owner; Claude Mod routes use bounded, self-reported observations.
+Every result is labeled `diagnosticOnly: true`, `deliveryGuaranteed: false`.
+Checks are snapshots, not reservations: a later closed app, expired notification,
+changed policy, route or connection can still prevent delivery. No timer or
+automatic retry is added. Results remain durable and readable through status.
+On the actual notification, the main agent reads the exact task result and
+continues within the original user authorization; receipt is not goal completion.
+Managed parents retain their existing child-result yield/resumption contract,
+not root notification authority.
+
+For in-turn waiting, `timeoutMs` defaults to 30000 and may explicitly be as high
+as 300000 for single or multi-wait. Revision changes and terminal outcomes return
+early. Claudex grants only validated task waits a matching socket deadline plus
+five seconds; other RPCs retain their existing bounds. A native MCP host may have
+its own shorter tool deadline: configure that host explicitly or use shorter
+waits/completion notifications. A timeout or disconnection does not cancel work.
 
 `waitReason: {kind, taskIds}` is a read-time diagnostic for each task: queued,
 capacity, uncertain-overlap, children, handoff, cancelling or broker-stopping.
@@ -144,7 +181,12 @@ The narrowly matched native PostToolUse hook submits identity hints to the priva
 broker. The broker independently matches the original request fingerprint and
 complete challenge receipt against the exact primary native call/result. A
 model-supplied ID, title or hook JSON is never sufficient. Codex uses at most
-four 100-item pages of one exact native turn; Claude uses the exact native UUID
+four 100-item pages of one exact native turn. Persistent primary Codex `cli`,
+`vscode` and `exec` origins use identical non-ephemeral user-thread and exact
+call/result proof requirements; a CLI origin opened in Desktop keeps its source
+label. Exact catalog lookup explicitly includes these three primary source kinds,
+since the native default thread list can omit `exec`; unknown and auxiliary
+sources remain refused. Claude uses the exact native UUID
 and cwd to locate one stable no-follow private transcript of at most 16 MiB in
 the broker's Claude home (`~/.claude` in the standard installation). Desktop Local
 registry membership is not required: persisted same-host CLI, SDK and Remote

@@ -44,6 +44,27 @@ test('Codex independently verifies exact completed native MCP result without rea
   assert.equal(fixture.requests.find(r => r.method === 'thread/items/list').args.turnId, 'turn-1');
 });
 
+test('Codex accepts persistent primary exec origin while preserving exact native call and receipt proof', async () => {
+  const fixture = codexFixture({ metadata: { source: 'exec' }, now: () => 1234 });
+  assert.deepEqual(await fixture.verify(input('codex')), { provider: 'codex', sessionId: ID, cwd: CWD,
+    toolUseId: 'toolu_origin', turnId: 'turn-1', source: 'codex-native-mcp-result', verifiedAt: 1234 });
+  assert.equal(fixture.closed(), 1);
+  assert.equal(fixture.requests.filter(request => request.method === 'thread/read').length, 2);
+  assert.deepEqual(fixture.requests.find(request => request.method === 'thread/items/list').args,
+    { threadId: ID, turnId: 'turn-1', limit: 100, sortDirection: 'desc' });
+  for (const metadata of [{ source: 'exec', ephemeral: true }, { source: 'exec', parentThreadId: TASK },
+    { source: 'exec', threadSource: 'subagent' }, { source: 'unknown' }]) {
+    const refused = codexFixture({ metadata });
+    await assert.rejects(refused.verify(input('codex')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+    assert.equal(refused.requests.length, 1, 'unverified origin metadata must fail before reading native items');
+    assert.equal(refused.closed(), 1);
+  }
+  const wrongReceipt = nativeItem();
+  wrongReceipt.item.result.content = content({ ...receipt, originChallenge: 'b'.repeat(64) });
+  await assert.rejects(codexFixture({ metadata: { source: 'exec' }, item: wrongReceipt }).verify(input('codex')),
+    { code: 'ORIGIN_PROOF_INVALID' });
+});
+
 test('Codex rejects wrong identity, auxiliary sources, unfinished or altered native calls', async t => {
   for (const [name, mutate] of Object.entries({
     server: i => { i.item.server = 'other'; }, tool: i => { i.item.tool = 'claudex_list'; },
@@ -60,7 +81,7 @@ test('Codex rejects wrong identity, auxiliary sources, unfinished or altered nat
     await assert.rejects(f.verify(input('codex')), { code: 'ORIGIN_PROOF_INVALID' }); assert.equal(f.closed(), 1);
   });
   for (const metadata of [{ id: TASK }, { cwd: '/other' }, { sessionId: TASK }, { ephemeral: true },
-    { parentThreadId: TASK }, { threadSource: 'subagent' }, { source: { subAgent: {} } }, { source: 'exec' }]) {
+    { parentThreadId: TASK }, { threadSource: 'subagent' }, { source: { subAgent: {} } }, { source: 'unknown' }]) {
     const f = codexFixture({ metadata });
     await assert.rejects(f.verify(input('codex')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
     assert.equal(f.requests.length, 1);

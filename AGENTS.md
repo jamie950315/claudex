@@ -240,6 +240,15 @@ the legacy global uncertain flag is not a per-task blocking claim. List supports
 query-bound live pagination and filters. Multi-wait supports 1–16 targets with
 one event listener, atomically acknowledging only returned child outcomes after
 checking the MCP-escaped response bound. Preserve compatible single-task behavior.
+Task waits default to 30 seconds and accept an explicit maximum of five minutes;
+only validated waits extend the private RPC deadline. Native MCP host deadlines
+remain independent. External controllers may request status checkNotification:true
+before ending a wake-enabled root turn. Its continuation nextAction is a read-only
+snapshot, never a dispatch lease or delivery guarantee: require verified origin,
+available notification quota, exact current native routing and lifecycle checks.
+Do not navigate, dispatch, change revisions or infer permission in this check.
+Queue-only, unbound, stopped, ended and unobservable routes continue waiting.
+Notifications still default off; main reads authoritative status after reception.
 MCP errors retain typed code and readable text through structuredContent.error.
 Worker-only report is generation-fenced and explicitly self-reported, never
 verified goal completion or a replacement for completed/resultFinal. Handoff
@@ -257,6 +266,11 @@ PostToolUse supplies hints only: match the exact start arguments fingerprint,
 one-use receipt challenge, primary session and call/result identity. Codex uses
 bounded exact-turn native items; Claude verifies one exact native UUID/cwd transcript
 under its configured native home, without requiring Desktop registry membership.
+Persistent primary Codex origins accept native cli, vscode and exec source labels;
+exec still requires non-ephemeral user-thread metadata and exact new call/result
+proof. Exact native catalog lookup explicitly lists those primary source kinds;
+Codex's default thread list can omit exec. Reject unknown and auxiliary sources.
+A source label alone is never origin authority.
 Persisted same-host CLI/SDK/Remote Control sessions qualify, including new native
 calls after a managed bootstrap; copied ancestors/imported calls do not. Preserve
 native result provenance and primary parent-chain checks, excluding agent nodes.
@@ -277,7 +291,13 @@ Coalesce undispatched terminal revisions and cap retained sends at 16/task and
 16/origin/minute. App-stop release is event-driven, not a polling loop. Status/wait
 remains the result authority. Fresh authorized native acceptance verifies both
 origin providers, queue-only Codex receipt and automatic Claude mod-self receipt
-with real Stop ACK. Preserve the earlier unbound and expired records without
+with real Stop ACK. Additional installed acceptance on Codex 0.159.0-alpha.12.1
+verified a persistent exec-origin main idle before its read-only Claude worker
+completed, one automatic native-owner completion wake, exact status/result read
+and real Stop ACK. The earlier unbound and uncertain exec canaries remain intact;
+source/catalog fixes never bind or replay them manually. This is separate from
+the earlier Claude Mod route and does not certify every runtime or host timeout.
+Preserve the earlier unbound and expired records without
 replay. This is bounded evidence for the reviewed installation, not a new
 synchronization-runtime allowlist or blanket acceptance of other versions/routes.
 

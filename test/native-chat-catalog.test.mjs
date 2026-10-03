@@ -34,7 +34,7 @@ test('native chat endpoint selection rejects aliased or invalid launcher configu
 
 test('catalog uses metadata only and proves exact targets remain in unarchived inventory', async () => {
   const calls = []; let closed = false;
-  const row = { id: 'original', name: 'Original title', cwd: '/project' };
+  const row = { id: 'original', name: 'Original title', cwd: '/project', source: 'vscode' };
   const client = { initialize: async () => {}, close: async () => { closed = true; },
     request: async (method, params) => { calls.push([method, params]); return method === 'thread/read' ? { thread: row } : { data: [row] }; } };
   const result = await discoverCodexChats({ sessionId: 'original' }, { clientFactory: () => client });
@@ -43,8 +43,46 @@ test('catalog uses metadata only and proves exact targets remain in unarchived i
   assert.deepEqual(calls.map(c => c[0]), ['thread/read', 'thread/list']);
   assert.equal(calls[0][1].includeTurns, false);
   assert.equal(calls[1][1].archived, false);
+  assert.deepEqual(calls[1][1].sourceKinds, ['cli', 'vscode', 'exec']);
   client.request = async method => method === 'thread/read' ? { thread: row } : { data: [] };
   assert.deepEqual(await discoverCodexChats({ sessionId: 'original' }, { clientFactory: () => client }), []);
+});
+
+test('catalog explicitly includes persistent exec origins hidden by native default source filtering', async () => {
+  const row = { id: 'exec-original', name: 'Exec title', cwd: '/project', source: 'exec' };
+  const calls = [];
+  const client = { initialize: async () => {}, close: async () => {}, request: async (method, params) => {
+    calls.push([method, params]);
+    if (method === 'thread/read') return { thread: row };
+    assert.equal(method, 'thread/list');
+    return { data: params.sourceKinds?.includes('exec') ? [row] : [], nextCursor: null };
+  } };
+  const result = await discoverCodexChats({ sessionId: row.id }, { clientFactory: () => client });
+  assert.equal(result.length, 1);
+  assert.equal(result[0].sessionId, row.id);
+  assert.equal(result[0].title, row.name);
+  assert.equal(result[0].cwd, row.cwd);
+  assert.deepEqual(calls[1], ['thread/list', { limit: 100, archived: false, useStateDbOnly: true,
+    sourceKinds: ['cli', 'vscode', 'exec'], searchTerm: row.name }]);
+});
+
+test('catalog rejects auxiliary and unknown sources while retaining exact-target and archive guards', async () => {
+  const row = { id: 'exec-original', name: 'Exec title', cwd: '/project', source: 'exec' };
+  let target = row, listed = [row];
+  const client = { initialize: async () => {}, close: async () => {}, request: async method =>
+    method === 'thread/read' ? { thread: target } : { data: listed, nextCursor: null } };
+  const discover = () => discoverCodexChats({ sessionId: row.id }, { clientFactory: () => client });
+  for (const source of ['unknown', { subAgent: {} }, undefined]) {
+    target = { ...row, source };
+    assert.deepEqual(await discover(), []);
+    target = row;
+    listed = [{ ...row, source }];
+    assert.deepEqual(await discover(), []);
+  }
+  for (const change of [{ archived: true }, { id: 'different' }, { cwd: 'relative' }, { name: '' }]) {
+    listed = [{ ...row, ...change }];
+    assert.deepEqual(await discover(), []);
+  }
 });
 
 test('incomplete discovery cannot select a supposedly unique title', async () => {

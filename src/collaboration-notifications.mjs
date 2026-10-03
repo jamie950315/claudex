@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { watch } from 'node:fs';
 import { dirname } from 'node:path';
 import { readAppStopState } from './app-stop-state.mjs';
+import { modDeliveryDiagnosis } from './mod-wake-broker.mjs';
 
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
@@ -18,6 +19,13 @@ const pending = task => task.notification?.origin && terminal.has(task.status)
   && !task.notification.deliveries.some(delivery => delivery.revision === task.revision);
 const sameOrigin = (a, b) => a?.provider === b?.provider && a?.sessionId === b?.sessionId
   && a?.cwd === b?.cwd && a?.toolUseId === b?.toolUseId && a?.turnId === b?.turnId;
+function notificationLimit(state, notification, now = Date.now()) {
+  if (notification.deliveries.length >= 16) return 'task-notification-limit';
+  const recent = Object.values(state.tasks).flatMap(item => item.notification?.origin?.provider === notification.origin.provider
+    && item.notification.origin.sessionId === notification.origin.sessionId ? item.notification.deliveries : [])
+    .filter(delivery => delivery.createdAt > now - 60000).length;
+  return recent >= 16 ? 'origin-rate-limit' : null;
+}
 const stopped = async hub => {
   const stop = await readAppStopState(dirname(hub.root));
   return hub.closed || stop?.stopped || stop?.resuming;
@@ -48,6 +56,66 @@ export function notificationPresentation(task) {
     pendingVerification: value.originHint ? { attempts: value.originHint.attempts,
       lastAttemptAt: value.originHint.lastAttemptAt, error: value.originHint.error } : null,
     suppressedRevision: value.suppressedRevision, suppressionReason: value.suppressionReason ?? null };
+}
+
+/** Explicit read-only preflight for a caller considering ending its current turn.
+ * This is a snapshot, never a dispatch lease or a guarantee of future delivery. */
+export async function inspectNotificationContinuation(hub, task) {
+  const result = (nextAction, reason, evidence = null) => ({ nextAction, reason, evidence,
+    checkedAt: Date.now(), diagnosticOnly: true, deliveryGuaranteed: false });
+  if (terminal.has(task.status)) return result('read-result', 'task-terminal');
+  const n = task.notification;
+  if (!n || n.policy.mode === 'off') return result('wait', 'notifications-off');
+  if (n.policy.mode !== 'wake') return result('wait', 'queue-does-not-wake');
+  if (!n.origin) return result('wait', n.challengeExpiresAt <= Date.now() ? 'origin-expired' : 'awaiting-native-proof');
+  const limit = notificationLimit(hub.state, n);
+  if (limit) return result('wait', limit);
+  if (await stopped(hub)) return result('wait', 'app-stopped');
+  const route = n.origin.provider === 'claude' ? hub.state.nativeWakeRoute ?? 'renderer' : 'native-owner';
+  const chat = (await hub.chatMailbox.list()).find(value => value.provider === n.origin.provider
+    && value.sessionId === n.origin.sessionId && value.cwd === n.origin.cwd);
+  if (!chat || chat.phase === 'ended') return result('wait', !chat ? 'origin-not-registered' : 'waiting-for-resume');
+  let observation;
+  if (n.origin.provider === 'codex') {
+    if (!hub.chatWake || !hub.chatWakeProbe || !hub.nativeChatDiscovery) return result('wait', 'wake-probe-unavailable');
+    let handle;
+    try {
+      const targets = await hub.nativeChatDiscovery({ sessionId: n.origin.sessionId });
+      if (!targets.some(value => value.sessionId === n.origin.sessionId && value.cwd === n.origin.cwd
+        && !value.archived && !value.titleError && typeof value.title === 'string' && value.title.trim()))
+        return result('wait', 'origin-unmapped');
+      // Unlike prepareCodexChatWake, this must never open a window or load a chat.
+      handle = await hub.chatWakeProbe({ sessionId: n.origin.sessionId, timeoutMs: 1500 });
+      observation = handle?.status === 'ready' ? result('await-notification', 'native-owner-observed', 'native-owner')
+        : result('wait', 'native-owner-unavailable');
+    } catch { observation = result('wait', 'native-owner-unavailable'); }
+    finally { handle?.close?.(); }
+  } else if (['mod', 'mod-self'].includes(route)) {
+    const diagnosis = await modDeliveryDiagnosis(hub, { targetProvider: 'claude', targetSessionId: n.origin.sessionId,
+      wakeRoute: route, state: 'queued' });
+    observation = ['receiver-observed', 'sender-observed'].includes(diagnosis?.reason)
+      ? result('await-notification', diagnosis.reason, 'mod-self-reported')
+      : result('wait', diagnosis?.reason ?? 'receiver-unavailable');
+  } else observation = result('wait', 'renderer-readiness-unverified');
+  // Metadata/probe awaits must not authorize yielding on a stale task or route.
+  const current = hub.state.tasks[task.id];
+  if (current && terminal.has(current.status)) return result('read-result', 'task-terminal');
+  if (!current || current.revision !== task.revision || !sameOrigin(current.notification?.origin, n.origin)
+    || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'renderer') !== route))
+    return result('wait', 'task-or-route-changed');
+  if (await stopped(hub)) return result('wait', 'app-stopped');
+  const latest = (await hub.chatMailbox.list()).find(value => value.provider === n.origin.provider
+    && value.sessionId === n.origin.sessionId && value.cwd === n.origin.cwd);
+  if (!latest || latest.phase === 'ended') return result('wait', 'waiting-for-resume');
+  const final = hub.state.tasks[task.id];
+  if (hub.closed) return result('wait', 'app-stopped');
+  if (final && terminal.has(final.status)) return result('read-result', 'task-terminal');
+  if (!final || final.revision !== task.revision || !sameOrigin(final.notification?.origin, n.origin)
+    || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'renderer') !== route))
+    return result('wait', 'task-or-route-changed');
+  const finalLimit = notificationLimit(hub.state, final.notification);
+  if (finalLimit) return result('wait', finalLimit);
+  return observation;
 }
 
 export function validateTaskNotification(task, requests) {
@@ -176,12 +244,10 @@ async function publish(hub) {
       const task = Object.values(state.tasks).find(pending);
       if (!task) return null;
       const n = task.notification, now = Date.now();
-      const recent = Object.values(state.tasks).flatMap(item => item.notification?.origin?.provider === n.origin.provider
-        && item.notification.origin.sessionId === n.origin.sessionId ? item.notification.deliveries : [])
-        .filter(delivery => delivery.createdAt > now - 60000).length;
-      if (n.deliveries.length >= 16 || recent >= 16) {
+      const limit = notificationLimit(state, n, now);
+      if (limit) {
         n.suppressedRevision = task.revision;
-        n.suppressionReason = n.deliveries.length >= 16 ? 'task-notification-limit' : 'origin-rate-limit';
+        n.suppressionReason = limit;
         return { suppressed: true };
       }
       const expiresAt = task.updatedAt + n.policy.expiresInMs;

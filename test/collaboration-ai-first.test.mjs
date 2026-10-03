@@ -61,7 +61,7 @@ test('uncertain blockers are exact and separate from the legacy global flag and 
 test('multi-wait uses one bounded listener, returns all changed targets, and never starts work', async t => {
   const { hub, call, start } = await fixture(t);
   const a = await start('wait-a'), b = await start('wait-b');
-  const waiting = call('wait', { targets: [a, b].map(task => ({ taskId: task.taskId, afterRevision: 1 })), timeoutMs: 1000 });
+  const waiting = call('wait', { targets: [a, b].map(task => ({ taskId: task.taskId, afterRevision: 1 })), timeoutMs: 300000 });
   await until(() => hub.listenerCount('change') === 1);
   await hub.mutate(state => { for (const id of [a.taskId, b.taskId]) state.tasks[id].revision++; });
   const response = await waiting;
@@ -71,6 +71,17 @@ test('multi-wait uses one bounded listener, returns all changed targets, and nev
   await assert.rejects(call('wait', { taskId: a.taskId, targets: [{ taskId: b.taskId }] }), { code: 'CLAUDEX_INVALID_WAIT' });
   const timeout = await call('wait', { targets: [{ taskId: a.taskId, afterRevision: 2 }], timeoutMs: 5 });
   assert.equal(timeout.timedOut, true); assert.equal(timeout.tasks[0].changed, false);
+});
+
+test('single and multi waits reject invalid bounds without retaining listeners', async t => {
+  const { hub, call, start } = await fixture(t);
+  const task = await start('wait-bounds');
+  for (const selection of [{ taskId: task.taskId }, { targets: [{ taskId: task.taskId }] }]) {
+    for (const timeoutMs of [-1, 300001, 1.5, '300000', null])
+      await assert.rejects(call('wait', { ...selection, timeoutMs }), /valid.*bounds/);
+  }
+  assert.equal(hub.listenerCount('change'), 0);
+  assert.equal(hub.running.size, 0);
 });
 
 test('multi-wait atomically acknowledges only returned terminal child outcomes', async t => {

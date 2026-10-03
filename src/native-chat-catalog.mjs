@@ -4,6 +4,8 @@ import { lstat, open } from 'node:fs/promises';
 import { join, isAbsolute, resolve } from 'node:path';
 import { CodexWebSocketClient } from './codex-websocket.mjs';
 
+const PRIMARY_CODEX_SOURCES = ['cli', 'vscode', 'exec'];
+
 /** Select the installed listener before connecting. A configured launcher never
  * falls back to another backend when its shared listener is unavailable. */
 export async function codexChatSocket({
@@ -46,12 +48,17 @@ export async function discoverCodexChats({ query, sessionId } = {}, {
   try {
     await client.initialize();
     const target = sessionId ? (await client.request('thread/read', { threadId: sessionId, includeTurns: false })).thread : null;
-    if (sessionId && (target?.id !== sessionId || typeof target.name !== 'string' || !target.name.trim())) return [];
+    if (sessionId && (target?.id !== sessionId || typeof target.name !== 'string' || !target.name.trim()
+      || !PRIMARY_CODEX_SOURCES.includes(target.source))) return [];
     const result = await client.request('thread/list', { limit: 100, archived: false, useStateDbOnly: true,
+      // Native default inventory excludes persistent exec-origin chats even
+      // after Desktop resumes them; request the supported primary kinds only.
+      sourceKinds: PRIMARY_CODEX_SOURCES,
       ...((target?.name || query) ? { searchTerm: target?.name || query } : {}) });
     if (result.nextCursor) throw new Error('Native chat discovery is incomplete; narrow the title search before sending.');
     return result.data.filter(t => t && (!sessionId || t.id === sessionId) && typeof t.id === 'string' && typeof t.name === 'string'
-      && t.name.trim() && typeof t.cwd === 'string' && isAbsolute(t.cwd) && !t.archived)
+      && t.name.trim() && typeof t.cwd === 'string' && isAbsolute(t.cwd) && !t.archived
+      && PRIMARY_CODEX_SOURCES.includes(t.source))
       .map(t => ({ provider: 'codex', nativeId: t.id, sessionId: t.id, chatId: `codex:${t.id}`,
         cwd: t.cwd, title: t.name, titleSource: 'codex-native-metadata', phase: 'unregistered',
         registeredByHook: false }));

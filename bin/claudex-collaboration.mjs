@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { prepareCodexChatWake } from '../src/codex-chat-wake.mjs';
+import { prepareCodexChatWake, preflightCodexChatWake } from '../src/codex-chat-wake.mjs';
 import { discoverCodexChats } from '../src/native-chat-catalog.mjs';
 import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.mjs';
 import { createClaudeOwnerWakePublisher } from '../src/claude-owner-wake.mjs';
@@ -77,6 +77,7 @@ async function serve(root, allowWrite, values) {
     const hub = new CollaborationHub({ root, allowWrite, allowFullAccess: values['allow-full-access'] === true,
       defaultPermission: values['default-permission'] ?? 'read-only',
       chatWake: prepareCodexChatWake,
+      chatWakeProbe: preflightCodexChatWake,
       nativeChatDiscovery: params => discoverCodexChats(params, { syncRoot: dirname(root) }),
       claudeWakeManifest: createClaudeChatWakeManifest({ root }),
       claudeOwnerWake: createClaudeOwnerWakePublisher({ root: dirname(root) }),

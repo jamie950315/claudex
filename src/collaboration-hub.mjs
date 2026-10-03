@@ -13,7 +13,9 @@ import { validateClaudeOwnerWakeRequest } from './claude-owner-wake.mjs';
 import { inspectOwnedProcesses, validateOwnedProcesses } from './collaboration-processes.mjs';
 import { validateOutcome, outcomePresentation } from './collaboration-outcome.mjs';
 import { sanitizeNativeActivity } from './collaboration-activity.mjs';
+import { DEFAULT_WAIT_MS, validWaitTimeout } from './collaboration-wait.mjs';
 import { notificationPolicy, createTaskNotification, notificationPresentation, validateTaskNotification,
+  inspectNotificationContinuation,
   bindTaskOrigin, recheckTaskOrigins, recoverNotifications, scheduleNotifications, drainNotifications,
   observeNotificationResume, NOTIFICATION_FENCE } from './collaboration-notifications.mjs';
 
@@ -129,7 +131,7 @@ export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, allowFullAccess = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     inspectProcessGroup = inspectExitedProcessGroup, inspectProcesses = inspectOwnedProcesses, chatTitleResolver = enrichChatTitles,
-    nativeChatDiscovery = null, chatWake = null, claudeWakeManifest = null, claudeOwnerWake = null, originVerifier = null } = {}) {
+    nativeChatDiscovery = null, chatWake = null, chatWakeProbe = null, claudeWakeManifest = null, claudeOwnerWake = null, originVerifier = null } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -149,6 +151,7 @@ export class CollaborationHub extends EventEmitter {
     this.chatTitleResolver = chatTitleResolver;
     this.nativeChatDiscovery = nativeChatDiscovery;
     this.chatWake = chatWake;
+    this.chatWakeProbe = chatWakeProbe;
     this.claudeWakeManifest = claudeWakeManifest;
     this.claudeOwnerWake = claudeOwnerWake;
     this.originVerifier = originVerifier;
@@ -586,7 +589,13 @@ export class CollaborationHub extends EventEmitter {
       });
     }
     if (method === 'status') {
-      return this.readTask(envelope);
+      if (params.checkNotification !== undefined && typeof params.checkNotification !== 'boolean')
+        fail('CLAUDEX_INVALID_QUERY', 'checkNotification must be boolean.');
+      if (params.checkNotification && actor.task)
+        fail('CLAUDEX_ACCESS_DENIED', 'Only an external controller may inspect its native continuation route.');
+      const response = await this.readTask(envelope);
+      if (params.checkNotification) response.notification.continuation = await inspectNotificationContinuation(this, this.state.tasks[params.taskId]);
+      return response;
     }
     if (method === 'list') {
       if (Object.keys(params).some(key => !['status', 'parentId', 'project', 'limit', 'cursor'].includes(key)))
@@ -633,8 +642,8 @@ export class CollaborationHub extends EventEmitter {
       if (params.view !== undefined && !['full', 'summary'].includes(params.view)) throw new Error('Invalid task view.');
       this.allowed(actor, this.state.tasks[params.taskId], this.state);
       if (actor.task?.id === params.taskId) throw new Error('A worker cannot wait on its own running task. Finish the native turn instead.');
-      const timeoutMs = params.timeoutMs ?? 30000;
-      if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 30000
+      const timeoutMs = params.timeoutMs === undefined ? DEFAULT_WAIT_MS : params.timeoutMs;
+      if (!validWaitTimeout(timeoutMs)
         || params.afterRevision !== undefined && (!Number.isSafeInteger(params.afterRevision) || params.afterRevision < 0)) throw new Error('Invalid wait bounds.');
       const current = this.state.tasks[params.taskId];
       const baseline = params.afterRevision ?? current.revision;
@@ -1012,10 +1021,10 @@ export class CollaborationHub extends EventEmitter {
   }
 
   async waitMany(envelope) {
-    const { params } = envelope, { targets, view = 'summary', timeoutMs = 30000 } = params;
+    const { params } = envelope, { targets, view = 'summary', timeoutMs = DEFAULT_WAIT_MS } = params;
     if (params.taskId !== undefined || params.afterRevision !== undefined || !['full', 'summary'].includes(view)
       || !Array.isArray(targets) || targets.length < 1 || targets.length > 16
-      || !Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 30000
+      || !validWaitTimeout(timeoutMs)
       || targets.some(target => !target || typeof target !== 'object' || Array.isArray(target)
         || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))
         || typeof target.taskId !== 'string' || target.afterRevision !== undefined

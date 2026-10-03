@@ -7,6 +7,47 @@ defaults remain false. Installation, native invocation and actual Desktop displa
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
+## Codex main completion-wake acceptance (2026-10-03)
+
+The user authorized a bounded native completion-wake check. A persistent Codex
+CLI source was opened in its exact existing Desktop conversation, using Codex
+0.159.0-alpha.12.1. That main called the installed `claudex_start` for one read-only
+Claude Code 2.1.283 worker, explicitly requesting `notifications.mode=wake`.
+No provider defaults, hook trust, native input policy or synchronization allowlist
+changed.
+
+The first attempt exposed the persistent native `exec` source label missing from
+origin validation. The next exposed Codex's default `thread/list` excluding that
+same source kind. Both were reproduced with exact read-only native metadata and
+fixed generally: primary `cli`, `vscode` and `exec` sources still require the
+existing persistent user-thread and exact native call/result proof; catalog
+queries explicitly select those primary kinds and reject unknown/auxiliary ones.
+The unbound first task and uncertain second notification remain preserved without
+manual binding, reset or replay. Each acceptance attempt used fresh work.
+
+The final installed build demonstrated the complete path:
+
+- Native call/result origin proof bound the exact source automatically.
+- A read-only continuation check returned `await-notification`, with native owner
+  evidence and the explicit `diagnosticOnly`/no-delivery-guarantee labels.
+- The main completed its dispatch turn; a native metadata observation confirmed
+  it was idle while the worker was still running.
+- The worker completed once, with `active=null` and one generation. The broker
+  created one notification and the existing native owner accepted one new turn.
+- The awakened main called `claudex_status` for that exact task, returned its
+  final nonce and `resultFinal=true`, and produced the real recipient Stop ACK.
+  No manual input or acknowledgement was submitted for that completion turn.
+
+This proves automatic completion wake for the reviewed installed Codex route,
+not every runtime, policy, offline case or synchronization lifecycle. The earlier
+Claude mod-self acceptance remains separate. Five-minute wait support is verified
+at the Claudex MCP/Unix-RPC boundary with early-return and disconnect checks;
+native hosts can still impose independent shorter tool deadlines. The full suite
+passed 1,483 tests with 23 opt-in skips before the native source fixes; the final
+affected origin/catalog/continuation/notification/Desktop-wake group passed all
+66 tests. Packaged changed runtime files matched source and strict deep signature
+verification passed. The installed app remains development-signed, not notarized.
+
 ## Source origin support and model diagnostics (2026-10-03)
 
 The origin verifier now uses an exact stable primary native Claude transcript

@@ -102,7 +102,7 @@ export function createOriginVerifier({ syncRoot,
             checkTime();
             requireValue(thread?.id === input.sessionId && thread.sessionId === input.sessionId && thread.cwd === input.cwd
               && thread.parentThreadId === null && thread.ephemeral === false && thread.threadSource === 'user'
-              && ['cli', 'vscode'].includes(thread.source), 'ORIGIN_PROOF_UNAVAILABLE');
+              && ['cli', 'vscode', 'exec'].includes(thread.source), 'ORIGIN_PROOF_UNAVAILABLE');
             return thread;
           };
           await metadata();
