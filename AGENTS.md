@@ -37,7 +37,11 @@ fixtures use placeholder paths and IDs.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
 - `dev/cache-warm-probe` is a manual, authorization-gated Sonnet 5.5/medium
   cache-retention experiment, not an installed warming service. It uses private
-  nonpersistent sessions, a single native Mod fork and a no-refresh control.
+  nonpersistent sessions and a no-refresh control. Explicit `--strategy main`
+  sends one real refresh turn through the same live SDK session without a Mod;
+  the default fork strategy uses one native Mod fork. Neither is an automatic
+  fallback for the other. Main-mode effort is requested configuration, not
+  independent effective-effort proof; actual main-response models are verified.
   Keep its runtime evidence outside Git and its inference outside automated tests.
   Fork usage and unchanged main messages must be verified; a cached hit alone
   does not establish TTL extension. Native fork has no independent output cap.

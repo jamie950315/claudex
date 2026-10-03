@@ -1,6 +1,7 @@
 # Native cache-retention experiment
 
-This development-only harness measures Claude Code's native `$.model.fork`
+This development-only harness measures either a normal same-session main turn
+(`--strategy main`) or native `$.model.fork` (`--strategy fork`, the default)
 against a no-refresh control. It is not a shipping Claudex feature, an installed
 plugin, or an unattended cache-warming service. It never uses an extracted OAuth
 token or another API route. It requires explicit authorization before `--run`.
@@ -14,17 +15,25 @@ token or another API route. It requires explicit authorization before `--run`.
   no user/project settings. Existing native sessions and installed plugins are
   not modified. No native application restart is needed.
 - Explicitly request 5-minute main and fork TTLs for this experiment only.
-  Check the actual main receipt's cache-write counts, and native request
-  model/effort, before proceeding.
-- Seed the control and warm arms. The warm arm runs one native Mod timer, 240
-  seconds after its first main request starts. It calls `$.model.fork` once.
-- Compare the main API-message snapshot before and after the fork in memory;
-  retain only equality, length, timestamps and token counts, never the content.
+  Check the actual main receipt's cache-write counts and its five-minute bucket
+  before proceeding.
+- Seed the control and warm arms. In main mode, 240 seconds after its first
+  request starts, the runner sends one real user turn through the same live SDK
+  query. This adds a real exchange to that test conversation. No plugin or Mod
+  capability is needed: the observation is host dispatch timing/configuration
+  plus native SDK responses, not a claim of independently observed effective
+  reasoning effort. Both arms must retain one native session ID and report only
+  Sonnet 5.5 as their actual main-response model.
+- In fork mode only, the warm arm runs one native Mod timer after 240 seconds and
+  calls `$.model.fork` once. Compare the main API-message snapshot before and
+  after the fork in memory; retain only equality, length, timestamps and token
+  counts, never the content.
 - After 360 seconds, send one normal final measurement turn to each session.
   Compare cache reuse with the control, then close both owned processes.
 
-There are at most four explicit main requests and one explicit fork, with no
-harness-level retries. Native auxiliary requests can still appear in native
+There are at most five explicit main requests (main mode), or four explicit main
+requests and one explicit fork (fork mode), with no harness-level retries.
+Native auxiliary requests can still appear in native
 accounting and must be reported separately from Sonnet main-response evidence.
 The harness requests a 128-token output limit through the native environment and
 a $0.50 estimated query budget per session. **The installed Mod fork API has no
@@ -46,31 +55,46 @@ node --test dev/cache-warm-probe/probe.test.mjs
 "$CLAUDE_BINARY" plugin test dev/cache-warm-probe/plugin
 ```
 
+The native plugin checks apply to fork mode. A native rollout refusal is not
+overridden, and does not prevent main mode, which does not use the Mod system.
+
 Create a new private output directory for each invocation. The runner refuses
 an existing arm directory, so uncertain calls cannot be replayed by restarting it.
 `--root` must point outside the repository. With no `--run`, the harness loads
-and checks the control plugin and closes it without sending a model prompt:
+and checks the control plugin (fork mode), or only initializes the control SDK
+session (main mode), then closes it without sending a model prompt:
 
 ```sh
 node dev/cache-warm-probe/run.mjs --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"
 ```
 
+For the main-conversation experiment, after explicit authorization:
+
+```sh
+node dev/cache-warm-probe/run.mjs --run --strategy main --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"
+```
+
 Only after authorization, use another new private directory and add `--run`.
 Allow approximately seven minutes. The default load-only path does not validate
 server cache behavior. No feature-rollout override is applied. A missing Mod
-load report stops the harness before any model prompt.
+load report stops fork mode before any model prompt. Main mode explicitly loads
+no plugin; it is not an automatic fallback after an uncertain fork.
 
 ## Evidence and limits
 
-`report.json` contains main receipts, actual main-response model labels, native
-request effort, cache token usage, the single fork receipt, before/after main
-equality, and owned-process exit evidence. `probe.json` contains content-free
-observations within each arm directory. Do not commit runtime output or native
-generated declarations. The source plugin is copied privately before loading.
+`report.json` contains main receipts, actual main-response model labels, the
+requested effort, cache token usage, one-session identity counts, an offline
+assessment and owned-process exit evidence. Fork mode also records native
+request effort, the fork receipt and before/after main equality. Its `probe.json`
+contains content-free Mod observations; main mode records host dispatch/native
+response observations in the report instead. Do not commit runtime output or
+native generated declarations. Only fork mode copies and loads the source plugin.
 
-A positive experiment needs a cache-read hit in the fork, unchanged main
-messages, and reuse of the seed prefix in the warm arm after the original TTL,
-while the control rebuilds it. A partial prefix or a control that stays warm is
+A positive experiment needs full-prefix reuse during the selected refresh and
+reuse of the seed prefix in the warm arm after the original TTL, while the control
+rebuilds it. Fork mode additionally requires unchanged main messages. Main mode
+requires the same native session and stable model/effort configuration; it
+deliberately adds one exchange. A partial prefix or a control that stays warm is
 inconclusive, not a success. One isolated CLI experiment does not certify
 Desktop painting, normal 1-hour subscription caches, compaction/model changes,
 other native versions or providers, or long-running unattended behavior.

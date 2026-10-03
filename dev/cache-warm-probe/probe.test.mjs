@@ -3,11 +3,12 @@ import assert from 'node:assert/strict';
 import { register } from './plugin/hooks/register.mjs';
 import { assessEvidence } from './evidence.mjs';
 
-function fixture({ arm = 'warm', authorized = true, mutate = false } = {}) {
+function fixture({ arm = 'warm', authorized = true, mutate = false, strategy = 'fork' } = {}) {
   const hooks = {}, timers = [], records = [];
   let now = 1000, calls = 0, messages = [{ role: 'user', content: 'fixture' }];
   const $ = {
-    env: { get: async key => key === 'CLAUDEX_CACHE_PROBE_ARM' ? arm : authorized ? '1' : undefined },
+    env: { get: async key => key === 'CLAUDEX_CACHE_PROBE_ARM' ? arm
+      : key === 'CLAUDEX_CACHE_PROBE_STRATEGY' ? strategy : authorized ? '1' : undefined },
     clock: { now: async () => now, after: (delay, callback) => {
       const timer = { delay, callback, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(timer); return timer;
     } },
@@ -37,6 +38,10 @@ test('no authorization produces no observations or scheduled inference', async (
 });
 test('control observes without scheduling', async () => {
   const f = fixture({ arm: 'control' }); await seed(f); assert(f.records.length > 0); assert.equal(f.timers.length, 0);
+});
+test('main strategy observes without scheduling any fork', async () => {
+  const f = fixture({ strategy: 'main' }); await seed(f); assert(f.records.length > 0);
+  assert.equal(f.timers.length, 0); assert.equal(f.calls, 0);
 });
 test('warm arm schedules exactly one fork, preserves main, and does not rearm', async () => {
   const f = fixture(); await seed(f); assert.equal(f.timers.length, 1); assert.equal(f.timers[0].delay, 240000);
@@ -86,5 +91,27 @@ test('a full prefix, expired cold control and exited processes are required', ()
   assert.equal(assessEvidence(report).status, 'inconclusive');
   report.arms.control.receipts[1].usage.cache_read_input_tokens = 0;
   delete report.arms.warm.receipts[1].usage.cache_read_input_tokens;
+  assert.equal(assessEvidence(report).status, 'inconclusive');
+});
+
+test('main refresh requires same-session, fixed-model requests and a cold control', () => {
+  const request = at => ({ kind: 'request', main: true, at, model: 'claude-sonnet-5-5', effort: 'medium' });
+  const receipt = (read, write) => ({ isError: false, replyIsOK: true,
+    usage: { cache_creation_input_tokens: write, cache_read_input_tokens: read } });
+  const report = { strategy: 'main', arms: {
+    control: { childExited: true, nativeSessionCount: 1, nativeModels: ['claude-sonnet-5-5'], receipts: [receipt(0, 4000), receipt(0, 4010)],
+      probe: { rows: [request(1000), request(362000)] } },
+    warm: { childExited: true, nativeSessionCount: 1, nativeModels: ['claude-sonnet-5-5'],
+      receipts: [receipt(0, 4000), receipt(4000, 20), receipt(4020, 10)],
+      probe: { rows: [request(1000), request(241010), request(363000)] } },
+  } };
+  assert.equal(assessEvidence(report).status, 'demonstrated-in-isolated-cli');
+  report.arms.warm.receipts[1].usage.cache_read_input_tokens = 0;
+  assert.equal(assessEvidence(report).status, 'not-established');
+  report.arms.warm.receipts[1].usage.cache_read_input_tokens = 4000;
+  report.arms.warm.nativeSessionCount = 2;
+  assert.equal(assessEvidence(report).status, 'refused');
+  report.arms.warm.nativeSessionCount = 1;
+  report.arms.control.receipts[1].usage.cache_read_input_tokens = 4000;
   assert.equal(assessEvidence(report).status, 'inconclusive');
 });

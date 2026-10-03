@@ -7,14 +7,16 @@ async function record($, root, arm, rows, event) {
 
 export function register(on) {
   let root, arm, started = false, ended = false, busy = false, firstRequestAt = null;
+  let strategy = 'fork';
   let timer = null, forkStarted = false;
   const rows = [];
   on('session.start', async ($, e, next) => {
     root = await $.session.cwd();
     arm = await $.env.get('CLAUDEX_CACHE_PROBE_ARM');
+    strategy = await $.env.get('CLAUDEX_CACHE_PROBE_STRATEGY') ?? 'fork';
     if (await $.env.get('CLAUDEX_CACHE_PROBE_AUTHORIZED') !== '1' || !['control', 'warm'].includes(arm)) return next(e);
     started = true;
-    await record($, root, arm, rows, { kind: 'loaded', version: await $.session.version(), model: await $.session.model() });
+    await record($, root, arm, rows, { kind: 'loaded', strategy, version: await $.session.version(), model: await $.session.model() });
     return next(e);
   });
   on('turn.step', async function* ($, e, next) {
@@ -34,7 +36,7 @@ export function register(on) {
     if (!started || ended || e.agentId) return result;
     busy = false;
     await record($, root, arm, rows, { kind: 'main-complete', reason: e.reason, usage: e.usage ?? null });
-    if (arm !== 'warm' || timer !== null || forkStarted || firstRequestAt === null || e.reason !== 'answer') return result;
+    if (strategy !== 'fork' || arm !== 'warm' || timer !== null || forkStarted || firstRequestAt === null || e.reason !== 'answer') return result;
     const due = firstRequestAt + 240000;
     if (due <= await $.clock.now()) { await record($, root, arm, rows, { kind: 'refused', reason: 'seed-too-slow' }); return result; }
     timer = $.clock.after(due - await $.clock.now(), async () => {
