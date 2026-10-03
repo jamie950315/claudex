@@ -390,7 +390,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has 0.6.2 installed with both native configuration
+passes. The reviewed Mac has 0.7.0 installed with both native configuration
 identities enabled and route=mod-self. Earlier acceptance after a normal Claude
 restart verified that one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real

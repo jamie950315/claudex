@@ -1,12 +1,68 @@
 # Claude Mod integration validation
 
-The source and installed companion are 0.6.2. The initial native test-kit gate
+The source and installed companion are 0.7.0, managed by Claudex.app 1.1.0.
+The initial native test-kit gate
 and its explicitly authorized resolution are recorded below. Earlier acceptance remains the
 historical 0.4.1 review from 2026-10-03. The reviewed Mac
 uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
 defaults remain false. Installation, native invocation and actual Desktop display
 were checked separately; no second Mod or sender session is required.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## App-managed Mod lifecycle acceptance (2026-10-03)
+
+Graphical setup and normal startup now install/update only the bundled Mod through
+the official manager, with an app-owned journal and immutable versioned stages.
+Status inspection is read-only. The nine-language app reports payload integrity,
+installed version and fresh loaded-code observations separately, offers scoped
+install/update and explicit enable actions, and confirms receiver permission
+changes without changing native notification routes or model defaults.
+
+The integrated regression run passed 1,550 tests with zero failures and 23
+existing opt-in skips. Official strict validation passed with zero errors/warnings,
+and all 18 native kit tests passed with the previously user-authorized isolated
+test-process function-hooks option. Setup never applies that option or runs a
+model/test suite on an end user's machine. Swift compilation and native synthetic
+layout smoke passed, including Traditional Chinese activation waiting, German
+compact-ready, one scroll view, natural fit and read-only controls.
+
+Real native tests in separate empty user homes verified initial installation,
+repeated-startup idempotence, read-only settings preservation, legacy 0.6.2 to
+0.7.0 migration, independent marketplace/inline preferences, explicit receiver
+changes, intentional disabled-state preservation and explicit enable. The app
+setup path itself installed the Mod while account/service operations were
+isolated, and correctly left native activation unverified. These are fresh-profile
+tests on this Mac, not physical acceptance of every other machine or native policy.
+
+A separate empty-home bootstrap downloaded the pinned official 2.1.287 manager,
+verified wrapper and platform-package integrity, ran no package scripts, and
+selected the real native platform binary rather than its wrapper's postinstall
+placeholder. Subsequent read-only discovery found that same working manager.
+This leaves the inference CLI unchanged. Real npm configuration probes also
+reproduced and repaired the former duplicate /dev/null user/global configuration
+failure, using distinct private empty files without inheriting user credentials.
+The app setup path then used that real pinned 2.1.287 manager in the same empty
+profile to install 0.7.0 successfully, with receiver defaults off and activation
+still correctly waiting. This closes the bootstrap-to-installer integration path;
+the test did not merely inspect the manager's help output.
+
+The development-signed 1.1.0 app was installed through normal Quit, verified
+owned-service shutdown and recoverable bundle replacement. On ordinary startup,
+the app itself migrated the existing verified marketplace to app-mod/releases
+and upgraded 0.6.2 to 0.7.0; no separate manual plugin installation command was
+used for that live upgrade. Its journal reached complete, its previous source
+remained present, and both native configuration identities retained their prior
+receiver values. The UI first showed installed-but-not-loaded waiting rather
+than falsely declaring activation. A new ordinary Claude Code session opened
+/claudex without model work; actual versioned observations then made the app show
+bundled/installed/loaded 0.7.0 with manager 2.1.286 and the unchanged mod-self route.
+The app returned to compact ready presentation. Neither Codex nor Claude was
+restarted, and no global function-hooks override or credential copy was made.
+
+Newly installed users still need the vendor apps, native sign-in/trust and any
+required component downloads. Existing sessions can retain old Mod code; a new
+session loads an update. Receiver observations are bounded self-reports, not a
+guarantee of delivery. The app remains development-signed and not notarized.
 
 ## Work observability acceptance (2026-10-03)
 

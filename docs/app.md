@@ -106,7 +106,7 @@ or the user's global Node.js installation.
 ## Claude Mod lifecycle
 
 No separate CLI installation is needed for the Mod. The app stages its bundled
-version in private `app-mod/stages` storage, strictly validates it, installs or
+version in private `app-mod/releases` storage, strictly validates it, installs or
 updates it through the native manager, and checks its complete payload hashes.
 Its durable installation journal retains the previous source and records progress
 for interrupted configuration recovery. It never edits native plugin caches,
