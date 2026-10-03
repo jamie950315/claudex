@@ -36,6 +36,27 @@ async function until(check) {
   throw new Error('Synthetic notification did not settle');
 }
 
+test('reviewing or closing a completed result does not create another completion wake or unread result', async t => {
+  const f = await fixture(t); const task = await f.start('completed-annotation'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.generation = 1; value.status = 'completed'; value.revision++;
+    value.result = { text: 'Synthetic result', generation: 1, provider: 'claude', at: Date.now() };
+    value.blockers = [{ id: 'decision', generation: 1, revision: 1, state: 'open',
+      question: 'Synthetic question', impact: 'Synthetic impact', needs: 'Synthetic decision', updatedAt: Date.now() }];
+  });
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
+  const before = f.hub.state.tasks[task.taskId];
+  await f.call('work_control', { taskId: task.taskId, generation: 1, action: 'resolve-blocker', blockerId: 'decision',
+    text: 'The controller independently resolved the question.', requestId: 'close-decision' });
+  await f.call('work_control', { taskId: task.taskId, generation: 1, action: 'review-result', decision: 'reviewed', requestId: 'review-result' });
+  await delay(25); await drainNotifications(f.hub);
+  const after = f.hub.state.tasks[task.taskId];
+  assert.equal(after.blockers[0].state, 'resolved'); assert.equal(after.resultReview.state, 'reviewed');
+  assert.equal(after.revision, before.revision, 'completion revision is the same result, not new work');
+  assert.equal(after.updatedAt, before.updatedAt, 'annotations do not extend the completion notification lifetime');
+  assert.equal(after.notification.deliveries.length, 1);
+});
+
 test('opt-in blocker notifications deduplicate transitions, omit content and ignore ordinary revisions', async t => {
   const f = await fixture(t); const task = await f.start('blocker'); await f.bind(task);
   await f.hub.mutate(state => {

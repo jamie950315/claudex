@@ -120,9 +120,25 @@ read generation 2's native tool/message timeline with source labels. These pixel
 were captured on 0.6.1; 0.6.2 leaves that rendering unchanged and corrects only the
 artifact byte request/error path. A real installed 0.6.2 helper read the 52,379-byte
 declared document through Unix RPC with a matching SHA256 and attribution unknown.
-The final package has 23 companion files. Synthetic all-language/complete-confirmation
-tests remain distinct from this bounded native visual acceptance; this is not
-proof of every button or vendor host lifecycle.
+The final package has 23 companion files and 122 app engine/entrypoint/plugin
+files, verified against source after normal installation and strict deep signing.
+Final 0.6.2 native inspection also displayed the declared document's beginning
+and end with file-observed provenance, then showed the complete exact-generation
+result-review confirmation. Discarding that preview preserved its audit receipt
+without dispatching the operation or changing the task revision. A fresh host
+view briefly exposed the native session in accessibility state before painting
+it; ordinary Back/Forward navigation to the same session restored the actual
+view without an app restart, reload, alternate owner, or another model turn.
+Synthetic all-language tests remain distinct from this bounded native visual
+acceptance; this is not proof of every button or vendor host lifecycle.
+
+The final confirmation audit reproduced another completion-boundary defect:
+reviewing a finished result or closing its blocker advanced the task revision,
+which could manufacture another unread result and completion notification.
+These annotations now preserve the completed work revision/timestamp, with their
+own timestamp/provenance retained. The 32-case affected protocol, notification,
+observability and Unix/MCP integration group passed after the repair. Actual
+execution, reports, active controls and new work retain their normal revisions.
 
 ## Codex main completion-wake acceptance (2026-10-03)
 

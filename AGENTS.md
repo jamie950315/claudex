@@ -247,6 +247,9 @@ override any report requirement. File evidence requires a declared artifact and
 canonical, stable no-follow identities within task roots, even for full-access
 work. Exact-file Git diffs remain shared-workspace observations with unknown
 authorship. UI expansion/reads never imply result review or integration.
+Completed-result review and blocker-closure annotations retain the work revision
+and completion timestamp; they must not create another unread result or native
+completion wake. Their own records retain annotation timestamps and provenance.
 
 AI-first diagnostics retain bounded native activity on each execution without
 changing task revisions or child acknowledgements. Keep requested model/effort

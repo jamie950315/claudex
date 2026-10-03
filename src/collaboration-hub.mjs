@@ -742,6 +742,10 @@ export class CollaborationHub extends EventEmitter {
         if (notifications.mode !== 'off') task.notification = createTaskNotification(notifications, key);
       } else {
         task = state.tasks[params.taskId]; this.allowed(actor, task, state);
+        // Review/closure annotates the same completed result. Do not manufacture
+        // an unread child outcome, renew its expiry or wake its origin again.
+        const completedAnnotation = method === 'work_control' && task.status === 'completed'
+          && ['review-result', 'resolve-blocker'].includes(params.action);
         if (!['cancel', 'resolve'].includes(method) && ['failed', 'cancelled', 'uncertain'].includes(task.status)) throw new Error('Failed, cancelled, or uncertain work cannot be implicitly restarted.');
         if (method === 'report') {
           if (!actor.task || actor.task.id !== task.id || task.status !== 'running')
@@ -819,7 +823,7 @@ export class CollaborationHub extends EventEmitter {
           };
           mark(task);
         }
-        if (method !== 'cancel') { task.revision++; task.updatedAt = Date.now(); }
+        if (method !== 'cancel' && !completedAnnotation) { task.revision++; task.updatedAt = Date.now(); }
         if (method === 'resolve') this.deliverToParent(state, task);
         if (bytes(task.messages) > 192 * 1024) throw new Error('Task context capacity reached; no messages were truncated.');
       }

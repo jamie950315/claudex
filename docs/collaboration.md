@@ -163,6 +163,9 @@ reports or tools.
 For completed results, `review-result` with `decision: "reviewed"` or
 `"integrated"` records an explicit controller/parent statement. Simply opening
 the Mod view or reading an artifact does not claim adoption or integration.
+Reviewing a completed result, or closing its remaining blocker, annotates that
+same result without advancing its work revision or completion timestamp. It
+does not manufacture another unread child outcome or completion notification.
 
 ### Delivery evidence
 
