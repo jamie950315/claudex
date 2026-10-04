@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.6 packages Claude Mod 0.8.5. Keep application and Mod versions
+Claudex.app 1.2.7 packages Claude Mod 0.8.6. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -288,8 +288,14 @@ harness. Do not defer all new completions until a long cold sweep finishes.
 
 ## Cross-model collaboration
 
-Cache warming is separately opt-in per loaded Claude session. `src/cache-warm.mjs`
-owns bounded durable policies and one-use attempts; the Mod's cache-warm client
+Cache warming is separately opt-in per loaded Claude session. The Mod exposes
+`/claudex:warm on [5m|1h]`, `off`, `status` and one-use
+confirmation for the current native session only. Ship `skills/warm/SKILL.md`
+in both allowlists for native catalogue discovery; intercept `claudex:warm`
+locally in `command.run`, preserving native origin and never delegating to a
+model. Its TTL override must not update shared remember/default preferences.
+Keep legacy `/claudex warm` persistence controls and Codex CLI controls distinct.
+`src/cache-warm.mjs` owns bounded durable policies and one-use attempts; the Mod's cache-warm client
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
 proof. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an

@@ -13,7 +13,7 @@ import { CollaborationHub } from '../../src/collaboration-hub.mjs';
 import { serveCollaborationSocket } from '../../src/collaboration-transport.mjs';
 import { modSessionObservation } from '../../src/mod-wake-broker.mjs';
 
-const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' } } });
+const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' }, 'warm-command': { type: 'boolean' } } });
 assert(values.run && values.root && values.claude, 'Supply --run, a new private --root and native --claude executable.');
 assert.equal(process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, '1', 'Requires the authorized process-only Mod opt-in.');
 const root = await realpath(values.root), binary = await realpath(values.claude);
@@ -79,7 +79,7 @@ async function session(work) {
     } } catch (error) { fault = error; pending?.reject(error); active.close(); }
   })();
   async function send(command) {
-    assert(/^\/claudex warm (?:status|off|on ttl=(?:1h|5m)|preference (?:session|(?:remember|default) ttl=(?:1h|5m))|confirm warm-[a-zA-Z0-9-]+)$/.test(command));
+    assert(/^\/claudex(?: warm|:warm) (?:status|off|on (?:ttl=)?(?:1h|5m)|preference (?:session|(?:remember|default) ttl=(?:1h|5m))|confirm warm-[a-zA-Z0-9-]+)$/.test(command));
     assert(!pending && !fault); report.commands++;
     let timer;
     const done = new Promise((resolve, reject) => { pending = { resolve, reject }; });
@@ -94,7 +94,11 @@ async function session(work) {
     } finally { clearTimeout(timer); }
   }
   try {
-    await active.initializationResult();
+    const initialization = await active.initializationResult();
+    if (values['warm-command']) {
+      assert(initialization.commands.some(command => command.name === 'claudex:warm'), 'Namespaced warm command missing from the native catalogue.');
+      entry.namespacedCommandListed = true;
+    }
     let ready = false;
     for (let i = 0; i < 50; i++) {
       const source = [...observedSources.values()].find(source => !previousIds.has(source.sessionId) && source.cwd === cwd);
@@ -123,25 +127,47 @@ async function confirm(send, command) {
   return send(preview.confirm);
 }
 try {
-  await session(async (send, initial) => {
-    assert.equal(initial.nativeTtl, '5m');
-    await confirm(send, '/claudex warm preference default ttl=1h');
-    await confirm(send, '/claudex warm on ttl=5m'); await send('/claudex warm off');
-  });
-  await session(async (send, initial) => {
-    assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.restore, 'applied');
-    await confirm(send, '/claudex warm preference remember ttl=5m');
-    await confirm(send, '/claudex warm on ttl=1h'); await send('/claudex warm off');
-  });
-  await session(async (send, initial) => {
-    assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.preference.mode, 'remember');
-    await confirm(send, '/claudex warm preference session');
-  });
-  await session(async (_send, initial) => {
-    assert.equal(initial.nativeTtl, '5m'); assert.equal(initial.restore, 'session-only');
-  });
+  if (values['warm-command']) {
+    await session(async send => {
+      await confirm(send, '/claudex warm preference remember ttl=1h');
+      const preview = await send('/claudex:warm on 5m');
+      assert.equal(preview.state, 'confirmation-required');
+      assert.equal(preview.ttl, '5m'); assert.equal(preview.savesTtlPreference, false);
+      assert.match(preview.confirm, /^\/claudex:warm confirm warm-/);
+      await send(preview.confirm);
+      const status = await send('/claudex:warm status');
+      assert.equal(status.local.enabled, true); assert.equal(status.nativeCache.value, '5m');
+      assert.equal(status.ttlPreference.ttl, '1h');
+      await send('/claudex:warm off');
+      assert.equal((await send('/claudex:warm status')).nativeCache.value, '5m');
+    });
+    await session(async (send, initial) => {
+      assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.preference.ttl, '1h');
+      assert.equal(initial.enabled, false);
+      await confirm(send, '/claudex:warm on ttl=1h');
+      await send('/claudex:warm off');
+    });
+  } else {
+    await session(async (send, initial) => {
+      assert.equal(initial.nativeTtl, '5m');
+      await confirm(send, '/claudex warm preference default ttl=1h');
+      await confirm(send, '/claudex warm on ttl=5m'); await send('/claudex warm off');
+    });
+    await session(async (send, initial) => {
+      assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.restore, 'applied');
+      await confirm(send, '/claudex warm preference remember ttl=5m');
+      await confirm(send, '/claudex warm on ttl=1h'); await send('/claudex warm off');
+    });
+    await session(async (send, initial) => {
+      assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.preference.mode, 'remember');
+      await confirm(send, '/claudex warm preference session');
+    });
+    await session(async (_send, initial) => {
+      assert.equal(initial.nativeTtl, '5m'); assert.equal(initial.restore, 'session-only');
+    });
+  }
   assert.equal(report.modelTurns, 0); assert.equal((await hub.cacheWarm.list()).attemptCount, 0);
-  report.outcome = 'native-preference-restarts-verified';
+  report.outcome = values['warm-command'] ? 'native-namespaced-warm-command-verified' : 'native-preference-restarts-verified';
 } catch (error) { report.outcome = 'failed'; report.error = error.message; process.exitCode = 1; }
 finally {
   await transport.close(); await hub.close();

@@ -14,6 +14,7 @@ export const MOD_STAGE_FILES = [
   'plugins/claudex/hooks/cache-warm.mjs',
   'plugins/claudex/tests/native.test.ts', 'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
+  'plugins/claudex/skills/warm/SKILL.md',
   'bin/claudex-mod-bridge.mjs', 'src/claude-mod-bridge.mjs',
   'src/claude-mod-storage.mjs', 'src/claude-mod-protocol.mjs',
   'src/claude-mod-wake-outbox.mjs', 'src/claude-mod-self-inbox.mjs',

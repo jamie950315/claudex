@@ -23,6 +23,7 @@ export const ENGINE_PLUGIN_FILES = Object.freeze([
   'plugins/claudex/tests/native.test.ts',
   'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
+  'plugins/claudex/skills/warm/SKILL.md',
 ]);
 export const ENGINE_SRC = Object.freeze([
   'cache-warm.mjs',

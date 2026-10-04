@@ -207,7 +207,16 @@ export function createCacheWarmClient() {
       cancel(b); b.epoch++; b.pending = null; b.sample = null; confirmation = null;
       b.reason = 'native-configuration-changed';
     },
-    async command(host, words, origin, expectedContext) {
+    async sessionCommand(host, words, origin) {
+      if (!words.length) words = ['status'];
+      if (!['status', 'on', 'off', 'confirm'].includes(words[0]))
+        throw new Error('Use /claudex:warm on [5m|1h|ttl=5m|ttl=1h], off, status, or confirm TOKEN.');
+      // This shortcut never changes the shared startup preference, including
+      // remember-last. Preserve the native origin; do not manufacture a user.
+      words = words.map((word, index) => index > 0 && words[0] === 'on' && ['5m', '1h'].includes(word) ? `ttl=${word}` : word);
+      return this.command(host, words, origin, undefined, { sessionOnly: true });
+    },
+    async command(host, words, origin, expectedContext, { sessionOnly = false } = {}) {
       if (await host.worker()) throw new Error('Managed worker cache warming is disabled.');
       if (!binding || !same(binding.context, await host.context())) await this.start(host);
       const b = binding;
@@ -241,7 +250,7 @@ export function createCacheWarmClient() {
         else if (!words.slice(1).some(word => word.startsWith('ttl='))) bounds.ttl = preferenceBefore.ttl ?? '1h';
         confirmation = null;
         const nativeBefore = bounds.ttl ? await host.checkCacheTtl(bounds.ttl) : await host.readCacheTtl();
-        confirmation = { id: token(), b, epoch: b.epoch, expiresAt: now + 120000, bounds, preference, preferenceBefore, settingsOnly: preferenceOnly || ttlOnly };
+        confirmation = { id: token(), b, epoch: b.epoch, expiresAt: now + 120000, bounds, preference, preferenceBefore, settingsOnly: preferenceOnly || ttlOnly, sessionOnly };
         if (ttlOnly) return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
           ttl: bounds.ttl, ttlPreference: preferenceBefore, nativeBefore: nativeBefore.value,
           effects: 'Apply the native main-cache TTL to this process and future children without enabling warming. Stops local warming. Remember mode saves this choice; a fixed default is unchanged. One-hour cache writes may cost more. Global settings and the subagent TTL variable are unchanged.',
@@ -258,12 +267,15 @@ export function createCacheWarmClient() {
             variable: 'CLAUDE_CODE_PROMPT_CACHE_TTL', affectsSubagentTtl: false, writesGlobalSettings: false },
           observedCachedPrefixTokens: b.sample ? b.sample.cacheReadTokens + b.sample.cacheWriteTokens : null,
           nativeOutputCapUnchanged: true,
-          effects: 'Confirming sets the real native main-cache TTL for this process and future children, then enables real plugin-origin OK turns that consume quota and remain in history. Remember mode also saves this TTL for future sessions; default mode keeps its fixed startup TTL. One-hour cache writes can cost more than five-minute writes. Global settings and the subagent TTL variable are unchanged. Model and effort are inherited. Token bounds stop future refreshes, not a hard per-request cap. Turning warming off does not undo the native TTL choice.',
-          expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
+          savesTtlPreference: !sessionOnly && preferenceBefore.mode === 'remember',
+          effects: 'Confirming sets the real native main-cache TTL for this process and future children, then enables real plugin-origin OK turns that consume quota and remain in history. '
+            + (sessionOnly ? 'This session-only command never changes saved startup preferences or remembered TTL choices. Other running sessions are unchanged. ' : 'Remember mode also saves this TTL for future sessions; default mode keeps its fixed startup TTL. ')
+            + 'One-hour cache writes can cost more than five-minute writes. Global settings and the subagent TTL variable are unchanged. Model and effort are inherited. Token bounds stop future refreshes, not a hard per-request cap. Turning warming off does not undo the native TTL choice.',
+          expiresAt: confirmation.expiresAt, confirm: `${sessionOnly ? '/claudex:warm' : '/claudex warm'} confirm ${confirmation.id}` };
       }
       if (words[0] === 'confirm' && words.length === 2) {
         const prepared = confirmation; confirmation = null;
-        if (!prepared || prepared.id !== words[1] || prepared.b !== b || prepared.epoch !== b.epoch)
+        if (!prepared || prepared.id !== words[1] || prepared.b !== b || prepared.epoch !== b.epoch || prepared.sessionOnly !== sessionOnly)
           throw new Error('Cache warming confirmation expired or its native context changed.');
         if (b.phase !== 'idle' || b.pending || b.dispatch || b.checking || b.configuring || b.restoring || b.turn?.attemptId)
           throw new Error('Wait for the current native turn before changing the native cache TTL.');
@@ -298,7 +310,7 @@ export function createCacheWarmClient() {
             b.ttlPreference = prepared.bounds.ttl;
           }
           await guard();
-          const saved = prepared.preference ?? (prepared.preferenceBefore.mode === 'remember'
+          const saved = prepared.preference ?? (!prepared.sessionOnly && prepared.preferenceBefore.mode === 'remember'
             ? { ...prepared.preferenceBefore, ttl: prepared.bounds.ttl } : null);
           if (saved) {
             if (!preferenceEqual(await readPreference(host), prepared.preferenceBefore)) throw new Error('TTL preference changed before save; confirm again.');

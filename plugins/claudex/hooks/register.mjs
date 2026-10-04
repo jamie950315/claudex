@@ -188,6 +188,14 @@ export function register(on, options = {}) {
     $.ui.invalidate('ui.render');
     return result;
   });
+  // The shipped warm skill supplies the native namespaced catalogue entry.
+  // Return locally without next(): never execute its model prompt as a command.
+  on('command.run', { command: 'claudex:warm' }, async ($, e) => {
+    try {
+      const words = (e.args ?? '').trim().split(/\s+/u).filter(Boolean);
+      return { text: JSON.stringify(await cacheWarm.sessionCommand(api($, options), words, e.origin), null, 2) };
+    } catch (error) { return { text: `Cache warming: ${error.message}` }; }
+  });
   on('command.run', { command: 'claudex' }, async ($, e) => {
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') return { text: localization.t('Use this managed worker\'s existing generation-scoped MCP tools.') };
     await localization.load(api($, options));

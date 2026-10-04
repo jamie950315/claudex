@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.6 and Claude Mod 0.8.5 provide bounded, per-conversation cache warming.
+Claudex 1.2.7 and Claude Mod 0.8.6 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,10 +16,38 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.5 companion and
-a 1.2.6 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.6 companion and
+a 1.2.7 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
+
+The session-only shortcut is:
+
+```text
+/claudex:warm on
+/claudex:warm on 5m
+/claudex:warm on 1h
+/claudex:warm confirm TOKEN
+/claudex:warm off
+/claudex:warm status
+```
+
+Choose one `on` form, then run the exact confirmation command it prints;
+`TOKEN` above is a placeholder. `ttl=5m` and `ttl=1h` are also supported.
+With no TTL argument, the saved startup preference supplies the TTL, or 1h
+when none is saved. With no arguments at all, the command shows status.
+Only this native session is targeted, automatically; session IDs and paths
+cannot be supplied. Even in remember-last mode, this shortcut does not change
+the saved TTL or mode for other/future sessions. `off` does not revert the TTL.
+
+Claude's native skill catalogue supplies the namespaced entry; the loaded Mod
+intercepts it as a local command without invoking a model. If the Mod is not
+loaded, the skill body cannot perform warming: it only explains the missing
+handler and forbids a model/tool fallback. Do not invoke it on an installation
+without active Mod hooks expecting a zero-model local command. Codex does not
+use this Claude-only handler; its separate CLI controls below are unchanged.
+
+The existing advanced command remains available:
 
 ```text
 /claudex warm status
@@ -86,6 +114,14 @@ For Claude, the CLI does not enable a conversation remotely. Select it in the na
 and confirm there. Status is read-only and does not start models or renew a
 cache. Native command output is structured technical JSON; the pane provides
 equivalent controls for TTL and startup preferences.
+
+Native 2.1.286 acceptance for Mod 0.8.6 verified that `claudex:warm` appears in
+the real command catalogue. Fourteen local commands across two isolated native
+processes exercised positional 5m, keyed 1h, confirmation, status and off with
+zero model turns or warm attempts. The first process retained its session-only
+5m choice while the next restored the unchanged remembered 1h; both exited.
+This verifies command dispatch and setting scope, not a new cache-retention test
+or installation into already-loaded user sessions.
 
 ## Claude native Cache settings tab
 

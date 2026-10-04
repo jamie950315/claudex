@@ -385,6 +385,19 @@ test('cache warming status stays read-only and plugin-origin commands cannot opt
   expect(seen.length).toBe(1)
 })
 
+test('namespaced warm command answers locally and preserves native user-origin requirements', async ($, on) => {
+  const seen: any[] = []
+  stubs(on, false, request => { seen.push(request); return { policies: [] } })
+  await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
+  seen.length = 0
+  const status = await $.command.run({ command: 'claudex:warm', args: '' })
+  expect(JSON.parse(status.text).local.enabled).toBe(false)
+  expect(seen.map(item => item.action)).toEqual(['list'])
+  const enable = await $.command.run({ command: 'claudex:warm', args: 'on 5m' })
+  expect(enable.text).toMatch(/explicit native user command/)
+  expect(seen.length).toBe(1)
+})
+
 test('saved TTL preference is applied through native startup APIs without enabling warming', async ($, on) => {
   const seen: any[] = []
   stubs(on, false, request => { seen.push(request); return { policies: [] } }, 'en', undefined,

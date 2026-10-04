@@ -1,6 +1,6 @@
 {
   "name": "claudex",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "author": { "name": "Claudex contributors" },
   "description": "AI-first Claudex session observations, reviewed operations and exact-session receipt handling.",
   "userConfig": {
