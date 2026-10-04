@@ -2,7 +2,7 @@
 
 ## Current companion: 0.8.11
 
-Claudex.app 1.2.15 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.2.16 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
 Version 0.8.11 gives invalid MCP arguments a stable `CLAUDEX_INVALID_ARGUMENTS`

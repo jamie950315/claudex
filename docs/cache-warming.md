@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.15 and Claude Mod 0.8.11 provide bounded, per-conversation cache warming.
+Claudex 1.2.16 and Claude Mod 0.8.11 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -17,7 +17,7 @@ observes and submits only into its own existing native session.
 ## Enable one Claude conversation
 
 Use the intended existing conversation with a freshly loaded 0.8.11 companion and
-a 1.2.15 broker. Older loaded sessions can retain the previous Mod until a normal
+a 1.2.16 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 

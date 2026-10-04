@@ -1,11 +1,16 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
-import { access, lstat, mkdir, open } from 'node:fs/promises';
+import { access, lstat, mkdir, open, realpath, rename, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { delimiter, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { resolveBundledCodex } from './codex-app-layout.mjs';
 
 const execute = promisify(execFile);
+const CLAUDE_PACKAGE = '@anthropic-ai/claude-code';
+const CLAUDE_VERSION = '2.1.283';
+const FILE_IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
+const sameFile = (left, right) => FILE_IDENTITY.every(key => left[key] === right[key]);
 const expected = {
   codex: { names: ['ChatGPT.app', 'Codex.app'], id: 'com.openai.codex', team: '2DC432GLL2' },
   // Users may run a locally patched Claude build (for example a translation)
@@ -161,14 +166,104 @@ async function installCli(name, root, runtime, home, run) {
   await emptyNpmConfig(userconfig);
   await emptyNpmConfig(globalconfig);
   await emptyNpmConfig(join(prefix, '.npmrc'));
-  const packageName = name === 'codex' ? '@openai/codex@0.158.0-alpha.2.1' : '@anthropic-ai/claude-code@2.1.283';
+  const wrapper = join(prefix, 'node_modules', CLAUDE_PACKAGE, 'bin', 'claude.exe');
+  const existingClaudeBinary = name === 'claude' && await exists(wrapper);
+  const packageName = name === 'codex' ? '@openai/codex@0.158.0-alpha.2.1' : `${CLAUDE_PACKAGE}@${CLAUDE_VERSION}`;
   const cliEnv = { HOME: home, LANG: process.env.LANG || 'C.UTF-8',
     PATH: `${join(runtime, 'bin')}${delimiter}${process.env.PATH || ''}`,
     npm_config_cache: cache, npm_config_registry: 'https://registry.npmjs.org',
     npm_config_userconfig: userconfig, npm_config_globalconfig: globalconfig };
   await run(node, [npm, 'install', '--prefix', prefix, '--no-audit', '--no-fund', packageName], { cwd: prefix, env: cliEnv });
+  if (name === 'claude' && !existingClaudeBinary) await separateFreshClaudeWrapper(prefix);
   const binary = join(prefix, 'node_modules', '.bin', name);
   if (!await versionOf(binary, run, cliEnv)) throw new Error(`Official ${name} CLI package did not provide a working binary.`);
+}
+
+async function providerMetadata(path) {
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await file.stat({ bigint: true });
+    if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n
+      || (before.mode & 0o022n) || before.size > 1024n * 1024n || !sameFile(before, await lstat(path, { bigint: true })))
+      throw new Error('Fresh Claude provider metadata is not an owned protected single-link regular file.');
+    const value = JSON.parse(await file.readFile('utf8'));
+    if (!sameFile(before, await file.stat({ bigint: true })) || !sameFile(before, await lstat(path, { bigint: true })))
+      throw new Error('Fresh Claude provider metadata changed during verification.');
+    return value;
+  } finally { await file.close(); }
+}
+
+// The official postinstall may hardlink its wrapper to the platform package.
+// Detach only that exact newly installed pair; never repair an existing CLI or
+// relax the Mod manager's single-link executable guard.
+async function separateFreshClaudeWrapper(prefix) {
+  const wrapperRoot = join(prefix, 'node_modules', CLAUDE_PACKAGE);
+  const wrapper = join(wrapperRoot, 'bin', 'claude.exe');
+  const before = await lstat(wrapper, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink() || before.uid !== BigInt(process.getuid()) || (before.mode & 0o022n))
+    throw new Error('Fresh Claude provider wrapper is not an owned protected regular file.');
+  if (before.nlink === 1n) return;
+  if (before.nlink !== 2n) throw new Error('Fresh Claude provider wrapper has unexpected hardlink aliases.');
+  const nativeName = `${CLAUDE_PACKAGE}-${process.platform}-${process.arch}`;
+  const nativeRoot = join(prefix, 'node_modules', nativeName), native = join(nativeRoot, 'claude');
+  const directories = [prefix, join(prefix, 'node_modules'), join(prefix, 'node_modules', '@anthropic-ai'),
+    wrapperRoot, join(wrapperRoot, 'bin'), nativeRoot];
+  for (const path of directories) {
+    const info = await lstat(path);
+    if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022)
+      || await realpath(path) !== path) throw new Error('Fresh Claude provider package directory is not canonical and protected.');
+  }
+  const manifest = await providerMetadata(join(wrapperRoot, 'package.json'));
+  const platformManifest = await providerMetadata(join(nativeRoot, 'package.json'));
+  if (manifest.name !== CLAUDE_PACKAGE || manifest.version !== CLAUDE_VERSION || manifest.bin?.claude !== 'bin/claude.exe'
+    || manifest.optionalDependencies?.[nativeName] !== CLAUDE_VERSION || platformManifest.name !== nativeName
+    || platformManifest.version !== CLAUDE_VERSION || JSON.stringify(platformManifest.os) !== JSON.stringify([process.platform])
+    || JSON.stringify(platformManifest.cpu) !== JSON.stringify([process.arch]))
+    throw new Error('Fresh Claude provider hardlink does not match the pinned official platform package.');
+  const alias = await lstat(native, { bigint: true });
+  if (!alias.isFile() || alias.isSymbolicLink() || !sameFile(before, alias)
+    || await realpath(join(prefix, 'node_modules', '.bin', 'claude')) !== wrapper)
+    throw new Error('Fresh Claude provider hardlink does not match its exact native executable alias.');
+  const source = await open(wrapper, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const temporary = join(wrapperRoot, 'bin', `.claude-${randomUUID()}.exe`);
+  let destination, published = false;
+  try {
+    if (!sameFile(before, await source.stat({ bigint: true }))) throw new Error('Fresh Claude provider executable changed while opening.');
+    destination = await open(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    const buffer = Buffer.alloc(1024 * 1024);
+    let position = 0;
+    while (true) {
+      const { bytesRead } = await source.read(buffer, 0, buffer.length, position);
+      if (!bytesRead) break;
+      let written = 0;
+      while (written < bytesRead) {
+        const reply = await destination.write(buffer, written, bytesRead - written, position + written);
+        if (!reply.bytesWritten) throw new Error('Fresh Claude provider executable copy did not advance.');
+        written += reply.bytesWritten;
+      }
+      position += bytesRead;
+    }
+    await destination.chmod(Number(before.mode & 0o777n)); await destination.sync();
+    const copy = await destination.stat({ bigint: true });
+    if (BigInt(position) !== before.size || copy.size !== before.size || !copy.isFile() || copy.nlink !== 1n
+      || copy.uid !== before.uid || (copy.mode & 0o777n) !== (before.mode & 0o777n)
+      || !sameFile(copy, await lstat(temporary, { bigint: true }))
+      || !sameFile(before, await source.stat({ bigint: true })) || !sameFile(before, await lstat(wrapper, { bigint: true }))
+      || !sameFile(before, await lstat(native, { bigint: true })))
+      throw new Error('Fresh Claude provider executable aliases changed during separation.');
+    await rename(temporary, wrapper); published = true;
+    const retained = await source.stat({ bigint: true }), installed = await destination.stat({ bigint: true });
+    // Rename/unlink changes ctime and the original inode's link count.
+    // All content, ownership and executable identity fields must remain exact.
+    if (retained.nlink !== 1n || !sameFile(retained, await lstat(native, { bigint: true }))
+      || FILE_IDENTITY.filter(key => !['ctimeNs', 'nlink'].includes(key)).some(key => retained[key] !== before[key])
+      || FILE_IDENTITY.filter(key => key !== 'ctimeNs').some(key => installed[key] !== copy[key])
+      || !sameFile(installed, await lstat(wrapper, { bigint: true })))
+      throw new Error('Fresh Claude provider executable separation did not preserve both protected files.');
+  } finally {
+    await destination?.close(); await source.close();
+    if (!published && destination) await unlink(temporary).catch(error => { if (!absent(error)) throw error; });
+  }
 }
 
 async function emptyNpmConfig(path) {

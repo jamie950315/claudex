@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rm, readFile, lstat, symlink, link, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rm, readFile, lstat, symlink, link, chmod, realpath, copyFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverProviders, ensureProviders } from '../src/app-providers.mjs';
+import { findAppModRuntime } from '../src/app-mod-runtime.mjs';
 
 async function fixture(t) {
-  const base = await mkdtemp(join(tmpdir(), 'claudex-providers-test-'));
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'claudex-providers-test-')));
   t.after(() => rm(base, { recursive: true, force: true }));
   const home = join(base, 'home');
   const root = join(base, 'root');
@@ -25,7 +26,26 @@ async function app(home, name) {
   return path;
 }
 
-function runner({ commands = [], wrongTeam = false, install = false } = {}) {
+async function claudePackage(prefix, { hardlink = false, mutate } = {}) {
+  const packageName = '@anthropic-ai/claude-code', nativeName = `${packageName}-${process.platform}-${process.arch}`;
+  const wrapperRoot = join(prefix, 'node_modules', packageName), nativeRoot = join(prefix, 'node_modules', nativeName);
+  await mkdir(join(wrapperRoot, 'bin'), { recursive: true, mode: 0o700 });
+  await mkdir(nativeRoot, { mode: 0o700 });
+  await writeFile(join(wrapperRoot, 'package.json'), JSON.stringify({ name: packageName, version: '2.1.283',
+    bin: { claude: 'bin/claude.exe' }, optionalDependencies: { [nativeName]: '2.1.283' } }), { mode: 0o600 });
+  await writeFile(join(nativeRoot, 'package.json'), JSON.stringify({ name: nativeName, version: '2.1.283',
+    os: [process.platform], cpu: [process.arch] }), { mode: 0o600 });
+  const native = join(nativeRoot, 'claude'), wrapper = join(wrapperRoot, 'bin', 'claude.exe');
+  await writeFile(native, 'Synthetic native executable bytes.', { mode: 0o755 });
+  await chmod(native, 0o755);
+  if (hardlink) await link(native, wrapper); else await copyFile(native, wrapper);
+  const binary = join(prefix, 'node_modules', '.bin', 'claude');
+  await symlink('../@anthropic-ai/claude-code/bin/claude.exe', binary);
+  await mutate?.({ wrapperRoot, nativeRoot, native, wrapper, binary });
+  return { wrapperRoot, nativeRoot, native, wrapper, binary };
+}
+
+function runner({ commands = [], wrongTeam = false, install = false, hardlink = false, mutate } = {}) {
   return async (command, args) => {
     commands.push([command, ...args]);
     if (command === '/usr/bin/codesign' && args[0] === '--verify') return {};
@@ -38,7 +58,8 @@ function runner({ commands = [], wrongTeam = false, install = false } = {}) {
       const name = prefix.includes('codex-cli') ? 'codex' : 'claude';
       const binary = join(prefix, 'node_modules', '.bin', name);
       await mkdir(join(prefix, 'node_modules', '.bin'), { recursive: true });
-      await writeFile(binary, '', { mode: 0o755 });
+      if (name === 'claude') await claudePackage(prefix, { hardlink, mutate });
+      else await writeFile(binary, '', { mode: 0o755 });
       return {};
     }
     if (args[0] === '--version') return { stdout: `${command.includes('claude') ? '2.1.283' : '0.158.0'}\n` };
@@ -90,6 +111,97 @@ test('signed desktop prerequisites allow private installation of missing CLIs', 
   assert.equal(found.claude.issue, undefined);
   assert.equal(configs.length, 2);
   assert.deepEqual(configs[0], configs[1], 'both CLI installs reuse only the two verified empty config files');
+});
+
+test('fresh official provider hardlink is separated before normal Mod manager selection', async t => {
+  const options = await fixture(t); await chmod(options.root, 0o700);
+  await app(options.home, 'ChatGPT.app'); await app(options.home, 'Claude.app');
+  const commands = [], installed = [];
+  const run = runner({ commands, install: true, hardlink: true, mutate: async value => {
+    const before = await lstat(value.wrapper);
+    installed.push({ ...value, before, bytes: await readFile(value.native) });
+    assert.equal(before.nlink, 2);
+  } });
+  const found = await ensureProviders({ ...options, run });
+  assert.equal(found.claude.issue, undefined);
+  const [value] = installed;
+  for (const path of [value.wrapper, value.native]) {
+    const info = await lstat(path);
+    assert.equal(info.nlink, 1); assert.equal(info.mode & 0o777, 0o755);
+    assert.deepEqual(await readFile(path), value.bytes);
+  }
+  assert.equal((await lstat(value.native)).ino, value.before.ino, 'native package bytes/inode remain intact');
+  assert.notEqual((await lstat(value.wrapper)).ino, value.before.ino);
+  const probes = [];
+  const selected = await findAppModRuntime({ root: options.root, home: options.home, runtime: options.runtime,
+    claudeBinary: found.claude.binary, run: async (binary, args) => {
+      probes.push({ binary, args });
+      return { stdout: args[0] === '--version' ? '2.1.283 (Claude Code)\n' : `Usage: claude plugin ${args[1]} [options]\n` };
+    } });
+  assert.equal(selected.state, 'ready'); assert.equal(selected.source, 'provided-native-cli');
+  assert.equal(probes.length, 3);
+});
+
+test('fresh provider separation refuses unexpected aliases and package identities without changing bytes', async t => {
+  const cases = {
+    'extra alias': async value => { await link(value.wrapper, value.wrapper + '.extra'); },
+    'foreign alias': async value => {
+      const outside = value.wrapper + '.original'; await writeFile(outside, 'Preserve unrelated executable.', { mode: 0o700 });
+      await rm(value.wrapper); await link(outside, value.wrapper);
+    },
+    'wrapper version': async value => {
+      const path = join(value.wrapperRoot, 'package.json'), manifest = JSON.parse(await readFile(path, 'utf8'));
+      manifest.version = '2.1.999'; await writeFile(path, JSON.stringify(manifest));
+    },
+    'native version': async value => {
+      const path = join(value.nativeRoot, 'package.json'), manifest = JSON.parse(await readFile(path, 'utf8'));
+      manifest.version = '2.1.999'; await writeFile(path, JSON.stringify(manifest));
+    },
+    'native architecture': async value => {
+      const path = join(value.nativeRoot, 'package.json'), manifest = JSON.parse(await readFile(path, 'utf8'));
+      manifest.cpu = ['unrecognized']; await writeFile(path, JSON.stringify(manifest));
+    },
+    'linked metadata': async value => { await link(join(value.wrapperRoot, 'package.json'), value.wrapper + '.metadata'); },
+    'foreign writable wrapper': async value => { await chmod(value.wrapper, 0o777); },
+    'native symlink': async value => {
+      await link(value.wrapper, value.wrapper + '.retained'); await rm(value.native); await symlink(value.wrapper, value.native);
+    },
+    'native directory symlink': async value => {
+      const { rename } = await import('node:fs/promises');
+      await rename(value.nativeRoot, value.nativeRoot + '.original'); await symlink(value.nativeRoot + '.original', value.nativeRoot);
+    },
+    'foreign command target': async value => {
+      const outside = value.wrapper + '.command'; await writeFile(outside, 'Preserve unrelated command.', { mode: 0o700 });
+      await rm(value.binary); await symlink(outside, value.binary);
+    },
+  };
+  for (const [name, mutate] of Object.entries(cases)) await t.test(name, async t => {
+    const options = await fixture(t);
+    await app(options.home, 'ChatGPT.app'); await app(options.home, 'Claude.app');
+    let installed, before;
+    const found = await ensureProviders({ ...options, run: runner({ install: true, hardlink: true, mutate: async value => {
+      await mutate(value); installed = value; before = await readFile(value.wrapper);
+    } }) });
+    assert.match(found.claude.issue, /CLI installation failed:/);
+    assert.deepEqual(await readFile(installed.wrapper), before);
+  });
+});
+
+test('existing private provider hardlink stays unchanged and the normal manager guard still blocks it', async t => {
+  const options = await fixture(t); await chmod(options.root, 0o700);
+  await app(options.home, 'ChatGPT.app'); await app(options.home, 'Claude.app');
+  const prefix = join(options.root, 'providers', 'claude-cli');
+  await mkdir(join(prefix, 'node_modules', '.bin'), { recursive: true, mode: 0o700 });
+  const existing = await claudePackage(prefix, { hardlink: true }), before = await lstat(existing.wrapper);
+  const commands = [], found = await ensureProviders({ ...options, run: runner({ commands, install: true }) });
+  assert.equal(found.claude.binary, existing.binary);
+  assert.equal(commands.some(args => args.includes('@anthropic-ai/claude-code@2.1.283')), false);
+  assert.equal((await lstat(existing.wrapper)).ino, before.ino);
+  assert.equal((await lstat(existing.wrapper)).nlink, 2);
+  const probes = [], selected = await findAppModRuntime({ root: options.root, home: options.home, runtime: options.runtime,
+    claudeBinary: found.claude.binary, run: async (...args) => { probes.push(args); throw new Error('Must not execute'); } });
+  assert.equal(selected.state, 'blocked'); assert.match(selected.reason, /canonical, owned/);
+  assert.deepEqual(probes, []);
 });
 
 test('provider bootstrap refuses and preserves nonempty, linked and foreign-writable npm config', async t => {
