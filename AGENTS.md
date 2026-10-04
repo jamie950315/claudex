@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.19 packages Claude Mod 0.8.14. Keep application and Mod versions
+Claudex.app 1.2.20 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -74,6 +74,8 @@ fixtures use placeholder paths and IDs.
 - Read transcript snapshots through a no-follow file descriptor and compare its
   nanosecond file identity with the named file before and after reading. Size and
   modification time alone do not prove stability after a replacement or rewrite.
+  Relocation evidence uses the same exact identity, including mode; millisecond
+  timestamps are presentation values only.
 - Before truncating a reusable staging file, verify its opened inode is an owned
   regular file with exactly one link and still matches the named file. No-follow
   alone does not protect originals against hardlink staging aliases. Controlled

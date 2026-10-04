@@ -354,7 +354,12 @@ four 100-item pages of one exact native turn. Persistent primary Codex `cli`,
 call/result proof requirements; a CLI origin opened in Desktop keeps its source
 label. Exact catalog lookup explicitly includes these three primary source kinds,
 since the native default thread list can omit `exec`; unknown and auxiliary
-sources remain refused. Claude uses the exact native UUID
+sources remain refused. The reviewed Codex Desktop 0.160.0 `vscode` response
+uses `threadSource: null`. That exact Desktop schema additionally requires its
+native Desktop originator, direct-input capability and explicit null fork,
+parent, agent-role and agent-nickname markers. Missing markers, other nullable
+schemas and native versions remain unbound; the complete exact call/result proof
+is still mandatory. Claude uses the exact native UUID
 and cwd to locate one stable no-follow private transcript of at most 16 MiB in
 the broker's Claude home (`~/.claude` in the standard installation). Desktop Local
 registry membership is not required: persisted same-host CLI, SDK and Remote

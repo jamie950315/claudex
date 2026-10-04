@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { link, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import fs, { link, lstat, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -32,14 +33,59 @@ async function fixture() {
 
 test('native relocation verifies exact identity and stable bytes without changing native files', async () => {
   const f = await fixture(), before = await readFile(f.path), registry = await readFile(f.registryPath);
+  const beforeIdentity = await lstat(f.path, { bigint: true });
   const result = await f.inspect();
   assert.equal(result.path, f.path); assert.equal(result.cwd, f.cwd); assert.equal(result.nativeId, f.record.nativeId);
   assert.equal(result.previousPath, f.record.path); assert.equal(result.previousCwd, f.record.cwd);
   assert.equal(result.mapping.sessionId, f.mapping.sessionId); assert.notEqual(result.mapping.sessionId.slice(6), result.nativeId);
   assert.equal(result.snapshot.bytes, before.length); assert.equal(result.snapshot.rows.length, f.rows.length);
-  assert.match(result.snapshot.hash, /^[a-f0-9]{64}$/); assert.equal(result.snapshot.identity.nlink, 1);
+  assert.match(result.snapshot.hash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(result.snapshot.identity, Object.fromEntries(
+    ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'].map(key => [key, String(beforeIdentity[key])])));
+  assert.doesNotThrow(() => JSON.stringify(result));
   assert.deepEqual(await readFile(f.path), before); assert.deepEqual(await readFile(f.registryPath), registry);
 });
+
+function mockFsMethod(t, method, replacement) {
+  const original = fs[method];
+  const mocked = t.mock.method(fs, method, (...args) => replacement(original, ...args));
+  syncBuiltinESMExports();
+  t.after(() => { mocked.mock.restore(); syncBuiltinESMExports(); });
+}
+
+for (const [stage, key] of [['opened-file', 'mtimeNs'], ['read-file', 'ctimeNs'],
+  ['read-file', 'mode'], ['final-path', 'mtimeNs']]) {
+  test(`relocation rejects an exact ${key} change at ${stage} even when legacy identity fields match`, async t => {
+    const f = await fixture(), before = await readFile(f.path), registry = await readFile(f.registryPath);
+    const native = await lstat(f.path, { bigint: true });
+    const changed = key === 'mode' ? native.mode ^ 0o200n : native[key] + 1n;
+    let injected = false, readStarted = false, pathStats = 0;
+    const change = info => { info[key] = changed; injected = true; return info; };
+    if (stage === 'final-path') {
+      mockFsMethod(t, 'lstat', async (original, target, ...args) => {
+        const info = await original(target, ...args);
+        return target === f.path && ++pathStats === 3 ? change(info) : info;
+      });
+    } else {
+      mockFsMethod(t, 'open', async (original, target, ...args) => {
+        const file = await original(target, ...args);
+        if (target === f.path) {
+          const stat = file.stat.bind(file), read = file.read.bind(file);
+          file.stat = async (...values) => {
+            const info = await stat(...values);
+            return stage === 'opened-file' || readStarted ? change(info) : info;
+          };
+          file.read = async (...values) => { const result = await read(...values); readStarted = true; return result; };
+        }
+        return file;
+      });
+    }
+    await assert.rejects(f.inspect(), /waits for a stable boundary/);
+    assert.equal(injected, true);
+    assert.deepEqual(await readFile(f.path), before);
+    assert.deepEqual(await readFile(f.registryPath), registry);
+  });
+}
 
 test('missing or unchanged authoritative mapping never adopts a same-ID transcript', async () => {
   const f = await fixture();

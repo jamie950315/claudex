@@ -40,6 +40,15 @@ function verifyCall(input, receipt, expected) {
   requireValue(isDeepStrictEqual(receipt, expected.expectedReceipt));
 }
 
+function desktopNullPrimary(thread) {
+  // Observed Desktop 0.160 primary threads report null instead of "user".
+  // Missing fields or explicit auxiliary identities do not prove this schema.
+  return thread.threadSource === null && thread.cliVersion === '0.160.0'
+    && thread.originator === 'Codex Desktop' && thread.source === 'vscode'
+    && thread.canAcceptDirectInput === true && thread.forkedFromId === null
+    && thread.agentNickname === null && thread.agentRole === null;
+}
+
 async function readClaudeSource(path, home) {
   requireValue(await realpath(home) === home, 'ORIGIN_PROOF_UNAVAILABLE');
   // Native Claude creates project directories with 0755 under the user's
@@ -101,7 +110,8 @@ export function createOriginVerifier({ syncRoot,
             const thread = (await client.request('thread/read', { threadId: input.sessionId, includeTurns: false }))?.thread;
             checkTime();
             requireValue(thread?.id === input.sessionId && thread.sessionId === input.sessionId && thread.cwd === input.cwd
-              && thread.parentThreadId === null && thread.ephemeral === false && thread.threadSource === 'user'
+              && thread.parentThreadId === null && thread.ephemeral === false
+              && (thread.threadSource === 'user' || desktopNullPrimary(thread))
               && ['cli', 'vscode', 'exec'].includes(thread.source), 'ORIGIN_PROOF_UNAVAILABLE');
             return thread;
           };

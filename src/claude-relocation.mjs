@@ -6,8 +6,8 @@ import { readDesktopSessionMappings } from './desktop.mjs';
 import { sessionPath } from './claude.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const identityKeys = ['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'uid', 'nlink'];
-const identity = value => Object.fromEntries(identityKeys.map(key => [key, value[key]]));
+const identityKeys = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
+const identity = value => Object.fromEntries(identityKeys.map(key => [key, String(value[key])]));
 const same = (a, b) => identityKeys.every(key => a[key] === b[key]);
 const canonical = value => typeof value === 'string' && isAbsolute(value) && resolve(value) === value;
 const beneath = (value, root) => value === root || value.startsWith(`${root}${sep}`);
@@ -32,22 +32,24 @@ async function directory(path) {
 }
 
 async function readTranscript(path, maxBytes) {
-  const expected = await lstat(path);
-  if (!expected.isFile() || expected.isSymbolicLink() || expected.nlink !== 1
-    || expected.uid !== process.getuid() || expected.size > maxBytes || await realpath(path) !== path)
+  const expected = await lstat(path, { bigint: true });
+  if (!expected.isFile() || expected.isSymbolicLink() || expected.nlink !== 1n
+    || expected.uid !== BigInt(process.getuid()) || expected.size < 0n || expected.size > BigInt(maxBytes)
+    || await realpath(path) !== path)
     fail('relocated transcript is not a bounded canonical owned regular file.');
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const before = await file.stat();
+    const before = await file.stat({ bigint: true });
     if (!same(before, expected)) waitForBoundary();
-    const bytes = Buffer.alloc(before.size + 1);
+    const size = Number(before.size);
+    const bytes = Buffer.alloc(size + 1);
     let length = 0;
     while (length < bytes.length) {
       const result = await file.read(bytes, length, bytes.length - length, length);
       if (!result.bytesRead) break;
       length += result.bytesRead;
     }
-    if (length !== before.size || !same(before, await file.stat()) || !same(before, await lstat(path)))
+    if (length !== size || !same(before, await file.stat({ bigint: true })) || !same(before, await lstat(path, { bigint: true })))
       waitForBoundary();
     const text = bytes.subarray(0, length).toString('utf8');
     if (!text || !text.endsWith('\n')) waitForBoundary();
@@ -56,7 +58,7 @@ async function readTranscript(path, maxBytes) {
     catch { fail('relocated transcript contains a malformed record.'); }
     if (rows.some(row => !row || typeof row !== 'object' || Array.isArray(row))) fail('relocated transcript contains a malformed record.');
     return { text, rows, hash: createHash('sha256').update(bytes.subarray(0, length)).digest('hex'), bytes: length,
-      mtimeMs: before.mtimeMs, identity: identity(before) };
+      mtimeMs: Number(before.mtimeNs) / 1e6, identity: identity(before) };
   } finally { await file.close(); }
 }
 
@@ -106,7 +108,8 @@ export async function inspectClaudeProjectRelocation({ claudeHome, desktopRegist
   }
   if (!enteredTarget || latestCwd !== mapping.cwd) fail('latest authored working directory does not match the native registry.');
   const second = (await lookup()).get(record.nativeId.toLowerCase());
-  if (JSON.stringify(second) !== JSON.stringify(mapping) || !same(data.identity, await lstat(path)) || !await absent(record.path))
+  if (JSON.stringify(second) !== JSON.stringify(mapping)
+    || !same(data.identity, identity(await lstat(path, { bigint: true }))) || !await absent(record.path))
     waitForBoundary();
   return { nativeId: record.nativeId, previousCwd: record.cwd, cwd: mapping.cwd,
     previousPath: record.path, path, mapping, snapshot: data };

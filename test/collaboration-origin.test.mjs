@@ -22,12 +22,16 @@ const nativeItem = () => ({ turnId: 'turn-1', item: { type: 'mcpToolCall', id: '
   tool: 'claudex_start', status: 'completed', arguments: clone(params), error: null,
   result: { content: content(receipt), structuredContent: null } } });
 
-function codexFixture({ item = nativeItem(), metadata = {}, pages, now } = {}) {
-  const requests = []; let closed = 0, pageIndex = 0;
+const desktopNullMetadata = () => ({ threadSource: null, cliVersion: '0.160.0', originator: 'Codex Desktop',
+  source: 'vscode', canAcceptDirectInput: true, forkedFromId: null, agentNickname: null, agentRole: null });
+
+function codexFixture({ item = nativeItem(), metadata = {}, metadataAfter, pages, now } = {}) {
+  const requests = []; let closed = 0, pageIndex = 0, metadataIndex = 0;
   const client = { initialize: async () => {}, close: async () => { closed++; }, request: async (method, args) => {
     requests.push({ method, args });
     if (method === 'thread/read') return { thread: { id: ID, sessionId: ID, cwd: CWD, parentThreadId: null,
-      ephemeral: false, threadSource: 'user', source: 'vscode', ...metadata } };
+      ephemeral: false, threadSource: 'user', source: 'vscode',
+      ...(metadataIndex++ && metadataAfter !== undefined ? metadataAfter : metadata) } };
     assert.equal(method, 'thread/items/list');
     return pages ? pages[pageIndex++] : { data: [item], nextCursor: null };
   } };
@@ -63,6 +67,59 @@ test('Codex accepts persistent primary exec origin while preserving exact native
   wrongReceipt.item.result.content = content({ ...receipt, originChallenge: 'b'.repeat(64) });
   await assert.rejects(codexFixture({ metadata: { source: 'exec' }, item: wrongReceipt }).verify(input('codex')),
     { code: 'ORIGIN_PROOF_INVALID' });
+});
+
+test('Codex accepts the observed Desktop null thread source only with exact primary metadata', async () => {
+  for (const status of ['idle', 'active']) {
+    const fixture = codexFixture({ metadata: { ...desktopNullMetadata(), status: { type: status } }, now: () => 1234 });
+    assert.deepEqual(await fixture.verify(input('codex')), { provider: 'codex', sessionId: ID, cwd: CWD,
+      toolUseId: 'toolu_origin', turnId: 'turn-1', source: 'codex-native-mcp-result', verifiedAt: 1234 });
+    assert.equal(fixture.closed(), 1);
+    assert.deepEqual(fixture.requests.map(request => request.method), ['thread/read', 'thread/items/list', 'thread/read']);
+    assert.ok(fixture.requests.filter(request => request.method === 'thread/read').every(request => request.args.includeTurns === false));
+  }
+});
+
+test('Codex null thread source refuses missing, auxiliary, forked or unreviewed Desktop metadata before item reads', async t => {
+  for (const [name, change] of Object.entries({
+    omittedSource: { threadSource: undefined }, auxiliarySource: { threadSource: 'subagent' },
+    cliSource: { source: 'cli' }, execSource: { source: 'exec' }, unknownSource: { source: 'unknown' },
+    version: { cliVersion: '0.161.0' }, omittedVersion: { cliVersion: undefined },
+    originator: { originator: 'codex_exec' }, omittedOriginator: { originator: undefined },
+    indirectInput: { canAcceptDirectInput: false }, omittedDirectInput: { canAcceptDirectInput: undefined },
+    fork: { forkedFromId: TASK }, omittedFork: { forkedFromId: undefined },
+    nickname: { agentNickname: 'worker' }, omittedNickname: { agentNickname: undefined },
+    role: { agentRole: 'worker' }, omittedRole: { agentRole: undefined },
+    parent: { parentThreadId: TASK }, omittedParent: { parentThreadId: undefined }, ephemeral: { ephemeral: true },
+  })) await t.test(name, async () => {
+    const fixture = codexFixture({ metadata: { ...desktopNullMetadata(), ...change } });
+    await assert.rejects(fixture.verify(input('codex')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+    assert.deepEqual(fixture.requests.map(request => request.method), ['thread/read']);
+    assert.equal(fixture.closed(), 1);
+  });
+});
+
+test('Codex null primary metadata must remain valid after the complete exact-turn item read', async () => {
+  for (const change of [{ forkedFromId: TASK }, { agentRole: 'worker' }, { source: 'unknown' },
+    { canAcceptDirectInput: false }, { cliVersion: '0.161.0' }, { id: TASK }]) {
+    const fixture = codexFixture({ metadata: desktopNullMetadata(), metadataAfter: { ...desktopNullMetadata(), ...change } });
+    await assert.rejects(fixture.verify(input('codex')), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+    assert.deepEqual(fixture.requests.map(request => request.method), ['thread/read', 'thread/items/list', 'thread/read']);
+    assert.equal(fixture.closed(), 1);
+  }
+});
+
+test('Codex null primary metadata cannot authorize altered, replayed or duplicate native receipts', async () => {
+  for (const mutate of [item => { item.item.arguments.requestId = 'other'; },
+    item => { item.item.result.content = content({ ...receipt, originChallenge: 'b'.repeat(64) }); },
+    item => { item.item.result.content = content({ ...receipt, replayed: true }); }]) {
+    const item = nativeItem(); mutate(item);
+    await assert.rejects(codexFixture({ metadata: desktopNullMetadata(), item }).verify(input('codex')),
+      { code: 'ORIGIN_PROOF_INVALID' });
+  }
+  const duplicate = codexFixture({ metadata: desktopNullMetadata(),
+    pages: [{ data: [nativeItem()], nextCursor: 'next' }, { data: [nativeItem()], nextCursor: null }] });
+  await assert.rejects(duplicate.verify(input('codex')), { code: 'ORIGIN_PROOF_INVALID' });
 });
 
 test('Codex rejects wrong identity, auxiliary sources, unfinished or altered native calls', async t => {
