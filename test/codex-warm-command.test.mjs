@@ -63,7 +63,7 @@ test('recognized failures block model submission without retrying or weakening c
   assert.equal(reply.decision, 'block'); assert.match(reply.reason, /uncertain response/); assert.equal(calls, 1);
 });
 
-test('hook command uses private Unix RPC for exact-chat preview, confirm, status and off with no inference', async t => {
+test('one on command enables its exact chat over private Unix RPC without a second confirmation or inference', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-warm-hook-')));
   const state = { sessionId: ID, cwd: root, phase: 'busy', model: 'fixture', effort: 'medium', fingerprint: 'fixture' };
   let connections = 0;
@@ -80,16 +80,32 @@ test('hook command uses private Unix RPC for exact-chat preview, confirm, status
     assert.deepEqual(value, { sessionId: ID, cwd: root, turnId: context.turn_id, transcriptPath: context.transcript_path }); return true;
   } };
   const send = prompt => handleCodexWarmCommand({ ...context, prompt }, options);
-  const preview = result(await send('/claudex:warm on'));
-  assert.equal(preview.state, 'confirmation-required'); assert.equal(preview.refreshMinutes, 25);
-  assert.match(preview.confirm, /^\/claudex:warm confirm .* accept-best-effort$/);
-  assert.equal(connections, 0); assert.equal((await hub.codexCacheWarm.list()).policies.length, 0);
-  const wrong = await handleCodexWarmCommand({ ...context, session_id: TOKEN, prompt: preview.confirm }, { root, verify: async () => true });
-  assert.match(wrong.reason, /another native chat/); assert.equal(connections, 0);
-  assert.equal(result(await send(preview.confirm)).policy.enabled, true); assert.equal(connections, 1);
-  assert.match((await send(preview.confirm)).reason, /consumed/);
+  const enabled = result(await send('/claudex:warm on'));
+  assert.equal(enabled.state, 'enabled'); assert.equal(enabled.policy.refreshMinutes, 25);
+  assert.equal(enabled.confirm, undefined); assert.equal(enabled.confirmationId, undefined);
+  assert.equal(enabled.policy.enabled, true); assert.equal(connections, 1);
   const status = result(await send('/claudex:warm status'));
   assert.equal(status.policies.length, 1); assert.equal(status.policies[0].sessionId, ID);
   assert.equal(result(await send('/claudex:warm off')).policy.enabled, false);
   assert.equal((await hub.codexCacheWarm.list()).attemptCount, 0);
+});
+
+test('direct on keeps the context fence and never retries an uncertain internal confirmation', async () => {
+  const preview = { confirmationId: TOKEN, sessionId: ID, cwd: '/fixture' };
+  for (const scenario of ['context-changed', 'wrong-target', 'uncertain']) {
+    const methods = []; let checks = 0;
+    const reply = await handleCodexWarmCommand(input('/claudex:warm on'), {
+      stopped: async () => null, verify: async () => ++checks === 1 || scenario !== 'context-changed',
+      call: async (_root, method, params) => {
+        methods.push(method);
+        if (method === 'codex_cache_warm_prepare') return { ...preview, ...(scenario === 'wrong-target' ? { sessionId: TOKEN } : {}) };
+        assert.equal(method, 'codex_cache_warm_confirm');
+        assert.deepEqual(params, { sessionId: ID, cwd: '/fixture', bestEffort: true, confirmationId: TOKEN });
+        throw new Error('unknown native response');
+      },
+    });
+    assert.equal(reply.decision, 'block'); assert.match(reply.reason, /Operation not confirmed/);
+    assert.deepEqual(methods, scenario === 'uncertain'
+      ? ['codex_cache_warm_prepare', 'codex_cache_warm_confirm'] : ['codex_cache_warm_prepare']);
+  }
 });

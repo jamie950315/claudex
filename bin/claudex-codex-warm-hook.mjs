@@ -18,7 +18,7 @@ async function main() {
     handleCodexWarmCommand(input, { root: args[1],
       worker: process.env.CLAUDEX_COLLABORATION_WORKER === '1' || Boolean(process.env.CLAUDEX_WORK_TOKEN) }),
     new Promise(resolve => { timer = setTimeout(() => resolve({ decision: 'block',
-      reason: 'Claudex cache command timed out. The operation is not confirmed. Do not retry confirm; inspect /claudex:warm status or use /claudex:warm off.' }), 25000); }),
+      reason: 'Claudex cache command timed out. The operation is not confirmed. Do not repeat on; inspect /claudex:warm status or use /claudex:warm off.' }), 25000); }),
   ]);
   clearTimeout(timer);
   // Finish before the native 30-second hook deadline, even if a timed-out RPC

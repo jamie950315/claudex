@@ -1,16 +1,16 @@
-# Claudex native companion, 0.8.6
+# Claudex native companion, 0.8.7
 
-Use `/claudex:warm on [5m|1h]` (also `ttl=5m|ttl=1h`), review its preview, then
-run the printed `/claudex:warm confirm TOKEN`. `/claudex:warm off` stops warming;
+Use `/claudex:warm on [5m|1h]` (also `ttl=5m|ttl=1h`) to enable directly, without
+a second confirmation command. `/claudex:warm off` stops warming;
 `/claudex:warm status` or no arguments inspects it. Only this loaded Claude
 session is targeted. The shortcut never changes shared startup preferences or
 remembered TTL choices, and off leaves the native TTL unchanged. The namespaced
 skill provides discovery; active Mod hooks answer locally without a model turn.
 Without those hooks, its body refuses model/tool implementation. Codex retains
-its separate best-effort CLI controls; this is a Claude Mod command.
+its separate best-effort native command hook and CLI controls; this is a Claude Mod command.
 
-Cache warming is default-off and separately confirmed in the selected loaded
-conversation: `/claudex warm on` prints a bounded confirmation command;
+Cache warming is default-off. The legacy advanced command keeps its preview in
+the selected loaded conversation: `/claudex warm on` prints a bounded confirmation command;
 `/claudex warm status` reads status and `/claudex warm off` revokes it. Optional
 `ttl=1h` (default) or `ttl=5m` synchronizes the real native main-cache TTL in the
 current Claude process, then enables the matching warming window after readback.
@@ -83,7 +83,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.6-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.7-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

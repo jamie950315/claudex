@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.9 packages Claude Mod 0.8.6. Keep application and Mod versions
+Claudex.app 1.2.10 packages Claude Mod 0.8.7. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -271,6 +271,8 @@ bounded polling harness, not a production fallback.
   rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
   exact lifecycle IDs/times and no response, tool or token activity; fresh native
   typed bootstrap context is allowed only by its strict role/kind/frame schema.
+  Also accept the observed pre-context environment-only world-state delta;
+  unknown delta fields and real message/tool/token records remain refused.
   Compare raw proof across both history reads. Empty controls never close a
   pending request, fabricate a reply, alter checkpoints or authorize history writes.
   An all-control new chat still waits for its first real completed dialogue.
@@ -296,8 +298,11 @@ harness. Do not defer all new completions until a long cold sweep finishes.
 ## Cross-model collaboration
 
 Cache warming is separately opt-in per loaded Claude session. The Mod exposes
-`/claudex:warm on [5m|1h]`, `off`, `status` and one-use
-confirmation for the current native session only. Ship `skills/warm/SKILL.md`
+`/claudex:warm on [5m|1h]`, `off` and `status` for the current native session
+only. By user decision, the explicit namespaced on command directly enables;
+run the one-use prepare/confirm transaction internally, with the original
+origin and an unchanged initial session binding/epoch across awaits. Never ask
+for a second confirmation token on this shortcut. Ship `skills/warm/SKILL.md`
 in both allowlists for native catalogue discovery; intercept `claudex:warm`
 locally in `command.run`, preserving native origin and never delegating to a
 model. Its TTL override must not update shared remember/default preferences.
@@ -306,7 +311,7 @@ Keep legacy `/claudex warm` persistence controls and Codex native hook controls 
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
 proof. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
-uncertain submission, read-only status and explicit bounded confirmation. The
+uncertain submission, read-only status and explicit bounded authorization. The
 Claude warming window defaults to one hour; users can choose
 `ttl=5m` or `ttl=1h` in the confirmed native command. Confirmation synchronizes
 the current process's real CLAUDE_CODE_PROMPT_CACHE_TTL through the official Mod
@@ -380,8 +385,11 @@ The Codex `/claudex:warm on|off|status` text command runs in
 `bin/claudex-codex-warm-hook.mjs`, never the notification-only sync hook.
 Setup installs its own UserPromptSubmit group and native trust remains a human
 review; report `warmCommand.ready` independently of sync readiness. No model
-prompt skill or custom slash menu is registered. On prepares only; confirmation
-requires the printed `accept-best-effort` and exact native chat context.
+prompt skill or custom slash menu is registered. By user decision, on directly
+enables and accepts the documented best-effort limits: keep prepare/confirm
+internal, recheck the exact native command context before activation, and never
+replay an uncertain enable request. Legacy explicit confirmations remain
+compatible; advanced CLI controls keep their own confirmation workflow.
 Verify primary metadata, hook/native transcript-path equality and exact active
 turn without reading arbitrary transcript paths; subagent hooks can report the
 parent session ID. Never relax these guards to pass an untested hook lifecycle.
@@ -561,10 +569,12 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.9 and Mod 0.8.6 installed through normal
+passes. The reviewed Mac has App 1.2.10 and Mod 0.8.7 installed through normal
 Quit/reopen and app-owned Mod management; both native configuration identities'
 receiver opt-ins were retained. Existing Claude sessions were not restarted;
-installation is verified but fresh loaded-0.8.6 acceptance remains pending.
+installation is verified but existing Desktop sessions can retain older loaded
+Mod code until a normal new session/reload. Isolated native 0.8.7 direct-on
+acceptance passed without model turns; it does not prove those existing sessions reloaded.
 The earlier reviewed 0.7.1 installation used route=mod-self. Earlier acceptance after a normal Claude
 restart verified that one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real

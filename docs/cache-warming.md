@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.9 and Claude Mod 0.8.6 provide bounded, per-conversation cache warming.
+Claudex 1.2.10 and Claude Mod 0.8.7 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,8 +16,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.6 companion and
-a 1.2.9 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.7 companion and
+a 1.2.10 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -27,13 +27,16 @@ The session-only shortcut is:
 /claudex:warm on
 /claudex:warm on 5m
 /claudex:warm on 1h
-/claudex:warm confirm TOKEN
 /claudex:warm off
 /claudex:warm status
 ```
 
-Choose one `on` form, then run the exact confirmation command it prints;
-`TOKEN` above is a placeholder. `ttl=5m` and `ttl=1h` are also supported.
+Choose one `on` form and send it once. It directly applies the session TTL and
+enables warming; no second confirmation or token is required. `ttl=5m` and
+`ttl=1h` are also supported. The native identity, idle-state, TTL-policy and
+one-use transaction checks still run internally. This explicit command consents
+to later bounded warm turns using native plan quota; it does not immediately
+request a model response.
 With no TTL argument, the saved startup preference supplies the TTL, or 1h
 when none is saved. With no arguments at all, the command shows status.
 Only this native session is targeted, automatically; session IDs and paths
@@ -47,7 +50,8 @@ handler and forbids a model/tool fallback. Do not invoke it on an installation
 without active Mod hooks expecting a zero-model local command. Codex uses a
 separate native hook for the same text, described below, not this Claude Mod.
 
-The existing advanced command remains available:
+The existing advanced command remains available with its separate preview/confirm
+flow; the pane's settings/persistence controls are unchanged:
 
 ```text
 /claudex warm status
@@ -76,7 +80,7 @@ or readback fails, local warming stops and reports that the native TTL may have
 changed; there is no silent rollback or retry. Status reports native configuration
 separately from the broker policy so partial outcomes remain visible.
 
-`on` only prepares a confirmation. Review the returned exact session, directory,
+The advanced `/claudex warm on` only prepares a confirmation. Review the returned exact session, directory,
 bounds, TTL source/margin, observed cached-prefix size, effects and expiration,
 then run the exact `confirm` command it prints.
 The confirmation expires after two minutes and is bound to that session's
@@ -143,7 +147,7 @@ These controls affect only the pane's own Claude session, not Codex.
   preserving the native TTL and saved startup choice.
 
 Settings-only confirmations stop local warming. They never authorize inference;
-enable warming separately with its bounded `warm on` confirmation. The pane
+enable warming separately with `/claudex:warm on`. The pane
 shares the command implementation and its policy/race/readback protections, not
 a second settings writer. Technical preview values and native diagnostics remain
 verbatim; controls are localized in all nine supported languages.
@@ -169,7 +173,7 @@ command printed by the preview:
   for existing and new installations until a preference is explicitly confirmed.
 
 Preference confirmation stops local warming and never enables it. Enable warming
-separately with `warm on` and its own confirmation. Neither restart nor preference
+separately with `/claudex:warm on`. Neither restart nor preference
 restoration authorizes a model request. Status/preview/inspection and `/clear`
 do not apply or save settings; `/clear` keeps the process's current TTL.
 
@@ -197,18 +201,19 @@ This capability gate does not change the synchronization runtime allowlist.
 
 ### Command in the ChatGPT desktop Codex page
 
-Claudex.app 1.2.8 packages a separate `UserPromptSubmit` hook for:
+Claudex.app 1.2.10 packages a separate `UserPromptSubmit` hook for:
 
 ```text
 /claudex:warm on
-/claudex:warm confirm TOKEN accept-best-effort
 /claudex:warm off
 /claudex:warm status
 ```
 
-`on` only prepares the preview. Review the exact chat, bounds and risks, then
-paste its complete confirmation command. Confirmation expires after two minutes
-and cannot be used from another chat. Off revokes this chat only. With no action,
+`on` directly enables this chat's bounded best-effort warmer; no second command
+or confirmation token is required. This explicit command accepts the best-effort
+limits and native plan usage described below. The native primary/turn check is
+repeated before the internal one-use activation transaction; no target can be
+supplied or substituted. Off revokes this chat only. With no action,
 the command shows status. Codex rejects `5m`/`1h`: these are Claude TTL settings,
 not a configurable Codex TTL. The Codex default refresh interval remains 25 minutes.
 
@@ -243,7 +248,7 @@ The handler verifies the native primary metadata, exact transcript path and
 current in-progress turn before calling the existing private controller. This
 also refuses a subagent hook that reports its parent's session ID. It never
 reads the supplied transcript path or searches histories. Missing or ambiguous
-context refuses the command rather than guessing a target. Confirmation retains
+context refuses the command rather than guessing a target. Direct activation retains
 all existing best-effort limits and waits for fresh ordinary usage evidence;
 the local control command itself is not a cache-refresh sample.
 
@@ -286,7 +291,17 @@ No transcript is edited, no reply is synthesized, and a control-only chat waits
 for a real completed conversation before synchronization enrollment. User-supplied
 Desktop screenshots also confirm the native status/on output is displayed; the
 "hook blocked this message" indicator is expected local interception, not an
-enrollment failure. `on` still requires the printed confirmation to enable warming.
+enrollment failure. Version 1.2.10 makes the explicit namespaced `on` command
+enable directly on both providers; earlier two-step command evidence above is
+historical. The advanced CLI/pane confirmation flows remain separate.
+The same update accepts the observed native environment-only world-state delta
+before an empty control turn's context; arbitrary deltas still fail proof.
+Direct-on acceptance verified twelve local commands in two isolated Claude
+processes with zero model turns, including 5m/1h changes without changing the
+shared remembered TTL. Installed Codex acceptance verified status/on/status/off/
+status in one existing test chat, with no second confirmation, no model activity
+and the policy disabled afterward. The generated empty turns also passed the
+native history exporter after the environment-delta correction.
 
 ### CLI controls
 

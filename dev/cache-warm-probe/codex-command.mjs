@@ -9,6 +9,9 @@ import { codexChatSocket } from '../../src/native-chat-catalog.mjs';
 import { preflightCodexChatWake } from '../../src/codex-chat-wake.mjs';
 import { privateRead } from '../../src/claude-mod-storage.mjs';
 import { callCollaboration } from '../../src/collaboration-transport.mjs';
+import { exportNativeHistory } from '../../src/native-history.mjs';
+import { createNativeEmptyTurnResolver } from '../../src/native-empty-turn.mjs';
+import { fingerprint } from '../../src/history.mjs';
 
 const { values } = parseArgs({ options: { run: { type: 'boolean' }, 'status-only': { type: 'boolean' },
   root: { type: 'string' }, session: { type: 'string' }, cwd: { type: 'string' } } });
@@ -88,11 +91,11 @@ try {
   const initial = await send('/claudex:warm status');
   assert(initial.policies.every(p => !p.enabled));
   if (!values['status-only']) {
-    const preview = await send('/claudex:warm on');
-    assert.equal(preview.state, 'confirmation-required'); assert.equal(preview.sessionId, id);
-    assert.equal(preview.refreshMinutes, 25);
     enrollmentRequested = true;
-    const enabled = await send(preview.confirm); assert.equal(enabled.policy.enabled, true);
+    const enabled = await send('/claudex:warm on');
+    assert.equal(enabled.state, 'enabled'); assert.equal(enabled.policy.enabled, true);
+    assert.equal(enabled.policy.sessionId, id); assert.equal(enabled.policy.refreshMinutes, 25);
+    assert.equal(enabled.confirm, undefined);
     const status = await send('/claudex:warm status'); assert.equal(status.policies[0].enabled, true);
     const stopped = await send('/claudex:warm off'); assert.equal(stopped.policy.enabled, false);
     const final = await send('/claudex:warm status'); assert(final.policies.every(p => !p.enabled));
@@ -107,6 +110,14 @@ try {
     assert(turn.items.every(item => item.type === 'userMessage'), 'Unexpected persisted assistant/tool item.');
   }
   report.nativeHistoryAudit = { exactCompletedTurns: expected.size, assistantOrToolItems: 0 };
+  // Control delivery alone is insufficient: these turns must remain exportable
+  // through synchronization's independently proven empty-lifecycle handling.
+  const metadata = (await client.request('thread/read', { threadId: id, includeTurns: false })).thread;
+  const exported = await exportNativeHistory({ client, threadId: id, cwd: values.cwd, completedPrefix: true,
+    resolveEmptyTurns: createNativeEmptyTurnResolver({ path: metadata.path, threadId: id, cwd: values.cwd }) });
+  report.synchronizationAudit = { messages: exported.common.messages.length, digest: fingerprint(exported.common),
+    emptyControlTurnCount: exported.emptyControlTurnCount, incompleteTail: exported.incompleteTail };
+  assert.equal(exported.incompleteTail, false);
   report.phase = 'native-local-command-verified';
 } catch (error) {
   report.phase = 'failed'; report.error = error.message; process.exitCode = 1;

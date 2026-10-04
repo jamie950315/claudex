@@ -130,11 +130,10 @@ try {
   if (values['warm-command']) {
     await session(async send => {
       await confirm(send, '/claudex warm preference remember ttl=1h');
-      const preview = await send('/claudex:warm on 5m');
-      assert.equal(preview.state, 'confirmation-required');
-      assert.equal(preview.ttl, '5m'); assert.equal(preview.savesTtlPreference, false);
-      assert.match(preview.confirm, /^\/claudex:warm confirm warm-/);
-      await send(preview.confirm);
+      const enabled = await send('/claudex:warm on 5m');
+      assert.equal(enabled.state, 'enabled');
+      assert.equal(enabled.nativeCacheSync.value, '5m');
+      assert.equal(enabled.confirm, undefined);
       const status = await send('/claudex:warm status');
       assert.equal(status.local.enabled, true); assert.equal(status.nativeCache.value, '5m');
       assert.equal(status.ttlPreference.ttl, '1h');
@@ -144,7 +143,7 @@ try {
     await session(async (send, initial) => {
       assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.preference.ttl, '1h');
       assert.equal(initial.enabled, false);
-      await confirm(send, '/claudex:warm on ttl=1h');
+      assert.equal((await send('/claudex:warm on ttl=1h')).state, 'enabled');
       await send('/claudex:warm off');
     });
   } else {

@@ -6,7 +6,7 @@ import { createCodexCacheNative } from './codex-cache-native.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const PREFIX = '/claudex:warm';
-const HELP = 'Use /claudex:warm on, off, status, or confirm TOKEN accept-best-effort. Codex has no configurable 5m/1h TTL. The default refresh interval is 25 minutes.';
+const HELP = 'Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits. Codex has no configurable 5m/1h TTL. The default refresh interval is 25 minutes.';
 const block = text => {
   const message = `Claudex cache warming (local command; no model request):\n${text}`;
   return { decision: 'block', reason: message, systemMessage: message };
@@ -52,18 +52,23 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
     if (hold?.stopped || hold?.resuming) throw new Error('Claudex is stopped or resuming; no change was requested.');
     const { action } = command;
     const params = { sessionId: input.session_id, cwd: input.cwd };
-    if (await verify({ ...params, turnId: input.turn_id, transcriptPath: input.transcript_path }) !== true)
+    const context = { ...params, turnId: input.turn_id, transcriptPath: input.transcript_path };
+    if (await verify(context) !== true)
       throw new Error('Native primary command context could not be verified; no change was requested.');
-    // Preparing is read-only native inspection, not opt-in. The printed confirm
-    // explicitly accepts the complete best-effort limitations before enrollment.
+    // The explicit user on command is enrollment consent. Keep the broker's
+    // one-use prepare/confirm transaction internal, with a fresh context fence.
     if (action === 'on' || action === 'confirm') params.bestEffort = true;
     if (action === 'confirm') params.confirmationId = command.confirmationId;
     const method = `codex_cache_warm_${action === 'on' ? 'prepare' : action === 'status' ? 'list' : action}`;
     let result = await call(root, method, params);
     if (action === 'on') {
       if (!UUID.test(result?.confirmationId ?? '') || result.sessionId !== params.sessionId || result.cwd !== params.cwd)
-        throw new Error('The preview did not match this chat; no confirmation was issued.');
-      result = { ...result, confirm: `${PREFIX} confirm ${result.confirmationId} accept-best-effort` };
+        throw new Error('The prepared settings did not match this chat; warming was not enabled.');
+      if (await verify(context) !== true)
+        throw new Error('Native command context changed before enabling warming.');
+      result = await call(root, 'codex_cache_warm_confirm', { ...params, confirmationId: result.confirmationId });
+      if (result?.policy?.enabled !== true) throw new Error('Warming activation was not verified; inspect status.');
+      result = { state: 'enabled', ...result };
     } else if (action === 'status') {
       // Status stays session-scoped and bounded; attempt history remains in CLI diagnostics.
       result = { sessionId: params.sessionId, cwd: params.cwd, policies: result.policies,
@@ -75,6 +80,6 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
   } catch (error) {
     // A lost response may follow a successful enrollment. Do not retry or claim
     // rollback; a separately requested status/off can resolve the uncertainty.
-    return block(`Operation not confirmed: ${error.message}\nDo not replay a confirmation after an uncertain result. Use ${PREFIX} status or ${PREFIX} off.`);
+    return block(`Operation not confirmed: ${error.message}\nDo not repeat an uncertain enable request. Use ${PREFIX} status or ${PREFIX} off.`);
   }
 }

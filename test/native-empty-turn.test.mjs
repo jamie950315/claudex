@@ -72,6 +72,20 @@ test('proves one exact empty lifecycle without inventing a hook or changing nati
   assert.deepEqual(await readFile(source.path), original);
 });
 
+test('loaded-chat environment-only world-state deltas are context, never a general delta exemption', async t => {
+  const source = await fixture(t, source => {
+    source.splice(2, 0, { type: 'world_state', payload: { full: false, state: { environments: [] } } });
+  });
+  const proof = await run(source);
+  assert.deepEqual(proof.turnIds, [turnId]);
+  source.source[2].payload.state.environments = [{ id: 'synthetic-local' }];
+  await writeFile(source.path, encode(source.source));
+  assert.notEqual((await run(source)).evidenceDigest, proof.evidenceDigest);
+  source.source[2].payload.state.user_message = 'Not native environment context';
+  await writeFile(source.path, encode(source.source));
+  await assert.rejects(run(source), /unrecognized native world state/);
+});
+
 test('one batch proves separated empty segments and accepts exact outside settings events', async t => {
   const source = await fixture(t, source => source.push(settings(), ...segment(nextId, 200), settings()));
   const proof = await run(source, [turn(), turn(nextId, 200)]);

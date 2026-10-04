@@ -142,8 +142,13 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
             fail('empty turn context differs from the API.');
           context = row;
         } else if (row?.type === 'world_state') {
-          if (context || world || !keys(row.payload, ['full', 'state']) || row.payload.full !== true
-            || !keys(row.payload.state, WORLD_FIELDS)) fail('empty turn has unrecognized native world state.');
+          const full = row.payload?.full === true && keys(row.payload.state, WORLD_FIELDS);
+          // A loaded Desktop chat can refresh just its native environments
+          // before the next prompt is blocked. This observed delta is context,
+          // not a user/model message; unknown delta fields remain refused.
+          const environmentDelta = row.payload?.full === false && keys(row.payload.state, ['environments']);
+          if (context || world || !keys(row.payload, ['full', 'state']) || !full && !environmentDelta)
+            fail('empty turn has unrecognized native world state.');
           world = true;
         } else if (row?.type === 'response_item') {
           if (world && !context) fail('empty turn context ordering is ambiguous.');

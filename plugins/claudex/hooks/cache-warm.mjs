@@ -214,7 +214,21 @@ export function createCacheWarmClient() {
       // This shortcut never changes the shared startup preference, including
       // remember-last. Preserve the native origin; do not manufacture a user.
       words = words.map((word, index) => index > 0 && words[0] === 'on' && ['5m', '1h'].includes(word) ? `ttl=${word}` : word);
-      return this.command(host, words, origin, undefined, { sessionOnly: true });
+      if (words[0] !== 'on') return this.command(host, words, origin, undefined, { sessionOnly: true });
+      // The explicit session command is the user's opt-in. Reuse the internal
+      // one-use configuration transaction without a second composer submission.
+      const context = await host.context();
+      if (!binding || !same(binding.context, context)) await this.start(host);
+      const b = binding, epoch = b?.epoch;
+      if (!b || !same(b.context, context)) throw new Error('Native session context changed; run the command again.');
+      const preview = await this.command(host, words, origin, context, { sessionOnly: true });
+      const id = preview.confirm.split(' ').at(-1);
+      if (!await safeContext(b, epoch)) {
+        if (confirmation?.id === id) confirmation = null;
+        throw new Error('Native session context changed; run the command again.');
+      }
+      const result = await this.command(host, ['confirm', id], origin, context, { sessionOnly: true });
+      return { ...result, state: result.local?.enabled === true ? 'enabled' : 'disabled' };
     },
     async command(host, words, origin, expectedContext, { sessionOnly = false } = {}) {
       if (await host.worker()) throw new Error('Managed worker cache warming is disabled.');

@@ -97,22 +97,31 @@ test('namespaced shortcut applies TTL only to its session, never the shared reme
   const f = await fixture(), origin = { kind: 'composer' };
   await setPreference(f, 'remember', 'ttl=1h');
   for (const choice of ['5m', 'ttl=1h']) {
-    const preview = await f.client.sessionCommand(f.host, ['on', choice], origin);
-    assert.equal(preview.ttl, choice.replace('ttl=', ''));
-    assert.equal(preview.savesTtlPreference, false);
-    assert.match(preview.confirm, /^\/claudex:warm confirm warm-/);
-    assert.equal(preview.sessionId, ID);
-    assert.equal(f.client.snapshot().enabled, false);
-    await f.client.sessionCommand(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin);
-    assert.equal((await f.host.readCacheTtl()).value, preview.ttl);
+    const result = await f.client.sessionCommand(f.host, ['on', choice], origin);
+    assert.equal(result.state, 'enabled');
+    assert.equal(result.confirm, undefined);
+    assert.equal(result.local.sessionId, ID);
+    assert.equal((await f.host.readCacheTtl()).value, choice.replace('ttl=', ''));
     assert.equal(f.client.snapshot().enabled, true);
     await f.client.sessionCommand(f.host, ['off'], origin);
     const status = await f.client.sessionCommand(f.host, [], origin);
     assert.equal(status.ttlPreference.ttl, '1h');
     assert.equal(status.local.enabled, false);
-    assert.equal(status.nativeCache.value, preview.ttl);
+    assert.equal(status.nativeCache.value, choice.replace('ttl=', ''));
   }
   assert.equal(f.submits, 0);
+});
+
+test('bare session on enables directly with saved TTL or the one-hour default', async () => {
+  for (const ttl of [undefined, '5m']) {
+    const f = await fixture();
+    if (ttl) await setPreference(f, 'default', `ttl=${ttl}`);
+    const result = await f.client.sessionCommand(f.host, ['on'], { kind: 'composer' });
+    assert.equal(result.state, 'enabled');
+    assert.equal(result.confirm, undefined);
+    assert.equal(result.nativeCacheSync.value, ttl ?? '1h');
+    assert.equal(f.submits, 0);
+  }
 });
 
 test('namespaced shortcut rejects ambiguous arguments, other contexts and non-user origins', async () => {
@@ -120,10 +129,33 @@ test('namespaced shortcut rejects ambiguous arguments, other contexts and non-us
   for (const words of [['on', '30m'], ['on', '5m', 'ttl=1h'], ['off', '5m'], ['preference', 'session'], ['on', 'session=other']])
     await assert.rejects(f.client.sessionCommand(f.host, words, origin));
   await assert.rejects(f.client.sessionCommand(f.host, ['on'], { kind: 'plugin' }), /explicit native user/);
-  const preview = await f.client.sessionCommand(f.host, ['on', '5m'], origin);
-  f.context = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/other' };
-  await assert.rejects(f.client.sessionCommand(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin), /expired|context changed/);
+  assert.equal(f.calls.length, 0);
+  const check = f.host.checkCacheTtl;
+  f.host.checkCacheTtl = async desired => {
+    const state = await check(desired);
+    f.context = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/other' };
+    return state;
+  };
+  await assert.rejects(f.client.sessionCommand(f.host, ['on', '5m'], origin), /context changed/);
   assert.equal((await f.host.readCacheTtl()).value, '1h');
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.submits, 0);
+});
+
+test('direct session enable fences activity during preparation and cannot consume legacy preference confirmations', async () => {
+  const f = await fixture(), origin = { kind: 'composer' };
+  const preview = await f.client.command(f.host, ['preference', 'remember', 'ttl=5m'], origin);
+  await assert.rejects(f.client.sessionCommand(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin), /context changed/);
+  assert.equal(await f.host.readTtlPreference(), undefined);
+  const check = f.host.checkCacheTtl;
+  f.host.checkCacheTtl = async desired => {
+    const state = await check(desired);
+    f.client.invalidate();
+    return state;
+  };
+  await assert.rejects(f.client.sessionCommand(f.host, ['on', '5m'], origin), /context changed/);
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  assert.equal(f.calls.length, 0);
   assert.equal(f.submits, 0);
 });
 
