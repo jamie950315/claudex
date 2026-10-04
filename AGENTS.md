@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.16 packages Claude Mod 0.8.11. Keep application and Mod versions
+Claudex.app 1.2.17 packages Claude Mod 0.8.12. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -722,7 +722,10 @@ matches require user disambiguation. Presentation isolates invalid metadata only
 after exact native identity validation; unsafe storage and ambiguous identities
 still fail closed, and action/writer mappings stay strict. Title queries show
 healthy matches before explicit error rows in one bounded page; unfiltered
-inventory order stays unchanged. chat_send expectedTitle rechecks the chosen
+inventory order stays unchanged. Native discovery with a next cursor still
+refuses the whole query as NATIVE_CHAT_DISCOVERY_INCOMPLETE; MCP and the Mod
+companion request a longer, more specific title without partial candidates,
+retry or arbitrary native diagnostic exposure. chat_send expectedTitle rechecks the chosen
 native title before enqueueing, without changing exact-session addressing. This
 also supports direct exact `title` addressing when a single valid native candidate
 exists; duplicates return needs-selection without enqueueing. Known ended chats

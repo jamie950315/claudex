@@ -55,7 +55,8 @@ export async function discoverCodexChats({ query, sessionId } = {}, {
       // after Desktop resumes them; request the supported primary kinds only.
       sourceKinds: PRIMARY_CODEX_SOURCES,
       ...((target?.name || query) ? { searchTerm: target?.name || query } : {}) });
-    if (result.nextCursor) throw new Error('Native chat discovery is incomplete; narrow the title search before sending.');
+    if (result.nextCursor) throw Object.assign(new Error('Native chat discovery is incomplete; use a longer, more specific title query before sending.'),
+      { code: 'NATIVE_CHAT_DISCOVERY_INCOMPLETE' });
     return result.data.filter(t => t && (!sessionId || t.id === sessionId) && typeof t.id === 'string' && typeof t.name === 'string'
       && t.name.trim() && typeof t.cwd === 'string' && isAbsolute(t.cwd) && !t.archived
       && PRIMARY_CODEX_SOURCES.includes(t.source))

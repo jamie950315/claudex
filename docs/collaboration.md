@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.2.16 and its bundled Mod 0.8.11;
+Current behavior is described for Claudex 1.2.17 and its bundled Mod 0.8.12;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -498,6 +498,11 @@ cannot be selected for sending. Unfiltered inventory retains its usual order.
 Claude search covers hook-registered chats. Codex title queries also inspect
 bounded, unarchived native metadata, so a chat need not have fired a hook first.
 Metadata discovery is explicitly distinguished from hook registration.
+Codex native title discovery requires the complete bounded inventory, with at
+most 100 native results. A broader query returns
+`NATIVE_CHAT_DISCOVERY_INCOMPLETE`; use a longer, more specific title query.
+MCP and the Mod pane expose this refusal explicitly. Partial native candidates
+are not returned or used to choose a recipient, and no message is queued.
 The broker reads the synchronization root beside its private collaboration root
 to select the configured Desktop launcher's shared listener. Keep custom
 collaboration roots directly inside their synchronization root when using that

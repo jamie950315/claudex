@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream';
 import net from 'node:net';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { serveCollaborationSocket, callCollaboration, runCollaborationMcp } from '../src/collaboration-transport.mjs';
+import { discoverCodexChats } from '../src/native-chat-catalog.mjs';
 
 async function fixture(t, dispatch = async value => value) {
   const root = await mkdtemp(join(tmpdir(), 'cldx-collab-'));
@@ -26,6 +27,28 @@ test('private socket forwards one request and one response', async t => {
   await assert.rejects(serveCollaborationSocket({ root, dispatch: () => null }), /already exists/);
   await server.close();
   await assert.rejects(lstat(join(root, 'rpc.sock')), { code: 'ENOENT' });
+});
+
+test('MCP preserves the typed incomplete-catalog refusal without returning partial title candidates', async t => {
+  let nativeRequests = 0;
+  const client = { initialize: async () => {}, close: async () => {}, request: async () => {
+    nativeRequests++; return { data: [{ id: 'partial', name: 'Cla', cwd: '/fixture', source: 'cli' }], nextCursor: 'more' };
+  } };
+  const { root } = await fixture(t, request => {
+    assert.equal(request.method, 'chat_list');
+    return discoverCodexChats(request.params, { clientFactory: () => client });
+  });
+  const input = new PassThrough(), output = new PassThrough(); let content = '';
+  output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', token: 'controller', input, output });
+  input.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+    name: 'claudex_chat_list', arguments: { query: 'Cla', match: 'contains', limit: 12 },
+  } }) + '\n');
+  await running;
+  const reply = JSON.parse(content.trim()).result;
+  assert.equal(reply.isError, true); assert.equal(reply.structuredContent.error.code, 'NATIVE_CHAT_DISCOVERY_INCOMPLETE');
+  assert.match(reply.structuredContent.error.message, /longer, more specific title query/);
+  assert.equal(reply.structuredContent.chats, undefined); assert.equal(nativeRequests, 1);
 });
 
 test('MCP work observability reads and generation-fenced controls cross the Unix RPC allowlist', async t => {

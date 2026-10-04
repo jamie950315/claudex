@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.11
+# Claudex native companion, 0.8.12
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -45,12 +45,16 @@ session. Codex Desktop has a separate experimental best-effort CLI opt-in;
 the Mod does not control Codex warming or its TTL. See the source repository's
 `docs/cache-warming.md` for its limitations and explicit confirmation.
 
-Claudex.app 1.2.5 installs and maintains this bundled companion during setup and
+Claudex.app 1.2.17 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
 never installs or configures it. Existing disabled/receiver preferences, other
 plugins and newer installed versions are preserved. Installed files and fresh
 loaded-session evidence are separate: an existing session can retain an older
 plugin root until its supported native lifecycle loads the update.
+
+Native chat title discovery refuses an incomplete bounded inventory with
+`NATIVE_CHAT_DISCOVERY_INCOMPLETE`. Use a longer, more specific title query;
+the pane returns no partial candidates and never retries or selects a recipient.
 
 The loaded observer reports its literal companion version and observation build
 alongside the existing content-free receiver flags. The broker's controller-only
@@ -88,7 +92,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.11-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.12-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

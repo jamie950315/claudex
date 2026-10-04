@@ -1,6 +1,6 @@
 # Claude Mod acceptance and deployment gates
 
-This is the reusable checklist for the current Claudex.app 1.2.16 / Mod 0.8.11
+This is the reusable checklist for the current Claudex.app 1.2.17 / Mod 0.8.12
 workflow. Start with [the current handoff](claude-mod-handoff.md) and
 [app lifecycle](app.md#claude-mod-lifecycle). Mark a gate as passed only with
 observed evidence on the

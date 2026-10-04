@@ -72,6 +72,8 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
         timeoutMs: method === 'mod_wake_wait' ? 25000 : RPC_TIMEOUT });
     } catch (error) {
       if (error.code === 'MOD_TARGET_UNAVAILABLE') throw new ModError(error.code, 'The exact recipient metadata is unavailable or changed.');
+      if (error.code === 'NATIVE_CHAT_DISCOVERY_INCOMPLETE') throw new ModError(error.code,
+        'Native chat discovery is incomplete; use a longer, more specific title query before sending.');
       throw error;
     }
   }

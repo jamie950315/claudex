@@ -1,7 +1,7 @@
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 // Loaded-code evidence, not marketplace configuration or an undocumented host API.
-export const MOD_VERSION = '0.8.11';
+export const MOD_VERSION = '0.8.12';
 export const MOD_BUILD = 'observer-v1';
 
 /** One lifecycle-local reporter; no text, tool arguments, or history inspection. */

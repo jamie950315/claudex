@@ -86,6 +86,13 @@ test('catalog rejects auxiliary and unknown sources while retaining exact-target
 });
 
 test('incomplete discovery cannot select a supposedly unique title', async () => {
-  const client = { initialize: async () => {}, close: async () => {}, request: async () => ({ data: [], nextCursor: 'more' }) };
-  await assert.rejects(discoverCodexChats({ query: 'Title' }, { clientFactory: () => client }), /incomplete/);
+  const calls = []; let closed = 0;
+  const client = { initialize: async () => {}, close: async () => { closed++; }, request: async (method, params) => {
+    calls.push([method, params]);
+    return { data: [{ id: 'partial-only', name: 'Title', cwd: '/fixture', source: 'cli' }], nextCursor: 'more' };
+  } };
+  await assert.rejects(discoverCodexChats({ query: 'Title' }, { clientFactory: () => client }), error =>
+    error.code === 'NATIVE_CHAT_DISCOVERY_INCOMPLETE' && /longer, more specific title query/.test(error.message));
+  assert.equal(calls.length, 1); assert.equal(calls[0][0], 'thread/list');
+  assert.equal(calls[0][1].limit, 100); assert.equal(calls[0][1].cursor, undefined); assert.equal(closed, 1);
 });
