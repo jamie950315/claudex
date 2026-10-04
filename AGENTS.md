@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.0 packages Claude Mod 0.8.0. Keep application and Mod versions
+Claudex.app 1.2.1 packages Claude Mod 0.8.1. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -289,6 +289,12 @@ is unsupported. TTL without an explicit native setting is labeled a conservative
 five-minute estimate, not inferred subscription retention. Token reservations
 limit admission, not native output; count recovery requests even after a policy
 stops. A native accepted prompt has no atomic dequeue API; preserve that limit.
+Native 2.1.286 suppresses a plugin's own prompt hook and frames its text before
+turn.start. Require the existing one-use dispatch plus exact original/native
+envelope, unchanged epoch/context and deadline; never treat matching text alone
+as authority. Fence stale awaited callbacks before replacing turn state. Native
+SDK catalogs/results can precede registration/completion-hook settlement; wait
+for actual loaded-code and broker evidence without repeating model input.
 No startup/inspection path enables warming, starts another owner, changes model
 settings or resumes expired work. See docs/cache-warming.md for operation and
 native activation limits. The older developer probe remains separate evidence.

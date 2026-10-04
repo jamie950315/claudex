@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.0 and Claude Mod 0.8.0 add bounded, per-conversation cache warming.
+Claudex 1.2.1 and Claude Mod 0.8.1 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 The first adapter is a loaded Claude Code Mod session. Codex is explicitly
@@ -14,8 +14,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.0 companion and
-a 1.2.0 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.1 companion and
+a 1.2.1 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -100,21 +100,33 @@ prunes native history or silently deletes old intent records.
 
 ## Native limitations and acceptance
 
-Idle/draft checks and a native prompt-admission hook fence observed activity
-before submission. Once the native host accepts a prompt, no public dequeue API
+Idle/draft and lifecycle checks fence observed activity before submission.
+Native 2.1.286 suppresses the originating plugin's own prompt hook as re-entry
+and frames its message before `turn.start`. Attribution therefore requires an
+existing one-use dispatch plus exact original text or the verified idle-plugin
+envelope, with unchanged context/epoch and an unexpired deadline. The envelope
+alone is never authority; observed competing prompts revoke the pending intent.
+An awaited callback superseded by a newer turn cannot overwrite that turn.
+Once the native host accepts a prompt, no public dequeue API
 exists. A human action racing **after native acceptance** cannot be atomically
 excluded by this adapter. Ambiguous turn attribution stays uncertain, with no
 automatic resubmission or interruption of the user's work.
 
 Source, synthetic state-machine tests, Unix RPC and strict staged validation are
-separate from actual native acceptance. The earlier isolated Sonnet 5.5/medium
+separate from actual native acceptance. An authorized isolated 0.8.1 native
+acceptance verified on/confirm, one timer-triggered plugin-origin prompt, a
+full-prefix cache hit, broker verification, the refresh limit and off under one
+session identity. See [the validation record](claude-mod-validation.md).
+The earlier isolated Sonnet 5.5/medium
 main-conversation experiment established cache reuse after the original TTL; it
 did not exercise this new Mod timer and admission path. The one-token diagnostic
 established that an artificially low output cap can trigger multiple native
 continuations, so this feature never sets the native cap to one.
 
-The native Mod test kit may be rollout-disabled. Do not change native feature or
-policy gates to make a test pass, and do not describe static validation or an app
+The native Mod test kit may be rollout-disabled. A documented process-only Mod
+opt-in may be used only with explicit user authorization; it is not evidence of
+default availability and must not change account policy or global preferences.
+Do not describe static validation or an app
 build as proof that a loaded session can dispatch and complete a warm turn.
 Enable real conversations only after the selected runtime's normal loaded-Mod
 path passes an authorized, bounded acceptance check.

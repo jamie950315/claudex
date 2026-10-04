@@ -97,6 +97,22 @@ no plugin; it is not an automatic fallback after an uncertain fork.
 
 ## Evidence and limits
 
+### Actual native Mod acceptance
+
+`native.mjs` runs the shipping companion and real Unix broker in a new private
+root. It verifies native `warm status`, `on`, and `confirm` as zero-model local
+commands, then allows one seed turn and one timer-triggered warm turn. It requires
+an explicit, user-authorized process-only `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`;
+it never writes that setting globally. Use `--run` only after inference approval.
+
+The native initialization catalog can precede dynamic command registration, so
+the harness waits for the staged Mod's actual loaded-version observer. It also
+waits for completion-hook settlement after the SDK result: that result can arrive
+while the broker still reports busy. Neither wait sends another model prompt.
+The harness preserves failed candidates and does not replay their dispatches.
+Its private report and debug log are never committed. Keep the broker outcome
+separate from a model reply: successful inference alone is not verified warming.
+
 `report.json` contains main receipts, actual main-response model labels, the
 requested effort, cache token usage, one-session identity counts, an offline
 assessment and owned-process exit evidence. Fork mode also records native

@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.0
+# Claudex native companion, 0.8.1
 
 Cache warming is default-off and separately confirmed in the selected loaded
 conversation: `/claudex warm on` prints a bounded confirmation command;
@@ -54,7 +54,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.0-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.1-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

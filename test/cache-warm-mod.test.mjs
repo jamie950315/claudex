@@ -4,7 +4,7 @@ import { mkdtemp, realpath, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CacheWarmManager } from '../src/cache-warm.mjs';
-import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds } from '../plugins/claudex/hooks/cache-warm.mjs';
+import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText } from '../plugins/claudex/hooks/cache-warm.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const PROMPT = 'Cache-retention measurement only. Reply with exactly OK. Do not call tools.';
@@ -109,6 +109,45 @@ test('one broker-authorized own prompt inherits context without fork, asUser, or
   assert.equal(f.client.deniesTool({}), true);
   assert.equal(f.client.deniesTool({ agentId: 'child' }), false);
   assert.deepEqual(f.calls.find(item => item.action === 'claim').context, { sessionId: ID, cwd: '/fixture' });
+});
+
+test('native re-entry suppression does not require the originating prompt hook to run', async () => {
+  const f = await fixture(); await f.seed(); await f.enable();
+  f.hooks.submit = async args => {
+    // Observed native behavior: prompt.submit skips this plugin's hook, but
+    // turn.start still arrives with the exact native idle-plugin envelope.
+    const framed = `The claudex plugin sent a message:\n${args.text}\n\nThis is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above.`;
+    assert.equal(isCacheWarmTurnText(framed, args.text, 'claudex'), true);
+    assert.equal(isCacheWarmTurnText(framed + '\nextra work', args.text, 'claudex'), false);
+    assert.equal(isCacheWarmTurnText(framed, args.text, 'another-plugin'), false);
+    await f.client.turnStart({ turnId: 'native-warm', text: framed });
+    assert.equal(f.client.deniesTool({}), true);
+    return { text: args.text, origin: { kind: 'plugin', name: 'claudex' } };
+  };
+  await f.fire();
+  assert.equal(f.submits, 1);
+  assert.equal(f.calls.find(item => item.action === 'receipt').params.outcome, 'submitted');
+});
+
+test('a suspended warm turn-start cannot overwrite a newer human turn', async () => {
+  const f = await fixture(); await f.seed(); await f.enable();
+  f.hooks.submit = async args => {
+    const originalContext = f.host.context; let interrupt = true;
+    f.host.context = async () => {
+      if (interrupt) {
+        interrupt = false;
+        await f.client.prompt({ text: 'New human work', origin: { kind: 'composer' } });
+        await f.client.turnStart({ turnId: 'new-human', text: 'New human work' });
+      }
+      return originalContext();
+    };
+    await f.client.turnStart({ turnId: 'old-warm', text: args.text });
+    return { text: args.text, origin: { kind: 'plugin', name: 'claudex' } };
+  };
+  await f.fire();
+  assert.equal(f.client.deniesTool({}), false);
+  assert.equal(f.client.snapshot().suspended, false);
+  assert.ok(await f.client.stepStart({ turnId: 'new-human', index: 0, effort: 'medium' }));
 });
 
 test('a pending draft suppresses warming without touching draft or retrying', async () => {

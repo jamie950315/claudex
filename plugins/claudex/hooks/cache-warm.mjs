@@ -4,6 +4,13 @@ const count = value => Number.isSafeInteger(value) && value >= 0;
 const token = () => `warm-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
 const defaults = Object.freeze({ maxMinutes: 60, maxRefreshes: 3, maxReadTokens: 250000, maxOutputTokens: 256 });
 
+// Native 2.1.286 frames an idle plugin submission before turn.start. Accept the
+// exact native envelope, never a substring or a mid-turn delivery. The pending
+// one-use intent, epoch, context and deadline are independently required below.
+export function isCacheWarmTurnText(text, prompt, pluginName) {
+  return text === prompt || text === `The ${pluginName} plugin sent a message:\n${prompt}\n\nThis is how Claude Code surfaces a prompt a plugin submits between turns — it starts this turn in the user's place. Address the message above.`;
+}
+
 export function cacheWarmTtl({ ttl, force5m, setting } = {}) {
   if (force5m === '1' || force5m === 'true') return { ttlMs: 300000, ttlSource: 'native-setting' };
   const value = ttl || setting;
@@ -85,6 +92,7 @@ export function createCacheWarmClient() {
       b.dispatch = b.pending;
       // Set uncertainty before crossing native submission. Never retry this call.
       outcome = 'uncertain';
+      b.pending.submissionStarted = true;
       const result = await b.host.submitPrompt({ text: attempt.prompt });
       if (typeof result?.drop === 'string') outcome = 'rejected';
       else if (typeof result?.text === 'string' && result.origin?.kind === 'plugin' && result.origin.name === b.host.pluginName)
@@ -182,7 +190,21 @@ export function createCacheWarmClient() {
     async turnStart(e) {
       const b = binding; if (!b) return;
       const pending = b.pending;
-      const own = pending?.admitted && pending.epoch === b.epoch && e.text === pending.text;
+      // Native 2.1.286 skips the originating plugin's prompt.submit hook as
+      // re-entry. Admission cannot depend on seeing that skipped hook. Bind only
+      // our one-use dispatch to an exact unchanged epoch/text/context before its
+      // deadline. Every observed competing submission clears this pending intent.
+      const epoch = b.epoch;
+      let own = false;
+      if (pending?.submissionStarted && pending.epoch === epoch && isCacheWarmTurnText(e.text, pending.text, b.host.pluginName)) {
+        const validContext = await safeContext(b, epoch);
+        const now = await b.host.now();
+        // A newer prompt/turn can arrive while native context is being read.
+        // A stale callback must never overwrite that newer turn or its usage.
+        if (!current(b, epoch) || b.pending !== pending) return;
+        own = validContext && now < pending.expiresAt;
+      }
+      if (!current(b, epoch)) return;
       cancel(b); b.epoch++; b.phase = 'busy'; b.pending = null;
       b.turn = { id: e.turnId, attemptId: own ? pending.id : null, responses: 0 };
       if (pending && !own) fault(b, 'native-turn-attribution-unavailable');

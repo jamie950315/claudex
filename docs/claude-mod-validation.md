@@ -1,16 +1,50 @@
 # Claude Mod integration validation
 
-The current source and reviewed installed companion are 0.7.1, managed by
-Claudex.app 1.1.1. The current checkpoint is followed by version-scoped historical
-records; their versions, counts and transient machine states remain unchanged
-as evidence of those earlier runs, not claims about the current installation.
-The reviewed Mac
-uses `nativeWake=true`, `selfWake=true` and broker route `mod-self`. Source
-defaults remain false. Installation, native invocation and actual Desktop display
-were checked separately; no second Mod or sender session is required.
+The current source target is Claude Mod 0.8.1 in Claudex.app 1.2.1. Its cache-warm
+acceptance below used isolated staged sessions and did not update the installed
+app, global preferences or existing conversations. Version-scoped installation
+checkpoints remain historical evidence, not claims about the current installation.
+The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker route
+`mod-self`; source defaults remain false. Installation, native invocation and
+actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
-## Current 1.1.1 / 0.7.1 checkpoint (2026-10-03)
+## Cache-warming 1.2.1 / 0.8.1 acceptance (2026-10-04)
+
+An explicitly authorized isolated Claude Code 2.1.286 session, using Sonnet 5.5
+and requested medium effort, passed the actual shipping Mod's local status,
+on/confirm, timer, native reply, broker accounting and off path. The native
+function-hooks option was set only for the test processes; global preferences
+and the vendor executable were unchanged. The test used one native session, no
+fork, no API key, no peer-wake route and no self-inbox delivery.
+
+The main seed wrote 7,446 cache tokens. At the four-minute deadline, exactly one
+native plugin-origin prompt reused all 7,446 tokens, wrote 105 new cache tokens
+and generated four output tokens (`OK`). The broker recorded one verified
+response, reached `refresh-limit`, and scheduled no further refresh. Explicit
+off retained the accounting and disabled the policy. Status/on/confirm/off each
+returned zero native model turns; the owned process exited afterward.
+
+Native acceptance exposed two boundaries missing from synthetic hooks: the host
+suppresses the originating plugin's own prompt hook as re-entry, and wraps its
+idle message before `turn.start`. The fix binds the already authorized one-use
+dispatch to exact raw/native-framed text, context, epoch and expiry, without
+forging user origin or an acknowledgement. A stale awaited callback cannot
+replace a newer human turn. Earlier submitted-but-unverified attempts remain
+uncertain and were not replayed; success used a new isolated session.
+
+The SDK initialization catalog can precede dynamic command registration, and
+its result can precede completion-hook settlement. The manual harness waits for
+the actual loaded-version observer and broker state rather than treating those
+earlier signals as failure or completion. It never retries model input.
+
+This verifies the opt-in CLI/SDK native-owner path, not Desktop rendering, every
+runtime's default Mod availability, one-hour TTL, Codex warming, or all native
+queue races. The earlier main-turn/control experiment separately established
+reuse after the original five-minute TTL. Native admission still has no public
+atomic dequeue API.
+
+## Historical 1.1.1 / 0.7.1 checkpoint (2026-10-03)
 
 The 0.7.1 stage passed all 18 official native kit cases on Claude Code 2.1.286,
 using the previously approved function-hooks option only in the isolated test
