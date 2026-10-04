@@ -34,11 +34,12 @@ test('cache warming uses real Unix RPC, stays default-off, and binds companion c
   assert.notEqual(first.policy?.enabled, true);
   await assert.rejects(f.call('configure', { provider: 'claude', sessionId: '22222222-2222-4222-8222-222222222222',
     cwd: f.cwd, enabled: true, requestId: 'wrong-context' }), { code: 'CONTEXT_CHANGED' });
-  const configured = await f.call('configure', { enabled: true, requestId: 'explicit-confirmation',
+  const configured = await f.call('configure', { enabled: true, requestId: 'explicit-confirmation', ttl: '5m',
     maxMinutes: 60, maxRefreshes: 3, maxReadTokens: 250000, maxOutputTokens: 256 });
   assert.equal(configured.policy.enabled, true);
+  assert.equal(configured.policy.ttlPreference, '5m');
   assert(Number.isSafeInteger(configured.nextAt));
-  const repeated = await f.call('configure', { enabled: true, requestId: 'explicit-confirmation',
+  const repeated = await f.call('configure', { enabled: true, requestId: 'explicit-confirmation', ttl: '5m',
     maxMinutes: 60, maxRefreshes: 3, maxReadTokens: 250000, maxOutputTokens: 256 });
   assert.deepEqual(repeated.policy, configured.policy);
   assert.equal((await f.call('claim', { instanceId: 'fixture-instance', epoch: 1 })).claimed, false);

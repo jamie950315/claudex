@@ -13,7 +13,7 @@ import { CollaborationHub } from '../../src/collaboration-hub.mjs';
 import { serveCollaborationSocket } from '../../src/collaboration-transport.mjs';
 import { createTokenLimitEvidence } from './token-limit-evidence.mjs';
 
-const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' } } });
+const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' }, 'ttl-sync': { type: 'boolean' } } });
 assert(values.root && values.claude, 'Supply a new private --root and the native --claude executable.');
 assert(process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS === '1', 'An explicitly authorized process-only native Mod opt-in is required.');
 const root = await realpath(values.root), binary = await realpath(values.claude);
@@ -108,8 +108,38 @@ try {
   assert.equal(status.local.enabled, false);
   assert.equal(report.native.at(-1).turns, 0, 'Status must not invoke a model.');
   if (!values.run) report.outcome = 'native-status-only';
+  else if (values['ttl-sync']) {
+    report.ttlSync = [];
+    for (const ttl of ['1h', '5m']) {
+      const preview = jsonReply(await send(`/claudex warm on ttl=${ttl} maxMinutes=2 maxRefreshes=1 maxReadTokens=40000 maxOutputTokens=256`));
+      assert.equal(preview.state, 'confirmation-required');
+      assert.equal(report.native.at(-1).turns, 0);
+      const confirmed = jsonReply(await send(preview.confirm));
+      assert.equal(confirmed.policy.enabled, true);
+      assert.equal(confirmed.nativeCacheSync.value, ttl);
+      assert.equal(confirmed.nativeCacheSync.scope, 'current-process');
+      assert.equal(report.native.at(-1).turns, 0);
+      const prompt = ttl === '1h'
+        ? Array.from({ length: 120 }, (_, i) => `Fixture ${i}: amber cedar lake north. Stable inert reference data.`).join('\n') + '\nReply only OK.'
+        : 'Measure the newly selected cache lifetime. Reply only OK.';
+      const response = await send(prompt);
+      assert(!response.receipt.isError && response.receipt.text?.trim() === 'OK');
+      const bucket = ttl === '1h' ? 'ephemeral_1h_input_tokens' : 'ephemeral_5m_input_tokens';
+      const other = ttl === '1h' ? 'ephemeral_5m_input_tokens' : 'ephemeral_1h_input_tokens';
+      assert(response.receipt.usage.cache_creation[bucket] > 0, `Native API did not report ${ttl} cache writes.`);
+      assert.equal(response.receipt.usage.cache_creation[other], 0);
+      report.ttlSync.push({ requested: ttl, confirmation: confirmed.nativeCacheSync,
+        cacheCreation: response.receipt.usage.cache_creation });
+      await delay(300); // Drain native completion hooks before a local setting change.
+      await send('/claudex warm off');
+      const current = jsonReply(await send('/claudex warm status'));
+      assert.equal(current.nativeCache.value, ttl, 'Off must not silently revert the native TTL choice.');
+    }
+    assert.equal((await hub.cacheWarm.list()).attemptCount, 0, 'TTL verification must not dispatch a timer refresh.');
+    report.outcome = 'native-ttl-sync-verified';
+  }
   else {
-    const preview = jsonReply(await send('/claudex warm on maxMinutes=10 maxRefreshes=1 maxReadTokens=40000 maxOutputTokens=256'));
+    const preview = jsonReply(await send('/claudex warm on ttl=5m maxMinutes=10 maxRefreshes=1 maxReadTokens=40000 maxOutputTokens=256'));
     assert.equal(preview.state, 'confirmation-required');
     assert.equal(report.native.at(-1).turns, 0);
     const confirmed = jsonReply(await send(preview.confirm));

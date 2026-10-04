@@ -4,19 +4,26 @@ import { mkdtemp, realpath, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CacheWarmManager } from '../src/cache-warm.mjs';
-import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText } from '../plugins/claudex/hooks/cache-warm.mjs';
+import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText, assertNativeCacheTtlChange } from '../plugins/claudex/hooks/cache-warm.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const PROMPT = 'Cache-retention measurement only. Reply with exactly OK. Do not call tools.';
 const usage = { model: 'claude-sonnet-5-5', input_tokens: 2, cache_read_input_tokens: 6000, cache_creation_input_tokens: 20, output_tokens: 4 };
 async function fixture() {
   let now = 1000, context = { sessionId: ID, cwd: '/fixture' }, fingerprint = 'sonnet-medium-5m';
-  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0;
+  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h';
   const timers = [], calls = [], client = createCacheWarmClient();
   const hooks = {};
   const host = {
     pluginName: 'claudex', worker: async () => worker, context: async () => ({ ...context }), now: async () => now,
-    cacheConfiguration: async () => ({ fingerprint, ttl: cacheWarmTtl({ setting: '5m' }) }),
+    cacheConfiguration: async preference => ({ fingerprint, ttl: cacheWarmTtl({ setting: nativeTtl, preference }) }),
+    readCacheTtl: async () => ({ value: nativeTtl, environmentValue: nativeTtl, scope: 'current-process', force5m: false, policyLocked: false }),
+    checkCacheTtl: async desired => { const state = await host.readCacheTtl(); assertNativeCacheTtlChange(state, desired); return state; },
+    applyCacheTtl: async (desired, expected, beforeWrite) => {
+      await beforeWrite();
+      assert.equal(nativeTtl, expected); const changed = nativeTtl !== desired; nativeTtl = desired;
+      return { value: desired, scope: 'current-process', changed };
+    },
     readPrompt: async () => ({ text: draft, cursor: draft.length }),
     after(ms, callback) { const timer = { due: now + ms, callback, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(timer); return timer; },
     async bridge(request) {
@@ -62,11 +69,83 @@ async function fixture() {
     get now() { return now; }, set now(value) { now = value; } };
 }
 
-test('cache warm TTL does not infer a one-hour subscription cache', () => {
-  assert.deepEqual(cacheWarmTtl(), { ttlMs: 300000, ttlSource: 'conservative-minimum' });
+test('cache warm window defaults to one hour and supports an explicit five-minute choice', () => {
+  assert.deepEqual(cacheWarmTtl(), { ttlMs: 3600000, ttlSource: 'configured-window' });
   assert.equal(cacheWarmTtl({ setting: '1h' }).ttlMs, 3600000);
   assert.equal(cacheWarmTtl({ ttl: '5m', setting: '1h' }).ttlMs, 300000);
   assert.equal(cacheWarmTtl({ ttl: '1h', force5m: '1' }).ttlMs, 300000);
+  assert.deepEqual(cacheWarmTtl({ preference: '5m' }), { ttlMs: 300000, ttlSource: 'configured-window' });
+  assert.equal(cacheWarmTtl({ setting: '1h', preference: '5m' }).ttlMs, 300000);
+  assert.equal(cacheWarmTtl({ setting: '5m', preference: '1h' }).ttlSource, 'native-setting');
+  assert.equal(parseCacheWarmBounds().ttl, '1h');
+  assert.equal(parseCacheWarmBounds(['ttl=5m']).ttl, '5m');
+  assert.throws(() => parseCacheWarmBounds(['ttl=30m']), /ttl=1h or ttl=5m/);
+  assert.throws(() => parseCacheWarmBounds(['ttl=5m', 'ttl=1h']), /exactly once/);
+});
+
+test('native TTL synchronization preserves forced-five-minute and managed-policy constraints', () => {
+  assert.throws(() => assertNativeCacheTtlChange({ force5m: true }, '1h'), /FORCE_PROMPT_CACHING_5M/);
+  assert.throws(() => assertNativeCacheTtlChange({ policyLocked: true, policyValue: '5m' }, '1h'), /Managed/);
+  assert.doesNotThrow(() => assertNativeCacheTtlChange({ force5m: true, policyLocked: true, policyValue: '5m' }, '5m'));
+});
+
+test('native TTL readback failure leaves warming disabled without fake synchronization', async () => {
+  const f = await fixture(); await f.seed(); await f.enable();
+  f.host.applyCacheTtl = async () => ({ value: '1h', scope: 'current-process' });
+  const preview = await f.client.command(f.host, ['on', 'ttl=5m'], { kind: 'composer' });
+  await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' }), /readback/);
+  assert.equal(f.client.snapshot().enabled, false);
+  assert.equal(f.calls.findLast(item => item.action === 'configure').params.enabled, false);
+  await f.fire(); assert.equal(f.submits, 0);
+});
+
+test('native TTL is not changed by preview or status', async () => {
+  const f = await fixture(); let writes = 0;
+  f.host.applyCacheTtl = async () => { writes++; throw new Error('unexpected mutation'); };
+  const preview = await f.client.command(f.host, ['on', 'ttl=5m'], { kind: 'composer' });
+  assert.equal(preview.nativeCacheChange.before, '1h'); assert.equal(preview.nativeCacheChange.after, '5m');
+  assert.equal(preview.nativeCacheChange.writesGlobalSettings, false);
+  const status = await f.client.command(f.host, ['status'], { kind: 'composer' });
+  assert.equal(status.nativeCache.value, '1h'); assert.equal(writes, 0);
+});
+
+test('TTL confirmation locks queued timers before awaiting native preflight', async () => {
+  const f = await fixture(); await f.seed(); await f.enable();
+  const queued = f.timers.at(-1);
+  const preview = await f.client.command(f.host, ['on', 'ttl=5m'], { kind: 'composer' });
+  const check = f.host.checkCacheTtl;
+  f.host.checkCacheTtl = async desired => {
+    await queued.callback();
+    return check(desired);
+  };
+  await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' });
+  assert.equal(f.submits, 0);
+  assert.equal(f.calls.some(item => item.action === 'claim'), false);
+  assert.equal((await f.host.readCacheTtl()).value, '5m');
+});
+
+test('a native turn during TTL preflight prevents the final environment write', async () => {
+  const f = await fixture(); await f.seed(); await f.enable();
+  const apply = f.host.applyCacheTtl;
+  f.host.applyCacheTtl = async (...args) => {
+    await f.client.turnStart({ turnId: 'new-human', text: 'Human work' });
+    return apply(...args);
+  };
+  await assert.rejects(f.enable(['ttl=5m']), /native context or current native turn changed/);
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  assert.equal(f.client.snapshot().enabled, false);
+  assert.equal(f.calls.findLast(item => item.action === 'configure').params.enabled, false);
+  assert.ok(await f.client.stepStart({ turnId: 'new-human', index: 0, effort: 'medium' }));
+});
+
+test('lost native TTL readback explicitly reports possible applied configuration', async () => {
+  const f = await fixture(); await f.seed(); await f.enable();
+  const apply = f.host.applyCacheTtl;
+  f.host.applyCacheTtl = async (...args) => { await apply(...args); throw new Error('readback unavailable'); };
+  await assert.rejects(f.enable(['ttl=5m']), /native TTL may have changed and was not rolled back.*readback unavailable/);
+  assert.equal((await f.host.readCacheTtl()).value, '5m');
+  assert.equal(f.client.snapshot().enabled, false);
+  await f.fire(); assert.equal(f.submits, 0);
 });
 
 test('warming defaults off and status neither configures nor observes', async () => {
@@ -77,11 +156,43 @@ test('warming defaults off and status neither configures nor observes', async ()
   assert.equal(f.submits, 0);
 });
 
+test('confirmed five-minute choice is persisted and waits for fresh window-specific evidence', async () => {
+  const f = await fixture();
+  f.host.cacheConfiguration = async preference => {
+    const ttl = cacheWarmTtl({ preference }); return { ttl, fingerprint: JSON.stringify(ttl) };
+  };
+  await f.seed();
+  const preview = await f.client.command(f.host, ['on', 'ttl=5m'], { kind: 'composer' });
+  assert.equal(preview.ttl, '5m');
+  assert.equal(preview.cacheWindow.ttlMs, 300000);
+  assert.equal(f.calls.length, 0);
+  await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' });
+  assert.equal(f.calls.find(item => item.action === 'configure' && item.params.enabled).params.ttl, '5m');
+  assert.equal((await f.host.readCacheTtl()).value, '5m');
+  assert.equal(f.calls.find(item => item.action === 'observe').params.sample, undefined);
+  assert.equal(f.timers.length, 0);
+  await f.seed('after-window-change');
+  const sample = f.calls.findLast(item => item.action === 'observe' && item.params.sample)?.params.sample;
+  assert.equal(sample.ttlMs, 300000);
+  assert.equal(sample.ttlSource, 'configured-window');
+  assert.equal(f.timers.length, 1);
+});
+
+test('changing the window cannot invalidate an in-flight native turn', async () => {
+  const f = await fixture();
+  await f.client.turnStart({ turnId: 'working', text: 'Human work' });
+  const preview = await f.client.command(f.host, ['on', 'ttl=5m'], { kind: 'composer' });
+  await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' }), /current native turn/);
+  assert.equal(f.calls.length, 0);
+  assert.ok(await f.client.stepStart({ turnId: 'working', index: 0, effort: 'medium' }));
+});
+
 test('bounded confirmation is exact context, expires, and is one-use', async () => {
   const f = await fixture();
   const preview = await f.client.command(f.host, ['on', 'maxRefreshes=2'], { kind: 'composer' });
   assert.equal(f.calls.length, 0); assert.equal(preview.maxRefreshes, 2);
-  assert.deepEqual(preview.cacheWindow, { ttlMs: 300000, ttlSource: 'native-setting', refreshBeforeExpiryMs: 60000 });
+  assert.equal(preview.ttl, '1h');
+  assert.deepEqual(preview.cacheWindow, { ttlMs: 3600000, ttlSource: 'native-setting', refreshBeforeExpiryMs: 300000 });
   assert.equal(preview.nativeOutputCapUnchanged, true);
   const command = ['confirm', preview.confirm.split(' ').at(-1)];
   f.now = 121000;

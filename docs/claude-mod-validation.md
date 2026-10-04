@@ -1,13 +1,32 @@
 # Claude Mod integration validation
 
-The current source target is Claude Mod 0.8.1 in Claudex.app 1.2.1. Its cache-warm
-acceptance below used isolated staged sessions and did not update the installed
+The current source target is Claude Mod 0.8.2 in Claudex.app 1.2.2. The version-scoped
+cache-warm acceptance below used isolated staged sessions and did not update the installed
 app, global preferences or existing conversations. Version-scoped installation
 checkpoints remain historical evidence, not claims about the current installation.
 The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker route
 `mod-self`; source defaults remain false. Installation, native invocation and
 actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## Native TTL sync 1.2.2 / 0.8.2 acceptance (2026-10-04)
+
+An authorized isolated Claude Code 2.1.286 session with Sonnet 5.5 and requested
+medium effort switched the real main-cache TTL from 5m to 1h and back to 5m using
+the shipping Mod's on/confirm commands. The official environment API changed
+only the current process. Native readback and the following ordinary request's
+actual cache-creation buckets agreed: 5,537 tokens in the one-hour bucket with
+zero in five-minute, then 8,937 tokens in the five-minute bucket with zero in
+one-hour. Both requests generated four output tokens. These were cold writes,
+not proof of latency improvement or one-hour retention duration.
+
+There were exactly two main model requests in one native session, zero automatic
+warm attempts, and zero model turns for status/on/confirm/off. Off retained the
+selected TTL. The owned process exited. The test used the explicitly authorized
+function-hooks option only in its process; no API key, global preference, vendor
+binary, existing conversation or installed app was changed. Subsequent synthetic
+regressions cover queued-timer exclusion, native activity before the environment
+write and explicit partial-write/readback-failure reporting.
 
 ## Cache-warming 1.2.1 / 0.8.1 acceptance (2026-10-04)
 

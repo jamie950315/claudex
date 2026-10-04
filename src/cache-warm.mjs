@@ -28,7 +28,7 @@ function sampleValue(value, now) {
     && integer(value.startedAt) && integer(value.completedAt) && value.completedAt >= value.startedAt
     && value.completedAt <= now && [300000, 3600000].includes(value.ttlMs)
     && value.completedAt - value.startedAt < value.ttlMs
-    && ['native-setting', 'conservative-minimum'].includes(value.ttlSource)
+    && ['native-setting', 'conservative-minimum', 'configured-window'].includes(value.ttlSource)
     && (value.ttlSource !== 'conservative-minimum' || value.ttlMs === 300000)
     && ['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens'].every(key => integer(value[key]))
     && integer(value.cacheReadTokens + value.cacheWriteTokens + READ_OVERHEAD)
@@ -38,8 +38,9 @@ function sampleValue(value, now) {
     ...(value.attemptId === undefined ? [] : ['attemptId'])].map(key => [key, value[key]]));
 }
 const prefix = sample => sample.cacheReadTokens + sample.cacheWriteTokens;
-const expires = sample => sample.startedAt + sample.ttlMs;
-const nextAt = sample => expires(sample) - (sample.ttlMs === 300000 ? 60000 : 300000);
+const windowMs = (sample, policy) => policy?.ttlPreference === '5m' ? Math.min(sample.ttlMs, 300000) : sample.ttlMs;
+const expires = (sample, policy) => sample.startedAt + windowMs(sample, policy);
+const nextAt = (sample, policy) => expires(sample, policy) - (windowMs(sample, policy) === 300000 ? 60000 : 300000);
 const successful = sample => ['end_turn', 'stop_sequence'].includes(sample.stopReason);
 function validate(state) {
   requireValue(state?.version === 1 && Array.isArray(state.policies) && state.policies.length <= MAX_POLICIES
@@ -53,7 +54,8 @@ function validate(state) {
       && integer(p.maxRefreshes, 1, 100) && integer(p.maxReadTokens, 1, 100000000)
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 1440)
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
-      && (p.ttlMs === null || [300000, 3600000].includes(p.ttlMs)));
+      && (p.ttlMs === null || [300000, 3600000].includes(p.ttlMs))
+      && (p.ttlPreference === undefined || ['1h', '5m'].includes(p.ttlPreference)));
     ids.add(p.sessionId);
   }
   for (const a of state.attempts) {
@@ -144,13 +146,13 @@ export class CacheWarmManager {
     if (!b.sample) return 'awaiting-evidence';
     if (!successful(b.sample)) return 'native-output-not-complete';
     if (!prefix(b.sample)) return 'no-cache-prefix';
-    if (this.now() >= expires(b.sample)) return 'cache-expired';
+    if (this.now() >= expires(b.sample, p)) return 'cache-expired';
     if (this.pending(p.sessionId)) return 'attempt-pending';
     const totals = this.totals(p);
     if (totals.refreshes >= p.maxRefreshes) return 'refresh-limit';
     if (totals.readTokens + prefix(b.sample) + READ_OVERHEAD > p.maxReadTokens) return 'read-budget';
     if (totals.outputTokens + OUTPUT_RESERVATION > p.maxOutputTokens) return 'output-budget';
-    if (due && this.now() < nextAt(b.sample)) return 'not-due';
+    if (due && this.now() < nextAt(b.sample, p)) return 'not-due';
     return null;
   }
   presentation(p) {
@@ -158,7 +160,8 @@ export class CacheWarmManager {
     return { ...clone(p), status: reason ?? 'scheduled', reason: reason ?? 'scheduled', bound: Boolean(b && b.cwd === p.cwd),
       phase: b?.phase ?? null, native: { phase: b?.phase ?? 'unbound' }, totals: this.totals(p),
       sample: b?.sample ? clone(b.sample) : null,
-      nextAt: !reason && b?.sample ? nextAt(b.sample) : null,
+      nextAt: !reason && b?.sample ? nextAt(b.sample, p) : null,
+      effectiveTtlMs: b?.sample ? windowMs(b.sample, p) : null,
       budgetKind: 'admission-reservation-not-a-native-token-cap' };
   }
   result(p, more = {}) {
@@ -185,6 +188,7 @@ export class CacheWarmManager {
     identity(input); requireValue(typeof input.enabled === 'boolean');
     requireValue(!input.enabled || word(input.requestId), 'Enabling requires a unique requestId.');
     requireValue(input.requestId === undefined || word(input.requestId));
+    requireValue(input.ttl === undefined || ['1h', '5m'].includes(input.ttl), 'Cache-warming ttl must be 1h or 5m.');
     const { maxMinutes = 60, maxRefreshes = 3, maxReadTokens = 250000, maxOutputTokens = 256 } = input;
     requireValue(integer(maxMinutes, 1, 1440) && integer(maxRefreshes, 1, 100)
       && integer(maxReadTokens, 1, 100000000) && integer(maxOutputTokens, 1, 1000000));
@@ -192,7 +196,7 @@ export class CacheWarmManager {
     return this.transaction(async () => {
       requireValue(!this.closed || !input.enabled, 'Cache-warming broker is stopping.');
       const payload = JSON.stringify({ provider: 'claude', sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
-        maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens });
+        maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens, ...(input.ttl === undefined ? {} : { ttl: input.ttl }) });
       const saved = input.requestId && this.state.requests.find(r => r.requestId === input.requestId);
       if (saved) {
         requireValue(saved.payload === payload, 'Cache-warming requestId was reused with different parameters.');
@@ -210,7 +214,7 @@ export class CacheWarmManager {
         throw error('CACHE_WARM_PENDING', 'A native attempt still awaits final evidence; do not start another.');
       for (const a of this.attempts(input.sessionId)) if (a.state === 'reserved') { a.state = 'revoked'; a.reason = 'policy-changed'; }
       const value = { provider: 'claude', sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
-        generation: (p?.generation ?? 0) + 1, maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens,
+        generation: (p?.generation ?? 0) + 1, ttlPreference: input.ttl ?? '1h', maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens,
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
       // Disabling revokes authorization without erasing this enrollment's
@@ -319,8 +323,8 @@ export class CacheWarmManager {
       if (reason) return { claimed: false, reason, nextAt: p ? this.presentation(p).nextAt : null };
       if (this.state.attempts.length >= MAX_ATTEMPTS) throw error('CACHE_WARM_CAPACITY', 'Cache-warming attempt capacity is exhausted.');
       const a = { id: randomUUID(), sessionId: p.sessionId, cwd: p.cwd, instanceId: b.instanceId,
-        epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: nextAt(b.sample),
-        expiresAt: Math.min(expires(b.sample), p.until), sampleId: b.sample.id, model: b.sample.model, effort: b.sample.effort,
+        epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: nextAt(b.sample, p),
+        expiresAt: Math.min(expires(b.sample, p), p.until), sampleId: b.sample.id, model: b.sample.model, effort: b.sample.effort,
         state: 'reserved', requiredPrefixTokens: prefix(b.sample), reservedReadTokens: prefix(b.sample) + READ_OVERHEAD,
         reservedOutputTokens: OUTPUT_RESERVATION };
       this.state.attempts.push(a); await this.save();

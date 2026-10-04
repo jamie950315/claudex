@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.1**, with **Claude Mod 0.8.1** bundled.
+Current development build: **Claudex.app 1.2.2**, with **Claude Mod 0.8.2** bundled.
 For the latest published release, **1.1.1**, see [release notes](releases/1.1.1.md) and the
 [published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v1.1.1).
 

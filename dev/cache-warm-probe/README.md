@@ -105,6 +105,15 @@ commands, then allows one seed turn and one timer-triggered warm turn. It requir
 an explicit, user-authorized process-only `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`;
 it never writes that setting globally. Use `--run` only after inference approval.
 
+`native.mjs --run --ttl-sync --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
+instead verifies real native TTL synchronization without waiting for a timer.
+In one isolated process it confirms 1h, sends one ordinary fixture request,
+checks the one-hour cache-creation bucket, then confirms 5m and checks the
+five-minute bucket with one more request. Local commands must use zero model
+turns, off must preserve the selected TTL, and no automatic attempt may occur.
+This is exactly two explicit model requests, not a one-hour retention experiment.
+It uses the same separately authorized process-only function-hooks option.
+
 The native initialization catalog can precede dynamic command registration, so
 the harness waits for the staged Mod's actual loaded-version observer. It also
 waits for completion-hook settlement after the SDK result: that result can arrive

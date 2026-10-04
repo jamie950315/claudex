@@ -1,10 +1,15 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.1
+## Current companion: 0.8.2
 
-Claudex.app 1.2.1 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.2.2 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.2 defaults the warming window to one hour and accepts `ttl=5m` or
+`ttl=1h` in the explicit per-conversation confirmation. The choice also sets and
+verifies the current native process's real main-cache TTL before warming is
+enabled. Global files and the separate subagent TTL variable stay unchanged;
+forced/managed restrictions are respected. Turning warming off retains the TTL.
 Version 0.8.1 accounts for native suppression of a plugin's own prompt hook.
 Cache-warming attribution retains the one-use dispatch, exact text/context,
 activity epoch and expiry checks rather than relying on observing that hook.
@@ -288,7 +293,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.1-review"
+STAGE="$PARENT/claudex-0.8.2-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -310,7 +315,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # The own-inbox test explicitly exercises both opt-ins. Use a separate,
 # never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.8.1-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.2-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

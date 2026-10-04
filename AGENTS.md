@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.1 packages Claude Mod 0.8.1. Keep application and Mod versions
+Claudex.app 1.2.2 packages Claude Mod 0.8.2. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -285,8 +285,16 @@ observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
 proof. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
 uncertain submission, read-only status and explicit bounded confirmation. Codex
-is unsupported. TTL without an explicit native setting is labeled a conservative
-five-minute estimate, not inferred subscription retention. Token reservations
+is unsupported. The warming window defaults to one hour; users can choose
+`ttl=5m` or `ttl=1h` in the confirmed native command. Confirmation synchronizes
+the current process's real CLAUDE_CODE_PROMPT_CACHE_TTL through the official Mod
+environment API, never global files or the separate subagent TTL variable.
+Lock timer dispatch, respect forced/managed constraints, pause the old policy on
+change, check exact idle/context immediately before writing and verify readback
+before enabling. Report partial application without rollback or replay; off
+retains the native TTL choice. Label an assumed window `configured-window`, not
+verified provider retention. Changes retire prior local evidence and wait for a
+fresh request. Token reservations
 limit admission, not native output; count recovery requests even after a policy
 stops. A native accepted prompt has no atomic dequeue API; preserve that limit.
 Native 2.1.286 suppresses a plugin's own prompt hook and frames its text before

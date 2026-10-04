@@ -2,10 +2,38 @@ import { createController, configurationDiagnostic } from './controller.mjs';
 import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
 import { createLocalization, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
-import { createCacheWarmClient, cacheWarmTtl } from './cache-warm.mjs';
+import { createCacheWarmClient, cacheWarmTtl, assertNativeCacheTtlChange } from './cache-warm.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validPath = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n\0]/u.test(value);
+
+async function nativeCacheTtlState($) {
+  const environmentValue = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL');
+  const force = await $.env.get('FORCE_PROMPT_CACHING_5M');
+  const settings = await $.settings.read(), policy = await $.settings.read({ source: 'policy' });
+  const valid = value => ['1h', '5m'].includes(value) ? value : null;
+  const truthy = value => value === '1' || value === 'true' || value === true;
+  const force5m = truthy(force) || truthy(policy.env?.FORCE_PROMPT_CACHING_5M);
+  const policyLocked = Object.hasOwn(policy, 'promptCacheTtl') || Object.hasOwn(policy.env ?? {}, 'CLAUDE_CODE_PROMPT_CACHE_TTL')
+    || truthy(policy.env?.FORCE_PROMPT_CACHING_5M);
+  const policyValue = truthy(policy.env?.FORCE_PROMPT_CACHING_5M) ? '5m'
+    : valid(policy.env?.CLAUDE_CODE_PROMPT_CACHE_TTL) ?? valid(policy.promptCacheTtl);
+  return { scope: 'current-process', environmentValue: valid(environmentValue), settingValue: valid(settings.promptCacheTtl),
+    value: force5m ? '5m' : valid(environmentValue) ?? valid(settings.promptCacheTtl), force5m, policyLocked, policyValue };
+}
+
+async function applyNativeCacheTtl($, desired, expectedValue, beforeWrite) {
+  const before = await nativeCacheTtlState($);
+  assertNativeCacheTtlChange(before, desired);
+  if (before.value !== expectedValue) throw new Error('Native cache TTL changed during confirmation; confirm again.');
+  const changed = before.value !== desired || before.environmentValue !== desired;
+  await beforeWrite();
+  if (changed) await $.env.set('CLAUDE_CODE_PROMPT_CACHE_TTL', desired);
+  const state = await nativeCacheTtlState($);
+  assertNativeCacheTtlChange(state, desired);
+  if (state.value !== desired || state.environmentValue !== desired) throw new Error('Native cache TTL readback failed.');
+  return { value: desired, scope: 'current-process', changed, verifiedAt: await $.clock.now() };
+}
 
 function api($, options, observer = null) {
   return {
@@ -33,12 +61,15 @@ function api($, options, observer = null) {
     pluginName: $.plugin.name,
     readPrompt: () => $.prompt.read(),
     submitPrompt: args => $.prompt.submit(args),
-    cacheConfiguration: async () => {
+    readCacheTtl: () => nativeCacheTtlState($),
+    checkCacheTtl: async value => { const state = await nativeCacheTtlState($); assertNativeCacheTtlChange(state, value); return state; },
+    applyCacheTtl: (value, expectedValue, beforeWrite) => applyNativeCacheTtl($, value, expectedValue, beforeWrite),
+    cacheConfiguration: async preference => {
       const model = await $.session.model(), settings = await $.settings.read();
       const ttl = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL');
       const force5m = await $.env.get('FORCE_PROMPT_CACHING_5M');
       const effort = await $.env.get('CLAUDE_CODE_EFFORT_LEVEL') ?? settings.effortLevel ?? null;
-      const cacheTtl = cacheWarmTtl({ ttl, force5m, setting: settings.promptCacheTtl });
+      const cacheTtl = cacheWarmTtl({ ttl, force5m, setting: settings.promptCacheTtl, preference });
       return { ttl: cacheTtl, fingerprint: JSON.stringify({ model, effort, ...cacheTtl }) };
     },
     readLanguage: () => $.store.get(LANGUAGE_PREFERENCE_KEY),

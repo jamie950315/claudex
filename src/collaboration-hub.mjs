@@ -423,7 +423,7 @@ export class CollaborationHub extends EventEmitter {
       if (!['list', 'configure', 'observe', 'claim', 'check', 'receipt'].includes(action)) throw new Error('Unsupported cache-warm operation.');
       const allowed = {
         list: ['sessionId', 'cwd'],
-        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
+        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'ttl', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
         observe: ['sessionId', 'cwd', 'instanceId', 'sequence', 'phase', 'epoch', 'sample', 'attemptId'],
         claim: ['sessionId', 'cwd', 'instanceId', 'epoch'],
         check: ['sessionId', 'cwd', 'instanceId', 'epoch', 'attemptId'],

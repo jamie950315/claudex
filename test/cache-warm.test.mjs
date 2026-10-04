@@ -241,6 +241,21 @@ test('native-setting hour TTL uses a five-minute margin; malformed observations 
   await assert.rejects(f.observe({ sample: f.sample({ startedAt: f.now() - 300001 }) }), /Invalid/);
 });
 
+test('configured hour default and user-selected five-minute window have distinct deadlines', async t => {
+  const f = await fixture(t);
+  const sample = f.sample({ ttlMs: 3600000, ttlSource: 'configured-window' });
+  await f.observe({ sample });
+  const hour = await f.enable({ requestId: 'hour', maxMinutes: 120 });
+  assert.equal(hour.policy.ttlPreference, '1h');
+  assert.equal(hour.nextAt, sample.startedAt + 55 * 60000);
+  const short = await f.enable({ requestId: 'five-minutes', ttl: '5m' });
+  assert.equal(short.policy.ttlPreference, '5m');
+  assert.equal(short.policy.effectiveTtlMs, 300000);
+  assert.equal(short.nextAt, sample.startedAt + 4 * 60000);
+  await assert.rejects(f.enable({ requestId: 'invalid-ttl', ttl: '30m' }), /ttl/);
+  await assert.rejects(f.enable({ requestId: 'five-minutes', ttl: '1h' }), /different parameters/);
+});
+
 test('private journal rejects symlinks, hardlinks, permissive files, and malformed JSON', async t => {
   for (const kind of ['symlink', 'hardlink', 'mode', 'malformed']) {
     const f = await fixture(t), source = join(f.root, 'source.json'), path = join(f.root, 'cache-warm.json');
