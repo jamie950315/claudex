@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.11 and Claude Mod 0.8.8 provide bounded, per-conversation cache warming.
+Claudex 1.2.12 and Claude Mod 0.8.9 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,8 +16,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.8 companion and
-a 1.2.11 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.9 companion and
+a 1.2.12 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -86,6 +86,11 @@ then run the exact `confirm` command it prints.
 The confirmation expires after two minutes and is bound to that session's
 current lifecycle. The broker deduplicates its request ID so a repeated receipt
 does not reset a budget. Uncertain submission is never automatically retried.
+
+The read-token ceiling is a Claudex usage safeguard, not a provider cache-size or
+account-quota limit: a short OK answer can still read a large cached prefix on
+each refresh. The summary labels this counter as warm reads, counted/limit;
+pending or uncertain requests can include reserved usage in the counted value.
 
 The four numeric limits shown are also the defaults. `maxMinutes` is a fixed enrollment
 lifetime, not an inactivity counter that can extend forever. `maxRefreshes`

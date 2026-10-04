@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.11 packages Claude Mod 0.8.8. Keep application and Mod versions
+Claudex.app 1.2.12 packages Claude Mod 0.8.9. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -577,7 +577,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.11 and Mod 0.8.8 installed through normal
+passes. The reviewed Mac has App 1.2.12 and Mod 0.8.9 installed through normal
 Quit/reopen and app-owned Mod management; both native configuration identities'
 receiver opt-ins were retained. Existing Claude sessions were not restarted;
 installation is verified but existing Desktop sessions can retain older loaded

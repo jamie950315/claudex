@@ -4,15 +4,15 @@
 const rows = {
   "Interval {minutes} min": ["間隔 {minutes} 分鐘", "间隔 {minutes} 分钟", "間隔 {minutes} 分", "간격 {minutes}분", "Intervalo {minutes} min", "Intervall {minutes} Min.", "Intervalle {minutes} min", "Intervallo {minutes} min"],
   "TTL managed by Codex": ["TTL 由 Codex 管理", "TTL 由 Codex 管理", "TTL は Codex が管理", "TTL은 Codex가 관리", "TTL gestionado por Codex", "TTL von Codex verwaltet", "TTL géré par Codex", "TTL gestito da Codex"],
-  "Tokens: prefix {prefix} · warm budget read {read}/{readLimit}, output {output}/{outputLimit}": [
-    "Tokens：快取前綴 {prefix} · 暖機預算讀取 {read}/{readLimit}、輸出 {output}/{outputLimit}",
-    "Tokens：缓存前缀 {prefix} · 预热预算读取 {read}/{readLimit}、输出 {output}/{outputLimit}",
-    "トークン：キャッシュ接頭辞 {prefix} · 維持予算 読取 {read}/{readLimit}、出力 {output}/{outputLimit}",
-    "토큰: 캐시 접두사 {prefix} · 웜 예산 읽기 {read}/{readLimit}, 출력 {output}/{outputLimit}",
-    "Tokens: prefijo {prefix} · presupuesto de caché lectura {read}/{readLimit}, salida {output}/{outputLimit}",
-    "Tokens: Präfix {prefix} · Warmhaltebudget Lesen {read}/{readLimit}, Ausgabe {output}/{outputLimit}",
-    "Tokens : préfixe {prefix} · budget de maintien lecture {read}/{readLimit}, sortie {output}/{outputLimit}",
-    "Token: prefisso {prefix} · budget cache lettura {read}/{readLimit}, output {output}/{outputLimit}"
+  "Tokens: prefix {prefix} · warm reads: {read}/{readLimit} (counted/limit), output {output}/{outputLimit}": [
+    "Tokens：快取前綴 {prefix} · 暖機讀取：{read}／{readLimit}（已計入／上限）、輸出 {output}/{outputLimit}",
+    "Tokens：缓存前缀 {prefix} · 预热读取：{read}／{readLimit}（已计入／上限）、输出 {output}/{outputLimit}",
+    "トークン：キャッシュ接頭辞 {prefix} · ウォーム読取：{read}/{readLimit}（計上済み／上限）、出力 {output}/{outputLimit}",
+    "토큰: 캐시 접두사 {prefix} · 웜 읽기: {read}/{readLimit} (집계/한도), 출력 {output}/{outputLimit}",
+    "Tokens: prefijo {prefix} · lecturas de caché: {read}/{readLimit} (contabilizado/límite), salida {output}/{outputLimit}",
+    "Tokens: Präfix {prefix} · Warmhalte-Lesezugriffe: {read}/{readLimit} (angerechnet/Limit), Ausgabe {output}/{outputLimit}",
+    "Tokens : préfixe {prefix} · lectures cache : {read}/{readLimit} (comptabilisé/plafond), sortie {output}/{outputLimit}",
+    "Token: prefisso {prefix} · letture cache: {read}/{readLimit} (conteggiato/limite), output {output}/{outputLimit}"
   ],
   "First cache result: {time}": ["首次快取回應：{time}", "首次缓存响应：{time}", "初回のキャッシュ応答：{time}", "최초 캐시 응답: {time}", "Primera respuesta de caché: {time}", "Erste Cache-Antwort: {time}", "Première réponse du cache : {time}", "Prima risposta cache: {time}"],
   "Next warm: {next}": ["下次暖機：{next}", "下次预热：{next}", "次回のキャッシュ維持：{next}", "다음 웜 요청: {next}", "Próximo refresco: {next}", "Nächste Warmhaltung: {next}", "Prochain maintien : {next}", "Prossimo aggiornamento: {next}"],

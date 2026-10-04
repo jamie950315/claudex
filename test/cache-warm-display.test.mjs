@@ -18,7 +18,7 @@ test('waiting summary contains four compact plain-text lines without diagnostic 
   const before = structuredClone(result);
   assert.equal(show(result), [
     'Cache warming: Enabled · TTL 1h',
-    'Tokens: prefix Unknown · warm budget read 0/250,000, output 0/256',
+    'Tokens: prefix Unknown · warm reads: 0/250,000 (counted/limit), output 0/256',
     'First cache result: Not yet',
     'Next warm: Waiting for a normal reply',
   ].join('\n'));
@@ -31,7 +31,7 @@ test('scheduled summary separates cached prefix, budget accounting and actual ca
     sample: { cacheReadTokens: 6000, cacheWriteTokens: 250, startedAt: 2000, completedAt: 3000 },
     totals: { readTokens: 8000, outputTokens: 64 }, cacheResults: { firstAt: 4500, lastAt: 6500, count: 2 } });
   const text = show({ policy: p });
-  assert.match(text, /prefix 6,250 · warm budget read 8,000\/250,000, output 64\/256/);
+  assert.ok(text.includes('prefix 6,250 · warm reads: 8,000/250,000 (counted/limit), output 64/256'));
   assert.match(text, /First cache result: time-4500/);
   assert.match(text, /Next warm: time-9000$/);
   assert.doesNotMatch(text, /time-2000|time-3000|time-6500|time-10000/);
@@ -47,7 +47,7 @@ test('no matching policy stays off without invented quotas, timestamps or defaul
   const text = show({ policies: [policy({ sessionId: 'other-session' }), policy({ cwd: '/elsewhere' })] });
   assert.equal(text, [
     'Cache warming: Disabled · TTL Unknown',
-    'Tokens: prefix Unknown · warm budget read Unknown/Unknown, output Unknown/Unknown',
+    'Tokens: prefix Unknown · warm reads: Unknown/Unknown (counted/limit), output Unknown/Unknown',
     'First cache result: Not yet',
     'Next warm: Stopped',
   ].join('\n'));
@@ -89,7 +89,7 @@ test('missing or invalid timestamps and counters remain unknown rather than fabr
     sample: { cacheReadTokens: 3, cacheWriteTokens: null }, totals: { readTokens: NaN, outputTokens: -1 },
     cacheResults: { count: 1, firstAt: null, lastAt: null } }) });
   assert.doesNotMatch(text, /Until/);
-  assert.match(text, /prefix Unknown · warm budget read Unknown\/250,000, output Unknown\/256/);
+  assert.ok(text.includes('prefix Unknown · warm reads: Unknown/250,000 (counted/limit), output Unknown/256'));
   assert.match(text, /First cache result: Unknown/);
   assert.match(text, /Next warm: Unknown$/);
   assert.match(show({ policy: policy({ reason: 'scheduled', nextAt: 5000 }) }, { formatTime: () => null }), /Next warm: Unknown$/);

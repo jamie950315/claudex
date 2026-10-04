@@ -74,7 +74,7 @@ export function formatWarmSummary(result = {}, { provider, sessionId, cwd, t = i
   const sample = policy?.sample;
   const prefix = number(sample?.cacheReadTokens) && number(sample?.cacheWriteTokens)
     && number(sample.cacheReadTokens + sample.cacheWriteTokens) ? sample.cacheReadTokens + sample.cacheWriteTokens : undefined;
-  const tokens = t('Tokens: prefix {prefix} · warm budget read {read}/{readLimit}, output {output}/{outputLimit}', {
+  const tokens = t('Tokens: prefix {prefix} · warm reads: {read}/{readLimit} (counted/limit), output {output}/{outputLimit}', {
     prefix: count(prefix), read: count(policy?.totals?.readTokens), readLimit: count(policy?.maxReadTokens),
     output: count(policy?.totals?.outputTokens), outputLimit: count(policy?.maxOutputTokens),
   });
