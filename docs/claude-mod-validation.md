@@ -1,6 +1,6 @@
 # Claude Mod integration validation
 
-The current source target is Claude Mod 0.8.2 in Claudex.app 1.2.2. The version-scoped
+The current source target is Claude Mod 0.8.3 in Claudex.app 1.2.3. The version-scoped
 cache-warm acceptance below used isolated staged sessions and did not update the installed
 app, global preferences or existing conversations. Version-scoped installation
 checkpoints remain historical evidence, not claims about the current installation.
@@ -8,6 +8,33 @@ The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker rout
 `mod-self`; source defaults remain false. Installation, native invocation and
 actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## Persistent TTL preferences 1.2.3 / 0.8.3 acceptance (2026-10-04)
+
+Four sequential, isolated Claude Code 2.1.286 processes used the shipping Mod,
+one fresh native configuration directory and a real private broker. A fixed 1h
+default survived a temporary 5m selection; the next process restored 1h. Remember
+mode then retained the latest confirmed 1h selection across another process exit.
+Switching to session-only left the current 1h value unchanged, while the fourth
+process used its original 5m launch environment. Every process began with warming
+disabled, every local-command result reported zero model turns, no warm attempt
+was created, and all four owned processes exited. No user credentials were copied
+or existing configuration/plugin store modified. The test used the previously
+authorized function-hooks option only in its isolated processes.
+
+The complete Node suite passed 1,640 tests with zero failures and 23 opt-in skips.
+All 21 official native-kit cases passed, including startup environment application
+and managed-policy refusal; these are synthetic native API tests, not Desktop
+painting evidence. Regression tests separately cover stale cross-session remember
+writes, partial saves and activity races. Remember updates use revision-specific
+keys and cannot overwrite another session's newer persistence mode or last choice.
+
+Initial harness candidates stopped on a local command's synthetic assistant
+envelope and on aggregate/too-early session-identity readiness checks. Failed roots
+were preserved. The corrected harness distinguishes local synthetic output and
+waits for the exact newly observed native context without replaying old commands.
+This evidence verifies native preference persistence, not a new one-hour cache
+retention experiment or installation into existing Desktop conversations.
 
 ## Native TTL sync 1.2.2 / 0.8.2 acceptance (2026-10-04)
 

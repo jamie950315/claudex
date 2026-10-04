@@ -3,6 +3,20 @@ const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const token = () => `warm-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
 const defaults = Object.freeze({ ttl: '1h', maxMinutes: 60, maxRefreshes: 3, maxReadTokens: 250000, maxOutputTokens: 256 });
+export const CACHE_TTL_PREFERENCE_KEY = 'cache-ttl-preference';
+export const CACHE_TTL_LAST_KEY = 'cache-ttl-last-choice';
+
+export function cacheTtlPreference(value) {
+  if (value === undefined || value === null) return { version: 1, mode: 'session' };
+  if (value?.version !== 1 || !['session', 'remember', 'default'].includes(value.mode)
+    || Object.keys(value).some(key => !['version', 'mode', 'ttl', 'revision'].includes(key))
+    || (value.mode === 'session' ? value.ttl !== undefined : !['1h', '5m'].includes(value.ttl))
+    || (value.mode === 'remember' ? typeof value.revision !== 'string' || !/^warm-[a-zA-Z0-9-]{1,80}$/.test(value.revision) : value.revision !== undefined))
+    throw new Error('Saved cache TTL preference is invalid; no native setting was changed.');
+  return { version: 1, mode: value.mode, ...(value.mode === 'session' ? {} : { ttl: value.ttl }),
+    ...(value.mode === 'remember' ? { revision: value.revision } : {}) };
+}
+const preferenceEqual = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
 // Native 2.1.286 frames an idle plugin submission before turn.start. Accept the
 // exact native envelope, never a substring or a mid-turn delivery. The pending
@@ -56,6 +70,19 @@ export function createCacheWarmClient() {
   function fault(b, reason) { cancel(b); b.suspended = true; b.reason = reason; }
   async function safeContext(b, epoch) {
     return current(b, epoch) && !await b.host.worker() && same(await b.host.context(), b.context) && current(b, epoch);
+  }
+  async function readPreference(host) {
+    const preference = cacheTtlPreference(await host.readTtlPreference());
+    if (preference.mode !== 'remember') return preference;
+    const last = await host.readLastTtlChoice(preference.revision);
+    if (last !== undefined && last !== null && (typeof last !== 'object'
+      || typeof last.revision !== 'string' || !['1h', '5m'].includes(last.ttl)))
+      throw new Error('Saved last TTL choice is invalid; no native setting was changed.');
+    return last?.revision === preference.revision ? { ...preference, ttl: last.ttl } : preference;
+  }
+  async function savePreference(host, preference) {
+    await host.writeTtlPreference(preference);
+    if (!preferenceEqual(await readPreference(host), preference)) throw new Error('Cache TTL preference readback failed; the saved preference may have changed.');
   }
   async function admissible(b, epoch, fingerprint) {
     if (!await safeContext(b, epoch) || b.phase !== 'idle' || !b.enabled || b.suspended) return false;
@@ -128,8 +155,9 @@ export function createCacheWarmClient() {
   }
   return {
     snapshot() { return binding ? { enabled: binding.enabled, reason: binding.reason, phase: binding.phase,
-      suspended: binding.suspended, instanceId: binding.instanceId, sessionId: binding.context.sessionId } : { enabled: false }; },
-    async start(host) {
+      suspended: binding.suspended, instanceId: binding.instanceId, sessionId: binding.context.sessionId,
+      ttlRestore: binding.ttlRestore } : { enabled: false }; },
+    async start(host, { restore = false } = {}) {
       const ticket = ++generation;
       if (binding) { cancel(binding); binding.ended = true; }
       binding = null; confirmation = null;
@@ -137,7 +165,35 @@ export function createCacheWarmClient() {
       const context = await host.context();
       if (ticket !== generation) return;
       binding = { host, context, instanceId: token(), epoch: 0, sequence: 0, phase: 'idle', enabled: false, ttlPreference: '1h',
-        ended: false, suspended: false, timer: null, pending: null, turn: null, sample: null, reason: 'disabled' };
+        ended: false, suspended: false, timer: null, pending: null, turn: null, sample: null, reason: 'disabled',
+        ttlRestore: { state: 'not-requested' } };
+      // Only the native session-start path restores an explicitly saved choice.
+      // Lazy command binding, inspection and /clear must never apply preferences.
+      if (restore) {
+        const b = binding, epoch = b.epoch;
+        b.restoring = true;
+        let applyAttempted = false;
+        const guard = async () => {
+          if (!await safeContext(b, epoch) || b.phase !== 'idle' || b.configuring)
+            throw new Error('Native activity changed during startup TTL restoration.');
+        };
+        try {
+          const preference = await readPreference(host);
+          await guard();
+          if (preference.mode === 'session') { b.ttlRestore = { state: 'session-only' }; return; }
+          const nativeBefore = await host.checkCacheTtl(preference.ttl);
+          await guard();
+          if (!preferenceEqual(await readPreference(host), preference)) throw new Error('TTL preference changed during startup.');
+          await guard(); applyAttempted = true;
+          const result = await host.applyCacheTtl(preference.ttl, nativeBefore.value, guard);
+          await guard();
+          if (result?.value !== preference.ttl || result?.scope !== 'current-process') throw new Error('Native cache TTL readback failed.');
+          b.ttlPreference = preference.ttl;
+          b.ttlRestore = { state: 'applied', preference, nativeCacheSync: result };
+        } catch (error) {
+          b.ttlRestore = { state: 'failed', nativeMayHaveChanged: applyAttempted, error: error.message };
+        } finally { b.restoring = false; }
+      }
     },
     async stop() {
       generation++; confirmation = null;
@@ -156,7 +212,8 @@ export function createCacheWarmClient() {
       if (!binding || !same(binding.context, await host.context())) await this.start(host);
       const b = binding;
       if (!b) throw new Error('Native session context is unavailable.');
-      if (words[0] === 'status' && words.length === 1) return { local: this.snapshot(),
+      if ((words[0] === 'status' || words[0] === 'preference') && words.length === 1) return { local: this.snapshot(),
+        ttlPreference: await readPreference(host),
         nativeCache: await host.readCacheTtl(), ...await call(b, 'list') };
       // Never let model/plugin-authored commands opt another session into inference.
       if (!['composer', 'bridge', 'sdk'].includes(origin?.kind)) throw new Error('Cache warming requires an explicit native user command.');
@@ -164,31 +221,47 @@ export function createCacheWarmClient() {
         cancel(b); b.epoch++; b.pending = null; b.enabled = false; confirmation = null;
         return call(b, 'configure', { enabled: false, instanceId: b.instanceId, requestId: token() });
       }
-      if (words[0] === 'on') {
-        const bounds = parseCacheWarmBounds(words.slice(1)), now = await host.now();
+      if (words[0] === 'on' || words[0] === 'preference') {
+        const preferenceBefore = await readPreference(host);
+        const preferenceOnly = words[0] === 'preference';
+        let preference;
+        if (preferenceOnly) {
+          if (words[1] === 'session' && words.length === 2) preference = { version: 1, mode: 'session' };
+          else if (['remember', 'default'].includes(words[1]) && words.length === 3 && /^ttl=(1h|5m)$/.test(words[2]))
+            preference = { version: 1, mode: words[1], ttl: words[2].slice(4), ...(words[1] === 'remember' ? { revision: token() } : {}) };
+          else throw new Error('Use warm preference session|remember ttl=1h|5m|default ttl=1h|5m.');
+        }
+        const bounds = parseCacheWarmBounds(preferenceOnly ? [] : words.slice(1)), now = await host.now();
+        if (preferenceOnly) bounds.ttl = preference.ttl ?? null;
+        else if (!words.slice(1).some(word => word.startsWith('ttl='))) bounds.ttl = preferenceBefore.ttl ?? '1h';
         confirmation = null;
-        const nativeBefore = await host.checkCacheTtl(bounds.ttl);
-        confirmation = { id: token(), b, epoch: b.epoch, expiresAt: now + 120000, bounds };
+        const nativeBefore = bounds.ttl ? await host.checkCacheTtl(bounds.ttl) : await host.readCacheTtl();
+        confirmation = { id: token(), b, epoch: b.epoch, expiresAt: now + 120000, bounds, preference, preferenceBefore };
+        if (preferenceOnly) return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
+          ttlPreference: preference, previousPreference: preferenceBefore, nativeBefore: nativeBefore.value,
+          effects: 'Save a plugin-wide preference for future loaded primary sessions sharing this native plugin store. Remember tracks subsequent confirmed Claudex TTL choices; default restores a fixed TTL. Session disables restoration without reverting the current TTL. This confirmation stops local warming and never enables inference. Native policy restrictions still apply; global settings and the subagent TTL variable are unchanged. Other running sessions are not changed. One-hour cache writes may cost more.',
+          expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
         return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd, ...bounds,
+          ttlPreference: preferenceBefore,
           cacheWindow: { ttlMs: bounds.ttl === '1h' ? 3600000 : 300000, ttlSource: 'native-setting',
             refreshBeforeExpiryMs: bounds.ttl === '1h' ? 300000 : 60000 },
           nativeCacheChange: { scope: 'current-process', before: nativeBefore.value, after: bounds.ttl,
             variable: 'CLAUDE_CODE_PROMPT_CACHE_TTL', affectsSubagentTtl: false, writesGlobalSettings: false },
           observedCachedPrefixTokens: b.sample ? b.sample.cacheReadTokens + b.sample.cacheWriteTokens : null,
           nativeOutputCapUnchanged: true,
-          effects: 'Confirming sets the real native main-cache TTL for this process and future children, then enables real plugin-origin OK turns that consume quota and remain in history. One-hour cache writes can cost more than five-minute writes. Global settings and the subagent TTL variable are unchanged. Model and effort are inherited. Token bounds stop future refreshes, not a hard per-request cap. Turning warming off does not undo the native TTL choice.',
+          effects: 'Confirming sets the real native main-cache TTL for this process and future children, then enables real plugin-origin OK turns that consume quota and remain in history. Remember mode also saves this TTL for future sessions; default mode keeps its fixed startup TTL. One-hour cache writes can cost more than five-minute writes. Global settings and the subagent TTL variable are unchanged. Model and effort are inherited. Token bounds stop future refreshes, not a hard per-request cap. Turning warming off does not undo the native TTL choice.',
           expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
       }
       if (words[0] === 'confirm' && words.length === 2) {
         const prepared = confirmation; confirmation = null;
         if (!prepared || prepared.id !== words[1] || prepared.b !== b || prepared.epoch !== b.epoch)
           throw new Error('Cache warming confirmation expired or its native context changed.');
-        if (b.phase !== 'idle' || b.pending || b.dispatch || b.checking || b.configuring || b.turn?.attemptId)
+        if (b.phase !== 'idle' || b.pending || b.dispatch || b.checking || b.configuring || b.restoring || b.turn?.attemptId)
           throw new Error('Wait for the current native turn before changing the native cache TTL.');
         // Own the configuration boundary before any awaited native reads. Even a
         // timer callback already queued by the host must not claim a warm turn.
         b.configuring = true; cancel(b);
-        let nativeSync, applyAttempted = false, configureEpoch = prepared.epoch, reply;
+        let nativeSync, applyAttempted = false, saveAttempted = false, configureEpoch = prepared.epoch, reply;
         const guard = async () => {
           if (!await safeContext(b, configureEpoch) || b.phase !== 'idle' || b.pending || b.dispatch || b.turn?.attemptId)
             throw new Error('The native context or current native turn changed during TTL synchronization.');
@@ -196,22 +269,45 @@ export function createCacheWarmClient() {
         try {
           if (await host.now() >= prepared.expiresAt) throw new Error('Cache warming confirmation expired.');
           await guard();
-          const nativeBefore = await host.checkCacheTtl(prepared.bounds.ttl);
+          if (!preferenceEqual(await readPreference(host), prepared.preferenceBefore)) throw new Error('TTL preference changed; confirm the new preference again.');
+          const nativeBefore = prepared.bounds.ttl ? await host.checkCacheTtl(prepared.bounds.ttl) : await host.readCacheTtl();
           await guard();
-          const reset = nativeBefore.value !== prepared.bounds.ttl || nativeBefore.environmentValue !== prepared.bounds.ttl
+          const reset = prepared.preference || nativeBefore.value !== prepared.bounds.ttl || nativeBefore.environmentValue !== prepared.bounds.ttl
             || b.ttlPreference !== prepared.bounds.ttl;
           if (reset) {
+            const wasEnabled = b.enabled;
             b.enabled = false; b.epoch++; b.sample = null; b.sampleFingerprint = null; b.publishedSampleId = null;
             configureEpoch = b.epoch;
-            await call(b, 'configure', { enabled: false, instanceId: b.instanceId, requestId: `${prepared.id}:pause` });
+            if (!prepared.preference || wasEnabled) await call(b, 'configure', { enabled: false, instanceId: b.instanceId, requestId: `${prepared.id}:pause` });
           }
           await guard();
-          applyAttempted = true;
-          nativeSync = await host.applyCacheTtl(prepared.bounds.ttl, nativeBefore.value, guard);
-          if (nativeSync?.value !== prepared.bounds.ttl || nativeSync?.scope !== 'current-process')
-            throw new Error('Native cache TTL readback did not match the requested value.');
+          if (prepared.bounds.ttl) {
+            applyAttempted = true;
+            nativeSync = await host.applyCacheTtl(prepared.bounds.ttl, nativeBefore.value, guard);
+            if (nativeSync?.value !== prepared.bounds.ttl || nativeSync?.scope !== 'current-process')
+              throw new Error('Native cache TTL readback did not match the requested value.');
+            b.ttlPreference = prepared.bounds.ttl;
+          }
           await guard();
-          b.ttlPreference = prepared.bounds.ttl;
+          const saved = prepared.preference ?? (prepared.preferenceBefore.mode === 'remember'
+            ? { ...prepared.preferenceBefore, ttl: prepared.bounds.ttl } : null);
+          if (saved) {
+            if (!preferenceEqual(await readPreference(host), prepared.preferenceBefore)) throw new Error('TTL preference changed before save; confirm again.');
+            await guard(); saveAttempted = true;
+            if (prepared.preference) await savePreference(host, saved);
+            else {
+              // Never rewrite the mode from a remember update. A stale session's
+              // last-choice write belongs only to its preference revision and
+              // cannot undo a newer default/session/remember selection.
+              await host.writeLastTtlChoice({ revision: saved.revision, ttl: saved.ttl });
+              if (!preferenceEqual(await readPreference(host), saved)) throw new Error('TTL preference changed during remember update; inspect status.');
+            }
+            await guard();
+          }
+          if (prepared.preference) {
+            b.reason = 'disabled'; b.suspended = false;
+            return { state: 'preference-saved', ttlPreference: saved, nativeCacheSync: nativeSync ?? null, local: this.snapshot() };
+          }
           // Explicit confirmation first registers this exact live instance. Default-off
           // starts and status reads never create a broker observer or policy.
           const initialSample = b.sample;
@@ -225,11 +321,11 @@ export function createCacheWarmClient() {
           b.enabled = reply?.policy?.enabled === true; b.suspended = false;
         } catch (error) {
           b.enabled = false; fault(b, 'native-ttl-sync-or-enable-failed');
-          throw new Error(`Local warming is stopped; broker activation is not confirmed. ${applyAttempted ? 'The native TTL may have changed and was not rolled back. ' : ''}${error.message}`);
+          throw new Error(`Local warming is stopped; broker activation is not confirmed. ${applyAttempted ? 'The native TTL may have changed and was not rolled back. ' : ''}${saveAttempted ? 'The saved preference may have changed; inspect status. ' : ''}${error.message}`);
         } finally { b.configuring = false; }
         await observe(b, b.sample); return { ...reply, nativeCacheSync: nativeSync, local: this.snapshot() };
       }
-      throw new Error('Use /claudex warm status|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxReadTokens=N maxOutputTokens=N]|confirm TOKEN|off.');
+      throw new Error('Use /claudex warm status|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxReadTokens=N maxOutputTokens=N]|confirm TOKEN|off.');
     },
     async prompt(e) {
       const b = binding; if (!b) return null;

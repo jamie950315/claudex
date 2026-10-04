@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.2 and Claude Mod 0.8.2 provide bounded, per-conversation cache warming.
+Claudex 1.2.3 and Claude Mod 0.8.3 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 The first adapter is a loaded Claude Code Mod session. Codex is explicitly
@@ -14,8 +14,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.2 companion and
-a 1.2.2 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.3 companion and
+a 1.2.3 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -24,14 +24,17 @@ acceptance. Do not restart active work merely to activate warming.
 /claudex warm on ttl=1h maxMinutes=60 maxRefreshes=3 maxReadTokens=250000 maxOutputTokens=256
 ```
 
-The native main-cache TTL and warming window default to `1h` when `ttl` is omitted. Use
+Without a saved preference, the native main-cache TTL and warming window default
+to `1h` when `ttl` is omitted. A saved remember/fixed-default preference instead
+supplies the omitted TTL. Use
 `/claudex warm on ttl=5m` to select five minutes, or `ttl=1h` to switch back.
 After confirmation, Claudex sets the real `CLAUDE_CODE_PROMPT_CACHE_TTL` through
 the official Mod environment API in the current Claude Code process (and future
 children inheriting that environment). This affects subsequent ordinary main
 requests too, not just the warming timer. It does not rewrite global settings,
-change other running Claude processes, persist across process restarts, or change
-the separate subagent TTL variable. One-hour cache writes may cost more than
+change other running Claude processes or change the separate subagent TTL
+variable. Without an explicit persistent preference, the change is session-only.
+One-hour cache writes may cost more than
 five-minute writes under the account's billing mode.
 
 Changing TTL requires an idle native turn. Claudex locks the timer, pauses the
@@ -80,6 +83,43 @@ claudex collaboration cache-warm off --session NATIVE_SESSION_ID --cwd /exact/pr
 The CLI does not enable a conversation remotely. Select it in the native client
 and confirm there. Status is read-only and does not start models or renew a
 cache. Native command output is structured technical JSON, not another pane.
+
+## TTL preferences across restarts
+
+Choose one mode in a loaded primary session, then run the exact confirmation
+command printed by the preview:
+
+```text
+/claudex warm preference remember ttl=1h
+/claudex warm preference default ttl=5m
+/claudex warm preference session
+```
+
+- `remember ttl=1h|5m` applies and saves that TTL now. Later confirmed Claudex
+  TTL choices update it; new native processes restore the latest saved choice.
+- `default ttl=1h|5m` applies and saves a fixed startup TTL. A later explicit
+  `warm on ttl=...` may override the current process without replacing the
+  saved default. An omitted TTL uses the saved default again.
+- `session` disables restoration. It does not undo the current process's TTL;
+  a new process uses its ordinary native configuration. This is the initial mode
+  for existing and new installations until a preference is explicitly confirmed.
+
+Preference confirmation stops local warming and never enables it. Enable warming
+separately with `warm on` and its own confirmation. Neither restart nor preference
+restoration authorizes a model request. Status/preview/inspection and `/clear`
+do not apply or save settings; `/clear` keeps the process's current TTL.
+
+Preferences use the native plugin's persistent key-value store, shared by future
+primary sessions using that store. They do not edit Claude global configuration
+files or broadcast changes to other running sessions. Remember tracks Claudex
+confirmations, not manual changes outside Claudex. Concurrent explicit writes use
+the native store's last completed write. Remembered TTL updates use a separate,
+revision-bound record so a stale session cannot overwrite a newer mode choice.
+A changed preview or mismatched readback
+fails rather than silently enabling warming. Forced-five-minute and managed
+policies still win. Startup failure leaves warming off and is exposed by
+`/claudex warm status` in `local.ttlRestore`, alongside the saved `ttlPreference`
+and separately read `nativeCache`. No automatic retry or rollback is performed.
 
 ## Scheduling and evidence
 

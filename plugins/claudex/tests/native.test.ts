@@ -4,6 +4,7 @@ import { expect, test, mock } from 'claude-code/testing'
 import { textChunks, usageLine } from '../hooks/controller.mjs'
 import { catalogs } from '../hooks/locales.mjs'
 import { MOD_VERSION, MOD_BUILD } from '../hooks/delivery.mjs'
+import { CACHE_TTL_PREFERENCE_KEY } from '../hooks/cache-warm.mjs'
 const ID = '11111111-1111-4111-8111-111111111111'
 const PANE = {
   plugin: 'claudex', component: 'Pane', requestId: 'claudex',
@@ -17,9 +18,15 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100,
     scroll: { offset: 0, bodyRows: 3 }, view: {} },
 } as const
-function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en', settings?: (event: any) => any) {
-  mock.env(on, worker ? { CLAUDEX_COLLABORATION_WORKER: '1' } : {})
-  mock.store(on, { 'ui-language': language })
+function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en', settings?: (event: any) => any, store: Record<string, unknown> = {}) {
+  const environment: Record<string, string | undefined> = worker ? { CLAUDEX_COLLABORATION_WORKER: '1' } : {}
+  on('env.get', (_: any, e: any) => ({ value: environment[e.name] }))
+  on('env.set', (_: any, e: any) => {
+    expect(e.name).toBe('CLAUDE_CODE_PROMPT_CACHE_TTL')
+    environment[e.name] = e.value
+    return { value: undefined }
+  })
+  mock.store(on, { 'ui-language': language, ...store })
   mock.clock(on, { now: 1000 })
   on('session.id', () => ({ value: ID }))
   on('session.cwd', () => ({ value: '/fixture' }))
@@ -376,4 +383,35 @@ test('cache warming status stays read-only and plugin-origin commands cannot opt
   const enable = await $.command.run({ command: 'claudex', args: 'warm on' })
   expect(enable.text).toMatch(/explicit native user command/)
   expect(seen.length).toBe(1)
+})
+
+test('saved TTL preference is applied through native startup APIs without enabling warming', async ($, on) => {
+  const seen: any[] = []
+  stubs(on, false, request => { seen.push(request); return { policies: [] } }, 'en', undefined,
+    { [CACHE_TTL_PREFERENCE_KEY]: { version: 1, mode: 'default', ttl: '5m' } })
+  await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
+  expect(seen.filter(item => item.op === 'cache-warm').length).toBe(0)
+  const status = JSON.parse((await $.command.run({ command: 'claudex', args: 'warm status' })).text)
+  if (status.local.ttlRestore.state !== 'applied') throw new Error(JSON.stringify(status.local.ttlRestore))
+  expect(status.nativeCache.value).toBe('5m')
+  expect(status.local.enabled).toBe(false)
+  expect(status.local.ttlRestore.state).toBe('applied')
+  expect(status.ttlPreference).toEqual({ version: 1, mode: 'default', ttl: '5m' })
+  // A normal /clear binding does not reapply startup defaults.
+  await $.classic.SessionStart({ source: 'clear' })
+  const cleared = JSON.parse((await $.command.run({ command: 'claudex', args: 'warm status' })).text)
+  expect(cleared.local.ttlRestore.state).toBe('not-requested')
+})
+
+test('startup TTL policy conflicts are visible and do not rewrite the saved choice', async ($, on) => {
+  stubs(on, false, () => ({ policies: [] }), 'en', event => event.source === 'policy'
+    ? { promptCacheTtl: '5m' } : { crossSessionInbound: 'hold', promptCacheTtl: '5m' },
+    { [CACHE_TTL_PREFERENCE_KEY]: { version: 1, mode: 'remember', ttl: '1h', revision: 'warm-fixture' } })
+  await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
+  const status = JSON.parse((await $.command.run({ command: 'claudex', args: 'warm status' })).text)
+  expect(status.nativeCache.environmentValue).toBe(null)
+  expect(status.local.ttlRestore.state).toBe('failed')
+  expect(status.local.ttlRestore.error).toMatch(/Managed/)
+  expect(status.local.enabled).toBe(false)
+  expect(status.ttlPreference.ttl).toBe('1h')
 })

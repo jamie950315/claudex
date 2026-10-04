@@ -4,20 +4,25 @@ import { mkdtemp, realpath, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CacheWarmManager } from '../src/cache-warm.mjs';
-import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText, assertNativeCacheTtlChange } from '../plugins/claudex/hooks/cache-warm.mjs';
+import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText, assertNativeCacheTtlChange, cacheTtlPreference } from '../plugins/claudex/hooks/cache-warm.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const PROMPT = 'Cache-retention measurement only. Reply with exactly OK. Do not call tools.';
 const usage = { model: 'claude-sonnet-5-5', input_tokens: 2, cache_read_input_tokens: 6000, cache_creation_input_tokens: 20, output_tokens: 4 };
 async function fixture() {
   let now = 1000, context = { sessionId: ID, cwd: '/fixture' }, fingerprint = 'sonnet-medium-5m';
-  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h';
+  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h', preference;
+  const lastChoices = new Map();
   const timers = [], calls = [], client = createCacheWarmClient();
   const hooks = {};
   const host = {
     pluginName: 'claudex', worker: async () => worker, context: async () => ({ ...context }), now: async () => now,
     cacheConfiguration: async preference => ({ fingerprint, ttl: cacheWarmTtl({ setting: nativeTtl, preference }) }),
     readCacheTtl: async () => ({ value: nativeTtl, environmentValue: nativeTtl, scope: 'current-process', force5m: false, policyLocked: false }),
+    readTtlPreference: async () => preference,
+    writeTtlPreference: async value => { preference = structuredClone(value); },
+    readLastTtlChoice: async revision => lastChoices.get(revision),
+    writeLastTtlChoice: async value => { lastChoices.set(value.revision, structuredClone(value)); },
     checkCacheTtl: async desired => { const state = await host.readCacheTtl(); assertNativeCacheTtlChange(state, desired); return state; },
     applyCacheTtl: async (desired, expected, beforeWrite) => {
       await beforeWrite();
@@ -81,6 +86,122 @@ test('cache warm window defaults to one hour and supports an explicit five-minut
   assert.equal(parseCacheWarmBounds(['ttl=5m']).ttl, '5m');
   assert.throws(() => parseCacheWarmBounds(['ttl=30m']), /ttl=1h or ttl=5m/);
   assert.throws(() => parseCacheWarmBounds(['ttl=5m', 'ttl=1h']), /exactly once/);
+});
+
+async function setPreference(f, ...words) {
+  const preview = await f.client.command(f.host, ['preference', ...words], { kind: 'composer' });
+  return f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' });
+}
+
+test('TTL preference schema is bounded and defaults to session-only without inventing persistence', () => {
+  assert.deepEqual(cacheTtlPreference(undefined), { version: 1, mode: 'session' });
+  for (const value of [{ version: 2, mode: 'remember', ttl: '5m' }, { version: 1, mode: 'default' },
+    { version: 1, mode: 'remember', ttl: '30m' }, { version: 1, mode: 'session', ttl: '1h' }])
+    assert.throws(() => cacheTtlPreference(value), /invalid/);
+});
+
+test('remember preference is confirmed, updates on explicit TTL choices, and restores without inference', async () => {
+  const f = await fixture();
+  const preview = await f.client.command(f.host, ['preference', 'remember', 'ttl=5m'], { kind: 'composer' });
+  assert.equal(await f.host.readTtlPreference(), undefined);
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  const result = await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' });
+  assert.equal(result.state, 'preference-saved'); assert.equal(result.local.enabled, false);
+  assert.equal((await f.host.readTtlPreference()).ttl, '5m');
+  assert.equal(f.calls.length, 0); assert.equal(f.submits, 0);
+  const omitted = await f.client.command(f.host, ['on'], { kind: 'composer' });
+  assert.equal(omitted.ttl, '5m');
+  await f.enable(['ttl=1h']);
+  assert.equal((await f.host.readLastTtlChoice((await f.host.readTtlPreference()).revision)).ttl, '1h');
+  const restarted = await fixture();
+  await restarted.host.applyCacheTtl('5m', '1h', async () => {});
+  restarted.host.readTtlPreference = f.host.readTtlPreference;
+  restarted.host.readLastTtlChoice = f.host.readLastTtlChoice;
+  await restarted.client.start(restarted.host, { restore: true });
+  assert.equal((await restarted.host.readCacheTtl()).value, '1h');
+  assert.equal(restarted.client.snapshot().ttlRestore.state, 'applied');
+  assert.equal(restarted.client.snapshot().enabled, false);
+  assert.equal(restarted.calls.length, 0); assert.equal(restarted.timers.length, 0);
+});
+
+test('fixed default survives temporary selection, while session mode disables future restoration', async () => {
+  const f = await fixture(); await setPreference(f, 'default', 'ttl=5m');
+  await f.enable(['ttl=1h']);
+  assert.equal((await f.host.readTtlPreference()).ttl, '5m');
+  await f.client.start(f.host, { restore: true });
+  assert.equal((await f.host.readCacheTtl()).value, '5m');
+  await f.enable(['ttl=1h']);
+  await setPreference(f, 'session');
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  await f.client.start(f.host, { restore: true });
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  assert.equal(f.client.snapshot().ttlRestore.state, 'session-only');
+  assert.equal(f.client.snapshot().enabled, false);
+});
+
+test('lazy status and clear-style binding never apply a saved native TTL preference', async () => {
+  const f = await fixture(); await f.host.writeTtlPreference({ version: 1, mode: 'default', ttl: '5m' });
+  await f.client.stop();
+  const result = await f.client.command(f.host, ['status'], { kind: 'composer' });
+  assert.equal(result.nativeCache.value, '1h'); assert.equal(result.ttlPreference.ttl, '5m');
+  assert.deepEqual(f.calls.map(item => item.action), ['list']);
+  await f.client.start(f.host);
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+});
+
+test('startup policy and malformed preference failures stay visible without writes or inference', async () => {
+  const f = await fixture(); let writes = 0;
+  f.host.applyCacheTtl = async () => { writes++; };
+  await f.host.writeTtlPreference({ version: 1, mode: 'remember', ttl: '1h', revision: 'warm-fixture' });
+  f.host.checkCacheTtl = async () => { throw new Error('Managed policy prevents this change'); };
+  await f.client.start(f.host, { restore: true });
+  assert.match(f.client.snapshot().ttlRestore.error, /Managed policy/);
+  await f.host.writeTtlPreference({ version: 99 });
+  await f.client.start(f.host, { restore: true });
+  assert.match(f.client.snapshot().ttlRestore.error, /invalid/);
+  assert.equal(writes, 0); assert.equal(f.calls.length, 0); assert.equal(f.submits, 0);
+});
+
+test('native activity fences startup restoration before its environment write', async () => {
+  const f = await fixture(); await f.host.writeTtlPreference({ version: 1, mode: 'default', ttl: '5m' });
+  const apply = f.host.applyCacheTtl;
+  f.host.applyCacheTtl = async (...args) => {
+    await f.client.turnStart({ turnId: 'human', text: 'Human work' });
+    return apply(...args);
+  };
+  await f.client.start(f.host, { restore: true });
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  assert.equal(f.client.snapshot().ttlRestore.state, 'failed');
+  assert.ok(await f.client.stepStart({ turnId: 'human', index: 0, effort: 'medium' }));
+});
+
+test('changed or failed preference persistence cannot silently enable warming', async () => {
+  const f = await fixture();
+  const preview = await f.client.command(f.host, ['preference', 'default', 'ttl=5m'], { kind: 'composer' });
+  await f.host.writeTtlPreference({ version: 1, mode: 'default', ttl: '1h' });
+  await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' }), /preference changed/);
+  await setPreference(f, 'remember', 'ttl=1h');
+  f.host.writeLastTtlChoice = async () => { throw new Error('storage unavailable'); };
+  await assert.rejects(f.enable(['ttl=5m']), /saved preference may have changed.*storage unavailable/);
+  assert.equal((await f.host.readCacheTtl()).value, '5m');
+  assert.equal(f.client.snapshot().enabled, false); assert.equal(f.submits, 0);
+});
+
+test('a stale remember write cannot overwrite another session mode or a newer remember revision', async () => {
+  for (const newer of [{ version: 1, mode: 'session' }, { version: 1, mode: 'default', ttl: '1h' },
+    { version: 1, mode: 'remember', ttl: '1h', revision: 'warm-newer' }]) {
+    const f = await fixture(); await setPreference(f, 'remember', 'ttl=1h');
+    const write = f.host.writeLastTtlChoice;
+    f.host.writeLastTtlChoice = async value => {
+      await f.host.writeTtlPreference(newer); // Another native session commits first.
+      if (newer.mode === 'remember') await write({ revision: newer.revision, ttl: '5m' });
+      await write(value);
+    };
+    await assert.rejects(f.enable(['ttl=5m']), /preference changed during remember update/);
+    const status = await f.client.command(f.host, ['status'], { kind: 'composer' });
+    assert.deepEqual(status.ttlPreference, newer.mode === 'remember' ? { ...newer, ttl: '5m' } : newer);
+    assert.equal(f.client.snapshot().enabled, false);
+  }
 });
 
 test('native TTL synchronization preserves forced-five-minute and managed-policy constraints', () => {

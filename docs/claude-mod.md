@@ -1,10 +1,14 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.2
+## Current companion: 0.8.3
 
-Claudex.app 1.2.2 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.2.3 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.3 adds confirmed TTL persistence: session-only, remember-last and
+fixed-default 1h/5m. Native startup restores only an explicitly saved preference
+without enabling warming; status and /clear never apply it. See the
+[preference commands](cache-warming.md#ttl-preferences-across-restarts).
 Version 0.8.2 defaults the warming window to one hour and accepts `ttl=5m` or
 `ttl=1h` in the explicit per-conversation confirmation. The choice also sets and
 verifies the current native process's real main-cache TTL before warming is
@@ -293,7 +297,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.2-review"
+STAGE="$PARENT/claudex-0.8.3-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -315,7 +319,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # The own-inbox test explicitly exercises both opt-ins. Use a separate,
 # never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.8.2-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.3-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

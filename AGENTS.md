@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.2 packages Claude Mod 0.8.2. Keep application and Mod versions
+Claudex.app 1.2.3 packages Claude Mod 0.8.3. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -303,8 +303,18 @@ envelope, unchanged epoch/context and deadline; never treat matching text alone
 as authority. Fence stale awaited callbacks before replacing turn state. Native
 SDK catalogs/results can precede registration/completion-hook settlement; wait
 for actual loaded-code and broker evidence without repeating model input.
-No startup/inspection path enables warming, starts another owner, changes model
-settings or resumes expired work. See docs/cache-warming.md for operation and
+TTL persistence is a separate confirmed plugin-store preference: session-only
+(the unset default), remember-last or fixed-default 1h/5m. Only native
+session.start restores an explicitly saved preference, with context/idle and
+native-policy guards; command/status lazy binding and /clear never restore it.
+Restoration never enrolls warming or starts inference. Remember tracks only
+confirmed Claudex TTL choices, not external environment edits; fixed defaults
+survive temporary selections. Shared-store changes affect future loaded primary
+sessions, not other running sessions. Expose restore failures and partial writes,
+never retry automatically or change a managed/subagent setting. Global native
+settings remain untouched; the plugin's own preference store is persistent.
+No startup/inspection path enables warming, starts another owner, changes the
+model/effort or resumes expired work. See docs/cache-warming.md for operation and
 native activation limits. The older developer probe remains separate evidence.
 
 Work observability is broker-owned and independently opt-in per task:

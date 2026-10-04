@@ -97,6 +97,24 @@ no plugin; it is not an automatic fallback after an uncertain fork.
 
 ## Evidence and limits
 
+### Native preference persistence without inference
+
+`preferences.mjs --run --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
+uses four sequential native processes and one isolated native configuration
+directory to check fixed-default restoration, remember-last updates and return
+to session-only behavior. It loads the shipping Mod and a real private broker,
+but submits only verified local `/claudex warm` commands. Every result must report
+zero model turns and no warming attempt may occur. No credentials are copied;
+the existing user configuration and installed plugin store are untouched.
+The same explicitly authorized process-only function-hooks option is required.
+
+Native local commands can return synthetic assistant envelopes; those are not
+model responses. The harness still refuses non-synthetic assistant activity and
+requires zero-turn results. Loaded-code readiness uses the exact newly observed
+native context, not aggregate observer counts: a closed process's diagnostic
+observer may remain until its TTL expires. Failed test roots are preserved and
+never resumed or replayed.
+
 ### Actual native Mod acceptance
 
 `native.mjs` runs the shipping companion and real Unix broker in a new private
