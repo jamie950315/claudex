@@ -11,6 +11,16 @@ Private IDs, transcripts and evidence directories remain outside this repository
 
 ## Cache settings pane 1.2.4 / 0.8.4 validation (2026-10-04)
 
+After explicit installation approval, the existing Claudex app completed normal
+Quit with verified synchronization, collaboration and owned-process shutdown.
+The development-signed 1.2.4 bundle replaced the installed app with a recoverable
+1.1.2 backup retained outside the checkout. All 129 installed engine files matched
+the reviewed source and strict deep signature verification passed. Normal app
+startup installed and verified Mod 0.8.4 through its journaled native-manager
+path, preserving the prior 0.7.3 cache and both configuration identities' receiver
+opt-ins. Existing Claude sessions were not restarted; the app correctly reports
+installed/enabled separately from waiting for fresh loaded-version evidence.
+
 The native pane now exposes TTL and startup preferences through the existing
 cache client rather than a separate writer. The official native test kit passed
 all 22 cases. Its new narrow Desktop-surface test selects 5m/fixed-default,
@@ -26,8 +36,8 @@ affected controller/localization tests also passed after the final presentation
 cleanup. Regressions cover duplicate confirmation, stale panel context, native
 preview revocation and settings-only TTL changes without model work. The prior
 four-process persistence evidence remains applicable to the unchanged startup
-and storage implementation. No new model inference or installed-app replacement
-was performed for this pane change.
+and storage implementation. No new model inference was performed for this pane
+change or installation; installed Desktop painting remains a separate check.
 
 ## Persistent TTL preferences 1.2.3 / 0.8.3 acceptance (2026-10-04)
 
