@@ -2,7 +2,7 @@
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const token = () => `warm-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
-const defaults = Object.freeze({ ttl: '1h', maxMinutes: 60, maxRefreshes: 3, maxReadTokens: 250000, maxOutputTokens: 256 });
+const defaults = Object.freeze({ ttl: '1h', maxMinutes: 60, maxRefreshes: 3, maxReadTokens: null, maxOutputTokens: 256 });
 export const CACHE_TTL_PREFERENCE_KEY = 'cache-ttl-preference';
 export const CACHE_TTL_LAST_KEY = 'cache-ttl-last-choice';
 
@@ -46,16 +46,17 @@ export function assertNativeCacheTtlChange(state, desired) {
 export function parseCacheWarmBounds(words = []) {
   const result = { ...defaults }, seen = new Set();
   for (const word of words) {
+    if (word.startsWith('maxReadTokens=')) throw new Error('Read-token limits have been removed; omit maxReadTokens.');
     if (word.startsWith('ttl=')) {
       const value = word.slice(4);
       if (seen.has('ttl') || !['1h', '5m'].includes(value)) throw new Error('Use ttl=1h or ttl=5m exactly once.');
       seen.add('ttl'); result.ttl = value; continue;
     }
-    const match = /^(maxMinutes|maxRefreshes|maxReadTokens|maxOutputTokens)=([1-9][0-9]*)$/.exec(word);
-    if (!match || seen.has(match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new Error('Use unique maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens positive integer bounds.');
+    const match = /^(maxMinutes|maxRefreshes|maxOutputTokens)=([1-9][0-9]*)$/.exec(word);
+    if (!match || seen.has(match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new Error('Use unique maxMinutes, maxRefreshes, maxOutputTokens positive integer bounds.');
     seen.add(match[1]); result[match[1]] = Number(match[2]);
   }
-  if (result.maxMinutes > 1440 || result.maxRefreshes > 100 || result.maxReadTokens > 10000000 || result.maxOutputTokens > 100000)
+  if (result.maxMinutes > 1440 || result.maxRefreshes > 100 || result.maxOutputTokens > 100000)
     throw new Error('Cache warming bounds exceed the supported limits.');
   return result;
 }
@@ -361,7 +362,7 @@ export function createCacheWarmClient() {
         } finally { b.configuring = false; }
         await observe(b, b.sample); return { ...reply, nativeCacheSync: nativeSync, local: this.snapshot() };
       }
-      throw new Error('Use /claudex warm status|ttl 1h|5m|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxReadTokens=N maxOutputTokens=N]|confirm TOKEN|off.');
+      throw new Error('Use /claudex warm status|ttl 1h|5m|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxOutputTokens=N]|confirm TOKEN|off.');
     },
     async prompt(e) {
       const b = binding; if (!b) return null;

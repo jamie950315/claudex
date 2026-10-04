@@ -100,6 +100,7 @@ try {
     const enabled = await send('/claudex:warm on');
     assert.equal(enabled.policies[0].enabled, true);
     assert.equal(enabled.policies[0].sessionId, id); assert.equal(enabled.policies[0].refreshMinutes, 25);
+    assert.equal(enabled.policies[0].maxReadTokens, null);
     const status = await send('/claudex:warm status'); assert.equal(status.policies[0].enabled, true);
     const stopped = await send('/claudex:warm off'); assert.equal(stopped.policies[0].enabled, false);
     const final = await send('/claudex:warm status'); assert(final.policies.every(p => !p.enabled));

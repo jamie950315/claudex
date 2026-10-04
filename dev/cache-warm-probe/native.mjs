@@ -111,7 +111,7 @@ try {
   else if (values['ttl-sync']) {
     report.ttlSync = [];
     for (const ttl of ['1h', '5m']) {
-      const preview = jsonReply(await send(`/claudex warm on ttl=${ttl} maxMinutes=2 maxRefreshes=1 maxReadTokens=40000 maxOutputTokens=256`));
+      const preview = jsonReply(await send(`/claudex warm on ttl=${ttl} maxMinutes=2 maxRefreshes=1 maxOutputTokens=256`));
       assert.equal(preview.state, 'confirmation-required');
       assert.equal(report.native.at(-1).turns, 0);
       const confirmed = jsonReply(await send(preview.confirm));
@@ -139,7 +139,7 @@ try {
     report.outcome = 'native-ttl-sync-verified';
   }
   else {
-    const preview = jsonReply(await send('/claudex warm on ttl=5m maxMinutes=10 maxRefreshes=1 maxReadTokens=40000 maxOutputTokens=256'));
+    const preview = jsonReply(await send('/claudex warm on ttl=5m maxMinutes=10 maxRefreshes=1 maxOutputTokens=256'));
     assert.equal(preview.state, 'confirmation-required');
     assert.equal(report.native.at(-1).turns, 0);
     const confirmed = jsonReply(await send(preview.confirm));

@@ -68,7 +68,9 @@ test('Codex CLI preserves the exact broker root and peer in the confirmation com
   assert.ok(preview.confirm.includes(`--root '${f.hub.root}'`)); assert.ok(preview.confirm.includes("--peer 'claude'"));
   assert.equal(preview.refreshMinutes, 1); assert.equal(f.connections, 0);
   await assert.rejects(run(process.execPath, [...base, 'confirm', preview.confirmationId, '--provider', 'codex',
-    '--accept-best-effort', '--root', f.hub.root, '--peer', 'claude', '--max-read-tokens', '1'], { env }), /confirmation cannot override/);
+    '--accept-best-effort', '--root', f.hub.root, '--peer', 'claude', '--max-output-tokens', '1'], { env }), /confirmation cannot override/);
+  await assert.rejects(run(process.execPath, [...base, 'on', '--provider', 'codex',
+    '--root', f.hub.root, '--max-read-tokens', '1'], { env }), /Read-token limits have been removed/);
   const result = await run(process.execPath, [...base, 'confirm', preview.confirmationId, '--provider', 'codex',
     '--accept-best-effort', '--root', f.hub.root, '--peer', 'claude'], { env });
   assert.equal(JSON.parse(result.stdout).policy.enabled, true);

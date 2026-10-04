@@ -187,12 +187,73 @@ test('bounded ledgers preserve history and refuse new allocation', async t => {
   assert.equal(listing.attemptCount, 2048); assert.equal(listing.attempts.length, 64); assert.equal(listing.attemptsTruncated, true);
 });
 
-test('duration and admission read/output budgets prevent a native authorization', async t => {
+test('duration and admission output budgets prevent a native authorization', async t => {
   for (const [bounds, reason] of [
-    [{ maxMinutes: 1 }, 'duration-limit'], [{ maxReadTokens: 6000 }, 'read-budget'], [{ maxOutputTokens: 127 }, 'output-budget'],
+    [{ maxMinutes: 1 }, 'duration-limit'], [{ maxOutputTokens: 127 }, 'output-budget'],
   ]) {
     const f = await fixture(t); await f.observe({ sample: f.sample() }); await f.enable(bounds); f.tick(239000);
     assert.equal((await f.claim()).reason, reason);
+  }
+});
+
+test('large prefixes and accumulated actual reads have no limit, including legacy finite journals', async t => {
+  for (const provider of ['claude', 'codex']) {
+    const f = await fixture(t, { provider });
+    const sample = more => ({ ...(provider === 'codex' ? codexSample(f) : f.sample()), ...more });
+    await f.observe({ sample: sample({ cacheWriteTokens: 300000 }) });
+    const enabled = await f.enable({ provider, bestEffort: true, maxMinutes: 120, maxReadTokens: 1 });
+    assert.equal(enabled.policy.maxReadTokens, null);
+    const path = f.manager.path, saved = JSON.parse(await readFile(path, 'utf8'));
+    assert.equal(saved.policies[0].maxReadTokens, null);
+    // A historical finite value remains intact on disk but cannot restrict reads.
+    saved.policies[0].maxReadTokens = 250000;
+    const original = JSON.stringify(saved);
+    await writeFile(path, original, { mode: 0o600 });
+    f.manager = await new CacheWarmManager({ root: f.root, provider, now: f.now }).initialize();
+    assert.equal((await f.manager.list()).policies[0].maxReadTokens, null);
+    assert.equal((await f.manager.list()).policies[0].bound, false);
+    assert.equal(await readFile(path, 'utf8'), original, 'Inspection does not rewrite legacy history.');
+    await f.observe({ sample: sample({ cacheWriteTokens: 300000 }) });
+    const interval = (provider === 'codex' ? 25 : 4) * 60000;
+    for (let epoch = 0; epoch < 2; epoch++) {
+      f.tick(interval - 1000);
+      const { attempt, claimed } = await f.claim({ epoch }); assert.equal(claimed, true);
+      const before = (await f.manager.list()).attempts.at(-1);
+      assert.equal(before.reservedReadTokens, (epoch === 0 ? 300000 : 310000) + 256);
+      assert.equal((await f.check(attempt.id, { epoch })).ready, true);
+      f.tick(1000);
+      const result = await f.observe({ epoch: epoch + 1, attemptId: attempt.id,
+        sample: sample({ cacheReadTokens: 310000 + epoch * 10000, cacheWriteTokens: 0 }) });
+      assert.equal(result.policy.enabled, true);
+      assert.equal(result.policy.maxReadTokens, null);
+    }
+    const p = (await f.manager.list()).policies[0];
+    assert.equal(p.totals.readTokens, 630000); assert.equal(p.totals.outputTokens, 8);
+    f.tick(interval - 1000);
+    assert.equal((await f.claim({ epoch: 2 })).claimed, true);
+  }
+});
+
+test('unlimited read schema and legacy receipt replay never reactivate a stopped policy', async t => {
+  for (const limit of [undefined, 250000, null]) {
+    const f = await fixture(t); await f.observe({ sample: f.sample() });
+    const input = { ...identity, provider: 'claude', enabled: true, requestId: 'legacy-read-receipt', maxReadTokens: limit };
+    await f.manager.configure(input);
+    await f.manager.configure({ ...identity, provider: 'claude', enabled: false });
+    const path = f.manager.path, saved = JSON.parse(await readFile(path, 'utf8'));
+    if (limit !== null) saved.policies[0].maxReadTokens = 250000;
+    saved.policies[0].reason = 'read-budget';
+    const original = JSON.stringify(saved);
+    await writeFile(path, original, { mode: 0o600 });
+    const restarted = await new CacheWarmManager({ root: f.root, now: f.now }).initialize();
+    const replay = await restarted.configure(input);
+    assert.equal(replay.replayed, true); assert.equal(replay.policy.enabled, false);
+    assert.equal(replay.policy.maxReadTokens, null); assert.equal(replay.policy.bound, false);
+    assert.equal(replay.policy.generation, saved.policies[0].generation);
+    assert.equal(replay.policy.until, saved.policies[0].until);
+    assert.equal(replay.policy.reason, 'read-budget');
+    assert.equal(await readFile(path, 'utf8'), original);
+    await assert.rejects(restarted.configure({ ...input, maxReadTokens: 500000 }), /different parameters/);
   }
 });
 

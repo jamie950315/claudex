@@ -5,7 +5,7 @@ import { createCodexUsageCounter } from './codex-cache-usage.mjs';
 import { createCodexCacheNative } from './codex-cache-native.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
-const risks = 'Best-effort only: no composer-draft inspection and no per-turn tool prohibition. Existing native model, effort and permissions are inherited. Real OK turns consume plan usage and remain in history. Token limits stop future refreshes; they are not hard output caps. The 30-minute evidence window is a local scheduling assumption, not a configurable or verified native TTL. Busy, missed deadlines, tool activity and uncertain delivery stop warming; uncertain input is never resent.';
+const risks = 'Best-effort only: no composer-draft inspection and no per-turn tool prohibition. Existing native model, effort and permissions are inherited. Real OK turns consume plan usage and remain in history. Cache reads have no token limit. The output-token budget stops future refreshes; it is not a hard output cap. The 30-minute evidence window is a local scheduling assumption, not a configurable or verified native TTL. Busy, missed deadlines, tool activity and uncertain delivery stop warming; uncertain input is never resent.';
 function identity(p) {
   if (!UUID.test(p?.sessionId ?? '') || typeof p.cwd !== 'string' || !isAbsolute(p.cwd)
     || resolve(p.cwd) !== p.cwd || /[\x00-\x1f\x7f]/u.test(p.cwd) || p.cwd.length > 4096)
@@ -13,9 +13,12 @@ function identity(p) {
 }
 function bounds(p) {
   if (p.bestEffort !== true) throw new Error('Explicit best-effort consent is required.');
+  if (p.maxReadTokens !== undefined && p.maxReadTokens !== null
+    && (!Number.isSafeInteger(p.maxReadTokens) || p.maxReadTokens < 1 || p.maxReadTokens > 100000000))
+    throw new Error('Invalid Codex cache-warm maxReadTokens.');
   const value = { refreshMinutes: p.refreshMinutes ?? 25, maxMinutes: p.maxMinutes ?? 60,
-    maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: p.maxReadTokens ?? 250000, maxOutputTokens: p.maxOutputTokens ?? 256 };
-  for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 1440, maxRefreshes: 100, maxReadTokens: 100000000, maxOutputTokens: 1000000 }))
+    maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: null, maxOutputTokens: p.maxOutputTokens ?? 256 };
+  for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 1440, maxRefreshes: 100, maxOutputTokens: 1000000 }))
     if (!Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > max) throw new Error(`Invalid Codex cache-warm ${key}.`);
   return value;
 }

@@ -1,10 +1,12 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.9
+## Current companion: 0.8.10
 
-Claudex.app 1.2.12 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.2.13 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.10 removes the read-token ceiling and displays counted/unlimited
+warm reads. Duration, refresh-count and output-token limits are unchanged.
 Version 0.8.9 labels warm reads as counted/limit instead of a read budget in all
 nine languages. Only wording changes; limits and accounting remain unchanged.
 Version 0.8.8 replaces the namespaced warming command's JSON with four compact
@@ -320,7 +322,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.9-review"
+STAGE="$PARENT/claudex-0.8.10-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -342,7 +344,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # The own-inbox test explicitly exercises both opt-ins. Use a separate,
 # never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.8.9-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.10-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

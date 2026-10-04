@@ -65,9 +65,34 @@ test('Codex status is default-off and confirmation requires exact actor and expl
   const preview = await f.service.prepare({ sessionId: ID, cwd: '/fixture', bestEffort: true }, 'controller');
   assert.equal(preview.inferenceStarted, false); assert.equal(f.connected, false);
   assert.equal(preview.refreshMinutes, 25);
+  assert.equal(preview.maxReadTokens, null);
   await assert.rejects(f.service.confirm({ confirmationId: preview.confirmationId, bestEffort: true }, 'other'), /controller/);
   await assert.rejects(f.service.confirm({ confirmationId: preview.confirmationId }, 'controller'), /consent/);
   assert.equal(f.dispatches, 0);
+});
+
+test('Codex accepts legacy read bounds without applying them and retains actual usage', async t => {
+  const f = await fixture(t);
+  for (const maxReadTokens of [0, -1, 100000001, '250000', NaN])
+    await assert.rejects(f.service.prepare({ sessionId: ID, cwd: '/fixture', bestEffort: true, maxReadTokens }, 'controller'), /maxReadTokens/);
+  const enabled = await f.enable({ maxReadTokens: 1, maxRefreshes: 3 });
+  assert.equal(enabled.policy.maxReadTokens, null);
+  await f.seed();
+  await f.emit({ type: 'start', turnId: 'large-prefix', startedAt: f.now });
+  const large = { ...warm, totalTokens: 310006, inputTokens: 310000, cachedInputTokens: 300000 };
+  await f.usage('large-prefix', large);
+  await f.emit({ type: 'complete', turnId: 'large-prefix', status: 'completed', completedAt: f.now });
+  await f.fire(); assert.equal(f.dispatches, 1);
+  await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });
+  await f.usage('warm', large);
+  await f.usage('warm', large);
+  await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+  const status = await f.service.list();
+  assert.equal(status.policies[0].enabled, true);
+  assert.equal(status.policies[0].maxReadTokens, null);
+  assert.equal(status.policies[0].totals.readTokens, 600000);
+  assert.equal(status.policies[0].totals.outputTokens, 12);
+  assert.ok(status.policies[0].nextAt > f.now);
 });
 
 test('Codex timer dispatches once to the owner and verifies only completed native cache evidence', async t => {

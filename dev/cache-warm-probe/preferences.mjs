@@ -140,6 +140,7 @@ try {
       assert.equal(enabled.summary.split('\n').length, 4);
       const status = await send('/claudex warm status');
       assert.equal(status.local.enabled, true); assert.equal(status.nativeCache.value, '5m');
+      assert.equal(status.policies.find(policy => policy.sessionId === status.local.sessionId).maxReadTokens, null);
       assert.equal(status.ttlPreference.ttl, '1h');
       await send('/claudex:warm off');
       assert.equal((await send('/claudex warm status')).nativeCache.value, '5m');

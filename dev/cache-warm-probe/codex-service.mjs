@@ -30,7 +30,7 @@ const service = await new CodexCacheWarmer({ root, native }).initialize();
 const report = { outcome: 'running', inferenceStarted: false };
 try {
   const preview = await service.prepare({ sessionId: values.session, cwd: values.cwd, bestEffort: true,
-    refreshMinutes: 25, maxMinutes: 1, maxRefreshes: 1, maxReadTokens: 1000000, maxOutputTokens: 128 }, 'observer-test');
+    refreshMinutes: 25, maxMinutes: 1, maxRefreshes: 1, maxOutputTokens: 128 }, 'observer-test');
   const result = await service.confirm({ confirmationId: preview.confirmationId, bestEffort: true }, 'observer-test');
   assert.equal(result.policy.enabled, true);
   console.log(JSON.stringify({ phase: 'observing', durationMs: duration, nativeInferenceDisabled: true }));

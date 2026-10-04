@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.12 packages Claude Mod 0.8.9. Keep application and Mod versions
+Claudex.app 1.2.13 packages Claude Mod 0.8.10. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -315,6 +315,13 @@ comes from native actual-read observations in the complete current-generation
 ledger, never a reservation or a truncated attempt listing. Formatting and
 language discovery cannot enroll, refresh or change budgets. Advanced diagnostic
 commands retain their structured response for operators.
+By user decision, read tokens have no admission or actual-usage limit on either
+provider. Keep their reservations and native usage accounting, exposing
+maxReadTokens:null and counted/unlimited in summaries. Validate legacy numeric
+fields for existing clients/journals and preserve exact requestId payload replay,
+but never enforce the old cap or re-enable stopped work. New UI/CLI commands
+reject the removed read-limit option. Duration, refresh-count, output limits
+and every native identity/lifecycle/no-replay check remain unchanged.
 `src/cache-warm.mjs` owns bounded durable policies and one-use attempts; the Mod's cache-warm client
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
@@ -369,7 +376,7 @@ overrides. Composer draft visibility and per-turn no-tools enforcement are
 unavailable: prompts are advisory, tool observations stop future warming but
 cannot undo already executed tools. Budgets are not hard native caps; native
 outputTokens already includes reasoning. Defaults are refreshMinutes=25
-(integer 1..25), maxMinutes=60, maxRefreshes=3, maxReadTokens=250000 and
+(integer 1..25), maxMinutes=60, maxRefreshes=3, maxReadTokens=null and
 maxOutputTokens=256. The 30-minute configured-window is a local evidence bound,
 not native TTL configuration or retention proof; measure from native turn start
 and refuse expired long-turn evidence. Model/effort observations are configured
@@ -577,7 +584,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.12 and Mod 0.8.9 installed through normal
+passes. The reviewed Mac has App 1.2.13 and Mod 0.8.10 installed through normal
 Quit/reopen and app-owned Mod management; both native configuration identities'
 receiver opt-ins were retained. Existing Claude sessions were not restarted;
 installation is verified but existing Desktop sessions can retain older loaded

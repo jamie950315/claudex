@@ -389,7 +389,7 @@ test('namespaced warm command answers locally and preserves native user-origin r
   const seen: any[] = []
   stubs(on, false, request => { seen.push(request); return { policies: [{
     provider: 'claude', sessionId: ID, cwd: '/fixture', enabled: false, reason: 'disabled', ttlPreference: '1h',
-    maxReadTokens: 250000, maxOutputTokens: 256, totals: { readTokens: 6000, outputTokens: 4 },
+    maxReadTokens: null, maxOutputTokens: 256, totals: { readTokens: 6000, outputTokens: 4 },
     sample: { cacheReadTokens: 6000, cacheWriteTokens: 10 },
     cacheResults: { count: 1, firstAt: 1000, lastAt: 1000 }, nextAt: null,
   }] } })
@@ -399,6 +399,7 @@ test('namespaced warm command answers locally and preserves native user-origin r
   expect(status.text.split('\n').length).toBe(4)
   expect(status.text).not.toMatch(/"local"|"policies"|"sessionId"/)
   expect(status.text).toMatch(/6,010/)
+  expect(status.text).toMatch(/Unlimited/)
   expect(status.text).toMatch(/UTC[+-]/)
   expect(seen.map(item => item.action)).toEqual(['list'])
   const enable = await $.command.run({ command: 'claudex:warm', args: 'on 5m' })

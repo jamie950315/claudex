@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.12 and Claude Mod 0.8.9 provide bounded, per-conversation cache warming.
+Claudex 1.2.13 and Claude Mod 0.8.10 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,8 +16,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.9 companion and
-a 1.2.12 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.10 companion and
+a 1.2.13 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -55,7 +55,7 @@ flow; the pane's settings/persistence controls are unchanged:
 
 ```text
 /claudex warm status
-/claudex warm on ttl=1h maxMinutes=60 maxRefreshes=3 maxReadTokens=250000 maxOutputTokens=256
+/claudex warm on ttl=1h maxMinutes=60 maxRefreshes=3 maxOutputTokens=256
 ```
 
 Without a saved preference, the native main-cache TTL and warming window default
@@ -87,16 +87,18 @@ The confirmation expires after two minutes and is bound to that session's
 current lifecycle. The broker deduplicates its request ID so a repeated receipt
 does not reset a budget. Uncertain submission is never automatically retried.
 
-The read-token ceiling is a Claudex usage safeguard, not a provider cache-size or
-account-quota limit: a short OK answer can still read a large cached prefix on
-each refresh. The summary labels this counter as warm reads, counted/limit;
-pending or uncertain requests can include reserved usage in the counted value.
+By user decision, warm reads have no token limit. They remain accounted in the
+summary as counted/unlimited; pending or uncertain requests can include reserved
+usage. Neither a large prefix nor accumulated cache reads stops warming. This
+does not remove native provider quotas or make cache reads free. Legacy numeric
+read-limit fields remain readable but are not enforced; new policies publish
+`maxReadTokens: null`. New commands reject the removed read-limit option.
 
-The four numeric limits shown are also the defaults. `maxMinutes` is a fixed enrollment
+The three numeric limits shown are also the defaults. `maxMinutes` is a fixed enrollment
 lifetime, not an inactivity counter that can extend forever. `maxRefreshes`
-counts reserved attempts, including attempts refused later. The token limits
-govern admission and stop future warming after observed use. They are **not
-provider-enforced per-request caps**: native output or recovery can exceed a
+counts reserved attempts, including attempts refused later. The output-token limit
+governs admission and stops future warming after observed use. It is **not a
+provider-enforced per-request cap**: native output or recovery can exceed a
 reservation. Each reservation includes the preceding cached prefix plus 256
 read tokens and 128 output tokens; final native usage replaces that estimate.
 
@@ -122,7 +124,7 @@ claudex collaboration cache-warm off --session NATIVE_SESSION_ID --cwd /exact/pr
 For Claude, the CLI does not enable a conversation remotely. Select it in the native client
 and confirm there. Status is read-only and does not start models or renew a
 cache. Namespaced on/off/status output is a four-line localized summary: state
-and TTL/interval, cache-prefix tokens and warm read/output budgets, first cache
+and TTL/interval, cache-prefix tokens, counted/unlimited warm reads and output budget, first cache
 result time, and next warm time or a short waiting reason. Times include the
 local UTC offset. The first result is native observed cache-read evidence, not
 enablement, reservation or submission time. Missing observations stay explicit;
@@ -340,7 +342,7 @@ nor status authorizes inference. The controller-only confirmation is bounded
 and one-use; workers cannot enable or control this warmer.
 
 Optional CLI bounds are `--refresh-minutes 25`, `--max-minutes 60`,
-`--max-refreshes 3`, `--max-read-tokens 250000` and `--max-output-tokens 256`.
+`--max-refreshes 3` and `--max-output-tokens 256`. There is no read-token limit.
 These are the defaults. `refreshMinutes` accepts integers from 1 through 25.
 The 25-minute default applies only to new previews/enrollments, not saved policies.
 The other bounds have the same admission semantics as Claude warming. Native

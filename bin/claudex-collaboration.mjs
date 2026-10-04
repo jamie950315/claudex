@@ -42,7 +42,7 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
   claudex collaboration cache-warm confirm TOKEN --provider codex --accept-best-effort
                                                 Confirm the exact reviewed Codex preview once
 Codex optional bounds: --refresh-minutes 25 --max-minutes 60 --max-refreshes 3
-  --max-read-tokens 250000 --max-output-tokens 256. Status/off accept --provider codex.
+  --max-output-tokens 256. Warm reads are unlimited. Status/off accept --provider codex.
 No draft inspection, hard no-tools guarantee or configurable native TTL exists for
 Codex. Busy, tool activity, budget exhaustion or uncertainty stop future warming.
 Claude enables only inside its loaded conversation with /claudex warm on and confirm.
@@ -152,10 +152,11 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   const token = process.env.CLAUDEX_WORK_TOKEN ?? await controllerToken(root);
   const peer = values.peer ?? 'codex';
   if (command === 'cache-warm') {
+    if (values['max-read-tokens'] !== undefined) throw new Error('Read-token limits have been removed; omit --max-read-tokens.');
     const action = positionals[1] ?? 'status';
     if (values.provider === 'codex') {
       if (!['status', 'list', 'on', 'confirm', 'off'].includes(action)) throw new Error('Use Codex cache-warm status|on|confirm TOKEN|off.');
-      if (action !== 'on' && ['refresh-minutes', 'max-minutes', 'max-refreshes', 'max-read-tokens', 'max-output-tokens'].some(flag => values[flag] !== undefined))
+      if (action !== 'on' && ['refresh-minutes', 'max-minutes', 'max-refreshes', 'max-output-tokens'].some(flag => values[flag] !== undefined))
         throw new Error('Set bounds on cache-warm on, then review the new preview; confirmation cannot override its bounds.');
       const params = {};
       if (['on', 'off'].includes(action) || values.session || values.cwd) {
@@ -167,7 +168,7 @@ export async function collaborationMain(args = process.argv.slice(2)) {
         params.bestEffort = true;
       }
       if (action === 'on') for (const [flag, key] of Object.entries({ 'refresh-minutes': 'refreshMinutes',
-        'max-minutes': 'maxMinutes', 'max-refreshes': 'maxRefreshes', 'max-read-tokens': 'maxReadTokens', 'max-output-tokens': 'maxOutputTokens' })) {
+        'max-minutes': 'maxMinutes', 'max-refreshes': 'maxRefreshes', 'max-output-tokens': 'maxOutputTokens' })) {
         if (values[flag] !== undefined) {
           if (!/^[1-9][0-9]*$/.test(values[flag]) || !Number.isSafeInteger(Number(values[flag]))) throw new Error(`Invalid --${flag}.`);
           params[key] = Number(values[flag]);

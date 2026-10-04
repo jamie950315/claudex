@@ -55,7 +55,7 @@ function validate(state, provider) {
     identity(p);
     requireValue(p.provider === provider && !ids.has(p.sessionId) && integer(p.generation, 1)
       && typeof p.enabled === 'boolean' && integer(p.until) && integer(p.updatedAt)
-      && integer(p.maxRefreshes, 1, 100) && integer(p.maxReadTokens, 1, 100000000)
+      && integer(p.maxRefreshes, 1, 100) && (p.maxReadTokens === null || integer(p.maxReadTokens, 1, 100000000))
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 1440)
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
       && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
@@ -161,7 +161,6 @@ export class CacheWarmManager {
     if (this.pending(p.sessionId)) return 'attempt-pending';
     const totals = this.totals(p);
     if (totals.refreshes >= p.maxRefreshes) return 'refresh-limit';
-    if (totals.readTokens + prefix(b.sample) + READ_OVERHEAD > p.maxReadTokens) return 'read-budget';
     if (totals.outputTokens + OUTPUT_RESERVATION > p.maxOutputTokens) return 'output-budget';
     if (due && this.now() < nextAt(b.sample, p)) return 'not-due';
     return null;
@@ -173,7 +172,7 @@ export class CacheWarmManager {
     const reads = this.attempts(p.sessionId, p.generation).filter(a => a.actual?.cacheReadTokens > 0);
     const times = reads.map(a => a.completedAt);
     const known = times.length > 0 && times.every(value => integer(value));
-    return { ...clone(p), status: reason ?? 'scheduled', reason: reason ?? 'scheduled', bound: Boolean(b && b.cwd === p.cwd),
+    return { ...clone(p), maxReadTokens: null, status: reason ?? 'scheduled', reason: reason ?? 'scheduled', bound: Boolean(b && b.cwd === p.cwd),
       cacheResults: { count: reads.length, firstAt: known ? Math.min(...times) : null, lastAt: known ? Math.max(...times) : null },
       phase: b?.phase ?? null, native: { phase: b?.phase ?? 'unbound' }, totals: this.totals(p),
       sample: b?.sample ? clone(b.sample) : null,
@@ -212,9 +211,11 @@ export class CacheWarmManager {
       requireValue(input.ttl === undefined, 'Codex native TTL configuration is not supported.');
       requireValue(integer(input.refreshMinutes ?? 25, 1, 25), 'Codex refreshMinutes must be an integer from 1 to 25.');
     }
+    // Retain the legacy receipt payload default for exact requestId replay.
+    // This field is validated for older clients, but is never an active limit.
     const { maxMinutes = 60, maxRefreshes = 3, maxReadTokens = 250000, maxOutputTokens = 256 } = input;
     requireValue(integer(maxMinutes, 1, 1440) && integer(maxRefreshes, 1, 100)
-      && integer(maxReadTokens, 1, 100000000) && integer(maxOutputTokens, 1, 1000000));
+      && (maxReadTokens === null || integer(maxReadTokens, 1, 100000000)) && integer(maxOutputTokens, 1, 1000000));
     const stopped = input.enabled ? await this.stopped() : false;
     return this.transaction(async () => {
       requireValue(!this.closed || !input.enabled, 'Cache-warming broker is stopping.');
@@ -240,7 +241,7 @@ export class CacheWarmManager {
       const value = { provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
         generation: (p?.generation ?? 0) + 1,
         ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 25 } : { ttlPreference: input.ttl ?? '1h' }),
-        maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens,
+        maxMinutes, maxRefreshes, maxReadTokens: null, maxOutputTokens,
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
       // Disabling revokes authorization without erasing this enrollment's
@@ -329,7 +330,7 @@ export class CacheWarmManager {
           }
           changed = true;
           const p = this.policy(a.sessionId), totals = this.totals(p);
-          if (a.state === 'failed' || totals.readTokens > p.maxReadTokens || totals.outputTokens > p.maxOutputTokens) {
+          if (a.state === 'failed' || totals.outputTokens > p.maxOutputTokens) {
             p.enabled = false; p.reason = a.state === 'failed' ? a.reason : 'actual-budget-exceeded';
           }
         }

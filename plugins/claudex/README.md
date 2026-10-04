@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.9
+# Claudex native companion, 0.8.10
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -33,8 +33,9 @@ the exact displayed change. The complete confirmation survives language changes.
 TTL-only changes (`/claudex warm ttl 1h|5m`) stop local warming without enabling
 inference. Read actual native TTL, saved preference and warming status separately.
 Optional
-`maxMinutes`, `maxRefreshes`, `maxReadTokens` and `maxOutputTokens` key=value
-bounds default to 60, 3, 250000 and 256. Warming creates real plugin-origin OK
+`maxMinutes`, `maxRefreshes` and `maxOutputTokens` key=value
+bounds default to 60, 3 and 256. Read tokens are counted without a limit.
+Warming creates real plugin-origin OK
 turns using the existing native account/model, not a fork or another API key.
 Budgets are admission estimates and observed stop thresholds, not hard native
 output caps. Busy/draft/context changes suppress submission. Native acceptance
@@ -87,7 +88,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.9-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.10-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

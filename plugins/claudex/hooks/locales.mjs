@@ -2,6 +2,7 @@
  * Columns: Traditional Chinese, Simplified Chinese, Japanese, Korean, Spanish,
  * German, French, Italian. The English key is also the English translation. */
 const rows = {
+  "Unlimited": ["無上限", "无上限", "上限なし", "제한 없음", "Sin límite", "Unbegrenzt", "Sans limite", "Senza limite"],
   "Interval {minutes} min": ["間隔 {minutes} 分鐘", "间隔 {minutes} 分钟", "間隔 {minutes} 分", "간격 {minutes}분", "Intervalo {minutes} min", "Intervall {minutes} Min.", "Intervalle {minutes} min", "Intervallo {minutes} min"],
   "TTL managed by Codex": ["TTL 由 Codex 管理", "TTL 由 Codex 管理", "TTL は Codex が管理", "TTL은 Codex가 관리", "TTL gestionado por Codex", "TTL von Codex verwaltet", "TTL géré par Codex", "TTL gestito da Codex"],
   "Tokens: prefix {prefix} · warm reads: {read}/{readLimit} (counted/limit), output {output}/{outputLimit}": [

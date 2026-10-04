@@ -83,6 +83,8 @@ test('cache warm window defaults to one hour and supports an explicit five-minut
   assert.equal(cacheWarmTtl({ setting: '1h', preference: '5m' }).ttlMs, 300000);
   assert.equal(cacheWarmTtl({ setting: '5m', preference: '1h' }).ttlSource, 'native-setting');
   assert.equal(parseCacheWarmBounds().ttl, '1h');
+  assert.equal(parseCacheWarmBounds().maxReadTokens, null);
+  assert.throws(() => parseCacheWarmBounds(['maxReadTokens=250000']), /removed/);
   assert.equal(parseCacheWarmBounds(['ttl=5m']).ttl, '5m');
   assert.throws(() => parseCacheWarmBounds(['ttl=30m']), /ttl=1h or ttl=5m/);
   assert.throws(() => parseCacheWarmBounds(['ttl=5m', 'ttl=1h']), /exactly once/);

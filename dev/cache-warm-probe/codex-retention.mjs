@@ -185,7 +185,7 @@ try {
     };
     service = await new CodexCacheWarmer({ root: ledger, native: nativeAdapter }).initialize();
     const preview = await service.prepare({ sessionId: warm.id, cwd: warm.cwd, bestEffort: true,
-      refreshMinutes: 25, maxMinutes: 40, maxRefreshes: 1, maxReadTokens: 250000, maxOutputTokens: 2048 }, 'retention-test');
+      refreshMinutes: 25, maxMinutes: 40, maxRefreshes: 1, maxOutputTokens: 2048 }, 'retention-test');
     await service.confirm({ confirmationId: preview.confirmationId, bestEffort: true }, 'retention-test');
     if (report.reusedSeedEvidence) await submit(warm, 'Establish a fresh native usage observation. Reply only OK.', 'observation-baseline');
     else for (const arm of [warm, control]) {
