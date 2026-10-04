@@ -264,39 +264,44 @@ const desktopWakeTools = [
 const byName = new Map([...toolDefinitions, ...desktopWakeTools].map(entry => [entry.name, entry]));
 
 function validateTool(name, args) {
-  const definition = byName.get(name);
-  if (!definition || !object(args)) fail('Unknown tool or invalid arguments');
-  const schema = definition.inputSchema;
-  if (schema.required.some(key => !Object.hasOwn(args, key)) || Object.keys(args).some(key => !Object.hasOwn(schema.properties, key))) fail('Invalid tool arguments');
-  for (const [key, value] of Object.entries(args)) {
-    const field = schema.properties[key];
-    if (key === 'effort') validateCollaborationEffort(args.provider, value);
-    if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
-    if (name === 'claudex_desktop_owner_wake' && (value.length > field.maxLength || !new RegExp(field.pattern).test(value))) fail(`Invalid ${key}`);
-    if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
-    if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
-    if (key === 'report') validateOutcome(value);
-    if (key === 'notifications') notificationPolicy(value);
-    if (field.type === 'boolean' && typeof value !== 'boolean') fail(`Invalid ${key}`);
-    if (key === 'observability' && (!object(value) || Object.keys(value).some(key => !['timeline', 'reports', 'blockerNotifications'].includes(key))
-      || value.timeline !== undefined && !['off', 'public'].includes(value.timeline)
-      || value.reports !== undefined && !['off', 'milestones'].includes(value.reports)
-      || value.blockerNotifications !== undefined && typeof value.blockerNotifications !== 'boolean')) fail('Invalid observability');
-    if (key === 'targets') {
-      if (!Array.isArray(value) || value.length < 1 || value.length > 16
-        || value.some(target => !object(target) || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))
-          || typeof target.taskId !== 'string' || !target.taskId || target.afterRevision !== undefined
-            && (!Number.isSafeInteger(target.afterRevision) || target.afterRevision < 0))
-        || new Set(value.map(target => target.taskId)).size !== value.length) fail('Invalid targets');
+  try {
+    const definition = byName.get(name);
+    if (!definition || !object(args)) fail('Unknown tool or invalid arguments');
+    const schema = definition.inputSchema;
+    if (schema.required.some(key => !Object.hasOwn(args, key)) || Object.keys(args).some(key => !Object.hasOwn(schema.properties, key))) fail('Invalid tool arguments');
+    for (const [key, value] of Object.entries(args)) {
+      const field = schema.properties[key];
+      if (key === 'effort') validateCollaborationEffort(args.provider, value);
+      if (field.type === 'string' && (typeof value !== 'string' || value.length < (field.minLength ?? 0) || (field.enum && !field.enum.includes(value)))) fail(`Invalid ${key}`);
+      if (name === 'claudex_desktop_owner_wake' && (value.length > field.maxLength || !new RegExp(field.pattern).test(value))) fail(`Invalid ${key}`);
+      if (key === 'model' && value !== null && (typeof value !== 'string' || Buffer.byteLength(value) > 200 || value !== value.trim() || !value.trim() || /[\u0000-\u001f\u007f-\u009f]/u.test(value))) fail('Invalid model');
+      if (field.type === 'integer' && (!Number.isInteger(value) || value < field.minimum || (field.maximum !== undefined && value > field.maximum))) fail(`Invalid ${key}`);
+      if (key === 'report') validateOutcome(value);
+      if (key === 'notifications') notificationPolicy(value);
+      if (field.type === 'boolean' && typeof value !== 'boolean') fail(`Invalid ${key}`);
+      if (key === 'observability' && (!object(value) || Object.keys(value).some(key => !['timeline', 'reports', 'blockerNotifications'].includes(key))
+        || value.timeline !== undefined && !['off', 'public'].includes(value.timeline)
+        || value.reports !== undefined && !['off', 'milestones'].includes(value.reports)
+        || value.blockerNotifications !== undefined && typeof value.blockerNotifications !== 'boolean')) fail('Invalid observability');
+      if (key === 'targets') {
+        if (!Array.isArray(value) || value.length < 1 || value.length > 16
+          || value.some(target => !object(target) || Object.keys(target).some(key => !['taskId', 'afterRevision'].includes(key))
+            || typeof target.taskId !== 'string' || !target.taskId || target.afterRevision !== undefined
+              && (!Number.isSafeInteger(target.afterRevision) || target.afterRevision < 0))
+          || new Set(value.map(target => target.taskId)).size !== value.length) fail('Invalid targets');
+      }
+      if (['readOnlyDirs', 'writableDirs'].includes(key) && (!Array.isArray(value) || value.length > field.maxItems
+        || value.some(path => typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')))) fail(`Invalid ${key}`);
     }
-    if (['readOnlyDirs', 'writableDirs'].includes(key) && (!Array.isArray(value) || value.length > field.maxItems
-      || value.some(path => typeof path !== 'string' || !isAbsolute(path) || path.includes('\0')))) fail(`Invalid ${key}`);
+    if (name === 'claudex_wait' && (args.targets === undefined ? args.taskId === undefined
+      : args.taskId !== undefined || args.afterRevision !== undefined)) fail('Supply taskId or targets, not both');
+    if (name === 'claudex_start' && !isAbsolute(args.cwd)) fail('cwd must be absolute');
+    if (name === 'claudex_start' && args.projectRoot !== undefined && !isAbsolute(args.projectRoot)) fail('projectRoot must be absolute');
+    return name.slice('claudex_'.length);
+  } catch (error) {
+    if (typeof error.code !== 'string') error.code = 'CLAUDEX_INVALID_ARGUMENTS';
+    throw error;
   }
-  if (name === 'claudex_wait' && (args.targets === undefined ? args.taskId === undefined
-    : args.taskId !== undefined || args.afterRevision !== undefined)) fail('Supply taskId or targets, not both');
-  if (name === 'claudex_start' && !isAbsolute(args.cwd)) fail('cwd must be absolute');
-  if (name === 'claudex_start' && args.projectRoot !== undefined && !isAbsolute(args.projectRoot)) fail('projectRoot must be absolute');
-  return name.slice('claudex_'.length);
 }
 
 /** Minimal newline JSON-RPC MCP facade. It emits protocol data only on output. */

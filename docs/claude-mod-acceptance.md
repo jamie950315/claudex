@@ -1,6 +1,6 @@
 # Claude Mod acceptance and deployment gates
 
-This is the reusable checklist for the current Claudex.app 1.1.1 / Mod 0.7.1
+This is the reusable checklist for the current Claudex.app 1.2.15 / Mod 0.8.11
 workflow. Start with [the current handoff](claude-mod-handoff.md) and
 [app lifecycle](app.md#claude-mod-lifecycle). Mark a gate as passed only with
 observed evidence on the
@@ -127,7 +127,7 @@ claude plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 claude plugin test "$TEST_STAGE/plugins/claudex"
 ```
 
-Read the emitted types and validation errors. The current source includes 18 native
+Read the emitted types and validation errors. The current source includes 23 native
 kit tests; record the executed count and candidate version rather than reusing
 the historical 0.3.1 count of 12. The 0.7.1 kit passed on Desktop Code 2.1.286 with
 an explicitly approved isolated test-process function-hooks option. Do not apply
@@ -141,27 +141,31 @@ The source-level expected inventory is:
 
 ```text
 Hooks:
-  session.start, classic.SessionStart, session.end, session.receive, turn.complete,
-  command.run (claudex), ui.render (AbovePrompt and Pane)
+  session.start, classic.SessionStart, session.end, session.receive,
+  prompt.submit, turn.start, turn.step, turn.complete, tool.call, config.set,
+  command.run (claudex and claudex:warm), ui.render (Pane)
 Calls:
-  env.get (literal CLAUDEX_COLLABORATION_WORKER)
-  session.id, session.cwd, session.usage, session.version, session.send
-  settings.read (native inbound policy)
-  store.get, store.set (independent plugin language preference)
-  tool.list, clock.after (bounded wait/reconnection scheduling)
+  env.get (worker marker, native TTL/force/effort), env.set (current-process TTL)
+  session.id, session.cwd, session.usage, session.version, session.model, session.send
+  settings.read (native inbound/TTL policy and bounded option diagnostics)
+  store.get, store.set (independent language and explicit TTL preferences)
+  tool.list, clock.now, clock.after (bounded wait/reconnection/warm scheduling)
   process.run (plugin.root is an intrinsic property, not a call)
   command.register
   ui.invalidate, ui.resolve, ui.open
-  prompt.fill (append-only handoff draft)
+  prompt.fill (append-only handoff draft), prompt.read (warm draft guard)
+  prompt.submit (explicitly opted-in, one-use cache-warming dispatch only)
 ```
 
 The validator may include intrinsic UI element methods or normalized names; audit
 what the actual build prints rather than string-matching this list blindly.
 `session.send` is statically declared even with nativeWake=false. Installation
 therefore grants trusted Mod code this capability; the flag gates this
-implementation's use of it. There should be no prompt.submit, permission approval, model.complete or direct
-fs.write call in the Mod. tool.list and clock.after are expected for SendMessage
-preflight and bounded event-backed wait/reconnection, not history polling.
+implementation's use of it. `prompt.submit` is limited to the separately authorized
+cache-warming path; it is never a fallback for peer delivery or a generic pane
+action. There should be no permission approval, model.complete or direct fs.write
+call in the Mod. tool.list and clock.after are expected for SendMessage preflight,
+bounded event-backed wait/reconnection and authorized warming, not history polling.
 
 Inspect the fixed `process.run` target: the packaged Node helper. Its deeper
 private file/RPC effects must be reviewed in source; the Mod validator's call list
@@ -175,8 +179,9 @@ runtime separately. Loading in the CLI does not establish Desktop availability.
 - Open `/claudex` with nativeWake=false. Confirm overview, task pages, exact task
   detail, chat title search/pagination, compose and inbox all render. Check a
   narrow terminal and resized Desktop pane; tabs/controls remain reachable.
-- Confirm AbovePrompt preserves the next mod/native subtree. Long titles and
-  JSON text stay within native element bounds. Native missing usage values show
+- Confirm native and peer-Mod prompt-area content remains unchanged, with no
+  Claudex AbovePrompt band. Long titles and JSON text stay within native element
+  bounds. Native missing usage values show
   unknown instead of fabricated zero, and rate-limit labels retain their native
   kind. Empty, errored and unavailable states remain distinguishable.
 - Invoke read-only refresh while native work runs. It starts no model, edits no

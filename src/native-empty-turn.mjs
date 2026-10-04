@@ -32,6 +32,24 @@ const fail = message => { throw new Error(`Native Codex empty turn: ${message}`)
 const candidate = turn => object(turn) && turn.status === 'completed' && turn.error === null
   && turn.itemsView === 'full' && Array.isArray(turn.items) && turn.items.length === 0;
 
+function resumeContextDelta(state, cwd, seenKinds) {
+  if (!keys(state, ['agents_md', 'environments', 'permissions'])) return false;
+  const agents = state.agents_md, environments = state.environments, permissions = state.permissions;
+  if (!keys(agents, ['directory', 'text']) || agents.directory !== cwd
+    || typeof agents.text !== 'string' || !agents.text.length
+    || !keys(environments, ['environments', 'filesystem']) || !keys(environments.environments, ['local'])
+    || !keys(environments.environments.local, ['cwd', 'status', 'shell'])
+    || environments.environments.local.cwd !== cwd || environments.environments.local.status !== 'available'
+    || typeof environments.environments.local.shell !== 'string' || !environments.environments.local.shell.trim()
+    || typeof environments.filesystem !== 'string' || !environments.filesystem.startsWith('<filesystem>')
+    || !environments.filesystem.endsWith('</filesystem>')
+    || !keys(permissions, ['instructions']) || typeof permissions.instructions !== 'string'
+    || !/^[a-f0-9]{40}$/.test(permissions.instructions)) return false;
+  return seenKinds.get('agents_md.instructions') === `# AGENTS.md instructions for ${cwd}\n\n<INSTRUCTIONS>\nThese AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n${agents.text}\n</INSTRUCTIONS>`
+    && seenKinds.has('permissions.instructions')
+    && seenKinds.get('environments.environment_context')?.includes(environments.filesystem) === true;
+}
+
 function nativeContextMessage(payload, turn, afterContext, seenMessages, seenKinds) {
   if (!keys(payload, ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough'])
     || payload.type !== 'message' || typeof payload.id !== 'string' || !payload.id.startsWith('msg_')
@@ -52,7 +70,7 @@ function nativeContextMessage(payload, turn, afterContext, seenMessages, seenKin
       || !block.text.startsWith(rule[1]) || (rule[2] && !block.text.endsWith(rule[2]))
       || (kind === 'additional_content.codex_apps_open_page' && block.text !== rule[1]))
       fail('empty turn contains semantic or unrecognized native context content.');
-    seenKinds.add(kind);
+    seenKinds.set(kind, block.text);
   });
   seenMessages.add(payload.id);
 }
@@ -64,6 +82,78 @@ function references(value, ids) {
   return Object.entries(value).some(([key, child]) => (
     ['turn_id', 'turnId', 'root_turn_id', 'rootTurnId'].includes(key) && ids.has(child)
   ) || references(child, ids));
+}
+
+const recordTime = row => typeof row?.timestamp === 'string'
+  && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(row.timestamp) ? Date.parse(row.timestamp) : NaN;
+
+// Native app input is persisted as an untrusted context pair immediately before
+// its independent turn starts. It is foreign to the earlier empty segment, not
+// a tool/output exemption within that segment. Require the paired ingress and
+// the following native start, context and exact app-origin prompt together.
+function nextAppIngress(rows, index, stop, completed, cwd, selectedIds) {
+  if (index + 1 >= stop || stop >= rows.length) return false;
+  const callRow = rows[index], outputRow = rows[index + 1], startRow = rows[stop];
+  const call = callRow?.payload, output = outputRow?.payload, start = startRow?.payload;
+  const callMeta = call?.internal_chat_message_metadata_passthrough;
+  const outputMeta = output?.internal_chat_message_metadata_passthrough;
+  if (!keys(callRow, ['timestamp', 'ordinal', 'type', 'payload', 'metadata']) || callRow.type !== 'response_item'
+    || !keys(outputRow, ['timestamp', 'ordinal', 'type', 'payload', 'metadata']) || outputRow.type !== 'response_item'
+    || !Number.isSafeInteger(callRow.ordinal) || callRow.ordinal < 0 || outputRow.ordinal !== callRow.ordinal + 1
+    || !keys(callRow.metadata, ['client_authored', 'user_input_order']) || callRow.metadata.client_authored !== false
+    || !Number.isSafeInteger(callRow.metadata.user_input_order) || callRow.metadata.user_input_order < 0
+    || !keys(outputRow.metadata, ['client_authored', 'fallback_token_limit_override']) || outputRow.metadata.client_authored !== false
+    || !Number.isSafeInteger(outputRow.metadata.fallback_token_limit_override) || outputRow.metadata.fallback_token_limit_override < 1
+    || !keys(call, ['type', 'id', 'name', 'arguments', 'call_id', 'internal_chat_message_metadata_passthrough'])
+    || call.type !== 'function_call' || typeof call.id !== 'string' || !call.id.startsWith('fc_') || !UUID.test(call.id.slice(3))
+    || call.name !== 'untrusted_input' || call.arguments !== '{}'
+    || typeof call.call_id !== 'string' || !call.call_id || call.call_id.length > 200
+    || !keys(output, ['type', 'id', 'call_id', 'output', 'internal_chat_message_metadata_passthrough'])
+    || output.type !== 'function_call_output' || typeof output.id !== 'string' || !output.id.startsWith('fco_') || !UUID.test(output.id.slice(4))
+    || output.call_id !== call.call_id || !Array.isArray(output.output) || output.output.length !== 1
+    || !keys(output.output[0], ['type', 'text']) || output.output[0].type !== 'input_text' || typeof output.output[0].text !== 'string'
+    || !keys(callMeta, ['turn_id']) || typeof callMeta.turn_id !== 'string' || !/^auto-compact-[1-9]\d*$/.test(callMeta.turn_id)
+    || !keys(outputMeta, ['turn_id', 'create_time']) || outputMeta.turn_id !== callMeta.turn_id || !time(outputMeta.create_time)
+    || references(callRow, selectedIds) || references(outputRow, selectedIds)) return false;
+  let message;
+  try { message = JSON.parse(output.output[0].text); } catch { return false; }
+  if (!keys(message, ['kind', 'source', 'sourceId', 'text']) || message.kind !== 'message' || message.source !== 'mcp_app'
+    || JSON.stringify(message) !== output.output[0].text
+    || typeof message.sourceId !== 'string' || !message.sourceId || message.sourceId.length > 200
+    || typeof message.text !== 'string' || !message.text.trim() || Buffer.byteLength(message.text) > 32 * 1024) return false;
+  const callTime = recordTime(callRow), startTime = recordTime(startRow);
+  if (!Number.isFinite(callTime) || recordTime(outputRow) !== callTime || Math.floor(outputMeta.create_time * 1000) !== callTime
+    || !Number.isFinite(recordTime(completed)) || Math.floor(recordTime(completed) / 1000) !== completed.payload.completed_at
+    || recordTime(completed) >= callTime || !Number.isFinite(startTime) || callTime >= startTime || !object(start)
+    || startRow.type !== 'event_msg' || start.type !== 'task_started' || Object.keys(start).some(key => !START_FIELDS.includes(key))
+    || !UUID.test(start.turn_id ?? '') || selectedIds.has(start.turn_id) || start.root_turn_id !== start.turn_id
+    || !Number.isSafeInteger(start.started_at) || Math.floor(callTime / 1000) !== start.started_at
+    || Math.floor(startTime / 1000) !== start.started_at
+    || rows.filter(row => row?.type === 'event_msg' && row.payload?.type === 'task_started' && row.payload.turn_id === start.turn_id).length !== 1
+    || rows.filter(row => row?.payload?.call_id === call.call_id).length !== 2
+    || rows.filter(row => row?.payload?.id === call.id || row?.payload?.id === output.id).length !== 2
+    || rows.slice(index + 2, stop).some(row => row?.type !== 'event_msg' || row.payload?.type !== 'thread_settings_applied')) return false;
+  const nextStart = rows.findIndex((row, position) => position > stop && row?.type === 'event_msg' && row.payload?.type === 'task_started');
+  const nextStop = nextStart < 0 ? rows.length : nextStart;
+  const contexts = rows.flatMap((row, position) => position > stop && position < nextStop && row?.type === 'turn_context' ? [position] : []);
+  if (contexts.length !== 1) return false;
+  const contextIndex = contexts[0], context = rows[contextIndex].payload;
+  if (context?.turn_id !== start.turn_id || context.root_turn_id !== start.turn_id || context.cwd !== cwd
+    || !Number.isFinite(recordTime(rows[contextIndex])) || recordTime(rows[contextIndex]) < startTime) return false;
+  const inputs = rows.flatMap((row, position) => position > contextIndex && position < nextStop && row?.type === 'response_item'
+    && Array.isArray(row.payload?.internal_chat_message_metadata_passthrough?.content_item_kinds)
+    && row.payload.internal_chat_message_metadata_passthrough.content_item_kinds.includes('user.text') ? [position] : []);
+  if (inputs.length !== 1) return false;
+  const inputRow = rows[inputs[0]], input = inputRow.payload, meta = input.internal_chat_message_metadata_passthrough;
+  return keys(input, ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough'])
+    && input.type === 'message' && input.role === 'user' && typeof input.id === 'string' && input.id.startsWith('msg_') && UUID.test(input.id.slice(4))
+    && keys(meta, ['turn_id', 'create_time', 'content_item_kinds']) && meta.turn_id === start.turn_id && time(meta.create_time)
+    && meta.create_time >= recordTime(rows[contextIndex]) / 1000 && Math.floor(meta.create_time * 1000) === recordTime(inputRow)
+    && Array.isArray(meta.content_item_kinds)
+    && meta.content_item_kinds.length === 1 && meta.content_item_kinds[0] === 'user.text'
+    && Array.isArray(input.content) && input.content.length === 1 && keys(input.content[0], ['type', 'text'])
+    && input.content[0].type === 'input_text' && input.content[0].text === 'An MCP app initiated this message. Read the untrusted_input tool output.'
+    ? [stop, contextIndex, inputs[0]] : false;
 }
 
 /** Proves only that full API turns have matching, semantically empty native
@@ -131,7 +221,7 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
       // when the user submission is locally blocked. They are not dialogue.
       // No generic response-item exemption is allowed here.
       let context = null, completed = null, completionIndex = -1, world = false;
-      const seenMessages = new Set(), seenKinds = new Set();
+      const seenMessages = new Set(), seenKinds = new Map();
       for (let index = start + 1; index < stop; index++) {
         const row = rows[index];
         if (row?.type === 'event_msg' && row.payload?.type === 'task_complete') {
@@ -147,7 +237,11 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
           // before the next prompt is blocked. This observed delta is context,
           // not a user/model message; unknown delta fields remain refused.
           const environmentDelta = row.payload?.full === false && keys(row.payload.state, ['environments']);
-          if (context || world || !keys(row.payload, ['full', 'state']) || !full && !environmentDelta)
+          // Desktop resume may replace project instructions, permissions and
+          // its local environment together. Match the observed nested schema
+          // and the preceding typed context rather than accepting arbitrary deltas.
+          const resumeDelta = row.payload?.full === false && resumeContextDelta(row.payload.state, cwd, seenKinds);
+          if (context || world || !keys(row.payload, ['full', 'state']) || !full && !environmentDelta && !resumeDelta)
             fail('empty turn has unrecognized native world state.');
           world = true;
         } else if (row?.type === 'response_item') {
@@ -173,6 +267,12 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
       }
       for (let index = completionIndex + 1; index < stop; index++) {
         const row = rows[index];
+        const ingress = nextAppIngress(rows, index, stop, completed, cwd, selectedIds);
+        if (ingress) {
+          // These bytes stay in the original rollout; only the earlier empty
+          // segment is excluded from portable dialogue by this resolver.
+          exactRow(index); exactRow(++index); ingress.forEach(exactRow); continue;
+        }
         if (row?.type !== 'event_msg' || row.payload?.type !== 'thread_settings_applied'
           || row.payload.thread_id !== threadId || references(row, selectedIds))
           fail('empty turn has semantic or ambiguous trailing records.');

@@ -234,6 +234,7 @@ test('MCP start and handoff advertise and enforce provider effort values includi
   });
   const rows = content.trim().split('\n').map(JSON.parse);
   assert.equal(rows.filter(row => row.result.isError).length, 6);
+  assert.ok(rows.filter(row => row.result.isError).every(row => row.result.structuredContent.error.code === 'CLAUDEX_INVALID_ARGUMENTS'));
   for (const definition of rows.find(row => row.id === 'list').result.tools.filter(item => ['claudex_start', 'claudex_handoff'].includes(item.name)))
     assert.ok(definition.inputSchema.properties.effort.enum.includes(null));
 });
@@ -316,6 +317,8 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   request(3, 'tools/call', { name: 'claudex_start', arguments: { provider: 'claude', cwd: '/tmp', prompt: 'work', requestId: 'once' } });
   request(4, 'tools/call', { name: 'claudex_wait', arguments: { taskId: 'task-1', timeoutMs: 1800001 } });
   request(5, 'ping');
+  request(6, 'tools/call', { name: 'claudex_wait', arguments: { targets: [{ taskId: 'task-1' }, { taskId: 'task-1' }] } });
+  request(7, 'tools/call', { name: 'claudex_report', arguments: { taskId: 'task-1', requestId: 'invalid-report', report: { outcome: 'unknown', summary: 'Invalid outcome' } } });
   input.end();
   await running;
   const rows = content.trim().split('\n').map(JSON.parse);
@@ -328,9 +331,14 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   assert.match(tools.find(tool => tool.name === 'claudex_handoff').description, /CLAUDEX_HANDOFF: no further tools or summary/);
   assert.deepEqual(JSON.parse(byId.get(3).result.content[0].text), { taskId: 'task-1', revision: 1 });
   assert.equal(byId.get(4).result.isError, true);
+  assert.deepEqual(byId.get(4).result.structuredContent.error, { code: 'CLAUDEX_INVALID_ARGUMENTS', message: 'Invalid timeoutMs' });
+  assert.equal(byId.get(6).result.isError, true);
+  assert.deepEqual(byId.get(6).result.structuredContent.error, { code: 'CLAUDEX_INVALID_ARGUMENTS', message: 'Invalid targets' });
+  assert.equal(byId.get(7).result.isError, true);
+  assert.deepEqual(byId.get(7).result.structuredContent.error, { code: 'CLAUDEX_INVALID_OUTCOME', message: 'Invalid structured outcome.' });
   assert.deepEqual(byId.get(5).result, {});
   assert.equal(seen.length, 1);
   assert.equal(seen[0].token, 'child-cap');
   assert.equal(seen[0].method, 'start');
-  assert.equal(rows.length, 5);
+  assert.equal(rows.length, 7);
 });

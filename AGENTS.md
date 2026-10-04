@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.13 packages Claude Mod 0.8.10. Keep application and Mod versions
+Claudex.app 1.2.15 packages Claude Mod 0.8.11. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -271,8 +271,13 @@ bounded polling harness, not a production fallback.
   rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
   exact lifecycle IDs/times and no response, tool or token activity; fresh native
   typed bootstrap context is allowed only by its strict role/kind/frame schema.
-  Also accept the observed pre-context environment-only world-state delta;
-  unknown delta fields and real message/tool/token records remain refused.
+  Also accept the observed pre-context environment-only world-state delta and
+  the exact Desktop resume agents_md/environments/permissions delta bound to
+  its typed native context and cwd. Unknown delta fields and real
+  message/tool/token records remain refused. Paired app-origin untrusted_input
+  ingress before the next native task_started requires its exact envelope,
+  pair, next independent context and millisecond ordering; it never exempts
+  activity within an empty candidate.
   Compare raw proof across both history reads. Empty controls never close a
   pending request, fabricate a reply, alter checkpoints or authorize history writes.
   An all-control new chat still waits for its first real completed dialogue.

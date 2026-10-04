@@ -1,16 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, appendFile, readFile, unlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, appendFile, readFile, realpath, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DesktopBridge } from '../src/desktop-bridge.mjs';
 import { DesktopRuntime, persistentPacketKey } from '../src/desktop-runtime.mjs';
 import { CodexClient } from '../src/codex.mjs';
+import { ClaudeOwner, CLAUDE_OWNER_CLI_VERSION, CLAUDE_OWNER_SDK_VERSION } from '../src/claude-owner.mjs';
 import { createCodexProjection, encodeCodexProjection } from '../src/codex-projection.mjs';
 import { encodeClaude, sessionPath } from '../src/claude.mjs';
 import { snapshot, hash, writeJSON } from '../src/storage.mjs';
 import { fingerprint } from '../src/history.mjs';
+
+function queue() {
+  const items = []; let wake, ended = false, failure;
+  return { push(item) { items.push(item); wake?.(); }, end() { ended = true; wake?.(); },
+    fail(error) { failure = error; ended = true; wake?.(); },
+    async *[Symbol.asyncIterator]() {
+      while (!ended || items.length) {
+        if (items.length) yield items.shift();
+        else await new Promise(resolve => { wake = resolve; });
+      }
+      if (failure) throw failure;
+    } };
+}
 
 test('packet signing key persists across runtime restarts', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cldx-key-'));
@@ -36,7 +50,7 @@ test('runtime reconnects after backend closure but never replays a request', asy
 });
 
 for (const contextMode of ['inline', 'archive']) test(`native ${contextMode} adapters alternate snapshots and a stable owner without losing canonical history`, { skip: process.env.CLAUDEX_NATIVE_TEST !== '1', timeout: 60000 }, async t => {
-  const root = await mkdtemp(join(tmpdir(), 'cldx-desktop-native-'));
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-desktop-native-')));
   const stateRoot = join(root, 'state'), cwd = join(root, 'project'), codexHome = join(root, 'codex'), claudeHome = join(root, 'claude');
   await Promise.all([cwd, codexHome, claudeHome].map(path => mkdir(path)));
   const turn = label => [
@@ -44,30 +58,36 @@ for (const contextMode of ['inline', 'archive']) test(`native ${contextMode} ada
     { role: 'assistant', content: [{ type: 'text', text: `Synthetic answer ${label}` }] },
   ];
   const ownerStates = new Map();
-  const ownerFactory = config => {
-    const data = ownerStates.get(config.conversationId) ?? { id: randomUUID(), operations: new Map(), parent: null, path: null };
-    ownerStates.set(config.conversationId, data);
-    let closed = false;
-    return {
-      async start() { data.path = sessionPath(claudeHome, config.cwd, data.id); await mkdir(join(data.path, '..'), { recursive: true }); },
-      status() { return { sessionId: data.id, transcriptPath: data.path, nativeState: 'idle', closed }; },
-      async inspectTranscript() { return snapshot(data.path); },
-      async connect() {},
-      async hasAppend({ operationId, content }) {
-        const known = data.operations.get(operationId);
-        if (known && known !== hash(content)) throw new Error('Changed mock operation');
-        return Boolean(known);
-      },
-      async append({ operationId, content }) {
-        if (await this.hasAppend({ operationId, content })) return { duplicate: true };
-        const rows = encodeClaude({ meta: { id: data.id, cwd: config.cwd, timestamp: new Date().toISOString() }, messages: [{ role: 'user', content }] }, data.id, data.parent);
-        await appendFile(data.path, rows.text, { mode: 0o600 });
-        data.parent = rows.rows.filter(row => row.uuid).at(-1).uuid;
-        data.operations.set(operationId, hash(content));
-      },
-      async close() { closed = true; },
-    };
-  };
+  const ownerFactory = config => new ClaudeOwner({ ...config,
+    sdkVersion: CLAUDE_OWNER_SDK_VERSION, claudeVersion: CLAUDE_OWNER_CLI_VERSION,
+    settingsResolver: async () => ({ effective: {}, sources: [] }), policyPreflight: async () => ({ version: 1, sources: [] }),
+    queryFactory: ({ prompt, options }) => {
+      const id = options.resume ?? options.sessionId, path = sessionPath(claudeHome, config.cwd, id), output = queue();
+      const data = { id, path, parent: null }; ownerStates.set(config.conversationId, data);
+      const input = (async () => {
+        for await (const item of prompt) {
+          assert.equal(item.shouldQuery, false, 'synthetic transport must never request inference');
+          await mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
+          const previous = await snapshot(path).catch(error => { if (error.code === 'ENOENT') return { rows: [] }; throw error; });
+          data.parent = previous.rows.filter(row => row.uuid).at(-1)?.uuid ?? null;
+          const row = { type: 'user', uuid: item.uuid, sessionId: id, cwd: config.cwd, parentUuid: data.parent,
+            version: CLAUDE_OWNER_CLI_VERSION, timestamp: new Date().toISOString(), message: item.message };
+          await appendFile(path, JSON.stringify(row) + '\n', { mode: 0o600 }); data.parent = item.uuid;
+          output.push({ type: 'result', subtype: 'success', is_error: false, session_id: id,
+            user_message_uuid: item.uuid, user_message_uuids: [item.uuid], num_turns: 0, duration_api_ms: 0, total_cost_usd: 0 });
+        }
+      })();
+      input.catch(error => output.fail(error));
+      return { initializationResult: async () => ({ session_state: 'idle', commands: [{ name: 'clear' }] }),
+        mcpServerStatus: async () => [],
+        async enableRemoteControl(_enabled, _title, registration) {
+          const remoteId = registration.reattachSessionId ?? `cse_${randomUUID().replaceAll('-', '')}`;
+          await mkdir(join(path, '..'), { recursive: true, mode: 0o700 });
+          await appendFile(path, JSON.stringify({ type: 'bridge-session', sessionId: id, bridgeSessionId: remoteId }) + '\n', { mode: 0o600 });
+          return { bridge_session_id: remoteId };
+        },
+        close() { output.end(); }, [Symbol.asyncIterator]: () => output[Symbol.asyncIterator]() };
+    } });
   const options = { root: stateRoot, codexHome, claudeHome, ownerFactory, contextMode,
     clientFactory: async () => new CodexClient({ codexHome }) };
   let runtime = await new DesktopRuntime(options).initialize();
