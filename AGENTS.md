@@ -49,6 +49,14 @@ fixtures use placeholder paths and IDs.
   two explicit user submissions and content-free, deduplicated response usage.
   A one-token cap or `maxTurns: 1` is not a one-request guarantee; preserve
   native errors and distinguish continuation from transport retries.
+- `dev/cache-warm-probe/codex.mjs` is a read-only Desktop capability/usage
+  prototype, not an enabled warmer. Optional observation only rejoins an
+  already-loaded active thread; never start a thread, dispatch input or override
+  native settings. The reviewed 0.160.0 owner route has no composer-state or
+  per-warm-turn no-tools contract, so automatic dispatch remains blocked.
+  Usage accounting needs an observed baseline and exact cumulative/last deltas;
+  duplicate events do not renew cache evidence. Local sample IDs are not upstream
+  response IDs. A weaker mode requires explicit acceptance, not a silent fallback.
 - Product repairs must apply through normal installation and runtime paths on
   other users' machines. Do not depend on one account, UID, project path, native
   conversation ID or manually repaired local state. Reproduce relevant failures

@@ -97,6 +97,42 @@ no plugin; it is not an automatic fallback after an uncertain fork.
 
 ## Evidence and limits
 
+### Codex Desktop guarded prototype
+
+`node codex.mjs --session NATIVE_THREAD_UUID` probes the existing Desktop owner
+and reads thread metadata without history. Optional `--observe-ms 45000` joins
+only an already-loaded active thread to observe its existing token events. It
+never starts a thread/turn, forks, writes settings or extracts credentials.
+Run its offline tests with `node --test dev/cache-warm-probe/codex.test.mjs` from
+the repository root. Run the probe with the full script path from that root.
+
+Automatic dispatch intentionally stays blocked on reviewed Desktop
+26.930.31730 (12947), CLI 0.160.0: owner discovery exposes untrusted-app-input
+support but no composer draft state; the turn request has no per-turn no-tools
+field. The owner can refuse busy turns, but that does not prove draft safety.
+Neither an OK-only instruction nor a budget reservation is a native tool/output
+cap. Enabling a weaker mode requires a separate product decision, not a hidden
+fallback. The shipping Claude warming implementation is unchanged.
+
+Read-only native observation confirmed cumulative/last token events, including
+duplicate notifications. The counter requires an observed baseline and exact
+six-field delta agreement, never invents missing fields, and stops on reset or
+inconsistent data. Its sample ID is local accounting identity, not an upstream
+response ID or cache-retention proof. The observed public stream did not emit
+`rawResponse/completed`; this does not prove every runtime suppresses it.
+No Codex cache-refresh inference or retention experiment has been performed.
+
+Static evidence: `ChatGPT.app/Contents/Resources/app.asar` SHA-256
+`87a934de9a00a04d2e534693db87756321ca4f3413f6caa55d3a0d32a5543836`.
+In `.vite/build/bootstrap-D3_zvIvQ.js`, UTF-8 asset offsets 1752773 (owner
+discovery), 1064248 (start-turn checks), and 1055477 (request field whitelist)
+establish these limits. This is build-scoped evidence, not a vendor API promise.
+
+Official references:
+- https://developers.openai.com/codex/app-server
+- https://developers.openai.com/codex/hooks
+- https://developers.openai.com/api/docs/guides/prompt-caching
+
 ### Native preference persistence without inference
 
 `preferences.mjs --run --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
