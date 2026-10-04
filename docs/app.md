@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.18**, with **Claude Mod 0.8.13** bundled.
+Current development build: **Claudex.app 1.2.19**, with **Claude Mod 0.8.14** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -45,6 +45,11 @@ so troubleshooting evidence is not changed. CLI output remains English.
    gate ordinary synchronization. See [command activation](cache-warming.md#command-in-the-chatgpt-desktop-codex-page).
 5. Let the checklist report which integrations are ready and which require an
    account, compatible runtime, idle native process, or normal app restart.
+
+The signed app bundle and executable may be owned by the current user or root,
+with no group/other write access. Setup verifies the strict deep signature and
+app identity. Private state, login files and plugin caches remain owned by the
+current user.
 
 Conversation synchronization wakes on native completion hooks/events, not a recurring
 two-second history scan. Startup/reconnection reconciliation and a status-only

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.18 packages Claude Mod 0.8.13. Keep application and Mod versions
+Claudex.app 1.2.19 packages Claude Mod 0.8.14. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -95,9 +95,10 @@ enable requests must not report success if newer-version preservation refused th
 Missing management capabilities use a separately pinned, integrity-checked Mod
 manager, not replacement of an existing inference CLI. Its bootstrap disables
 package scripts and selects the exact native platform package, not the wrapper's
-postinstall placeholder. Bundled source/runtime may be root-owned; private state
-and plugin caches must remain owned by the current user. Empty npm user/global
-configuration files must be distinct and protected; do not inherit credentials
+postinstall placeholder. Bundled source/runtime and the signed app bundle/executable
+may be owned by the current user or root, protected from foreign writes. Private
+state, login files and plugin caches must remain owned by the current user. Empty
+npm user/global configuration files must be distinct and protected; do not inherit credentials
 or a provider directory's npm settings. Native runtime guards and accounts remain.
 Show installed payload/version and fresh loaded-Mod self-report separately.
 mod_wake_status is controller-only, bounded and content-free, never a dispatch

@@ -56,8 +56,8 @@ async function loadedJob(definition, run) {
 
 async function verifyApp(appPath, run) {
   const info = await lstat(appPath), executable = await lstat(join(appPath, 'Contents', 'MacOS', 'ClaudexApp'));
-  if (!info.isDirectory() || info.isSymbolicLink() || info.uid !== process.getuid() || (info.mode & 0o022)
-    || !executable.isFile() || executable.isSymbolicLink() || executable.uid !== process.getuid() || (executable.mode & 0o022))
+  if (!info.isDirectory() || info.isSymbolicLink() || (info.uid !== process.getuid() && info.uid !== 0) || (info.mode & 0o022)
+    || !executable.isFile() || executable.isSymbolicLink() || (executable.uid !== process.getuid() && executable.uid !== 0) || (executable.mode & 0o022))
     throw new Error('The unified application is not an owned bundle.');
   await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', appPath]);
   const signed = await run('/usr/bin/codesign', ['-d', '--verbose=2', appPath]);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -74,6 +74,43 @@ test('one unified login entry starts quietly and never launches model or service
   assert.doesNotMatch(options.definition.plist, /KeepAlive|watch|claudex\.mjs/);
   assert.ok(!options.calls.some(call => ['bootstrap', 'kickstart', 'kill'].includes(call[1])));
   await installAppLogin(options);
+});
+
+test('trusted application ownership still refuses unsafe bundles and private login state before native work', async t => {
+  for (const kind of ['bundle-write', 'executable-write', 'bundle-link', 'executable-link', 'private-root-write']) await t.test(kind, async t => {
+    const options = await fixture(t);
+    const executable = join(options.appPath, 'Contents', 'MacOS', 'ClaudexApp');
+    if (kind === 'bundle-write') await chmod(options.appPath, 0o775);
+    if (kind === 'executable-write') await chmod(executable, 0o775);
+    if (kind === 'private-root-write') await chmod(options.root, 0o755);
+    if (kind === 'bundle-link' || kind === 'executable-link') {
+      const path = kind === 'bundle-link' ? options.appPath : executable;
+      await rename(path, `${path}.original`);
+      await symlink(`${path}.original`, path);
+    }
+    await assert.rejects(installAppLogin(options), /not an owned bundle|state must be private and owned/);
+    assert.deepEqual(options.calls, []);
+    await assert.rejects(readFile(options.definition.path), { code: 'ENOENT' });
+    await assert.rejects(readFile(join(options.root, 'app-login.json')), { code: 'ENOENT' });
+  });
+});
+
+test('application login retains strict signature and identity verification for protected bundles', async t => {
+  for (const kind of ['verification', 'identifier', 'authority', 'team']) await t.test(kind, async t => {
+    const options = await fixture(t);
+    const run = async (command, args) => {
+      const result = await options.run(command, args);
+      if (command === '/usr/bin/codesign' && args[0] === '--verify' && kind === 'verification') throw new Error('Strict signature verification failed.');
+      if (command === '/usr/bin/codesign' && args[0] === '-d') {
+        const expected = { identifier: 'Identifier=dev.0ruka.claudex.app', authority: 'Authority=Apple Development: Test', team: 'TeamIdentifier=TESTTEAM00' };
+        result.stderr = result.stderr.replace(expected[kind], `${kind}=foreign`);
+      }
+      return result;
+    };
+    await assert.rejects(installAppLogin({ ...options, run }), /signature.*verif/i);
+    assert.ok(options.calls.every(call => call[0] === '/usr/bin/codesign'));
+    await assert.rejects(readFile(options.definition.path), { code: 'ENOENT' });
+  });
 });
 
 test('migration quits only verified legacy display, disables its login entry and preserves artifacts', async t => {
