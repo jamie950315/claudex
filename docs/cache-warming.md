@@ -218,6 +218,10 @@ An already-running turn is not killed and completed tool actions are not undone.
 - The initial cumulative counter is only a baseline. Scheduling waits for fresh
   exact native usage deltas and successful native completion; it does not infer
   usage from an old transcript, status timestamp or duplicate notification.
+  Enrollment during an existing turn may need the next ordinary turn's settings
+  snapshot. Until then it remains `awaiting-native-settings`, without arming a
+  refresh timer. Unchanged native settings notifications do not disable warming;
+  actual changes after the first validated snapshot still do.
 Model/effort metadata describes configured values, not independently verified
 execution-model evidence.
 
@@ -240,6 +244,10 @@ Codex usage/claim RPC. Interrupted dispatch remains uncertain, without replay.
 Source/synthetic tests and native observer checks are separate from real
 warm-turn inference and controlled retention experiments. Neither proves TTL
 extension. The Claude native acceptance records below do not certify Codex.
+An authorized 1.2.6 experiment verified one native 25-minute refresh, an OK reply,
+full-prefix cache reuse and budget enforcement. Its no-refresh control still hit
+at about 31 minutes, so retention extension remains inconclusive; see the
+[version-scoped validation record](claude-mod-validation.md).
 
 ## Claude scheduling and evidence
 

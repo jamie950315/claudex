@@ -9,6 +9,58 @@ The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker rout
 actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
 
+## Codex 25-minute native retention experiment, 1.2.6 (2026-10-04)
+
+The new-enrollment default is 25 minutes; saved explicit 20-minute policies are
+unchanged. The complete Node run passed 1,685 tests, zero failures and 23 opt-in
+skips. A final focused 33-test run additionally covered mid-turn enrollment
+waiting for its first native settings snapshot instead of advertising an
+unusable timer. The bundled Mod payload is unchanged at 0.8.5.
+
+An explicitly authorized experiment used native ChatGPT sign-in and two isolated
+persistent Desktop threads on Codex 0.160.0. Both used configured
+`gpt-6.1-sol` / high effort after their test-only settings were normalized before
+any model input. These are native configured settings, not independent response
+model telemetry. The existing native owner handled every input; there was no
+fork, separate inference CLI, API key or change to an existing user conversation.
+
+| Measurement | Warm arm cached-input tokens | No-refresh control cached-input tokens |
+| --- | ---: | ---: |
+| Initial completed primer | 35,968 | 35,968 |
+| One automatic refresh at 25 minutes | 36,096 | No request |
+| Final measurement at approximately 31 minutes | 36,224 | 36,096 |
+
+The scheduled refresh replied exactly `OK`, used five output tokens (zero
+reported reasoning tokens), called no tools, and became `verified` only after
+exact native completion and accounting. Its one-refresh limit stopped further
+warming. Final measurement starts were 1,863 and 1,857 seconds after the warm
+and control primers respectively. Native metadata verified exactly four warm-arm
+turns and three control-arm turns, all completed, with no extra turns. Both final
+requests returned `OK` with five output tokens. All test warming ended disabled.
+
+**The automatic warm path and cache hit passed, but retention extension is
+inconclusive.** The untouched control still reused its full observed prefix at
+about 31 minutes. The warm arm's larger final cached-token count reflects its
+additional history; it is not evidence that warming extended retention or made
+the response faster. This single run does not establish an expiry time.
+
+Real testing exposed two boundaries missed by the initial synthetic setup:
+ordinary turns emit unchanged settings snapshots, and a new thread can resolve
+native default instructions on its first turn. The adapter now keeps the
+independent permission/provider/plugin baseline, binds the first observed prompt
+snapshot to confirmed identity, and rejects subsequent actual changes. It never
+uses an idle resume response as already-observed prompt evidence. A mid-turn
+enrollment with no snapshot waits instead of scheduling an unusable refresh.
+
+Earlier candidates are preserved: one failed before inference when Desktop's
+loaded defaults differed from creation metadata; two completed four seed/primer
+turns each but stopped before warm dispatch on settings checks. An attempted
+reuse also refused differing settings without inference. The final seven-turn
+run brought this request's total to 15 main test turns; there were no uncertain
+input retries. Private reports, native IDs and synthetic native histories remain
+outside the repository. Existing user work and the installed 1.2.4 app were not
+restarted or replaced by this experiment.
+
 ## Codex best-effort 1.2.5 / 0.8.5 verification scope (2026-10-04)
 
 Codex now has a separate, explicitly confirmed broker-owned best-effort scheduler

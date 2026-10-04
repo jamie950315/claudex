@@ -364,6 +364,12 @@ Codex observe/claim RPC, worker controls, uncertain replay, restart auto-resume
 or catch-up bursts. Claude Mod Cache settings remain Claude-only; Codex starts
 with CLI controls. Source tests and native observer evidence are not proof of
 real warming inference or TTL extension.
+Authorized 1.2.6 native acceptance verified a 25-minute same-owner OK refresh
+(36,096 cached input / 5 output tokens), exact accounting and the one-refresh
+limit. At about 31 minutes both warmed and untouched controls still hit; retain
+the inconclusive extension result, not a guaranteed native TTL claim. Detailed
+version-scoped evidence is in docs/claude-mod-validation.md. Mid-turn enrollment
+with no native settings snapshot waits without a dispatch timer.
 
 Work observability is broker-owned and independently opt-in per task:
 `observability.timeline=public`, `reports=milestones`, and `blockerNotifications`.

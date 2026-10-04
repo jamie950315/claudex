@@ -165,6 +165,12 @@ export class CodexCacheWarmer {
     if (!b.turn || b.turn.id !== e.turnId) return this.fail(b, 'native-completion-identity-changed', true);
     b.completion?.cancel(); b.completion = null;
     const own = Boolean(b.attempt);
+    if (!own && b.handle.settingsReady !== true) {
+      // Mid-turn enrollment can observe usage before the next settings snapshot.
+      // Keep waiting; do not advertise an executable timer with no prompt baseline.
+      b.phase = 'idle'; b.turn = null; b.samples = []; b.epoch++;
+      b.reason = 'awaiting-native-settings'; await this.observe(b); return;
+    }
     if (!b.samples.length) {
       if (own) return this.fail(b, 'native-usage-unavailable', true);
       b.phase = 'idle'; b.turn = null; b.reason = 'awaiting-evidence';

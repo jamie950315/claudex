@@ -12,7 +12,7 @@ const warm = { ...initial, totalTokens: 1306, inputTokens: 1300, cachedInputToke
 const add = (a, b) => Object.fromEntries(Object.keys(a).map(key => [key, a[key] + b[key]]));
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-warm-'))); await chmod(root, 0o700);
-  let now = 1000000, listener, connected = false, stopped = false, calls = 0, dispatches = 0, hook, preflightHook, stopHook;
+  let now = 1000000, listener, connected = false, stopped = false, calls = 0, dispatches = 0, hook, preflightHook, stopHook, settingsReady = true;
   let total = initial;
   const state = { sessionId: ID, cwd: '/fixture', model: 'fixture-model', effort: 'medium',
     fingerprint: 'fixture-fingerprint', ownerClientId: OWNER, phase: 'busy', nativeVersion: '0.160.0' };
@@ -22,6 +22,7 @@ async function fixture(t) {
     async connect(_params, onEvent) {
       calls++; connected = true; listener = onEvent;
       return { state: { ...state }, initialTurn: { id: 'seed', startedAt: now, status: 'inProgress' },
+        get settingsReady() { return settingsReady; },
         listen() {}, async close() { connected = false; },
         async inspect() { return { ...state }; },
         async preflight() {
@@ -54,7 +55,7 @@ async function fixture(t) {
   return { service, root, state, timers, emit, usage, seed, enable, fire,
     get now() { return now; }, get connected() { return connected; }, get calls() { return calls; }, get dispatches() { return dispatches; },
     set hook(value) { hook = value; }, set preflightHook(value) { preflightHook = value; }, set stopped(value) { stopped = value; },
-    set stopHook(value) { stopHook = value; } };
+    set stopHook(value) { stopHook = value; }, set settingsReady(value) { settingsReady = value; } };
 }
 
 test('Codex status is default-off and confirmation requires exact actor and explicit risk consent', async t => {
@@ -97,6 +98,19 @@ test('a baseline-only first normal turn waits for fresh usage instead of fabrica
   await f.usage('normal-next', next); f.state.phase = 'idle';
   await f.emit({ type: 'complete', turnId: 'normal-next', status: 'completed', completedAt: f.now });
   assert.ok((await f.service.list()).policies[0].nextAt > f.now);
+});
+
+test('mid-turn enrollment waits for a native settings snapshot instead of arming an unusable timer', async t => {
+  const f = await fixture(t); f.settingsReady = false;
+  await f.enable(); await f.seed();
+  let p = (await f.service.list()).policies[0];
+  assert.equal(p.enabled, true); assert.equal(p.nextAt, null); assert.equal(p.nativeReason, 'awaiting-native-settings');
+  f.settingsReady = true;
+  await f.emit({ type: 'start', turnId: 'settings-observed', startedAt: f.now });
+  await f.usage('settings-observed', next);
+  await f.emit({ type: 'complete', turnId: 'settings-observed', status: 'completed', completedAt: f.now });
+  p = (await f.service.list()).policies[0]; assert.ok(p.nextAt > f.now);
+  assert.equal(f.dispatches, 0);
 });
 
 test('busy state, changed configuration and app-stop suppress native warming', async t => {
