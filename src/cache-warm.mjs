@@ -204,7 +204,7 @@ export class CacheWarmManager {
       requireValue(!input.enabled || input.bestEffort === true, 'Codex warming requires explicit bestEffort acceptance.');
       requireValue(input.bestEffort === undefined || typeof input.bestEffort === 'boolean');
       requireValue(input.ttl === undefined, 'Codex native TTL configuration is not supported.');
-      requireValue(integer(input.refreshMinutes ?? 20, 1, 25), 'Codex refreshMinutes must be an integer from 1 to 25.');
+      requireValue(integer(input.refreshMinutes ?? 25, 1, 25), 'Codex refreshMinutes must be an integer from 1 to 25.');
     }
     const { maxMinutes = 60, maxRefreshes = 3, maxReadTokens = 250000, maxOutputTokens = 256 } = input;
     requireValue(integer(maxMinutes, 1, 1440) && integer(maxRefreshes, 1, 100)
@@ -214,7 +214,7 @@ export class CacheWarmManager {
       requireValue(!this.closed || !input.enabled, 'Cache-warming broker is stopping.');
       const payload = JSON.stringify({ provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
         maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens, ...(input.ttl === undefined ? {} : { ttl: input.ttl }),
-        ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 20 } : {}) });
+        ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 25 } : {}) });
       const saved = input.requestId && this.state.requests.find(r => r.requestId === input.requestId);
       if (saved) {
         requireValue(saved.payload === payload, 'Cache-warming requestId was reused with different parameters.');
@@ -233,7 +233,7 @@ export class CacheWarmManager {
       for (const a of this.attempts(input.sessionId)) if (a.state === 'reserved') { a.state = 'revoked'; a.reason = 'policy-changed'; }
       const value = { provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
         generation: (p?.generation ?? 0) + 1,
-        ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 20 } : { ttlPreference: input.ttl ?? '1h' }),
+        ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 25 } : { ttlPreference: input.ttl ?? '1h' }),
         maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens,
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };

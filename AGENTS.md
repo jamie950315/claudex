@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.5 packages Claude Mod 0.8.5. Keep application and Mod versions
+Claudex.app 1.2.6 packages Claude Mod 0.8.5. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -342,13 +342,20 @@ same native owner without navigation, new owners, API keys or model/effort
 overrides. Composer draft visibility and per-turn no-tools enforcement are
 unavailable: prompts are advisory, tool observations stop future warming but
 cannot undo already executed tools. Budgets are not hard native caps; native
-outputTokens already includes reasoning. Defaults are refreshMinutes=20
+outputTokens already includes reasoning. Defaults are refreshMinutes=25
 (integer 1..25), maxMinutes=60, maxRefreshes=3, maxReadTokens=250000 and
 maxOutputTokens=256. The 30-minute configured-window is a local evidence bound,
 not native TTL configuration or retention proof; measure from native turn start
 and refuse expired long-turn evidence. Model/effort observations are configured
 metadata, not independent response-model proof. A baseline counter is not a
 sample: require fresh exact usage deltas and native completion. Preserve native
+settings-snapshot semantics: idle resume fields are not an already-observed
+prompt baseline. Validate the independent permission/provider/plugin hash from
+resume, then bind the first native snapshot to confirmed model/cwd and any known
+effort. Native default instructions may resolve on that first ordinary turn;
+no snapshot means no dispatch. Identical subsequent snapshots are not changes;
+later full-fingerprint changes still revoke warming. Keep instruction text out
+of diagnostics and retained state by hashing it. Preserve native
 second-precision starts and equal-time distinct socket deltas; exact returned
 turn ID plus service-owned accounting supplies attribution, never timestamp
 alone. Candidates become verified only after all warm samples and exact own

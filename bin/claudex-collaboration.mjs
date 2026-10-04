@@ -41,7 +41,7 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Preview bounded warming for a loaded Desktop owner
   claudex collaboration cache-warm confirm TOKEN --provider codex --accept-best-effort
                                                 Confirm the exact reviewed Codex preview once
-Codex optional bounds: --refresh-minutes 20 --max-minutes 60 --max-refreshes 3
+Codex optional bounds: --refresh-minutes 25 --max-minutes 60 --max-refreshes 3
   --max-read-tokens 250000 --max-output-tokens 256. Status/off accept --provider codex.
 No draft inspection, hard no-tools guarantee or configurable native TTL exists for
 Codex. Busy, tool activity, budget exhaustion or uncertainty stop future warming.

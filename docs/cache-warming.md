@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.5 and Claude Mod 0.8.5 provide bounded, per-conversation cache warming.
+Claudex 1.2.6 and Claude Mod 0.8.5 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -17,7 +17,7 @@ observes and submits only into its own existing native session.
 ## Enable one Claude conversation
 
 Use the intended existing conversation with a freshly loaded 0.8.5 companion and
-a 1.2.5 broker. Older loaded sessions can retain the previous Mod until a normal
+a 1.2.6 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -178,15 +178,26 @@ Both preview and confirmation require `--accept-best-effort`. Neither a preview
 nor status authorizes inference. The controller-only confirmation is bounded
 and one-use; workers cannot enable or control this warmer.
 
-Optional CLI bounds are `--refresh-minutes 20`, `--max-minutes 60`,
+Optional CLI bounds are `--refresh-minutes 25`, `--max-minutes 60`,
 `--max-refreshes 3`, `--max-read-tokens 250000` and `--max-output-tokens 256`.
-These are the defaults. `refreshMinutes` accepts integers from 1 through 25;
-the other bounds have the same admission semantics as Claude warming. Native
+These are the defaults. `refreshMinutes` accepts integers from 1 through 25.
+The 25-minute default applies only to new previews/enrollments, not saved policies.
+The other bounds have the same admission semantics as Claude warming. Native
 `outputTokens` already includes reasoning tokens and is not added twice.
 The output budget is an admission reservation and observed stop threshold,
 **not a hard native output cap**.
 
 ### Accepted limitations
+
+Stopping means stopping **future automatic refreshes**, not interrupting normal
+user work. Ordinary native activity cancels an old timer; a fresh completed
+request can establish a new deadline while enrollment remains enabled. If busy
+state is discovered at the final dispatch boundary, that attempt is refused and
+warming is disabled rather than inserted into the active turn. Tool activity
+stops warming only when it belongs to the exact warm turn, not during ordinary
+coding work. Budget exhaustion also stops future dispatches. An uncertain native
+receipt means a request might already have been accepted; it is never resent.
+An already-running turn is not killed and completed tool actions are not undone.
 
 - There is no reliable composer-draft read and no per-warm-turn no-tools control.
   The instruction requests only `OK`, but the turn retains the conversation's
@@ -207,8 +218,8 @@ The output budget is an admission reservation and observed stop threshold,
 - The initial cumulative counter is only a baseline. Scheduling waits for fresh
   exact native usage deltas and successful native completion; it does not infer
   usage from an old transcript, status timestamp or duplicate notification.
-  Model/effort metadata describes configured values, not independently verified
-  execution-model evidence.
+Model/effort metadata describes configured values, not independently verified
+execution-model evidence.
 
 The private service matches the exact returned native turn ID before attributing
 warm usage. Native turn starts have second precision, while multiple distinct

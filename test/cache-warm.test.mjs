@@ -357,7 +357,7 @@ test('Codex ledgers require explicit best-effort consent and cannot configure a 
   await assert.rejects(f.observe({ sample: f.sample() }), /Invalid/);
   await assert.rejects(f.observe({ sample: { ...codexSample(f), ttlSource: 'native-setting' } }), /Invalid/);
   const enabled = await codexEnable(f, { requestId: 'codex-consent' });
-  assert.equal(enabled.policy.bestEffort, true); assert.equal(enabled.policy.refreshMinutes, 20);
+  assert.equal(enabled.policy.bestEffort, true); assert.equal(enabled.policy.refreshMinutes, 25);
   assert.equal(enabled.policy.ttlPreference, undefined);
   await assert.rejects(codexEnable(f, { requestId: 'codex-consent', refreshMinutes: 5 }), /different parameters/);
   assert.equal((await codexEnable(f, { requestId: 'codex-consent' })).replayed, true);
@@ -385,7 +385,7 @@ test('Codex and Claude journals isolate identical session and request identities
   const codex = await new CacheWarmManager({ root: f.root, provider: 'codex', now: f.now }).initialize();
   assert.deepEqual((await codex.list()).policies, []);
   await codex.observe({ ...identity, sequence: 1, epoch: 0, phase: 'idle', sample: codexSample(f) });
-  await codex.configure({ ...identity, provider: 'codex', bestEffort: true, enabled: true, requestId: 'shared-id' });
+  await codex.configure({ ...identity, provider: 'codex', bestEffort: true, enabled: true, requestId: 'shared-id', refreshMinutes: 20 });
   assert.equal(await readFile(claudePath, 'utf8'), original);
   f.tick(1199000);
   const { attempt } = await codex.claim({ ...identity, epoch: 0 });
@@ -394,6 +394,7 @@ test('Codex and Claude journals isolate identical session and request identities
   const restarted = await new CacheWarmManager({ root: f.root, provider: 'codex', now: f.now }).initialize();
   const listing = await restarted.list();
   assert.equal(listing.policies[0].enabled, false);
+  assert.equal(listing.policies[0].refreshMinutes, 20, 'Existing selected intervals are not migrated to the new default.');
   assert.equal(listing.attempts[0].state, 'uncertain');
   assert.equal(await readFile(claudePath, 'utf8'), original);
   // A misplaced provider journal must fail closed, never be interpreted as the other provider.
@@ -403,11 +404,11 @@ test('Codex and Claude journals isolate identical session and request identities
 
 test('Codex one-use attempts retain actual output accounting after opt-out', async t => {
   const f = await fixture(t, { provider: 'codex' });
-  await f.observe({ sample: codexSample(f) }); await codexEnable(f, { maxOutputTokens: 128 }); f.tick(1199000);
+  await f.observe({ sample: codexSample(f) }); await codexEnable(f, { maxOutputTokens: 128 }); f.tick(1499000);
   const { attempt } = await f.claim(); assert.equal((await f.check(attempt.id)).ready, true);
   assert.equal((await f.check(attempt.id)).ready, false);
   const off = await f.manager.configure({ ...identity, provider: 'codex', enabled: false });
-  assert.equal(off.policy.bestEffort, true); assert.equal(off.policy.refreshMinutes, 20);
+  assert.equal(off.policy.bestEffort, true); assert.equal(off.policy.refreshMinutes, 25);
   f.tick(1000);
   await f.observe({ epoch: 1, attemptId: attempt.id,
     sample: { ...codexSample(f), cacheReadTokens: 6000, outputTokens: 300 } });
@@ -435,7 +436,7 @@ test('Codex second-precision turn start accounts exact own samples without relax
     const f = await fixture(t, { provider });
     await f.observe({ sample: provider === 'codex' ? codexSample(f) : f.sample() });
     if (provider === 'codex') await codexEnable(f); else await f.enable();
-    f.tick(provider === 'codex' ? 1199123 : 239123);
+    f.tick(provider === 'codex' ? 1499123 : 239123);
     const { attempt } = await f.claim(); await f.check(attempt.id); await f.receipt(attempt.id, 'submitted');
     const authorizedAt = f.now(), startedAt = Math.floor(authorizedAt / 1000) * 1000;
     assert.ok(startedAt < authorizedAt); f.tick(1000);
@@ -450,7 +451,7 @@ test('Codex second-precision turn start accounts exact own samples without relax
 
 test('Codex own samples earlier than the authorized second remain outside accounting', async t => {
   const f = await fixture(t, { provider: 'codex' });
-  await f.observe({ sample: codexSample(f) }); await codexEnable(f); f.tick(1199123);
+  await f.observe({ sample: codexSample(f) }); await codexEnable(f); f.tick(1499123);
   const { attempt } = await f.claim(); await f.check(attempt.id); await f.receipt(attempt.id, 'submitted');
   const startedAt = Math.floor(f.now() / 1000) * 1000 - 1; f.tick(1000);
   await f.observe({ epoch: 1, attemptId: attempt.id, sample: { ...codexSample(f), startedAt, cacheReadTokens: 6000 } });
@@ -460,7 +461,7 @@ test('Codex own samples earlier than the authorized second remain outside accoun
 
 test('Codex distinct exact samples in one timestamp batch are charged once; time regressions and rewrites are refused', async t => {
   const f = await fixture(t, { provider: 'codex' });
-  await f.observe({ sample: codexSample(f) }); await codexEnable(f); f.tick(1199000);
+  await f.observe({ sample: codexSample(f) }); await codexEnable(f); f.tick(1499000);
   const { attempt } = await f.claim(); await f.check(attempt.id); f.tick(1000);
   const first = { ...codexSample(f), id: 'exact-delta-one', cacheReadTokens: 6000, attemptId: attempt.id };
   const second = { ...first, id: 'exact-delta-two', cacheReadTokens: 6020 };
@@ -482,7 +483,7 @@ test('Codex distinct exact samples in one timestamp batch are charged once; time
 test('Codex cache hits remain candidates until exact own idle finalizes every response', async t => {
   for (const lastOutcome of ['success', 'tool_use', 'ended']) {
     const f = await fixture(t, { provider: 'codex' });
-    await f.observe({ sample: codexSample(f) }); await codexEnable(f); f.tick(1199000);
+    await f.observe({ sample: codexSample(f) }); await codexEnable(f); f.tick(1499000);
     const { attempt } = await f.claim(); await f.check(attempt.id); await f.receipt(attempt.id, 'submitted'); f.tick(1000);
     const first = { ...codexSample(f), id: 'first-request', cacheReadTokens: 6000, attemptId: attempt.id };
     await f.observe({ epoch: 1, phase: 'busy', sample: first });

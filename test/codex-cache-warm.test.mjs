@@ -63,6 +63,7 @@ test('Codex status is default-off and confirmation requires exact actor and expl
   await assert.rejects(f.service.prepare({ sessionId: ID, cwd: '/fixture' }, 'controller'), /consent/);
   const preview = await f.service.prepare({ sessionId: ID, cwd: '/fixture', bestEffort: true }, 'controller');
   assert.equal(preview.inferenceStarted, false); assert.equal(f.connected, false);
+  assert.equal(preview.refreshMinutes, 25);
   await assert.rejects(f.service.confirm({ confirmationId: preview.confirmationId, bestEffort: true }, 'other'), /controller/);
   await assert.rejects(f.service.confirm({ confirmationId: preview.confirmationId }, 'controller'), /consent/);
   assert.equal(f.dispatches, 0);
@@ -70,6 +71,9 @@ test('Codex status is default-off and confirmation requires exact actor and expl
 
 test('Codex timer dispatches once to the owner and verifies only completed native cache evidence', async t => {
   const f = await fixture(t); await f.enable(); await f.seed();
+  const scheduled = (await f.service.list()).policies[0];
+  assert.equal(scheduled.refreshMinutes, 25);
+  assert.equal(scheduled.nextAt, scheduled.sample.startedAt + 25 * 60000);
   await f.fire(); assert.equal(f.dispatches, 1);
   let status = await f.service.list(); assert.equal(status.attempts[0].state, 'submitted');
   await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });

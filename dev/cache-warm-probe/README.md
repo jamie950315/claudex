@@ -115,7 +115,7 @@ cap. The separately accepted shipping experimental best-effort adapter uses
 explicit CLI preview/confirmation and its own bounded journal; it does not
 silently weaken this probe. See
 [the Codex warming guide](../../docs/cache-warming.md#codex-desktop-experimental-best-effort)
-for same-owner scope, 20-minute default refresh, the local 30-minute evidence
+for same-owner scope, 25-minute default refresh, the local 30-minute evidence
 window, and the missing draft/no-tools controls. Claude native TTL and Mod pane
 controls remain separate.
 
@@ -125,7 +125,24 @@ six-field delta agreement, never invents missing fields, and stops on reset or
 inconsistent data. Its sample ID is local accounting identity, not an upstream
 response ID or cache-retention proof. The observed public stream did not emit
 `rawResponse/completed`; this does not prove every runtime suppresses it.
-No Codex cache-refresh inference or retention experiment has been performed.
+Those earlier read-only observations did not perform cache-refresh inference or
+establish retention. See the version-scoped validation record for subsequent
+manual inference experiments; a runnable harness alone is not acceptance proof.
+
+`codex-retention.mjs` is the separately authorized native-inference harness.
+`--prepare --root NEW_PRIVATE_ROOT` creates two isolated persistent test threads
+without inference. Load those exact test threads normally in Desktop, then
+`--run --root SAME_ROOT` uses the shipping warmer for one refresh at 25 minutes
+and compares both arms at about 31 minutes. It allows six explicit measurements
+plus one automatic warm turn, retains only metadata/token counts/OK predicates,
+and never uses an API key. It preserves failed candidates without replay.
+Only the test threads' settings are normalized before their first input; native
+creation responses and loaded Desktop defaults can differ. The live observation
+must settle after each warm-arm seed before the harness sends another prompt.
+An optional `--reuse-from` preparation accepts only completed seed evidence from
+a stopped candidate with zero warm attempts and a still-valid control window;
+it creates a new report and new request identities, not a retry of old input.
+Different loaded settings or an expired control window refuse reuse.
 
 Static evidence: `ChatGPT.app/Contents/Resources/app.asar` SHA-256
 `87a934de9a00a04d2e534693db87756321ca4f3413f6caa55d3a0d32a5543836`.

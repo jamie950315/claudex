@@ -13,7 +13,7 @@ function identity(p) {
 }
 function bounds(p) {
   if (p.bestEffort !== true) throw new Error('Explicit best-effort consent is required.');
-  const value = { refreshMinutes: p.refreshMinutes ?? 20, maxMinutes: p.maxMinutes ?? 60,
+  const value = { refreshMinutes: p.refreshMinutes ?? 25, maxMinutes: p.maxMinutes ?? 60,
     maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: p.maxReadTokens ?? 250000, maxOutputTokens: p.maxOutputTokens ?? 256 };
   for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 1440, maxRefreshes: 100, maxReadTokens: 100000000, maxOutputTokens: 1000000 }))
     if (!Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > max) throw new Error(`Invalid Codex cache-warm ${key}.`);
