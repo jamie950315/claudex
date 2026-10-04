@@ -274,18 +274,53 @@ test('double confirmation dispatches once', async () => {
   const f = fixture(); await f.controller.prepare(f.api, 'cancel', { taskId: 'job' });
   await Promise.all([f.controller.commit(f.api), f.controller.commit(f.api)]);
   assert.equal(f.calls.filter(call => call.op === 'commit').length, 1); assert.equal(f.controller.state.pending, null);
+  assert.equal(f.controller.state.lastReceipt.state, 'completed'); assert.equal(f.controller.state.notice, '');
+  f.controller.tab(f.api, 'tasks'); assert.equal(f.controller.state.notice, '');
 });
 test('unknown commit blocks further UI actions and retains receipt ID', async () => {
   const f = fixture(); await f.controller.prepare(f.api, 'cancel', { taskId: 'job' });
   f.api.bridge = async () => { throw new Error('timeout'); };
   await f.controller.commit(f.api);
   assert.equal(f.controller.state.lastReceipt.state, 'uncertain'); assert.equal(f.controller.state.lastReceipt.id, ID);
+  assert.equal(f.controller.state.notice, ''); assert.match(f.controller.state.error, /automatic replay is disabled/);
   await f.controller.prepare(f.api, 'cancel', { taskId: 'other' });
   assert.match(f.controller.state.error, /uncertain/); assert.equal(f.controller.state.pending, null);
 });
 test('reading a receipt does not invoke commit or retry', async () => {
   const f = fixture(); await f.controller.receipt(f.api, ID);
   assert.deepEqual(f.calls.map(call => call.op), ['receipt']); assert.equal(f.controller.state.lastReceipt.state, 'uncertain');
+});
+test('authoritative receipt consumes only its matching no-longer-prepared preview', async () => {
+  for (const receiptState of ['prepared', 'dispatching', 'completed', 'uncertain']) {
+    const f = fixture(); await f.controller.prepare(f.api, 'cancel', { taskId: 'job' });
+    const base = f.api.bridge;
+    f.api.bridge = async request => request.op === 'receipt'
+      ? (f.calls.push(request), { id: ID, state: receiptState, context: request.context }) : base(request);
+    await f.controller.receipt(f.api, ID);
+    assert.deepEqual(f.calls.map(call => call.op), ['prepare', 'receipt']);
+    assert.equal(f.controller.state.lastReceipt.state, receiptState);
+    if (receiptState === 'prepared') {
+      assert.equal(f.controller.state.pending.id, ID); assert.match(f.controller.state.notice, /Prepared only/);
+    } else {
+      assert.equal(f.controller.state.pending, null); assert.equal(f.controller.state.notice, '');
+    }
+  }
+  const f = fixture(); await f.controller.prepare(f.api, 'cancel', { taskId: 'job' });
+  f.api.bridge = async request => ({ id: CLAIM, state: 'completed', context: request.context });
+  await f.controller.receipt(f.api, CLAIM);
+  assert.equal(f.controller.state.pending.id, ID); assert.match(f.controller.state.notice, /Prepared only/);
+});
+test('delayed receipt cannot consume a new session preview or its notice', async () => {
+  const f = fixture(); await f.controller.prepare(f.api, 'cancel', { taskId: 'old-job' });
+  const base = f.api.bridge; let release;
+  f.api.bridge = async request => request.op === 'receipt'
+    ? new Promise(resolve => { release = resolve; }) : base(request);
+  const reading = f.controller.receipt(f.api, ID); await tick();
+  f.change({ ...OTHER }); await f.controller.bind(f.api);
+  await f.controller.prepare(f.api, 'cancel', { taskId: 'new-job' });
+  release({ id: ID, state: 'completed', context: CTX }); await reading;
+  assert.equal(f.controller.state.pending.params.taskId, 'new-job');
+  assert.match(f.controller.state.notice, /Prepared only/); assert.equal(f.controller.state.lastReceipt, null);
 });
 test('session change before commit invalidates old preview', async () => {
   const f = fixture(); await f.controller.prepare(f.api, 'cancel', { taskId: 'job' });

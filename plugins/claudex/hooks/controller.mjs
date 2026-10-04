@@ -276,7 +276,7 @@ export function createController({ nativeWake = false } = {}) {
         if (!same(captured.context, ticket.context) || state.pending?.id !== captured.id)
           throw new Error('Session or preview changed; the old action was left uncommitted.');
         // Clear the button before awaiting dispatch, including transport failures.
-        state.pending = null;
+        state.pending = null; state.notice = '';
         state.lastReceipt = { ...captured, state: 'dispatching', automaticReplay: false };
         state.tab = 'receipt'; changed(api);
         try {
@@ -291,7 +291,12 @@ export function createController({ nativeWake = false } = {}) {
     async receipt(api, id) {
       return run(api, async ticket => {
         const result = await call(api, ticket, 'receipt', { id });
-        if (await stillBound(api, ticket)) { state.lastReceipt = result; state.tab = 'receipt'; }
+        if (await stillBound(api, ticket)) {
+          if (state.pending?.id === result.id && ['dispatching', 'completed', 'uncertain'].includes(result.state)) {
+            state.pending = null; state.notice = '';
+          }
+          state.lastReceipt = result; state.tab = 'receipt';
+        }
       });
     },
     template(api, method, params) {

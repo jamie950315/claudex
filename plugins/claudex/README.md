@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.12
+# Claudex native companion, 0.8.13
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -45,7 +45,7 @@ session. Codex Desktop has a separate experimental best-effort CLI opt-in;
 the Mod does not control Codex warming or its TTL. See the source repository's
 `docs/cache-warming.md` for its limitations and explicit confirmation.
 
-Claudex.app 1.2.17 installs and maintains this bundled companion during setup and
+Claudex.app 1.2.18 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
 never installs or configures it. Existing disabled/receiver preferences, other
 plugins and newer installed versions are preserved. Installed files and fresh
@@ -92,7 +92,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.12-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.13-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

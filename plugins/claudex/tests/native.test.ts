@@ -164,6 +164,7 @@ test('native compose previews the entire operation before exactly one dispatch',
       return prepared
     }
     if (request.op === 'commit') return { ...prepared, state: 'completed', result: { taskId: 'fixture-task' } }
+    if (request.op === 'receipt') return { ...prepared, state: 'completed', result: { taskId: 'fixture-task' } }
     return {}
   })
   for (const surface of ['terminal', 'desktop'] as const) {
@@ -173,11 +174,16 @@ test('native compose previews the entire operation before exactly one dispatch',
     await ui.input({ key: 'action-json', text: JSON.stringify({ method: 'start', params }) })
     expect(await ui.find({ type: 'Text', text: /Attention:/ })).toBeUndefined()
     expect(await ui.find({ key: 'confirm-action' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Prepared only. Confirm explicitly to dispatch.' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Review only; preserve files\./ })).toBeDefined()
     expect(seen.filter(item => item.op === 'commit').length).toBe(surface === 'terminal' ? 0 : 1)
     await ui.press({ key: 'confirm-action' })
     expect(await ui.find({ key: 'confirm-action' })).toBeUndefined()
     expect(await ui.find({ key: 'receipt-refresh' })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Prepared only. Confirm explicitly to dispatch.' })).toBeUndefined()
+    await ui.press({ key: 'receipt-refresh' })
+    await ui.press({ key: 'tab-tasks' })
+    expect(await ui.find({ type: 'Text', text: 'Prepared only. Confirm explicitly to dispatch.' })).toBeUndefined()
     await ui.unmount()
   }
   expect(seen.filter(item => item.op === 'commit').length).toBe(2)
