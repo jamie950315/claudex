@@ -209,7 +209,9 @@ export function register(on, options = {}) {
     await controller.bind(api($, options));
     await localization.load(api($, options));
     return renderPanel({ ui: $.ui.resolve(e), state: controller.state, controller,
-      host: () => api($, options), options, wake, t: localization.t,
+      host: () => ({ ...api($, options),
+        cacheCommand: (words, context) => cacheWarm.command(api($, options), words, { kind: 'claudex-panel' }, context) }),
+      options, wake, t: localization.t,
       language: localization.preference, languageError: localization.error,
       setLanguage: value => localization.select(api($, options), value) });
   });

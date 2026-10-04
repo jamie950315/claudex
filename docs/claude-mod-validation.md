@@ -1,6 +1,6 @@
 # Claude Mod integration validation
 
-The current source target is Claude Mod 0.8.3 in Claudex.app 1.2.3. The version-scoped
+The current source target is Claude Mod 0.8.4 in Claudex.app 1.2.4. The version-scoped
 cache-warm acceptance below used isolated staged sessions and did not update the installed
 app, global preferences or existing conversations. Version-scoped installation
 checkpoints remain historical evidence, not claims about the current installation.
@@ -8,6 +8,26 @@ The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker rout
 `mod-self`; source defaults remain false. Installation, native invocation and
 actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## Cache settings pane 1.2.4 / 0.8.4 validation (2026-10-04)
+
+The native pane now exposes TTL and startup preferences through the existing
+cache client rather than a separate writer. The official native test kit passed
+all 22 cases. Its new narrow Desktop-surface test selects 5m/fixed-default,
+verifies preview is read-only, switches through all nine languages without losing
+the complete confirmation or form values, confirms the native environment/store
+change, then changes only the current TTL to 1h while retaining the fixed 5m
+startup default. Discard removes the confirmation, and no warming enable occurs.
+This is native UI tree/API simulation, not a screenshot of an installed Desktop
+session. Existing tests validate both native surface schemas.
+
+The complete Node suite passed 1,644 tests with zero failures and 23 opt-in skips;
+affected controller/localization tests also passed after the final presentation
+cleanup. Regressions cover duplicate confirmation, stale panel context, native
+preview revocation and settings-only TTL changes without model work. The prior
+four-process persistence evidence remains applicable to the unchanged startup
+and storage implementation. No new model inference or installed-app replacement
+was performed for this pane change.
 
 ## Persistent TTL preferences 1.2.3 / 0.8.3 acceptance (2026-10-04)
 

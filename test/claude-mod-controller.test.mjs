@@ -56,6 +56,40 @@ test('status refresh performs only doctor/read and usage calls', async () => {
   assert.equal(f.controller.state.usage.context.percent, 53); assert.equal(f.submissions.length, 0);
 });
 
+test('cache panel edits preview without mutation, confirms once and retains edits through read refresh', async () => {
+  const f = fixture(), seen = [];
+  f.api.cacheCommand = async (words, context) => {
+    assert.deepEqual(context, CTX); seen.push(words);
+    if (words[0] === 'status') return { nativeCache: { value: '1h' }, ttlPreference: { mode: 'session' }, local: { enabled: false } };
+    if (words[0] === 'confirm') return { state: 'preference-saved' };
+    return { state: 'confirmation-required', ...CTX, confirm: '/claudex warm confirm warm-fixture',
+      effects: 'The complete native setting effects.', ttl: '5m' };
+  };
+  await f.controller.cacheRefresh(f.api);
+  f.controller.cacheEdit(f.api, 'ttl', '5m'); f.controller.cacheEdit(f.api, 'mode', 'default');
+  await f.controller.cacheRefresh(f.api);
+  assert.deepEqual(f.controller.state.cacheForm, { ttl: '5m', mode: 'default' });
+  await f.controller.cachePrepare(f.api, 'preference');
+  assert.deepEqual(seen.at(-1), ['preference', 'default', 'ttl=5m']);
+  assert.ok(!seen.some(words => words[0] === 'confirm'));
+  await Promise.all([f.controller.cacheConfirm(f.api), f.controller.cacheConfirm(f.api)]);
+  assert.equal(seen.filter(words => words[0] === 'confirm').length, 1);
+  assert.equal(f.controller.state.cachePending, null);
+  await f.controller.cachePrepare(f.api, 'ttl');
+  await f.controller.cacheDiscard(f.api);
+  assert.deepEqual(seen.at(-1), ['discard']);
+});
+
+test('cache confirmation does not dispatch into a changed controller context', async () => {
+  const f = fixture(), seen = [];
+  f.api.cacheCommand = async words => { seen.push(words); return { state: 'confirmation-required', ...CTX,
+    confirm: '/claudex warm confirm warm-fixture' }; };
+  await f.controller.cachePrepare(f.api, 'ttl');
+  f.change(OTHER);
+  await f.controller.cacheConfirm(f.api);
+  assert.equal(seen.some(words => words[0] === 'confirm'), false);
+});
+
 test('work details use exact generation bounded read pages without acknowledgement or dispatch', async () => {
   const f = fixture();
   f.api.bridge = async request => {

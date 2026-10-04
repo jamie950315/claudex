@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.3 packages Claude Mod 0.8.3. Keep application and Mod versions
+Claudex.app 1.2.4 packages Claude Mod 0.8.4. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -313,6 +313,14 @@ survive temporary selections. Shared-store changes affect future loaded primary
 sessions, not other running sessions. Expose restore failures and partial writes,
 never retry automatically or change a managed/subagent setting. Global native
 settings remain untouched; the plugin's own preference store is persistent.
+The Mod Cache settings tab uses the same bounded native preview/confirm path as
+the commands. Selection/render/status never write configuration. Current-TTL
+changes (`warm ttl 1h|5m`) are settings-only, stop local warming and never enable
+model work; remember updates and fixed defaults retain their existing semantics.
+Keep displayed native state, saved preference and edited form distinct. Preserve
+form/confirmation on language switches, consume confirms once, and fence stale
+panel contexts. Always show the complete preview, including effects and expiry.
+Discard revokes the native confirmation; no UI-only permission or second ledger.
 No startup/inspection path enables warming, starts another owner, changes the
 model/effort or resumes expired work. See docs/cache-warming.md for operation and
 native activation limits. The older developer probe remains separate evidence.

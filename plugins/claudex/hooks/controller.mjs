@@ -58,7 +58,8 @@ function blank(context = null, epoch = 0) {
   return { context, epoch, enabled: false, busy: false, tab: 'overview', error: '', notice: '',
     usage: null, version: null, doctor: null, configuration: null, tasks: null, chats: null, chatQuery: '', chatCursor: null,
     taskOffset: 0, selectedTask: null, detail: null, workGeneration: null, children: {}, events: null, reports: null, artifact: null, pending: null, lastReceipt: null,
-    wakes: [], wakeTarget: null, wakePreview: null, form: '' };
+    wakes: [], wakeTarget: null, wakePreview: null, form: '', cacheStatus: null, cachePending: null, cacheResult: null,
+    cacheForm: { ttl: '1h', mode: 'session' }, cacheDirty: false };
 }
 export function createController({ nativeWake = false } = {}) {
   let state = blank();
@@ -99,6 +100,60 @@ export function createController({ nativeWake = false } = {}) {
   return {
     get state() { return state; }, reset, bind,
     tab(api, tab) { state.tab = tab; changed(api); },
+    async cacheRefresh(api) {
+      return run(api, async ticket => {
+        const result = await api.cacheCommand(['status'], ticket.context);
+        if (!await stillBound(api, ticket)) return;
+        state.cacheStatus = result; state.cacheResult = null; state.tab = 'cache';
+        if (!state.cacheDirty && !state.cachePending) state.cacheForm = {
+          ttl: result.ttlPreference?.ttl ?? result.nativeCache?.value ?? '1h', mode: result.ttlPreference?.mode ?? 'session' };
+      });
+    },
+    cacheEdit(api, key, value) {
+      if (state.busy || (key === 'ttl' ? !['1h', '5m'].includes(value) : key !== 'mode' || !['session', 'remember', 'default'].includes(value))) return;
+      state.cacheForm[key] = value; state.cacheDirty = true; state.cachePending = null; state.cacheResult = null; changed(api);
+    },
+    async cachePrepare(api, kind) {
+      if (!['ttl', 'preference'].includes(kind)) return;
+      return run(api, async ticket => {
+        const { ttl, mode } = state.cacheForm;
+        state.cachePending = null; state.cacheResult = null;
+        const words = kind === 'ttl' ? ['ttl', ttl] : ['preference', mode, ...(mode === 'session' ? [] : [`ttl=${ttl}`])];
+        const result = await api.cacheCommand(words, ticket.context);
+        if (!await stillBound(api, ticket)) return;
+        if (result.state !== 'confirmation-required' || !/^\/claudex warm confirm warm-[a-zA-Z0-9-]+$/.test(result.confirm ?? '')
+          || !same(result, ticket.context)) throw new Error('Native cache preview did not match this session.');
+        state.cachePending = result;
+      });
+    },
+    async cacheDiscard(api) {
+      return run(api, async ticket => {
+        state.cachePending = null; state.cacheResult = null;
+        await api.cacheCommand(['discard'], ticket.context);
+      });
+    },
+    async cacheConfirm(api) {
+      const preview = state.cachePending;
+      if (!preview) return;
+      return run(api, async ticket => {
+        if (state.cachePending !== preview || !same(preview, ticket.context)) throw new Error('Native cache preview did not match this session.');
+        state.cachePending = null; changed(api);
+        const result = await api.cacheCommand(['confirm', preview.confirm.split(' ').at(-1)], ticket.context);
+        if (!await stillBound(api, ticket)) return;
+        state.cacheResult = result;
+        const status = await api.cacheCommand(['status'], ticket.context);
+        if (await stillBound(api, ticket)) { state.cacheStatus = status; state.cacheDirty = false; }
+      });
+    },
+    async cacheOff(api) {
+      return run(api, async ticket => {
+        state.cachePending = null;
+        await api.cacheCommand(['off'], ticket.context);
+        if (!await stillBound(api, ticket)) return;
+        const status = await api.cacheCommand(['status'], ticket.context);
+        if (await stillBound(api, ticket)) { state.cacheStatus = status; state.cacheResult = { state: 'disabled' }; }
+      });
+    },
     edit(api, text) { state.form = text; changed(api); },
     page(api, delta) { state.taskOffset = Math.max(0, state.taskOffset + delta); changed(api); },
     async refresh(api) {

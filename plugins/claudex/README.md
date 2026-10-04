@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.3
+# Claudex native companion, 0.8.4
 
 Cache warming is default-off and separately confirmed in the selected loaded
 conversation: `/claudex warm on` prints a bounded confirmation command;
@@ -14,6 +14,11 @@ to stop restoration. Both TTLs are supported. Each prints a confirmation; saving
 a preference stops local warming without enabling inference. Preferences persist
 in the native plugin store and apply to future loaded primary sessions sharing
 that store, not other running sessions. Unset preferences remain session-only.
+Open `/claudex` and select **Cache settings** to change TTL and startup behavior
+using native controls. Selection only edits the form; preview and confirm apply
+the exact displayed change. The complete confirmation survives language changes.
+TTL-only changes (`/claudex warm ttl 1h|5m`) stop local warming without enabling
+inference. Read actual native TTL, saved preference and warming status separately.
 Optional
 `maxMinutes`, `maxRefreshes`, `maxReadTokens` and `maxOutputTokens` key=value
 bounds default to 60, 3, 250000 and 256. Warming creates real plugin-origin OK
@@ -66,7 +71,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.3-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.4-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

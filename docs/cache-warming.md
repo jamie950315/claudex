@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.3 and Claude Mod 0.8.3 provide bounded, per-conversation cache warming.
+Claudex 1.2.4 and Claude Mod 0.8.4 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 The first adapter is a loaded Claude Code Mod session. Codex is explicitly
@@ -14,8 +14,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.3 companion and
-a 1.2.3 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.4 companion and
+a 1.2.4 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -82,7 +82,32 @@ claudex collaboration cache-warm off --session NATIVE_SESSION_ID --cwd /exact/pr
 
 The CLI does not enable a conversation remotely. Select it in the native client
 and confirm there. Status is read-only and does not start models or renew a
-cache. Native command output is structured technical JSON, not another pane.
+cache. Native command output is structured technical JSON; the pane provides
+equivalent controls for TTL and startup preferences.
+
+## Native Cache settings tab
+
+Open `/claudex`, then **Cache settings**. The tab shows the current native TTL,
+saved startup mode/TTL and warming status separately. Choose 1h or 5m and a
+startup mode in the form; selecting values does not apply them.
+
+- **Preview current TTL change** changes this process's TTL without enabling
+  warming. Remember mode also saves the choice; a fixed startup default remains
+  unchanged. The equivalent command is `/claudex warm ttl 1h` (or `5m`).
+- **Preview startup preference** saves the selected startup behavior. Remember
+  and fixed-default also apply the selected TTL now. Session-only stops startup
+  restoration without reverting the current native TTL.
+- Review the complete, exact-session preview and press **Confirm cache change**.
+  **Discard preview** revokes that confirmation. Edits and confirmations survive
+  language changes, but not a native session/context change.
+- **Refresh status** is read-only. **Stop cache warming** revokes warming while
+  preserving the native TTL and saved startup choice.
+
+Settings-only confirmations stop local warming. They never authorize inference;
+enable warming separately with its bounded `warm on` confirmation. The pane
+shares the command implementation and its policy/race/readback protections, not
+a second settings writer. Technical preview values and native diagnostics remain
+verbatim; controls are localized in all nine supported languages.
 
 ## TTL preferences across restarts
 

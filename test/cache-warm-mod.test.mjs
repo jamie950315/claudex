@@ -230,6 +230,29 @@ test('native TTL is not changed by preview or status', async () => {
   assert.equal(status.nativeCache.value, '1h'); assert.equal(writes, 0);
 });
 
+test('native panel can change TTL without enabling warming and stale panel contexts are refused', async () => {
+  const f = await fixture(); await setPreference(f, 'remember', 'ttl=1h');
+  const context = await f.host.context();
+  const preview = await f.client.command(f.host, ['ttl', '5m'], { kind: 'claudex-panel' }, context);
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+  const result = await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'claudex-panel' }, context);
+  assert.equal(result.state, 'ttl-applied'); assert.equal(result.local.enabled, false);
+  const status = await f.client.command(f.host, ['status'], { kind: 'claudex-panel' }, context);
+  assert.equal(status.nativeCache.value, '5m'); assert.equal(status.ttlPreference.ttl, '5m');
+  assert.equal(f.calls.some(item => item.action === 'configure' && item.params.enabled), false);
+  f.context = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/other' };
+  await assert.rejects(f.client.command(f.host, ['ttl', '1h'], { kind: 'claudex-panel' }, context), /panel context changed/);
+  assert.equal((await f.host.readCacheTtl()).value, '5m'); assert.equal(f.submits, 0);
+});
+
+test('discarding a cache settings preview revokes its native confirmation', async () => {
+  const f = await fixture();
+  const preview = await f.client.command(f.host, ['ttl', '5m'], { kind: 'composer' });
+  await f.client.command(f.host, ['discard'], { kind: 'claudex-panel' });
+  await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], { kind: 'composer' }), /expired/);
+  assert.equal((await f.host.readCacheTtl()).value, '1h');
+});
+
 test('TTL confirmation locks queued timers before awaiting native preflight', async () => {
   const f = await fixture(); await f.seed(); await f.enable();
   const queued = f.timers.at(-1);

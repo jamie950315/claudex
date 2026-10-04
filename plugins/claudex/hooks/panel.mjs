@@ -81,12 +81,12 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       options: [{ value: 'system', label: t('Follow system') }, ...languages.map(([value, label]) => ({ value, label }))],
       onSelect: value => setLanguage(value) })];
   const tabs = [ ['overview', t('Overview')], ['tasks', t('Tasks')], ['chats', t('Chats')],
-    ['compose', t('Compose')], ['inbox', t('Inbox')] ];
+    ['compose', t('Compose')], ['inbox', t('Inbox')], ['cache', t('Cache settings')] ];
   const selectedTab = ['detail'].includes(state.tab) ? 'tasks'
     : ['confirm', 'receipt'].includes(state.tab) ? 'compose' : state.tab === 'wake-confirm' ? 'inbox' : state.tab;
   // Keep two rows even on a wide surface; wrapping also protects longer locales.
   for (const group of [tabs.slice(0, 3), tabs.slice(3)]) body.push(row(group.map(([tab, label]) =>
-    button(`tab-${tab}`, label, () => controller.tab(host(), tab), selectedTab === tab))));
+    button(`tab-${tab}`, label, () => tab === 'cache' ? controller.cacheRefresh(host()) : controller.tab(host(), tab), selectedTab === tab))));
   body.push(muted(localizedUsage(state.usage, t)));
   if (languageError) body.push(section(t('Language setting'), [text(t.diagnostic(languageError))]));
   if (state.busy) body.push(text(t('Operation in progress. Duplicate submission is disabled.'), { bold: true }));
@@ -120,6 +120,42 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
     ]));
     if (options.nativeWake === true) body.push(details('delivery', wake.state,
       t('Delivery diagnostics')));
+  } else if (state.tab === 'cache') {
+    const cache = state.cacheStatus;
+    const modes = { session: t('This process only'), remember: t('Remember last TTL'), default: t('Fixed startup TTL') };
+    body.push(section(t('Cache settings'), [
+      field(t('Current native TTL'), cache?.nativeCache?.value),
+      field(t('Saved startup mode'), modes[cache?.ttlPreference?.mode] ?? t('Unknown')),
+      ...(cache?.ttlPreference?.ttl ? [field(t('Saved TTL'), cache.ttlPreference.ttl)] : []),
+      field(t('Cache warming'), cache ? cache.local?.enabled ? t('Enabled') : t('Disabled') : t('Unknown')),
+      ...(cache?.local?.ttlRestore?.state === 'failed' ? [text(cache.local.ttlRestore.error)] : []),
+      button('cache-refresh', t('Refresh status'), () => controller.cacheRefresh(host())),
+      details('cache-native', cache),
+    ]));
+    body.push(section(t('TTL and startup behavior'), [
+      Select({ key: 'cache-ttl', label: t('Cache TTL'), value: state.cacheForm.ttl,
+        options: [{ value: '1h', label: t('1 hour') }, { value: '5m', label: t('5 minutes') }],
+        onSelect: value => { if (controller.state === state) controller.cacheEdit(host(), 'ttl', value); } }),
+      Select({ key: 'cache-mode', label: t('Startup behavior'), value: state.cacheForm.mode,
+        options: Object.entries(modes).map(([value, label]) => ({ value, label })),
+        onSelect: value => { if (controller.state === state) controller.cacheEdit(host(), 'mode', value); } }),
+      muted(t('Remember follows later confirmed TTL choices. Fixed default restores the selected TTL at startup. This process only disables restoration.')),
+      row([button('cache-preview-ttl', t('Preview current TTL change'), () => controller.cachePrepare(host(), 'ttl')),
+        button('cache-preview-preference', t('Preview startup preference'), () => controller.cachePrepare(host(), 'preference'))]),
+      text(t('Changing these settings stops local warming; it never enables model work. One-hour cache writes may cost more.')),
+      muted(t('Global Claude settings, subagent TTL and other running sessions are unchanged.')),
+    ]));
+    if (state.cachePending) body.push(section(t('Review cache change'), [
+      field(t('Session ID'), state.cachePending.sessionId), field(t('Directory'), state.cachePending.cwd),
+      // Always retain the complete confirmation, including scope and effects.
+      text(JSON.stringify(state.cachePending, null, 2)),
+      row([button('cache-confirm', t('Confirm cache change'), () => controller.cacheConfirm(host()), true),
+        button('cache-discard', t('Discard preview'), () => controller.cacheDiscard(host()))]),
+    ]));
+    if (state.cacheResult) body.push(section(t('Cache change result'), [
+      text(state.cacheResult.state === 'disabled' ? t('Disabled') : t('Settings updated. Warming remains off.')), details('cache-result', state.cacheResult),
+    ]));
+    body.push(button('cache-off', t('Stop cache warming'), () => controller.cacheOff(host())));
   } else if (state.tab === 'tasks') {
     const tasks = state.tasks?.tasks ?? [];
     body.push(section(t('Task inventory'), [button('tasks-refresh', t('Refresh tasks'), () => controller.refresh(host())),
