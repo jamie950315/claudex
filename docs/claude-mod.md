@@ -2,7 +2,7 @@
 
 ## Current companion: 0.8.6
 
-Claudex.app 1.2.7 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.2.8 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
 Version 0.8.6 adds `/claudex:warm on [5m|1h]`, `off` and `status` for the

@@ -8,6 +8,7 @@ import { hash, withLock } from './storage.mjs';
 const MAX_BYTES = 4 * 1024 * 1024;
 const MARKER = 'Notify Claudex of a native conversation boundary';
 const ORIGIN_MARKER = 'Verify the native origin of an opted-in Claudex task';
+const WARM_MARKER = 'Handle explicit Claudex cache commands in this Codex chat';
 const ORIGIN_MATCHER = '^mcp__claudex[-_]work__claudex_start$';
 const EVENTS = {
   codex: ['SessionStart', 'UserPromptSubmit', 'Stop', 'Interrupt', 'SessionEnd'],
@@ -96,14 +97,17 @@ export function syncHookDefinitions(options) {
   const config = paths(options);
   return Object.fromEntries(Object.entries(EVENTS).map(([provider, events]) => {
     const command = [config.nodePath, config.hookPath, '--root', config.root, '--provider', provider].map(quote).join(' ');
+    const warmCommand = [config.nodePath, join(dirname(config.hookPath), 'claudex-codex-warm-hook.mjs'), '--root', config.root].map(quote).join(' ');
     return [provider, { provider, path: join(config[`${provider}Home`], provider === 'codex' ? 'hooks.json' : 'settings.json'),
       events, group: { hooks: [{ type: 'command', command, timeout: 3, statusMessage: MARKER }] },
+      ...(provider === 'codex' ? { warmGroup: { hooks: [{ type: 'command', command: warmCommand, timeout: 30, statusMessage: WARM_MARKER }] } } : {}),
       originGroup: { matcher: ORIGIN_MATCHER, hooks: [{ type: 'command', command, timeout: 5, statusMessage: ORIGIN_MARKER }] } }];
   }));
 }
 
 function ownsGroup(definition, event, group) {
   return definition && (definition.events.includes(event) && JSON.stringify(group) === JSON.stringify(definition.group)
+    || event === 'UserPromptSubmit' && definition.warmGroup && JSON.stringify(group) === JSON.stringify(definition.warmGroup)
     || event === 'PostToolUse' && definition.originGroup && JSON.stringify(group) === JSON.stringify(definition.originGroup));
 }
 
@@ -116,13 +120,14 @@ function merge(snapshot, definition, prior) {
     for (const group of groups) for (const handler of group.hooks) {
       if (typeof handler?.command !== 'string') continue;
       const owned = ownsGroup(definition, event, group) || ownsGroup(prior, event, group);
-      if (handler.command.includes('claudex-sync-hook.mjs') && !owned)
+      if ((handler.command.includes('claudex-sync-hook.mjs') || handler.command.includes('claudex-codex-warm-hook.mjs')) && !owned)
         throw new Error('An unrecognized Claudex hook already exists; review it before installing another.');
     }
   }
   for (const event of new Set([...definition.events, ...(prior?.events ?? []), 'PostToolUse'])) {
     const retained = (hooks[event] ?? []).filter(group => !ownsGroup(definition, event, group) && !ownsGroup(prior, event, group));
     if (definition.events.includes(event)) retained.push(definition.group);
+    if (event === 'UserPromptSubmit' && definition.warmGroup) retained.push(definition.warmGroup);
     if (event === 'PostToolUse') retained.push(definition.originGroup);
     hooks[event] = retained;
   }
@@ -154,6 +159,13 @@ function validateJournal(value, definitions, directory) {
       || def.originGroup.hooks[0]?.statusMessage !== ORIGIN_MARKER || def.originGroup.hooks[0]?.type !== 'command'
       || typeof def.originGroup.hooks[0]?.command !== 'string' || def.originGroup.hooks[0]?.timeout !== 5))
       throw new Error('Sync hook origin ownership journal is invalid.');
+    if (def.warmGroup !== undefined && (provider !== 'codex' || !object(def.warmGroup)
+      || Object.keys(def.warmGroup).some(key => key !== 'hooks')
+      || !Array.isArray(def.warmGroup.hooks) || def.warmGroup.hooks.length !== 1
+      || def.warmGroup.hooks[0]?.statusMessage !== WARM_MARKER || def.warmGroup.hooks[0]?.type !== 'command'
+      || typeof def.warmGroup.hooks[0]?.command !== 'string' || def.warmGroup.hooks[0]?.timeout !== 30
+      || Object.keys(def.warmGroup.hooks[0]).some(key => !['type', 'command', 'timeout', 'statusMessage'].includes(key))))
+      throw new Error('Cache command hook ownership journal is invalid.');
   }
   return value;
 }
@@ -178,6 +190,8 @@ export async function inspectSyncHooks(options) {
       && config.hooks.PostToolUse.some(group => JSON.stringify(group) === JSON.stringify(definition.originGroup));
     result[provider] = { configured: lifecycleConfigured, lifecycleConfigured, originConfigured,
       path: definition.path, events: definition.events,
+      ...(provider === 'codex' ? { warmCommandConfigured: Array.isArray(config.hooks?.UserPromptSubmit)
+        && config.hooks.UserPromptSubmit.some(group => JSON.stringify(group) === JSON.stringify(definition.warmGroup)) } : {}),
       ...(provider === 'codex' ? { trust: 'not-inspected', requiresTrustReview: true } : {}) };
   }
   return { configured: Object.values(result).every(value => value.configured),
@@ -196,9 +210,9 @@ export async function inspectNativeSyncHookTrust({ client, ...options }) {
   if (inventories.length !== 1 || !Array.isArray(inventories[0].hooks)
       || !Array.isArray(inventories[0].errors)) throw new Error('Native Codex hook inventory is missing or ambiguous.');
   const inventory = inventories[0], expected = definitions.codex;
-  const inspectEvent = eventName => {
+  const inspectEvent = (eventName, groupOverride) => {
     const nativeEvent = eventName[0].toLowerCase() + eventName.slice(1);
-    const group = eventName === 'PostToolUse' ? expected.originGroup : expected.group;
+    const group = groupOverride ?? (eventName === 'PostToolUse' ? expected.originGroup : expected.group);
     const found = inventory.hooks.filter(hook => hook?.eventName === nativeEvent
       && hook.command === group.hooks[0].command && hook.sourcePath === expected.path
       && (eventName !== 'PostToolUse' || hook.matcher === group.matcher));
@@ -209,8 +223,11 @@ export async function inspectNativeSyncHookTrust({ client, ...options }) {
       trustStatus: hook && ['trusted', 'managed', 'untrusted', 'modified'].includes(hook.trustStatus)
         ? hook.trustStatus : 'unknown' };
   };
-  const events = expected.events.map(inspectEvent);
+  const events = expected.events.map(event => inspectEvent(event));
   const origin = inspectEvent('PostToolUse');
+  const warmCommand = { configured: disk.providers.codex.warmCommandConfigured,
+    ...inspectEvent('UserPromptSubmit', expected.warmGroup) };
+  warmCommand.ready = warmCommand.configured && warmCommand.trusted && inventory.errors.length === 0;
   const notificationOrigin = {
     codex: { configured: disk.providers.codex.originConfigured, ...origin },
     claude: { configured: disk.providers.claude.originConfigured, enabled: claude.enabled },
@@ -226,10 +243,11 @@ export async function inspectNativeSyncHookTrust({ client, ...options }) {
   else if (!codex.loaded) reason = 'Codex has not loaded all Claudex completion hooks. Open /hooks in Codex and review the configured hooks.';
   else if (events.some(event => !event.enabled)) reason = 'Claudex completion hooks are disabled in Codex. Open /hooks to review and enable them.';
   else if (!codex.trusted) reason = 'Claudex completion hooks need native Codex approval. Open /hooks and trust the exact Claudex hook definitions.';
-  return { ready: reason === undefined, codex, claude, notificationOrigin, ...(reason ? { reason } : {}) };
+  return { ready: reason === undefined, codex, claude, notificationOrigin, warmCommand, ...(reason ? { reason } : {}) };
 }
 
-/** Install only notification hooks. Trust and native credential stores are untouched. */
+/** Install notification hooks and the separately trusted local cache-command hook.
+ * No model work, warming enrollment or native trust writes occur during setup. */
 export async function installSyncHooks(options) {
   const config = paths(options);
   const definitions = syncHookDefinitions(options);

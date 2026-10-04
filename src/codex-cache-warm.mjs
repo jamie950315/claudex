@@ -66,6 +66,11 @@ export class CodexCacheWarmer {
     return this.enqueue(async () => {
       const p = this.previews.get(params.confirmationId);
       if (!p || p.actor !== actor) throw new Error('Cache-warm confirmation is missing, consumed or belongs to another controller.');
+      if (params.sessionId !== undefined || params.cwd !== undefined) {
+        identity(params);
+        if (params.sessionId !== p.sessionId || params.cwd !== p.cwd)
+          throw new Error('Cache-warm confirmation belongs to another native chat.');
+      }
       this.previews.delete(params.confirmationId);
       if (params.bestEffort !== true || this.now() >= p.expiresAt || this.closed || await this.stopped()) throw new Error('Cache-warm confirmation expired or explicit consent is missing.');
       if (this.manager.pending(p.sessionId)) throw new Error('A native attempt still awaits evidence; inspect it before re-enabling.');

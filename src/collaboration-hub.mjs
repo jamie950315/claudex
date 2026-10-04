@@ -430,7 +430,7 @@ export class CollaborationHub extends EventEmitter {
       if (actor.task) throw new Error('Managed workers cannot control Codex cache warming.');
       const action = method.slice('codex_cache_warm_'.length);
       const allowed = {
-        list: ['sessionId', 'cwd'], off: ['sessionId', 'cwd'], confirm: ['confirmationId', 'bestEffort'],
+        list: ['sessionId', 'cwd'], off: ['sessionId', 'cwd'], confirm: ['confirmationId', 'bestEffort', 'sessionId', 'cwd'],
         prepare: ['sessionId', 'cwd', 'bestEffort', 'refreshMinutes', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
       }[action];
       if (!allowed || Object.keys(params).some(key => !allowed.includes(key))) throw new Error('Unsupported Codex cache-warm fields.');

@@ -9,6 +9,7 @@ export const APP_LOCALES = Object.freeze(['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko'
 export const ENGINE_BIN = Object.freeze([
   'claudex-app.mjs', 'claudex-codex.mjs', 'claudex-collaboration.mjs', 'claudex-service.mjs', 'claudex.mjs',
   'claudex-sync-hook.mjs', 'claudex-mod.mjs', 'claudex-mod-bridge.mjs',
+  'claudex-codex-warm-hook.mjs',
 ]);
 export const ENGINE_PLUGIN_FILES = Object.freeze([
   'plugins/claudex/.claude-plugin/plugin.json',
@@ -28,6 +29,7 @@ export const ENGINE_PLUGIN_FILES = Object.freeze([
 export const ENGINE_SRC = Object.freeze([
   'cache-warm.mjs',
   'codex-cache-warm.mjs', 'codex-cache-native.mjs', 'codex-cache-usage.mjs',
+  'codex-warm-command.mjs',
   'claude-mod-bridge.mjs', 'claude-mod-install.mjs', 'claude-mod-protocol.mjs', 'claude-mod-storage.mjs',
   'claude-mod-wake-outbox.mjs', 'claude-mod-self-inbox.mjs', 'mod-wake-broker.mjs',
   'app-setup.mjs', 'app-providers.mjs', 'app-signature-cache.mjs', 'app-login.mjs',

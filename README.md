@@ -16,7 +16,7 @@ Claudex provides two independent capabilities:
 Collaboration runs models using your native accounts. Synchronization transports
 history without asking a model to generate a reply or summarize it.
 
-Current development build: **Claudex.app 1.2.7**, bundling **Claude Mod 0.8.6**.
+Current development build: **Claudex.app 1.2.8**, bundling **Claude Mod 0.8.6**.
 Latest published release: **1.1.1** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.1.1)
 · [Release notes](docs/releases/1.1.1.md).
 App and Mod versions are separate. Guides on `main` describe current behavior;
@@ -220,7 +220,7 @@ synchronization runtime allowlist.
 | Cross-model collaboration | Codex CLI `0.158.0-alpha.2.1`; Claude Code `2.1.283` | Both-direction child delegation and result return, parent resumption after file edits, and consecutive owner transfers under one task ID. |
 | Cooperative in-flight follow-up | Codex CLI `0.159.0-alpha.12.1`; Claude Code `2.1.283` | Both real supervisor/child directions accepted a proactive instruction and completed in generation one, without a child blocker or duplicate invocation. |
 | Claude Mod | Bundled `0.8.6`; Desktop Code `2.1.286`, documented Mod API baseline `2.1.287` | Cache settings pane and commands for native 1h/5m TTL and session-only, remember-last or fixed-default persistence. Warming remains default-off. Source/synthetic checks and native activation are separate; see the [cache-warming guide](docs/cache-warming.md). Installed and loaded versions are separate. |
-| Codex cache warming | Desktop native runtime `0.160.0`, experimental best-effort | Separate CLI opt-in for an already-loaded persistent primary conversation, using the same owner. No draft-state or per-turn no-tools control; no native TTL setting. Source tests and native observer evidence do not establish warm-turn completion or TTL extension. See [limits and confirmation](docs/cache-warming.md#codex-desktop-experimental-best-effort). This does not expand the synchronization allowlist. |
+| Codex cache warming | Desktop native runtime `0.160.0`, experimental best-effort | CLI opt-in and a separately trusted `/claudex:warm` text-command hook for the current loaded primary chat. No draft-state or per-turn no-tools control; no native TTL setting. A prior native CLI enrollment verified one refresh but not retention extension; the new command still needs Desktop activation acceptance. See [limits and confirmation](docs/cache-warming.md#codex-desktop-experimental-best-effort). This does not expand the synchronization allowlist. |
 | Desktop synchronization | Strict Codex baseline `0.155.0-alpha.16.3` / `.16.4`; Claude Code `2.1.281` with SDK `0.3.281` | Native conversation delivery, real Desktop alternation, supported compaction and image cases, identity preservation, and bounded snapshot retirement. |
 
 Manual CLI initialization defaults to `versionPolicy: "strict"`; new graphical

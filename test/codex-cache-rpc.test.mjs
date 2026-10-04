@@ -33,6 +33,8 @@ test('Codex cache preview/confirm/status/off work over private Unix RPC without 
   const p = await f.call('prepare', { ...f.context, bestEffort: true, refreshMinutes: 20 });
   assert.equal(f.connections, 0);
   await assert.rejects(f.call('confirm', { confirmationId: p.confirmationId, bestEffort: true }, 'claude'), /controller/);
+  await assert.rejects(f.call('confirm', { confirmationId: p.confirmationId, bestEffort: true,
+    ...f.context, sessionId: '22222222-2222-4222-8222-222222222222' }), /another native chat/);
   const result = await f.call('confirm', { confirmationId: p.confirmationId, bestEffort: true });
   assert.equal(result.policy.provider, 'codex'); assert.equal(result.policy.enabled, true);
   assert.equal(f.connections, 1);

@@ -179,6 +179,29 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
     try { return await read(connection, expected, version(await connection.initialize())); }
     finally { await connection.close(); }
   }
+  async function verifyCommand(input) {
+    const expected = target(input);
+    if (!identifier(input.turnId) || !pathValue(input.transcriptPath)) fail('command identity unavailable');
+    const connection = await client();
+    try {
+      const nativeVersion = version(await connection.initialize());
+      const state = await read(connection, expected, nativeVersion);
+      const { thread } = await connection.request('thread/read', { threadId: expected.sessionId, includeTurns: false });
+      if (thread?.path !== input.transcriptPath || state.phase !== 'busy'
+        || metadata(thread, expected, nativeVersion, state.ownerClientId).fingerprint !== state.fingerprint)
+        fail('command is not from this primary transcript');
+      // Subagent hook session_id can name its parent. Require the native primary
+      // transcript path AND its exact active turn; never open arbitrary hook paths.
+      const page = await connection.request('thread/turns/list', {
+        threadId: expected.sessionId, limit: 1, itemsView: 'notLoaded', sortDirection: 'desc',
+      });
+      const turn = page?.data?.[0];
+      if (!Array.isArray(page?.data) || page.data.length !== 1 || turn?.id !== input.turnId || turn.status !== 'inProgress'
+        || turn.itemsView !== 'notLoaded' || !Array.isArray(turn.items) || turn.items.length)
+        fail('command is not the current primary turn');
+      return true;
+    } finally { await connection.close(); }
+  }
   async function connect(input, onEvent) {
     const expected = target(input);
     if (typeof onEvent !== 'function') fail('event callback required');
@@ -282,5 +305,5 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
       };
     } catch (error) { await close(); throw error; }
   }
-  return { inspect, connect };
+  return { inspect, connect, verifyCommand };
 }

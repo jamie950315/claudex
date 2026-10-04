@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.7 packages Claude Mod 0.8.6. Keep application and Mod versions
+Claudex.app 1.2.8 packages Claude Mod 0.8.6. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -294,7 +294,7 @@ confirmation for the current native session only. Ship `skills/warm/SKILL.md`
 in both allowlists for native catalogue discovery; intercept `claudex:warm`
 locally in `command.run`, preserving native origin and never delegating to a
 model. Its TTL override must not update shared remember/default preferences.
-Keep legacy `/claudex warm` persistence controls and Codex CLI controls distinct.
+Keep legacy `/claudex warm` persistence controls and Codex native hook controls distinct.
 `src/cache-warm.mjs` owns bounded durable policies and one-use attempts; the Mod's cache-warm client
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
@@ -340,8 +340,8 @@ No startup/inspection path enables warming, starts another owner, changes the
 model/effort or resumes expired work. See docs/cache-warming.md for operation and
 native activation limits. The older developer probe remains separate evidence.
 
-Codex Desktop warming is a separate experimental best-effort CLI opt-in with
-explicit acceptance on preview and confirmation. Only native 0.160.0 loaded
+Codex Desktop warming is a separate experimental best-effort opt-in through the
+CLI or a separately trusted UserPromptSubmit command hook. Only native 0.160.0 loaded
 persistent primary threads qualify; reject forks, subagents and active goals.
 This does not expand the synchronization allowlist. Dispatch once through the
 same native owner without navigation, new owners, API keys or model/effort
@@ -367,9 +367,24 @@ turn ID plus service-owned accounting supplies attribution, never timestamp
 alone. Candidates become verified only after all warm samples and exact own
 successful completion. Use the isolated codex-cache-warm.json ledger; no public
 Codex observe/claim RPC, worker controls, uncertain replay, restart auto-resume
-or catch-up bursts. Claude Mod Cache settings remain Claude-only; Codex starts
-with CLI controls. Source tests and native observer evidence are not proof of
+or catch-up bursts. Claude Mod Cache settings remain Claude-only. Source tests and native observer evidence are not proof of
 real warming inference or TTL extension.
+The Codex `/claudex:warm on|off|status` text command runs in
+`bin/claudex-codex-warm-hook.mjs`, never the notification-only sync hook.
+Setup installs its own UserPromptSubmit group and native trust remains a human
+review; report `warmCommand.ready` independently of sync readiness. No model
+prompt skill or custom slash menu is registered. On prepares only; confirmation
+requires the printed `accept-best-effort` and exact native chat context.
+Verify primary metadata, hook/native transcript-path equality and exact active
+turn without reading arbitrary transcript paths; subagent hooks can report the
+parent session ID. Never relax these guards to pass an untested hook lifecycle.
+Recognized commands return blocking output on success or failure, with a
+25-second handler deadline before the 30-second native timeout. Native startup
+failure or untrusted/disabled hooks can still skip interception; document that
+limit. Ordinary input is a no-op. CLI controls remain unchanged; Codex TTL is not
+configurable. Native Desktop hook timing, trust and rendered local output have
+not yet passed activation acceptance; do not claim zero-model live UI delivery
+from synthetic/private-RPC checks or static source inspection.
 Authorized 1.2.6 native acceptance verified a 25-minute same-owner OK refresh
 (36,096 cached input / 5 output tokens), exact accounting and the one-refresh
 limit. At about 31 minutes both warmed and untouched controls still hit; retain

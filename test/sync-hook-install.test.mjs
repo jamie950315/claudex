@@ -33,7 +33,7 @@ test('installs bounded synchronous native event publishers without replacing use
   assert.deepEqual(current.hooks.PreToolUse, original.hooks.PreToolUse);
   assert.deepEqual(current.hooks.Stop[0], original.hooks.Stop[0]);
   for (const def of Object.values(definitions)) for (const event of def.events) {
-    const group = (await read(def.path)).hooks[event].at(-1);
+    const group = (await read(def.path)).hooks[event].find(group => group.hooks[0]?.statusMessage === def.group.hooks[0].statusMessage);
     assert.deepEqual(group, def.group);
     assert.equal(group.hooks[0].timeout, 3);
     assert.equal(group.hooks[0].async, undefined);
@@ -45,6 +45,9 @@ test('installs bounded synchronous native event publishers without replacing use
     assert.equal(group.hooks[0].timeout, 5);
     assert.equal(group.hooks[0].async, undefined);
   }
+  assert.deepEqual((await read(definitions.codex.path)).hooks.UserPromptSubmit.at(-1), definitions.codex.warmGroup);
+  assert.equal(result.providers.codex.warmCommandConfigured, true);
+  assert.equal(definitions.claude.warmGroup, undefined);
   const journal = await read(result.journalPath);
   assert.equal(await readFile(journal.plans.find(p => p.provider === 'claude').beforePath, 'utf8'), originalBytes);
   assert.equal((await lstat(result.journalPath)).mode & 0o777, 0o600);
@@ -83,7 +86,8 @@ test('legacy lifecycle-only v1 journals upgrade additively and preserve user Pos
   for (const definition of Object.values(definitions)) {
     const config = await read(definition.path);
     assert.deepEqual(config.hooks.PostToolUse, [user, definition.originGroup]);
-    for (const event of definition.events) assert.deepEqual(config.hooks[event], [definition.group]);
+    for (const event of definition.events) assert.deepEqual(config.hooks[event], [definition.group,
+      ...(event === 'UserPromptSubmit' && definition.warmGroup ? [definition.warmGroup] : [])]);
   }
   assert.equal((await installSyncHooks(options)).changed, false);
 });
@@ -99,6 +103,21 @@ test('foreign PostToolUse matches and modified origin ownership journals are nev
   await writeFile(installed.journalPath, JSON.stringify(journal), { mode: 0o600 });
   await assert.rejects(installSyncHooks(g.options), /origin ownership journal/);
   assert.equal(await readFile(g.definitions.codex.path, 'utf8'), before);
+});
+
+test('cache command hooks upgrade independently without adopting foreign definitions or trust', async () => {
+  const f = await fixture(), installed = await installSyncHooks(f.options);
+  const config = await read(f.definitions.codex.path), journal = await read(installed.journalPath);
+  config.hooks.UserPromptSubmit = [f.definitions.codex.group];
+  delete journal.definitions.codex.warmGroup;
+  await writeFile(f.definitions.codex.path, JSON.stringify(config));
+  await writeFile(installed.journalPath, JSON.stringify(journal), { mode: 0o600 });
+  assert.equal((await inspectSyncHooks(f.options)).providers.codex.warmCommandConfigured, false);
+  assert.equal((await installSyncHooks(f.options)).providers.codex.warmCommandConfigured, true);
+  const foreign = await fixture();
+  const group = structuredClone(foreign.definitions.codex.warmGroup); group.hooks[0].async = true;
+  await writeFile(foreign.definitions.codex.path, JSON.stringify({ hooks: { UserPromptSubmit: [group] } }));
+  await assert.rejects(installSyncHooks(foreign.options), /unrecognized Claudex hook/);
 });
 
 test('upgrades only exact previously owned commands while retaining new native user settings', async () => {
@@ -224,6 +243,19 @@ test('the narrowly matched PostToolUse definition requires its own exact native 
     assert.equal(result.codex.trusted, true);
     assert.equal(result.notificationOrigin.ready, false);
   }
+});
+
+test('cache command readiness requires its own native trust and never blocks synchronization', async () => {
+  const f = await nativeFixture();
+  assert.equal((await f.inspect()).warmCommand.ready, false);
+  assert.equal((await f.inspect()).ready, true);
+  const hook = { eventName: 'userPromptSubmit', command: f.definitions.codex.warmGroup.hooks[0].command,
+    enabled: true, currentHash: 'native-warm-hash', trustStatus: 'untrusted', sourcePath: f.definitions.codex.path };
+  f.inventory.hooks.push(hook);
+  assert.equal((await f.inspect()).warmCommand.ready, false);
+  hook.trustStatus = 'trusted';
+  assert.equal((await f.inspect()).warmCommand.ready, true);
+  assert.equal((await f.inspect()).ready, true);
 });
 
 test('missing optional origin hooks do not block already configured and trusted history synchronization', async () => {

@@ -70,6 +70,22 @@ test('loaded, exact cwd, persistent primary and version guards reject before any
   }
 });
 
+test('local commands require the exact primary transcript and active turn without reading history', async () => {
+  const path = '/private/fixture/rollout.jsonl';
+  const options = { thread: { status: { type: 'active' }, path }, request(method) {
+    if (method === 'thread/turns/list') return { data: [{ id: turnId, status: 'inProgress', itemsView: 'notLoaded', items: [] }] };
+  } };
+  const f = fixture(options);
+  assert.equal(await f.native.verifyCommand({ ...target, turnId, transcriptPath: path }), true);
+  assert(!f.calls.some(x => /resume|start|fork/.test(x.method)));
+  assert.equal(f.closes(), 1);
+  for (const wrong of [{ transcriptPath: '/private/fixture/subagent.jsonl' }, { turnId: 'other-turn' }]) {
+    const g = fixture(options);
+    await assert.rejects(g.native.verifyCommand({ ...target, turnId, transcriptPath: path, ...wrong }), /primary/);
+    assert.equal(g.closes(), 1);
+  }
+});
+
 test('an existing goal refuses subscription without resuming or mutating the goal', async () => {
   const f = fixture({ goal: { objective: 'private goal', status: 'active' } });
   await assert.rejects(f.native.connect(target, () => {}), /active-goal-unsupported/);

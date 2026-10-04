@@ -2,10 +2,12 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.7**, with **Claude Mod 0.8.6** bundled.
+Current development build: **Claudex.app 1.2.8**, with **Claude Mod 0.8.6** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
-CLI feature. App setup and inspection never enable it. The Claude Mod's Cache
+feature with CLI controls and a `/claudex:warm` text command in the Codex page.
+Setup installs the command's independent native hook but never trusts it or
+enables warming. The Claude Mod's Cache
 settings pane controls only its own Claude TTL and preferences, not Codex.
 See [Codex confirmation and limitations](cache-warming.md#codex-desktop-experimental-best-effort).
 For the latest published release, **1.1.1**, see [release notes](releases/1.1.1.md) and the
@@ -39,6 +41,8 @@ so troubleshooting evidence is not changed. CLI output remains English.
 4. Review and trust the exact Claudex completion hooks through Codex's native hook
    review (`/hooks` in Codex CLI). Setup preserves existing hooks and never bypasses
    native trust. A configured-but-untrusted hook remains an explicit readiness issue.
+   The optional cache-command hook requires its own trust review; it does not
+   gate ordinary synchronization. See [command activation](cache-warming.md#command-in-the-chatgpt-desktop-codex-page).
 5. Let the checklist report which integrations are ready and which require an
    account, compatible runtime, idle native process, or normal app restart.
 

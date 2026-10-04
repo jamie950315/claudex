@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.7 and Claude Mod 0.8.6 provide bounded, per-conversation cache warming.
+Claudex 1.2.8 and Claude Mod 0.8.6 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -17,7 +17,7 @@ observes and submits only into its own existing native session.
 ## Enable one Claude conversation
 
 Use the intended existing conversation with a freshly loaded 0.8.6 companion and
-a 1.2.7 broker. Older loaded sessions can retain the previous Mod until a normal
+a 1.2.8 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -44,8 +44,8 @@ Claude's native skill catalogue supplies the namespaced entry; the loaded Mod
 intercepts it as a local command without invoking a model. If the Mod is not
 loaded, the skill body cannot perform warming: it only explains the missing
 handler and forbids a model/tool fallback. Do not invoke it on an installation
-without active Mod hooks expecting a zero-model local command. Codex does not
-use this Claude-only handler; its separate CLI controls below are unchanged.
+without active Mod hooks expecting a zero-model local command. Codex uses a
+separate native hook for the same text, described below, not this Claude Mod.
 
 The existing advanced command remains available:
 
@@ -187,13 +187,81 @@ and separately read `nativeCache`. No automatic retry or rollback is performed.
 
 ## Codex Desktop experimental best-effort
 
-Codex warming is separately opt-in and currently controlled through the CLI,
+Codex warming is separately opt-in through a native chat command or the CLI,
 not the Claude Mod pane. It requires native runtime `0.160.0` and an already-loaded,
 persistent primary Desktop conversation. Forks, subagents, unloaded threads and
 threads with an active goal are refused (`active-goal-unsupported`). The adapter
 uses the existing native owner; it does not start a second owner, fork, invoke
 `codex exec resume`, navigate the app, extract credentials or use an API key.
 This capability gate does not change the synchronization runtime allowlist.
+
+### Command in the ChatGPT desktop Codex page
+
+Claudex.app 1.2.8 packages a separate `UserPromptSubmit` hook for:
+
+```text
+/claudex:warm on
+/claudex:warm confirm TOKEN accept-best-effort
+/claudex:warm off
+/claudex:warm status
+```
+
+`on` only prepares the preview. Review the exact chat, bounds and risks, then
+paste its complete confirmation command. Confirmation expires after two minutes
+and cannot be used from another chat. Off revokes this chat only. With no action,
+the command shows status. Codex rejects `5m`/`1h`: these are Claude TTL settings,
+not a configurable Codex TTL. The Codex default refresh interval remains 25 minutes.
+
+Normal Claudex setup (or `claudex hooks install` for CLI installations) adds the
+new command hook without replacing existing user hooks or their trust records.
+Review and trust that exact new definition in Codex's native hook controls.
+Its status message is **Handle explicit Claudex cache commands in this Codex chat**.
+`claudex hooks status` reports `providers.codex.warmCommandConfigured`; that is
+configuration presence only. Native hook inspection separately reports
+`warmCommand.ready`, requiring the exact loaded, enabled, trusted definition.
+Setup never grants native trust or enables
+warming. An installed definition is not proof of loaded/trusted activation.
+
+After activation, type the command as the entire message in the intended loaded
+primary Codex chat. It is a hook-intercepted text command, not a registered slash
+menu item or a model-driven skill. If autocomplete consumes Enter, close the
+menu and use Send. The hook blocks the model request and shows its result as
+native hook output/warning; a blocked prompt is expected for this local action.
+No fork, API key, shell prompt expansion, or model interpretation is involved.
+Ordinary messages pass through unchanged. Unknown arguments and operation errors
+are also blocked; an uncertain result is never retried automatically.
+
+Only rely on local interception after the hook is loaded, enabled and trusted.
+Disabled/untrusted hooks are skipped by Codex; hook process startup failures and
+native timeouts can also prevent interception. They are not a guaranteed
+fail-closed command registry. The handler has a 25-second local deadline before
+its 30-second native deadline, but cannot override a disabled or failed host hook.
+Without activation, do not send these strings expecting zero model usage; use
+the existing CLI instead.
+
+The handler verifies the native primary metadata, exact transcript path and
+current in-progress turn before calling the existing private controller. This
+also refuses a subagent hook that reports its parent's session ID. It never
+reads the supplied transcript path or searches histories. Missing or ambiguous
+context refuses the command rather than guessing a target. Confirmation retains
+all existing best-effort limits and waits for fresh ordinary usage evidence;
+the local control command itself is not a cache-refresh sample.
+
+Validation covers actual hook-process parsing, native-context fixtures, private
+Unix RPC, installation migration and independent trust diagnostics. Read-only
+Desktop 0.160.0 probes and static composer/owner inspection support compatibility,
+but the new hook was not trusted or executed in a live Desktop chat during this
+implementation. Hook-time turn visibility, rendered output and zero-model native
+command acceptance remain an explicit activation gate, not a completed UI test.
+The reviewed installation was upgraded through normal Claudex shutdown and
+restart to App 1.2.8 / Mod 0.8.6, retaining the previous app as a recoverable
+backup. Installed files and strict signatures matched the build. The new hook
+was configured, loaded and enabled, but native inspection reported it untrusted;
+existing synchronization and notification-origin hooks remained ready. No Codex
+warming policy or attempt was created. Complete the separate native trust review
+before attempting the local command acceptance check.
+
+### CLI controls
 
 Prepare a bounded preview for the exact native thread UUID and directory:
 
