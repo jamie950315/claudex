@@ -2,7 +2,7 @@ import { lstat, open, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
-import { readDesktopSessionMappings } from './desktop.mjs';
+import { readDesktopTitleMappings } from './desktop.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const MAX_BYTES = 32 * 1024 * 1024;
@@ -75,7 +75,7 @@ export async function enrichChatTitles(chats, {
     let metadata;
     try {
       metadata = provider === 'codex' ? await readCodexTitles(codexHome, wanted)
-        : await readDesktopSessionMappings(desktopHome, [...wanted]);
+        : await readDesktopTitleMappings(desktopHome, [...wanted]);
     } catch (error) {
       const reason = error.code === 'ENOENT' ? `${provider} title metadata is unavailable.` : error.message;
       for (const chat of selected) chat.titleError = reason;
@@ -84,6 +84,7 @@ export async function enrichChatTitles(chats, {
     for (const chat of selected) {
       const entry = metadata.get(identity(chat).toLowerCase());
       if (!entry) { chat.titleError = `${provider} title metadata has no matching native session.`; continue; }
+      if (entry.error) { chat.titleError = entry.error; continue; }
       if (entry.ambiguous) { chat.titleError = 'Conflicting Codex titles have the same update timestamp.'; continue; }
       chat.title = entry.title;
       chat.titleSource = provider === 'codex' ? 'codex-session-index' : 'claude-desktop-registry';

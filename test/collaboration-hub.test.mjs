@@ -517,6 +517,38 @@ test('native title search preserves ambiguous candidates and rechecks the chosen
   assert.equal(Object.keys(hub.state.tasks).length, 0, 'search and send never create managed work');
 });
 
+test('title queries retain bounded metadata error rows without treating them as matches or recipients', async t => {
+  const first = randomUUID(), invalid = randomUUID(), unrelated = randomUUID();
+  const { hub } = await setup(t, async () => { throw new Error('No managed inference'); }, {
+    chatTitleResolver: async chats => chats.map(chat => chat.sessionId === invalid
+      ? { ...chat, title: 'Target', titleError: 'Desktop metadata is unavailable.' }
+      : { ...chat, title: chat.sessionId === first ? 'Target' : 'Other' }),
+  });
+  for (const sessionId of [invalid, first, unrelated])
+    await hub.chatMailbox.register({ provider: 'claude', sessionId, cwd: hub.root, event: 'SessionStart' });
+  const inventory = await hub.dispatch(controller(hub, 'codex', 'chat_list', { provider: 'claude' }));
+  assert.deepEqual(inventory.chats.map(chat => chat.sessionId), [invalid, first, unrelated]);
+  const params = { provider: 'claude', query: 'Target', match: 'exact', limit: 1 };
+  const found = await hub.dispatch(controller(hub, 'codex', 'chat_list', params));
+  assert.equal(found.totalCount, 2); assert.equal(found.exactMatchCount, 1);
+  assert.equal(found.unavailableTitleCount, 1); assert.equal(found.chats.length, 1);
+  assert.equal(found.chats[0].sessionId, first); assert.equal(found.nextCursor, '1');
+  const next = await hub.dispatch(controller(hub, 'codex', 'chat_list', { ...params, cursor: found.nextCursor }));
+  assert.equal(next.chats[0].sessionId, invalid); assert.equal(next.chats[0].titleMatch, null);
+  assert.equal(next.chats[0].titleError, 'Desktop metadata is unavailable.'); assert.equal(next.nextCursor, null);
+  const absent = await hub.dispatch(controller(hub, 'codex', 'chat_list', { ...params, query: 'Unknown' }));
+  assert.equal(absent.exactMatchCount, 0); assert.equal(absent.totalCount, 1);
+  assert.equal(absent.chats[0].sessionId, invalid);
+  const contains = await hub.dispatch(controller(hub, 'codex', 'chat_list', { ...params, query: 'arg', match: 'contains', limit: 100 }));
+  assert.equal(contains.totalCount, 2); assert.equal(contains.exactMatchCount, 0);
+  assert.deepEqual(contains.chats.map(chat => chat.titleMatch), ['contains', null]);
+  await assert.rejects(hub.dispatch(controller(hub, 'codex', 'chat_send', {
+    provider: 'claude', sessionId: invalid, expectedTitle: 'Target', message: 'Do not send', requestId: 'invalid-metadata',
+  })), /could not be verified/);
+  assert.equal((await readJSON(hub.chatMailbox.path)).messages.length, 0);
+  assert.equal(Object.keys(hub.state.tasks).length, 0);
+});
+
 test('native title search preserves capitalization before matching returned metadata', async t => {
   const sessionId = randomUUID(), title = 'Original Chat CHAT-M7K4';
   const descriptor = { provider: 'codex', nativeId: sessionId, sessionId, chatId: `codex:${sessionId}`,

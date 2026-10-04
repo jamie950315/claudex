@@ -489,6 +489,12 @@ record; Claude titles use the exact Desktop registry CLI-ID mapping. No title is
 inferred from message content, folder names or synchronized copies. Lookups are
 read-only and bounded; missing, conflicting or unsafe metadata produces a title
 error rather than a guessed name. Activity is a hint, not proof a process is alive.
+Claude metadata errors with an exact known identity affect only that record;
+unsafe storage or ambiguous identities still fail the lookup. Title queries keep
+error rows in the same bounded page, with `titleMatch: null`, so an unavailable
+title cannot silently disappear from search. Follow `nextCursor` to inspect all
+matches and errors; healthy matches appear before error rows, and error rows
+cannot be selected for sending. Unfiltered inventory retains its usual order.
 Claude search covers hook-registered chats. Codex title queries also inspect
 bounded, unarchived native metadata, so a chat need not have fired a hook first.
 Metadata discovery is explicitly distinguished from hook registration.

@@ -537,9 +537,11 @@ export class CollaborationHub extends EventEmitter {
           }
           titled = [...known.values()];
         }
-        const all = titled.map(chat => ({ ...chat, titleMatch: query && typeof chat.title === 'string'
+        const all = titled.map(chat => ({ ...chat, titleMatch: query && !chat.titleError && typeof chat.title === 'string'
           ? normalize(chat.title) === query ? 'exact' : normalize(chat.title).includes(query) ? 'contains' : null : null }))
-          .filter(chat => query === null || chat.titleMatch === 'exact' || params.match !== 'exact' && chat.titleMatch === 'contains');
+          .filter(chat => query === null || chat.titleError || chat.titleMatch === 'exact'
+            || params.match !== 'exact' && chat.titleMatch === 'contains');
+        if (query !== null) all.sort((a, b) => Boolean(a.titleError) - Boolean(b.titleError));
         const start = Number(params.cursor ?? 0);
         const chats = []; let next = start, size = 0;
         while (next < all.length && chats.length < limit) {

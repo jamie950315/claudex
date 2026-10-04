@@ -249,7 +249,7 @@ test('a new incomplete or changed original/replacement revokes the intent and fa
 });
 
 test('activity, title, registration and file changes during verification cannot publish a command', async () => {
-  for (const change of ['activity', 'title', 'owner', 'original', 'pending']) {
+  for (const change of ['activity', 'title', 'registry-rewrite', 'owner', 'original', 'pending']) {
     const f = await fixture(), pair = await f.add();
     f.intercept(async record => {
       if (record.nativeId !== pair.current.nativeId) return;
@@ -257,6 +257,12 @@ test('activity, title, registration and file changes during verification cannot 
         if (change === 'activity') pair.mapping.lastActivityAt++;
         else pair.mapping.title = 'Changed title';
         await pair.saveMapping();
+      } else if (change === 'registry-rewrite') {
+        const before = await lstat(pair.registryPath, { bigint: true });
+        await pair.saveMapping();
+        const after = await lstat(pair.registryPath, { bigint: true });
+        assert.equal(after.ino, before.ino); assert.equal(after.size, before.size);
+        assert.ok(after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs);
       } else if (change === 'owner') { pair.owner.pending = {}; await pair.saveOwner(); }
       else if (change === 'original') await appendFile(pair.original.path, 'changed\n');
       else f.state.pending = {};

@@ -718,7 +718,11 @@ chat_list supports native-title query/provider/match filters for already hook-
 registered Claude sessions and bounded native Codex metadata discovery. Enrich from bounded stable Codex session_index metadata and
 exact Claude Desktop CLI-ID mappings, never transcript guesses or title-based ID
 substitution. Preserve duplicate candidates and metadata errors; partial/duplicate
-matches require user disambiguation. chat_send expectedTitle rechecks the chosen
+matches require user disambiguation. Presentation isolates invalid metadata only
+after exact native identity validation; unsafe storage and ambiguous identities
+still fail closed, and action/writer mappings stay strict. Title queries show
+healthy matches before explicit error rows in one bounded page; unfiltered
+inventory order stays unchanged. chat_send expectedTitle rechecks the chosen
 native title before enqueueing, without changing exact-session addressing. This
 also supports direct exact `title` addressing when a single valid native candidate
 exists; duplicates return needs-selection without enqueueing. Known ended chats
