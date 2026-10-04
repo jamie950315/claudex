@@ -63,6 +63,7 @@ test('reservation and one-use authorization do not prove a hit; native own sampl
   await f.receipt(id, 'submitted');
   let list = await f.manager.list();
   assert.equal(list.attempts[0].state, 'submitted'); assert.equal(list.policies[0].nextAt, null);
+  assert.deepEqual(list.policies[0].cacheResults, { count: 0, firstAt: null, lastAt: null });
   f.tick(1000);
   const result = await f.observe({ epoch: 1, attemptId: id, sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 80, attemptId: id }) });
   assert.equal(result.policy.enabled, true); assert.ok(result.nextAt > f.now());
@@ -71,6 +72,7 @@ test('reservation and one-use authorization do not prove a hit; native own sampl
   assert.equal(list.attempts[0].reservedReadTokens, 6256);
   assert.equal(list.policies[0].totals.readTokens, 6000);
   assert.equal(list.policies[0].totals.outputTokens, 4);
+  assert.deepEqual(list.policies[0].cacheResults, { count: 1, firstAt: f.now(), lastAt: f.now() });
   assert.equal((await f.receipt(id, 'submitted')).state, 'verified');
 });
 

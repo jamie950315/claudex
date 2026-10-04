@@ -3,6 +3,7 @@ import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
 import { createLocalization, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
 import { createCacheWarmClient, cacheWarmTtl, assertNativeCacheTtlChange, CACHE_TTL_PREFERENCE_KEY, CACHE_TTL_LAST_KEY } from './cache-warm.mjs';
+import { formatWarmSummary } from './cache-warm-display.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const validPath = value => typeof value === 'string' && value.startsWith('/') && !value.startsWith('//') && !/[\r\n\0]/u.test(value);
@@ -193,7 +194,10 @@ export function register(on, options = {}) {
   on('command.run', { command: 'claudex:warm' }, async ($, e) => {
     try {
       const words = (e.args ?? '').trim().split(/\s+/u).filter(Boolean);
-      return { text: JSON.stringify(await cacheWarm.sessionCommand(api($, options), words, e.origin), null, 2) };
+      await localization.load(api($, options));
+      const host = api($, options), context = await host.context();
+      const result = await cacheWarm.sessionCommand(host, words, e.origin);
+      return { text: formatWarmSummary(result, { ...context, provider: 'claude', t: localization.t }) };
     } catch (error) { return { text: `Cache warming: ${error.message}` }; }
   });
   on('command.run', { command: 'claudex' }, async ($, e) => {

@@ -13,7 +13,6 @@ const ID = '11111111-1111-4111-8111-111111111111';
 const TOKEN = '22222222-2222-4222-8222-222222222222';
 const input = prompt => ({ hook_event_name: 'UserPromptSubmit', session_id: ID, cwd: '/fixture',
   turn_id: 'current-turn', transcript_path: '/private/fixture/rollout.jsonl', prompt });
-const result = reply => JSON.parse(reply.reason.slice(reply.reason.indexOf('\n') + 1));
 
 test('Codex warm command parsing is exact and never interprets quoted or embedded instructions', () => {
   for (const text of ['Hello', 'Explain /claudex:warm on', '`/claudex:warm on`', '/claudex:warmup on'])
@@ -76,17 +75,19 @@ test('one on command enables its exact chat over private Unix RPC without a seco
   const socket = await serveCollaborationSocket({ root: hub.root, dispatch: e => hub.dispatch(e) });
   t.after(async () => { await socket.close(); await hub.close(); await rm(root, { recursive: true, force: true }); });
   const context = { ...input(''), cwd: root };
-  const options = { root, verify: async value => {
+  const options = { root, getTranslator: async () => undefined, verify: async value => {
     assert.deepEqual(value, { sessionId: ID, cwd: root, turnId: context.turn_id, transcriptPath: context.transcript_path }); return true;
   } };
   const send = prompt => handleCodexWarmCommand({ ...context, prompt }, options);
-  const enabled = result(await send('/claudex:warm on'));
-  assert.equal(enabled.state, 'enabled'); assert.equal(enabled.policy.refreshMinutes, 25);
-  assert.equal(enabled.confirm, undefined); assert.equal(enabled.confirmationId, undefined);
-  assert.equal(enabled.policy.enabled, true); assert.equal(connections, 1);
-  const status = result(await send('/claudex:warm status'));
+  const enabled = await send('/claudex:warm on');
+  assert.equal(enabled.reason.split('\n').length, 4);
+  assert.doesNotMatch(enabled.reason, /"policy"|"sessionId"|confirmationId|\/fixture/);
+  let status = await hub.codexCacheWarm.list();
+  assert.equal(status.policies[0].refreshMinutes, 25); assert.equal(status.policies[0].enabled, true); assert.equal(connections, 1);
+  assert.equal((await send('/claudex:warm status')).reason.split('\n').length, 4);
   assert.equal(status.policies.length, 1); assert.equal(status.policies[0].sessionId, ID);
-  assert.equal(result(await send('/claudex:warm off')).policy.enabled, false);
+  assert.equal((await send('/claudex:warm off')).reason.split('\n').length, 4);
+  status = await hub.codexCacheWarm.list(); assert.equal(status.policies[0].enabled, false);
   assert.equal((await hub.codexCacheWarm.list()).attemptCount, 0);
 });
 

@@ -387,11 +387,19 @@ test('cache warming status stays read-only and plugin-origin commands cannot opt
 
 test('namespaced warm command answers locally and preserves native user-origin requirements', async ($, on) => {
   const seen: any[] = []
-  stubs(on, false, request => { seen.push(request); return { policies: [] } })
+  stubs(on, false, request => { seen.push(request); return { policies: [{
+    provider: 'claude', sessionId: ID, cwd: '/fixture', enabled: false, reason: 'disabled', ttlPreference: '1h',
+    maxReadTokens: 250000, maxOutputTokens: 256, totals: { readTokens: 6000, outputTokens: 4 },
+    sample: { cacheReadTokens: 6000, cacheWriteTokens: 10 },
+    cacheResults: { count: 1, firstAt: 1000, lastAt: 1000 }, nextAt: null,
+  }] } })
   await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
   seen.length = 0
   const status = await $.command.run({ command: 'claudex:warm', args: '' })
-  expect(JSON.parse(status.text).local.enabled).toBe(false)
+  expect(status.text.split('\n').length).toBe(4)
+  expect(status.text).not.toMatch(/"local"|"policies"|"sessionId"/)
+  expect(status.text).toMatch(/6,010/)
+  expect(status.text).toMatch(/UTC[+-]/)
   expect(seen.map(item => item.action)).toEqual(['list'])
   const enable = await $.command.run({ command: 'claudex:warm', args: 'on 5m' })
   expect(enable.text).toMatch(/explicit native user command/)

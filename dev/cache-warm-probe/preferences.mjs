@@ -87,6 +87,12 @@ async function session(work) {
     try {
       const values = await Promise.race([done, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Native command timed out; no replay.')), 30000); })]);
       for (const value of values) if (typeof value === 'string') {
+        if (command.startsWith('/claudex:warm ')) {
+          // SDK wraps local output in a native text envelope. Only the command
+          // body is presentation; use the legacy diagnostic status for state.
+          const text = value.replace(/<[^>]+>/g, '').trim();
+          if (text.split('\n').length === 4 && !/"policy"|"sessionId"/.test(text)) return { summary: text };
+        }
         const begin = value.indexOf('{'), end = value.lastIndexOf('}');
         if (begin >= 0 && end > begin) { try { return JSON.parse(value.slice(begin, end + 1)); } catch {} }
       }
@@ -131,19 +137,17 @@ try {
     await session(async send => {
       await confirm(send, '/claudex warm preference remember ttl=1h');
       const enabled = await send('/claudex:warm on 5m');
-      assert.equal(enabled.state, 'enabled');
-      assert.equal(enabled.nativeCacheSync.value, '5m');
-      assert.equal(enabled.confirm, undefined);
-      const status = await send('/claudex:warm status');
+      assert.equal(enabled.summary.split('\n').length, 4);
+      const status = await send('/claudex warm status');
       assert.equal(status.local.enabled, true); assert.equal(status.nativeCache.value, '5m');
       assert.equal(status.ttlPreference.ttl, '1h');
       await send('/claudex:warm off');
-      assert.equal((await send('/claudex:warm status')).nativeCache.value, '5m');
+      assert.equal((await send('/claudex warm status')).nativeCache.value, '5m');
     });
     await session(async (send, initial) => {
       assert.equal(initial.nativeTtl, '1h'); assert.equal(initial.preference.ttl, '1h');
       assert.equal(initial.enabled, false);
-      assert.equal((await send('/claudex:warm on ttl=1h')).state, 'enabled');
+      assert.equal((await send('/claudex:warm on ttl=1h')).summary.split('\n').length, 4);
       await send('/claudex:warm off');
     });
   } else {

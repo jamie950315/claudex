@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.10 packages Claude Mod 0.8.7. Keep application and Mod versions
+Claudex.app 1.2.11 packages Claude Mod 0.8.8. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -307,6 +307,14 @@ in both allowlists for native catalogue discovery; intercept `claudex:warm`
 locally in `command.run`, preserving native origin and never delegating to a
 model. Its TTL override must not update shared remember/default preferences.
 Keep legacy `/claudex warm` persistence controls and Codex native hook controls distinct.
+Normal namespaced on/off/status replies use the shared pure cache-warm-display
+formatter: four localized text lines, never raw policy JSON. Keep its Mod file
+in both packaging allowlists. Select only the exact session/cwd policy; respect
+local suspension and unavailable scheduling evidence. First cache-result timing
+comes from native actual-read observations in the complete current-generation
+ledger, never a reservation or a truncated attempt listing. Formatting and
+language discovery cannot enroll, refresh or change budgets. Advanced diagnostic
+commands retain their structured response for operators.
 `src/cache-warm.mjs` owns bounded durable policies and one-use attempts; the Mod's cache-warm client
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
@@ -569,7 +577,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.10 and Mod 0.8.7 installed through normal
+passes. The reviewed Mac has App 1.2.11 and Mod 0.8.8 installed through normal
 Quit/reopen and app-owned Mod management; both native configuration identities'
 receiver opt-ins were retained. Existing Claude sessions were not restarted;
 installation is verified but existing Desktop sessions can retain older loaded

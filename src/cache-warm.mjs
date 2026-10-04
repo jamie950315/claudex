@@ -168,7 +168,13 @@ export class CacheWarmManager {
   }
   presentation(p) {
     const b = this.bindings.get(p.sessionId), reason = this.reason(p, b);
+    // Derived from native response evidence, never from a reservation, timer or
+    // dispatch receipt. Use the complete generation ledger, not list truncation.
+    const reads = this.attempts(p.sessionId, p.generation).filter(a => a.actual?.cacheReadTokens > 0);
+    const times = reads.map(a => a.completedAt);
+    const known = times.length > 0 && times.every(value => integer(value));
     return { ...clone(p), status: reason ?? 'scheduled', reason: reason ?? 'scheduled', bound: Boolean(b && b.cwd === p.cwd),
+      cacheResults: { count: reads.length, firstAt: known ? Math.min(...times) : null, lastAt: known ? Math.max(...times) : null },
       phase: b?.phase ?? null, native: { phase: b?.phase ?? 'unbound' }, totals: this.totals(p),
       sample: b?.sample ? clone(b.sample) : null,
       nextAt: !reason && b?.sample ? nextAt(b.sample, p) : null,

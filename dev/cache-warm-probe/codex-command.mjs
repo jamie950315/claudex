@@ -22,6 +22,11 @@ const client = new CodexWebSocketClient({ socketPath: await codexChatSocket(), t
 const id = values.session, report = { phase: 'starting', sessionId: id, commands: [], unexpectedModelActivity: false };
 const file = join(root, 'report.json'), save = () => writeFile(file, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
 const rows = new Map(); let current, enrollmentRequested = false;
+async function policyStatus() {
+  const root = join(process.env.HOME, '.local/share/claudex/collaboration');
+  const token = (await privateRead(join(root, 'controller-key'), { maxBytes: 65 })).trim();
+  return callCollaboration({ root, peer: 'codex', token, method: 'codex_cache_warm_list', params: { sessionId: id, cwd: values.cwd } });
+}
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const record = turnId => {
   if (!rows.has(turnId)) rows.set(turnId, { turnId, hooks: [], completed: null, usage: null, modelItems: [] });
@@ -63,11 +68,11 @@ async function send(text) {
       assert.equal(row.hooks[0].status, 'blocked', 'Native execution must confirm the blocking decision.');
       assert(!row.usage || row.usage.last?.totalTokens === 0, 'Control command consumed model tokens.');
       assert.equal(row.modelItems.length, 0);
-      const text = row.hooks[0].entries.find(e => e.text.startsWith('Claudex cache warming (local command; no model request):\n'))?.text;
+      const text = row.hooks[0].entries.find(e => e.kind === 'warning' && e.text.split('\n').length === 4)?.text;
       assert(text, 'Native hook did not surface its local result.');
-      const body = text.slice(text.indexOf('\n') + 1);
-      assert(body.startsWith('{'), body);
-      return JSON.parse(body);
+      assert(!/"sessionId"|"policy"|confirmationId/.test(text), 'Internal JSON leaked into the summary.');
+      entry.displayText = text; await save();
+      return policyStatus();
     }
     await delay(50);
   }
@@ -93,11 +98,10 @@ try {
   if (!values['status-only']) {
     enrollmentRequested = true;
     const enabled = await send('/claudex:warm on');
-    assert.equal(enabled.state, 'enabled'); assert.equal(enabled.policy.enabled, true);
-    assert.equal(enabled.policy.sessionId, id); assert.equal(enabled.policy.refreshMinutes, 25);
-    assert.equal(enabled.confirm, undefined);
+    assert.equal(enabled.policies[0].enabled, true);
+    assert.equal(enabled.policies[0].sessionId, id); assert.equal(enabled.policies[0].refreshMinutes, 25);
     const status = await send('/claudex:warm status'); assert.equal(status.policies[0].enabled, true);
-    const stopped = await send('/claudex:warm off'); assert.equal(stopped.policy.enabled, false);
+    const stopped = await send('/claudex:warm off'); assert.equal(stopped.policies[0].enabled, false);
     const final = await send('/claudex:warm status'); assert(final.policies.every(p => !p.enabled));
     enrollmentRequested = false;
   }

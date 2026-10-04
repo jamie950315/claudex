@@ -21,6 +21,7 @@ export const ENGINE_PLUGIN_FILES = Object.freeze([
   'plugins/claudex/hooks/locales.mjs',
   'plugins/claudex/hooks/delivery.mjs',
   'plugins/claudex/hooks/cache-warm.mjs',
+  'plugins/claudex/hooks/cache-warm-display.mjs',
   'plugins/claudex/tests/native.test.ts',
   'plugins/claudex/README.md',
   'plugins/claudex/skills/claudex-workflow/SKILL.md',

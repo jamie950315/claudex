@@ -1,4 +1,8 @@
-# Claudex native companion, 0.8.7
+# Claudex native companion, 0.8.8
+
+Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
+tokens and warm budgets, first cache result, and next warm time or waiting reason.
+Technical JSON remains available only through the advanced diagnostic commands.
 
 Use `/claudex:warm on [5m|1h]` (also `ttl=5m|ttl=1h`) to enable directly, without
 a second confirmation command. `/claudex:warm off` stops warming;
@@ -83,7 +87,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.7-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.8-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

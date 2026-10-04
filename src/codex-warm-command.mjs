@@ -3,14 +3,26 @@ import { readAppStopState } from './app-stop-state.mjs';
 import { privateDir, privateRead } from './claude-mod-storage.mjs';
 import { callCollaboration } from './collaboration-transport.mjs';
 import { createCodexCacheNative } from './codex-cache-native.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+import { formatWarmSummary } from '../plugins/claudex/hooks/cache-warm-display.mjs';
+import { createLocalization } from '../plugins/claudex/hooks/localization.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const PREFIX = '/claudex:warm';
 const HELP = 'Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits. Codex has no configurable 5m/1h TTL. The default refresh interval is 25 minutes.';
 const block = text => {
-  const message = `Claudex cache warming (local command; no model request):\n${text}`;
-  return { decision: 'block', reason: message, systemMessage: message };
+  return { decision: 'block', reason: text, systemMessage: text };
 };
+
+async function systemTranslator() {
+  const localization = createLocalization();
+  await localization.load({ readLanguage: async () => 'system', preferredLanguages: async () => {
+    const result = await promisify(execFile)('/usr/bin/defaults', ['read', '-g', 'AppleLanguages'], { timeout: 2000, maxBuffer: 8192 });
+    return { ...result, exitCode: 0 };
+  } });
+  return localization.t;
+}
 
 export function parseCodexWarmCommand(prompt) {
   if (typeof prompt !== 'string' || !/^\/claudex:warm(?:\s|$)/u.test(prompt.trim())) return null;
@@ -35,6 +47,7 @@ async function rpc(root, method, params) {
  * The broker independently verifies the loaded native owner on prepare/confirm.
  * Recognized commands always block model submission, including failures. */
 export async function handleCodexWarmCommand(input, { root, worker = false, call = rpc, stopped = readAppStopState,
+  getTranslator = systemTranslator,
   verify = context => createCodexCacheNative({ syncRoot: root }).verifyCommand(context) } = {}) {
   if (input?.hook_event_name !== 'UserPromptSubmit') return null;
   let command;
@@ -74,9 +87,7 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
       result = { sessionId: params.sessionId, cwd: params.cwd, policies: result.policies,
         bestEffort: result.bestEffort, limitations: result.limitations };
     }
-    const text = JSON.stringify(result, null, 2);
-    if (typeof text !== 'string' || text.length > 30000) throw new Error('The local result exceeded its display bound; inspect status.');
-    return block(text);
+    return block(formatWarmSummary(result, { provider: 'codex', ...params, t: await getTranslator() }));
   } catch (error) {
     // A lost response may follow a successful enrollment. Do not retry or claim
     // rollback; a separately requested status/off can resolve the uncertainty.

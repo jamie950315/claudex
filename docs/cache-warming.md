@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.10 and Claude Mod 0.8.7 provide bounded, per-conversation cache warming.
+Claudex 1.2.11 and Claude Mod 0.8.8 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,8 +16,8 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.7 companion and
-a 1.2.10 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.8 companion and
+a 1.2.11 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -116,8 +116,18 @@ claudex collaboration cache-warm off --session NATIVE_SESSION_ID --cwd /exact/pr
 
 For Claude, the CLI does not enable a conversation remotely. Select it in the native client
 and confirm there. Status is read-only and does not start models or renew a
-cache. Native command output is structured technical JSON; the pane provides
-equivalent controls for TTL and startup preferences.
+cache. Namespaced on/off/status output is a four-line localized summary: state
+and TTL/interval, cache-prefix tokens and warm read/output budgets, first cache
+result time, and next warm time or a short waiting reason. Times include the
+local UTC offset. The first result is native observed cache-read evidence, not
+enablement, reservation or submission time. Missing observations stay explicit;
+no scheduled time or token count is invented. Codex follows system language;
+Claude follows its Mod language preference. Advanced `/claudex warm` diagnostics
+and CLI output retain structured data for operators, while the pane provides
+equivalent TTL and startup-preference controls.
+The compact output passed native Mod command validation and installed Codex
+status/on/status/off/status acceptance with four localized lines, no internal
+JSON identifiers and no model activity. Synchronization export remained intact.
 
 Native 2.1.286 acceptance for Mod 0.8.6 verified that `claudex:warm` appears in
 the real command catalogue. Fourteen local commands across two isolated native
