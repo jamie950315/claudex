@@ -193,6 +193,13 @@ test('owned API export uses two complete matching reads and rejects observed sou
   const result = await exportOwnedCodexHistory({ ...identity, client, cwd: '/tmp' });
   assert.equal(requests, 2);
   assert.equal(result.digest, fingerprint(canonical()));
+  const control = { id: 'empty-control', status: 'completed', itemsView: 'full', items: [], startedAt: 200, completedAt: 201, error: null };
+  const controlled = { request: async () => ({ data: [...structuredClone(snapshot.turns), control], nextCursor: null }) };
+  await assert.rejects(exportOwnedCodexHistory({ ...identity, client: controlled, cwd: '/tmp' }), /no persisted items/);
+  const unchanged = await exportOwnedCodexHistory({ ...identity, client: controlled, cwd: '/tmp',
+    resolveEmptyTurns: async turns => ({ turnIds: turns.map(turn => turn.id), sourceIdentity: { ino: 'fixture' }, evidenceDigest: 'a'.repeat(64) }) });
+  assert.equal(unchanged.digest, result.digest); assert.equal(unchanged.emptyControlTurnCount, 1);
+  assert.equal(unchanged.incompleteTail, false);
   let changingRequests = 0;
   const changing = { async request() {
     const data = structuredClone(snapshot.turns);

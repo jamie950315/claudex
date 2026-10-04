@@ -16,6 +16,7 @@ import { inspectNativeSyncHookTrust } from './sync-hook-install.mjs';
 import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owned-claude-history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
+import { createNativeEmptyTurnResolver } from './native-empty-turn.mjs';
 import { createCodexRolloutLocator, createCodexLocalImageResolver } from './native-local-images.mjs';
 import { createNativeGoalRequestResolver } from './native-goal-request.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
@@ -157,7 +158,7 @@ export class DesktopRuntime {
     this.verificationCodeHash ??= Promise.all([
       'history.mjs', 'claude.mjs', 'codex.mjs', 'owned-claude-history.mjs', 'owned-codex-history.mjs',
       'base64.mjs', 'compaction.mjs', 'claude-parallel-tools.mjs', 'claude-fork.mjs', 'claude-image-assets.mjs',
-      'native-history.mjs', 'native-local-images.mjs', 'native-goal-request.mjs', 'context-archive.mjs', 'context-packet.mjs',
+      'native-history.mjs', 'native-local-images.mjs', 'native-goal-request.mjs', 'native-empty-turn.mjs', 'context-archive.mjs', 'context-packet.mjs',
       'context-packet-reader.mjs', 'desktop-runtime.mjs', 'desktop-watch-hints.mjs',
       'cold-verification-cache.mjs', 'verification-observations.mjs', 'storage.mjs', '../package-lock.json',
     ].map(async name => [name, await readFile(new URL(name, import.meta.url), 'utf8')]))
@@ -551,6 +552,7 @@ export class DesktopRuntime {
       const retainedPath = verifiedCheckpoint && record.path && record.path !== path
         ? record.path : undefined;
       let data, imageEvidence;
+      const resolveEmptyTurns = createNativeEmptyTurnResolver({ path, threadId: nativeId, cwd });
       const resolveLocalImages = createCodexLocalImageResolver({ path, threadId: nativeId, retainedRollouts, retainedPath,
         locateRollout: createCodexRolloutLocator(this.codexHome),
         onResolved: evidence => { imageEvidence = evidence; },
@@ -558,10 +560,10 @@ export class DesktopRuntime {
       try {
         data = record.managed
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
-            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages, displayScreenshots: record.displayScreenshots })
+            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages, resolveEmptyTurns, displayScreenshots: record.displayScreenshots })
           : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits, displayScreenshots: record.displayScreenshots,
             checkpoint: verifiedCheckpoint ? record.checkpoint : undefined,
-            resolveLocalImages, resolveInitialGoal: createNativeGoalRequestResolver({ path, threadId: nativeId, cwd }) });
+            resolveLocalImages, resolveEmptyTurns, resolveInitialGoal: createNativeGoalRequestResolver({ path, threadId: nativeId, cwd }) });
         if (imageEvidence) {
           // An owned bootstrap expands two native items into its authenticated
           // portable prefix. Later native items retain that exact offset.

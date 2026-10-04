@@ -72,7 +72,7 @@ function compactionControl(turn) {
 
 const responseBoundary = turn => turn.status === 'completed' && !compactionControl(turn);
 
-function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorRequest = false, allowInitialDelegation = false } = {}) {
+function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorRequest = false, allowInitialDelegation = false, emptyControl = false } = {}) {
   if (!object(turn) || typeof turn.id !== 'string' || !turn.id || !Array.isArray(turn.items)) fail('malformed turn.');
   if (turn.status === 'inProgress' && !allowActive) fail('wait for the in-progress turn to complete.');
   if (turn.status !== 'completed' && turn.status !== 'inProgress'
@@ -85,7 +85,10 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   const completedAt = timestamp(turn.completedAt);
   if (startedAt !== null && completedAt !== null && completedAt < startedAt) fail('turn completion precedes its start.');
   if (startedAt !== null && previousStart !== null && startedAt < previousStart) fail('native turns are not in ascending order.');
-  if (turn.status === 'completed' && !turn.items.length) fail('a completed turn has no persisted items.');
+  if (turn.status === 'completed' && !turn.items.length) {
+    if (emptyControl) return startedAt ?? previousStart;
+    fail('a completed turn has no persisted items.');
+  }
   // The exact Desktop create_thread ingress is an observed request boundary,
   // not an assistant-only loophole. Keep the original function event unchanged.
   let lastUser = allowInitialDelegation && isNativeInitialDelegation(turn.items[0]) ? 0 : -1; let lastAgent = -1;
@@ -108,8 +111,9 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   return startedAt ?? previousStart;
 }
 
-async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots) {
+async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns) {
   const turns = []; const ids = new Set(); const cursors = new Set();
+  const emptyTurnEvidence = [];
   let initialGoal = null;
   let cursor; let pages = 0; let bytes = 0; let itemCount = 0; let previousStart = null; let hasPriorRequest = false;
   while (true) {
@@ -138,6 +142,18 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
     const nextCursor = response.nextCursor ?? null;
     if (nextCursor !== null && (typeof nextCursor !== 'string' || !nextCursor)) fail('invalid pagination cursor.');
     if (nextCursor !== null && response.data.length === 0) fail('empty page with a continuation cursor.');
+    const emptyCandidates = response.data.filter(turn => object(turn) && turn.status === 'completed'
+      && turn.error == null && turn.itemsView === 'full' && Array.isArray(turn.items) && !turn.items.length);
+    let emptyControls = new Set();
+    if (emptyCandidates.length && resolveEmptyTurns) {
+      const proof = await resolveEmptyTurns(emptyCandidates, { threadId });
+      if (!object(proof) || !object(proof.sourceIdentity) || !/^[a-f0-9]{64}$/.test(proof.evidenceDigest ?? '')
+        || !Array.isArray(proof.turnIds) || proof.turnIds.length !== emptyCandidates.length
+        || new Set(proof.turnIds).size !== proof.turnIds.length
+        || proof.turnIds.some((id, index) => id !== emptyCandidates[index].id)) fail('invalid empty control provenance.');
+      emptyControls = new Set(proof.turnIds);
+      emptyTurnEvidence.push({ apiDigest: canonicalDigest(emptyCandidates), proof });
+    }
     for (const turn of response.data) {
       if (!turns.length && object(turn) && turn.status === 'completed' && turn.itemsView === 'full'
           && Array.isArray(turn.items) && turn.items.some(item => item?.type === 'agentMessage')
@@ -148,12 +164,16 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
             || !object(initialGoal.sourceIdentity))) fail('invalid initial goal provenance.');
         hasPriorRequest = initialGoal !== null;
       }
-      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix, hasPriorRequest, allowInitialDelegation: turns.length === 0 });
+      previousStart = validateTurn(turn, previousStart, { completedPrefix, allowActive: completedPrefix, hasPriorRequest,
+        allowInitialDelegation: turns.length === 0, emptyControl: emptyControls.has(turn?.id) });
       hasPriorRequest ||= turn.items.some(item => item.type === 'userMessage') || turns.length === 0 && isNativeInitialDelegation(turn.items[0]);
       if (ids.has(turn.id)) fail('duplicate turn identity across native pages.');
       ids.add(turn.id);
       itemCount += turn.items.length;
       if (itemCount > limits.maxItems) fail('item limit exceeded; no partial export is returned.');
+      // Proven no-message native control turns neither add portable content nor
+      // complete an unfinished request. Their raw proof is compared across reads.
+      if (emptyControls.has(turn.id)) continue;
       turns.push(turn);
     }
     if (nextCursor === null) break;
@@ -169,7 +189,8 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
   return { turns: exported, initialGoal, digest: initialGoal === null ? canonicalDigest(exported)
     : canonicalDigest(JSON.parse(serialize({ turns: exported, initialGoal: initialGoal.request }))),
     itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
-    bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount };
+    bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount, emptyTurnEvidence,
+    emptyControlTurnCount: emptyTurnEvidence.reduce((sum, entry) => sum + entry.proof.turnIds.length, 0) };
 }
 
 function inert(label, value) {
@@ -282,16 +303,18 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
 // database access, source transcript writes, or hidden partial-history fallback.
 // Two matching complete reads detect observed changes, not a writer lease. The
 // coordinator still rechecks source identity/checkpoints before publication.
-export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal, displayScreenshots } = {}) {
+export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal, displayScreenshots, resolveEmptyTurns } = {}) {
   if (!client || typeof client.request !== 'function') fail('a native app-server client is required.');
   if (typeof threadId !== 'string' || !threadId) fail('thread identity is required.');
   if (typeof completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
   if (resolveInitialGoal !== undefined && typeof resolveInitialGoal !== 'function') fail('invalid initial goal resolver.');
+  if (resolveEmptyTurns !== undefined && typeof resolveEmptyTurns !== 'function') fail('invalid empty control resolver.');
   if (displayScreenshots !== undefined && displayScreenshots !== 'omitted') fail('invalid display screenshot policy.');
   const limits = checkedLimits(inputLimits);
-  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots);
-  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots);
+  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns);
+  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns);
   if (first.digest !== second.digest || serialize(first.initialGoal?.sourceIdentity ?? null) !== serialize(second.initialGoal?.sourceIdentity ?? null)
+    || serialize(first.emptyTurnEvidence) !== serialize(second.emptyTurnEvidence)
     || serialize(first.initialGoal?.prefixHashAlternatives ?? null) !== serialize(second.initialGoal?.prefixHashAlternatives ?? null))
     fail('source history changed between complete reads; synchronization paused.');
   return { ...first, threadId, turnCount: first.turns.length };
@@ -303,10 +326,10 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, displayScreenshots, checkpoint } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, resolveEmptyTurns, displayScreenshots, checkpoint } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
-  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots });
+  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns });
   const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
   let common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
   // Preserve an existing representation only if the entire saved canonical
@@ -330,5 +353,6 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
   if (Buffer.byteLength(encoded) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
   return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
     incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount,
+    emptyControlTurnCount: first.emptyControlTurnCount,
     nativeMessageOffset: first.initialGoal === null ? 0 : 1 };
 }

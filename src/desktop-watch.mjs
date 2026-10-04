@@ -32,6 +32,7 @@ const isWaiting = error => WAITING.test(reason(error));
 const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verified synchronized checkpoint)?\.$/.test(reason(error))
   || /^Native Codex history export: no completed persisted history is available; wait for a complete turn\.(?: \[Codex thread [a-f0-9-]+\])?$/.test(reason(error));
 const isUnsupported = error => error?.code === 'CLAUDEX_NATIVE_CWD_UNAVAILABLE' || UNSUPPORTED.test(reason(error))
+  || /^Native Codex empty turn: /.test(reason(error))
   || /^Native Codex history export: an assistant message precedes the turn user input\.(?: \[Codex thread [a-f0-9-]+\])?$/i.test(reason(error));
 const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'

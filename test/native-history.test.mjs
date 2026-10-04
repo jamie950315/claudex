@@ -21,6 +21,42 @@ const run = (native, options = {}) => exportNativeHistory({ client: native, thre
 const delegation = () => ({ type: 'functionCallOutput', id: 'fco-native-request', namespace: 'codex_app', name: 'create_thread',
   output: '<codex_delegation>\n  <source_thread_id>00000000-0000-4000-8000-000000000002</source_thread_id>\n  <input>Explicit synthetic task request.\nPreserve this text exactly.</input>\n</codex_delegation>' });
 
+const emptyProof = async turns => ({ turnIds: turns.map(turn => turn.id), sourceIdentity: { dev: '1', ino: '2' }, evidenceDigest: 'a'.repeat(64) });
+
+test('proven empty controls preserve canonical messages and never become a response boundary', async () => {
+  const control = turn('control', [], 200), baseline = await run(client([page([turn()])]));
+  const result = await run(client([page([turn(), control])]), { completedPrefix: true, resolveEmptyTurns: emptyProof });
+  assert.equal(result.emptyControlTurnCount, 1); assert.equal(result.incompleteTail, false);
+  assert.equal(result.turnCount, 1); assert.equal(result.digest, baseline.digest);
+  assert.equal(fingerprint(result.common), fingerprint(baseline.common));
+  const middle = await run(client([page([turn(), control], 'next'), page([turn('next', [user('Next'), answer('Done')], 300)])]),
+    { resolveEmptyTurns: emptyProof });
+  assert.equal(middle.common.messages.length, 4); assert.equal(middle.emptyControlTurnCount, 1);
+  const interrupted = { ...turn('unfinished', [user('Unfinished')], 200), status: 'interrupted' };
+  const prefix = await run(client([page([turn(), interrupted, turn('control', [], 300)])]),
+    { completedPrefix: true, resolveEmptyTurns: emptyProof });
+  assert.equal(prefix.common.messages.length, 2); assert.equal(prefix.incompleteTail, true); assert.equal(prefix.incompleteTailCount, 1);
+  await assert.rejects(run(client([page([control])]), { resolveEmptyTurns: emptyProof }), /no completed persisted history/);
+  await assert.rejects(run(client([page([control, turn('unprompted', [answer()], 300)])]), { resolveEmptyTurns: emptyProof }), /precedes/);
+});
+
+test('unproven empties, changed control evidence and malformed resolver results retain history guards', async () => {
+  const control = turn('control', [], 200);
+  await assert.rejects(run(client([page([turn(), control])])), /no persisted items/);
+  for (const proof of [null, { turnIds: ['other'], sourceIdentity: {}, evidenceDigest: 'a'.repeat(64) },
+    { turnIds: ['control'], sourceIdentity: {}, evidenceDigest: 'bad' }])
+    await assert.rejects(run(client([page([turn(), control])]), { resolveEmptyTurns: async () => proof }), /provenance/);
+  let serial = 0;
+  await assert.rejects(run(client([page([turn(), control])]), { resolveEmptyTurns: async turns => ({
+    ...await emptyProof(turns), sourceIdentity: { ino: String(++serial) },
+  }) }), /source history changed/);
+  await assert.rejects(run(client([page([turn(), control]), page([turn(), { ...control, durationMs: 40 }])]),
+    { resolveEmptyTurns: emptyProof }), /source history changed/);
+  await assert.rejects(run(client([page([turn(), control, control])]), { resolveEmptyTurns: emptyProof }), /provenance|duplicate/);
+  await assert.rejects(run(client([page([turn(), { ...control, error: { message: 'failure' } }])]),
+    { resolveEmptyTurns: emptyProof }), /only completed/);
+});
+
 test('two complete ascending native reads preserve all pages and explicit provenance', async () => {
   const native = client([page([turn()], 'second'), page([turn('t2', [user('Next'), answer('Done')], 200)])]);
   const exported = await run(native);

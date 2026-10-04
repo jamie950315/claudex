@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.8 packages Claude Mod 0.8.6. Keep application and Mod versions
+Claudex.app 1.2.9 packages Claude Mod 0.8.6. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -267,6 +267,13 @@ bounded polling harness, not a production fallback.
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
+- Native completed turns with no full API items require independent stable
+  rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
+  exact lifecycle IDs/times and no response, tool or token activity; fresh native
+  typed bootstrap context is allowed only by its strict role/kind/frame schema.
+  Compare raw proof across both history reads. Empty controls never close a
+  pending request, fabricate a reply, alter checkpoints or authorize history writes.
+  An all-control new chat still waits for its first real completed dialogue.
 - Imported history must not loop back as newly authored history.
 - Native user slash-command and skill-invocation records can omit stdout. Decode only
   unpaired, identity-bound native string command envelopes as inert full text;
@@ -554,7 +561,7 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.8 and Mod 0.8.6 installed through normal
+passes. The reviewed Mac has App 1.2.9 and Mod 0.8.6 installed through normal
 Quit/reopen and app-owned Mod management; both native configuration identities'
 receiver opt-ins were retained. Existing Claude sessions were not restarted;
 installation is verified but fresh loaded-0.8.6 acceptance remains pending.

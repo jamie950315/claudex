@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.2.8 and Claude Mod 0.8.6 provide bounded, per-conversation cache warming.
+Claudex 1.2.9 and Claude Mod 0.8.6 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -17,7 +17,7 @@ observes and submits only into its own existing native session.
 ## Enable one Claude conversation
 
 Use the intended existing conversation with a freshly loaded 0.8.6 companion and
-a 1.2.8 broker. Older loaded sessions can retain the previous Mod until a normal
+a 1.2.9 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -274,6 +274,19 @@ Composer keystrokes, autocomplete and rendered pixels were not exercised;
 native hook output delivery is not a screenshot-based UI acceptance claim.
 This control-command test does not remeasure cache retention or claim free
 automatic warm turns.
+
+App 1.2.9 fixes an integration issue found after that acceptance: native blocked
+commands can complete with no persisted display items, which 1.2.8's history
+exporter incorrectly treated as a synchronization conflict. The exporter now
+requires an independently stable authoritative rollout proving the exact empty
+lifecycle and matching API identity/timing before excluding it from dialogue.
+Fresh-session typed native context is checked separately from ordinary messages.
+Unknown empty turns and any actual user/model/tool activity remain guarded.
+No transcript is edited, no reply is synthesized, and a control-only chat waits
+for a real completed conversation before synchronization enrollment. User-supplied
+Desktop screenshots also confirm the native status/on output is displayed; the
+"hook blocked this message" indicator is expected local interception, not an
+enrollment failure. `on` still requires the printed confirmation to enable warming.
 
 ### CLI controls
 
