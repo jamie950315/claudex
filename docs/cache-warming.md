@@ -248,18 +248,32 @@ all existing best-effort limits and waits for fresh ordinary usage evidence;
 the local control command itself is not a cache-refresh sample.
 
 Validation covers actual hook-process parsing, native-context fixtures, private
-Unix RPC, installation migration and independent trust diagnostics. Read-only
-Desktop 0.160.0 probes and static composer/owner inspection support compatibility,
-but the new hook was not trusted or executed in a live Desktop chat during this
-implementation. Hook-time turn visibility, rendered output and zero-model native
-command acceptance remain an explicit activation gate, not a completed UI test.
+Unix RPC, installation migration and independent trust diagnostics.
 The reviewed installation was upgraded through normal Claudex shutdown and
 restart to App 1.2.8 / Mod 0.8.6, retaining the previous app as a recoverable
-backup. Installed files and strict signatures matched the build. The new hook
-was configured, loaded and enabled, but native inspection reported it untrusted;
-existing synchronization and notification-origin hooks remained ready. No Codex
-warming policy or attempt was created. Complete the separate native trust review
-before attempting the local command acceptance check.
+backup. Installed files and strict signatures matched the build. After the
+user's native trust review, inspection reported the exact new hook loaded,
+enabled and trusted; synchronization and notification-origin hooks remained ready.
+
+Authorized native Desktop-backend acceptance on 0.160.0 then exercised seven
+local commands in an existing isolated test chat: one initial status, followed
+by status, on, confirm, status, off and status. Each command had one native hook
+run with status `blocked`, a completed control turn, surfaced structured local
+output, no token-usage event and no model/tool item. Hook execution took 54–82 ms.
+An independent exact-turn history audit found all seven completed with no
+assistant/tool items. The confirmation enabled only the target chat with a
+25-minute interval; final broker evidence showed it disabled and unbound,
+zero refresh attempts/tokens and no next timer.
+
+This proves actual hook-time primary/turn visibility, native blocking and the
+installed controller path, not just direct helper calls. The manual probe
+`dev/cache-warm-probe/codex-command.mjs` uses literal `turn/start` input through
+the existing shared Desktop backend, never the differently wrapped app-origin
+wake envelope. It makes no model/permission overrides and never replays input.
+Composer keystrokes, autocomplete and rendered pixels were not exercised;
+native hook output delivery is not a screenshot-based UI acceptance claim.
+This control-command test does not remeasure cache retention or claim free
+automatic warm turns.
 
 ### CLI controls
 

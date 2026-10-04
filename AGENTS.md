@@ -382,9 +382,15 @@ Recognized commands return blocking output on success or failure, with a
 25-second handler deadline before the 30-second native timeout. Native startup
 failure or untrusted/disabled hooks can still skip interception; document that
 limit. Ordinary input is a no-op. CLI controls remain unchanged; Codex TTL is not
-configurable. Native Desktop hook timing, trust and rendered local output have
-not yet passed activation acceptance; do not claim zero-model live UI delivery
-from synthetic/private-RPC checks or static source inspection.
+configurable. Authorized Desktop 0.160.0 backend acceptance after native trust
+verified seven blocked local command turns (status/on/confirm/off), native
+hook-time primary/turn checks, structured output and no token-usage events or
+assistant/tool history items. The test policy ended disabled/unbound with zero
+refresh attempts and no timer. Keep the manual `codex-command.mjs` probe outside
+automated tests; it submits literal native input, never the wrapped app-origin
+wake payload, and stops on uncertainty or model activity. Composer keystrokes,
+autocomplete and rendered pixels remain unverified; do not promote native
+backend/output evidence into visual UI or cache-retention proof.
 Authorized 1.2.6 native acceptance verified a 25-minute same-owner OK refresh
 (36,096 cached input / 5 output tokens), exact accounting and the one-refresh
 limit. At about 31 minutes both warmed and untouched controls still hit; retain
@@ -548,10 +554,10 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.4 and Mod 0.8.4 installed through normal
+passes. The reviewed Mac has App 1.2.8 and Mod 0.8.6 installed through normal
 Quit/reopen and app-owned Mod management; both native configuration identities'
 receiver opt-ins were retained. Existing Claude sessions were not restarted;
-installation is verified but fresh loaded-0.8.4 acceptance remains pending.
+installation is verified but fresh loaded-0.8.6 acceptance remains pending.
 The earlier reviewed 0.7.1 installation used route=mod-self. Earlier acceptance after a normal Claude
 restart verified that one Desktop native session and one waiter delivered
 a newly authorized message to the same session, with a Sonnet 5.5 reply and real
