@@ -8,6 +8,7 @@ import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
 import { ChatMailbox } from './chat-mailbox.mjs';
 import { CacheWarmManager } from './cache-warm.mjs';
+import { CodexCacheWarmer } from './codex-cache-warm.mjs';
 import { readAppStopState } from './app-stop-state.mjs';
 import { dispatchModWake, modSessionObservation, modDeliveryDiagnosis } from './mod-wake-broker.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
@@ -140,7 +141,8 @@ export class CollaborationHub extends EventEmitter {
   constructor({ root, run, mcp, allowWrite = false, allowFullAccess = false, defaultPermission = 'read-only', maxWorkers = 64, maxDepth = 3,
     maxSteps = 12, maxTasks = 1000, maxRequests = 10000, maxStateBytes = 32 * 1024 * 1024,
     inspectProcessGroup = inspectExitedProcessGroup, inspectProcesses = inspectOwnedProcesses, chatTitleResolver = enrichChatTitles,
-    nativeChatDiscovery = null, chatWake = null, chatWakeProbe = null, claudeWakeManifest = null, claudeOwnerWake = null, originVerifier = null } = {}) {
+    nativeChatDiscovery = null, chatWake = null, chatWakeProbe = null, claudeWakeManifest = null, claudeOwnerWake = null, originVerifier = null,
+    codexCacheOptions = {} } = {}) {
     super();
     // Bounded socket waiters can legitimately exceed EventEmitter's default ten.
     this.setMaxListeners(136);
@@ -166,6 +168,7 @@ export class CollaborationHub extends EventEmitter {
     this.originVerifier = originVerifier;
     this.modWaiters = 0;
     this.modReads = new Set();
+    this.codexCacheOptions = codexCacheOptions;
   }
 
   // The controller's saved default is its explicit authorization for that level;
@@ -187,6 +190,11 @@ export class CollaborationHub extends EventEmitter {
   async initialize() {
     this.root = await privateDirectory(this.root);
     this.cacheWarm = new CacheWarmManager({ root: this.root, stopped: async () => {
+      if (this.closed) return true;
+      const state = await readAppStopState(dirname(this.root));
+      return this.closed || state?.stopped === true || state?.resuming === true;
+    } });
+    this.codexCacheWarm = new CodexCacheWarmer({ root: this.root, ...this.codexCacheOptions, stopped: async () => {
       if (this.closed) return true;
       const state = await readAppStopState(dirname(this.root));
       return this.closed || state?.stopped === true || state?.resuming === true;
@@ -270,6 +278,7 @@ export class CollaborationHub extends EventEmitter {
     this.autoResolveTimer.unref?.();
     observeNotificationResume(this);
     await this.cacheWarm.initialize();
+    await this.codexCacheWarm.initialize();
     return this;
   }
 
@@ -417,6 +426,17 @@ export class CollaborationHub extends EventEmitter {
     if (!envelope || !envelope.params || typeof envelope.params !== 'object' || Array.isArray(envelope.params)) throw new Error('Invalid protocol envelope.');
     const { method, params } = envelope;
     const actor = this.actor(envelope);
+    if (method.startsWith('codex_cache_warm_')) {
+      if (actor.task) throw new Error('Managed workers cannot control Codex cache warming.');
+      const action = method.slice('codex_cache_warm_'.length);
+      const allowed = {
+        list: ['sessionId', 'cwd'], off: ['sessionId', 'cwd'], confirm: ['confirmationId', 'bestEffort'],
+        prepare: ['sessionId', 'cwd', 'bestEffort', 'refreshMinutes', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
+      }[action];
+      if (!allowed || Object.keys(params).some(key => !allowed.includes(key))) throw new Error('Unsupported Codex cache-warm fields.');
+      if (this.closed && !['list', 'off'].includes(action)) throw new Error('Broker is stopping.');
+      return this.codexCacheWarm[action](params, actor.key);
+    }
     if (method.startsWith('cache_warm_')) {
       if (actor.task) throw new Error('Only an external controller or its native Mod may manage cache warming.');
       const action = method.slice('cache_warm_'.length);
@@ -434,6 +454,7 @@ export class CollaborationHub extends EventEmitter {
       if (action === 'list') {
         if (Object.keys(params).some(key => !['sessionId', 'cwd'].includes(key))) throw new Error('Invalid cache-warm list filters.');
         const result = await this.cacheWarm.list();
+        result.providers.codex = 'experimental-best-effort-separate-controller';
         if (params.sessionId !== undefined) {
           if (typeof params.sessionId !== 'string' || typeof params.cwd !== 'string') throw new Error('Exact cache-warm context is required.');
           return { ...result, policies: result.policies.filter(item => item.sessionId === params.sessionId && item.cwd === params.cwd),
@@ -1285,6 +1306,7 @@ export class CollaborationHub extends EventEmitter {
     this.closed = true; this.emit('change');
     let cacheCloseError;
     try { await this.cacheWarm?.close(); } catch (error) { cacheCloseError = error; }
+    try { await this.codexCacheWarm?.close(); } catch (error) { cacheCloseError ??= error; }
     clearInterval(this.autoResolveTimer);
     // A pump may already be waiting on a journal commit. Drain its launch boundary
     // before taking the worker snapshot so no invocation escapes shutdown.

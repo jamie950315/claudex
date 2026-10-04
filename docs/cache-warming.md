@@ -1,21 +1,23 @@
 # Opt-in native cache warming
 
-Claudex 1.2.4 and Claude Mod 0.8.4 provide bounded, per-conversation cache warming.
+Claudex 1.2.5 and Claude Mod 0.8.5 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
-The first adapter is a loaded Claude Code Mod session. Codex is explicitly
-unsupported; Claude acceptance does not establish Codex behavior.
+Claude uses a loaded Code Mod session. Codex Desktop has a separate
+[experimental best-effort adapter](#codex-desktop-experimental-best-effort),
+enabled only after accepting its weaker controls. Claude acceptance does not
+establish Codex behavior.
 
-This is a real, visible plugin-origin conversation turn requesting only `OK`.
+Claude warming is a real, visible plugin-origin conversation turn requesting only `OK`.
 It consumes native plan usage and remains in the conversation. It is not a
 zero-output request or a free cache read. The broker owns authorization,
 deadlines, token accounting and durable one-use dispatch intents; the Mod
 observes and submits only into its own existing native session.
 
-## Enable one conversation
+## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.4 companion and
-a 1.2.4 broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.5 companion and
+a 1.2.5 broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
 
@@ -80,16 +82,17 @@ claudex collaboration cache-warm status
 claudex collaboration cache-warm off --session NATIVE_SESSION_ID --cwd /exact/project/path
 ```
 
-The CLI does not enable a conversation remotely. Select it in the native client
+For Claude, the CLI does not enable a conversation remotely. Select it in the native client
 and confirm there. Status is read-only and does not start models or renew a
 cache. Native command output is structured technical JSON; the pane provides
 equivalent controls for TTL and startup preferences.
 
-## Native Cache settings tab
+## Claude native Cache settings tab
 
 Open `/claudex`, then **Cache settings**. The tab shows the current native TTL,
 saved startup mode/TTL and warming status separately. Choose 1h or 5m and a
 startup mode in the form; selecting values does not apply them.
+These controls affect only the pane's own Claude session, not Codex.
 
 - **Preview current TTL change** changes this process's TTL without enabling
   warming. Remember mode also saves the choice; a fixed startup default remains
@@ -146,7 +149,88 @@ policies still win. Startup failure leaves warming off and is exposed by
 `/claudex warm status` in `local.ttlRestore`, alongside the saved `ttlPreference`
 and separately read `nativeCache`. No automatic retry or rollback is performed.
 
-## Scheduling and evidence
+## Codex Desktop experimental best-effort
+
+Codex warming is separately opt-in and currently controlled through the CLI,
+not the Claude Mod pane. It requires native runtime `0.160.0` and an already-loaded,
+persistent primary Desktop conversation. Forks, subagents, unloaded threads and
+threads with an active goal are refused (`active-goal-unsupported`). The adapter
+uses the existing native owner; it does not start a second owner, fork, invoke
+`codex exec resume`, navigate the app, extract credentials or use an API key.
+This capability gate does not change the synchronization runtime allowlist.
+
+Prepare a bounded preview for the exact native thread UUID and directory:
+
+```sh
+claudex collaboration cache-warm on --provider codex --session NATIVE_THREAD_UUID --cwd /exact/project/path --accept-best-effort
+```
+
+Review the returned identity, limits, effects and expiration, then run the exact
+confirmation it prints:
+
+```sh
+claudex collaboration cache-warm confirm TOKEN --provider codex --accept-best-effort
+claudex collaboration cache-warm status --provider codex
+claudex collaboration cache-warm off --provider codex --session NATIVE_THREAD_UUID --cwd /exact/project/path
+```
+
+Both preview and confirmation require `--accept-best-effort`. Neither a preview
+nor status authorizes inference. The controller-only confirmation is bounded
+and one-use; workers cannot enable or control this warmer.
+
+Optional CLI bounds are `--refresh-minutes 20`, `--max-minutes 60`,
+`--max-refreshes 3`, `--max-read-tokens 250000` and `--max-output-tokens 256`.
+These are the defaults. `refreshMinutes` accepts integers from 1 through 25;
+the other bounds have the same admission semantics as Claude warming. Native
+`outputTokens` already includes reasoning tokens and is not added twice.
+The output budget is an admission reservation and observed stop threshold,
+**not a hard native output cap**.
+
+### Accepted limitations
+
+- There is no reliable composer-draft read and no per-warm-turn no-tools control.
+  The instruction requests only `OK`, but the turn retains the conversation's
+  native permissions and tools. Observing tool activity stops future warming;
+  it cannot undo tools already executed or guarantee no side effects.
+- The same-owner dispatch can refuse a busy conversation. Busy, expired or
+  ambiguous opportunities do not produce catch-up bursts, uncertain retries or
+  interruption of the user's work. There is no atomic draft/idle/dispatch
+  guarantee.
+- No Codex native TTL configuration is written. The 30-minute
+  `configured-window` is an assumed local evidence deadline, not proof of
+  server TTL or a 30-minute retention promise. Refreshes are due at the observed
+  turn start plus `refreshMinutes`. A turn already lasting 30 minutes cannot
+  supply fresh evidence for this window.
+  Different models and native account routes may retain caches for less time;
+  choose the interval accordingly. A miss stops subsequent warming rather than
+  certifying the assumed window.
+- The initial cumulative counter is only a baseline. Scheduling waits for fresh
+  exact native usage deltas and successful native completion; it does not infer
+  usage from an old transcript, status timestamp or duplicate notification.
+  Model/effort metadata describes configured values, not independently verified
+  execution-model evidence.
+
+The private service matches the exact returned native turn ID before attributing
+warm usage. Native turn starts have second precision, while multiple distinct
+usage deltas in one socket batch can share a completion timestamp. Accounting
+preserves these clocks without inventing timestamps or upstream response IDs;
+increasing observations and exact counter deltas distinguish samples. It rejects
+counter inconsistencies, timestamp regressions and changed duplicate samples.
+Per-request hits remain candidates until the entire successfully completed warm
+turn's buffered usage has been accounted. A submitted turn or one partial hit
+does not certify warming.
+
+Codex uses its own bounded `codex-cache-warm.json` journal, isolated from Claude's
+`cache-warm.json`. App-stop, disconnect, broker shutdown and restart revoke native
+authorization; restart never automatically resumes warming. Only the private
+native service supplies observations and consumes claims: there is no external
+Codex usage/claim RPC. Interrupted dispatch remains uncertain, without replay.
+
+Source/synthetic tests and native observer checks are separate from real
+warm-turn inference and controlled retention experiments. Neither proves TTL
+extension. The Claude native acceptance records below do not certify Codex.
+
+## Claude scheduling and evidence
 
 The Mod records content-free metadata from each main request: identity, start
 and completion times, model, effort, stop reason and input/cache/output counts.
@@ -186,7 +270,7 @@ dispatches remain uncertain. The private journal is bounded to 64 policies and
 2,048 attempts/confirmation receipts and fails explicitly at capacity; it never
 prunes native history or silently deletes old intent records.
 
-## Native limitations and acceptance
+## Claude native limitations and acceptance
 
 Idle/draft and lifecycle checks fence observed activity before submission.
 Native 2.1.286 suppresses the originating plugin's own prompt hook as re-entry

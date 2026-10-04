@@ -92,6 +92,6 @@ test('staged cache-warm helper reads the actual Unix broker after its source cop
     child.stdin.end(JSON.stringify(request));
   });
   assert.equal(result.ok, true);
-  assert.equal(result.result.providers.codex, 'unsupported');
+  assert.equal(result.result.providers.codex, 'experimental-best-effort-separate-controller');
   assert.deepEqual(result.result.policies, []);
 });

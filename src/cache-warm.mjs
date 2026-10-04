@@ -23,10 +23,12 @@ function identity(value) {
 function bindingIdentity(value) {
   identity(value); requireValue(word(value.instanceId));
 }
-function sampleValue(value, now) {
+function sampleValue(value, now, provider) {
   requireValue(value && word(value.id) && word(value.model) && word(value.effort)
     && integer(value.startedAt) && integer(value.completedAt) && value.completedAt >= value.startedAt
-    && value.completedAt <= now && [300000, 3600000].includes(value.ttlMs)
+    && value.completedAt <= now && (provider === 'codex'
+      ? value.ttlMs === 1800000 && value.ttlSource === 'configured-window'
+      : [300000, 3600000].includes(value.ttlMs))
     && value.completedAt - value.startedAt < value.ttlMs
     && ['native-setting', 'conservative-minimum', 'configured-window'].includes(value.ttlSource)
     && (value.ttlSource !== 'conservative-minimum' || value.ttlMs === 300000)
@@ -40,22 +42,27 @@ function sampleValue(value, now) {
 const prefix = sample => sample.cacheReadTokens + sample.cacheWriteTokens;
 const windowMs = (sample, policy) => policy?.ttlPreference === '5m' ? Math.min(sample.ttlMs, 300000) : sample.ttlMs;
 const expires = (sample, policy) => sample.startedAt + windowMs(sample, policy);
-const nextAt = (sample, policy) => expires(sample, policy) - (windowMs(sample, policy) === 300000 ? 60000 : 300000);
+const nextAt = (sample, policy) => policy?.provider === 'codex'
+  ? sample.startedAt + policy.refreshMinutes * 60000
+  : expires(sample, policy) - (windowMs(sample, policy) === 300000 ? 60000 : 300000);
 const successful = sample => ['end_turn', 'stop_sequence'].includes(sample.stopReason);
-function validate(state) {
+function validate(state, provider) {
   requireValue(state?.version === 1 && Array.isArray(state.policies) && state.policies.length <= MAX_POLICIES
     && Array.isArray(state.attempts) && state.attempts.length <= MAX_ATTEMPTS
     && Array.isArray(state.requests) && state.requests.length <= MAX_ATTEMPTS, 'Invalid cache-warming journal.');
   const ids = new Set(), attempts = new Set();
   for (const p of state.policies) {
     identity(p);
-    requireValue(p.provider === 'claude' && !ids.has(p.sessionId) && integer(p.generation, 1)
+    requireValue(p.provider === provider && !ids.has(p.sessionId) && integer(p.generation, 1)
       && typeof p.enabled === 'boolean' && integer(p.until) && integer(p.updatedAt)
       && integer(p.maxRefreshes, 1, 100) && integer(p.maxReadTokens, 1, 100000000)
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 1440)
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
-      && (p.ttlMs === null || [300000, 3600000].includes(p.ttlMs))
-      && (p.ttlPreference === undefined || ['1h', '5m'].includes(p.ttlPreference)));
+      && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
+      && (provider === 'codex'
+        ? p.ttlPreference === undefined && integer(p.refreshMinutes, 1, 25)
+          && typeof p.bestEffort === 'boolean' && (!p.enabled || p.bestEffort)
+        : p.ttlPreference === undefined || ['1h', '5m'].includes(p.ttlPreference)));
     ids.add(p.sessionId);
   }
   for (const a of state.attempts) {
@@ -69,7 +76,9 @@ function validate(state) {
       && (a.authorizedAt === undefined || integer(a.authorizedAt))
       && (a.actual === undefined || ['cacheReadTokens', 'cacheWriteTokens', 'inputTokens', 'outputTokens'].every(key => integer(a.actual[key])))
       && (a.responseIds === undefined || Array.isArray(a.responseIds) && a.responseIds.length <= 64
-        && a.responseIds.every(word) && new Set(a.responseIds).size === a.responseIds.length));
+        && a.responseIds.every(word) && new Set(a.responseIds).size === a.responseIds.length)
+      && (a.cacheVerified === undefined || provider === 'codex' && typeof a.cacheVerified === 'boolean'
+        && (!a.cacheVerified || integer(a.authorizedAt) && a.responseIds?.length > 0 && a.actual !== undefined)));
     attempts.add(a.id);
   }
   const requests = new Set();
@@ -84,9 +93,11 @@ function validate(state) {
 /** Broker-owned bounded intent ledger. Native observations are ephemeral and
  * never restore a dispatch lease after restart. No method performs inference. */
 export class CacheWarmManager {
-  constructor({ root, now = Date.now, stopped = async () => false }) {
+  constructor({ root, provider = 'claude', now = Date.now, stopped = async () => false }) {
     requireValue(typeof root === 'string' && isAbsolute(root) && resolve(root) === root);
-    this.root = root; this.path = join(root, 'cache-warm.json'); this.now = now; this.stopped = stopped;
+    requireValue(['claude', 'codex'].includes(provider), 'Unsupported cache-warming provider.');
+    this.provider = provider;
+    this.root = root; this.path = join(root, provider === 'codex' ? 'codex-cache-warm.json' : 'cache-warm.json'); this.now = now; this.stopped = stopped;
     this.state = { version: 1, policies: [], attempts: [], requests: [] };
     this.bindings = new Map(); this.retired = new Map(); this.serial = Promise.resolve();
     this.closed = false; this.initialized = false; this.exists = false;
@@ -98,7 +109,7 @@ export class CacheWarmManager {
       catch (cause) { if (cause.code !== 'ENOENT') throw cause; this.initialized = true; return this; }
       const saved = await privateJSON(this.path, { optional: true, maxBytes: MAX_BYTES });
       if (saved) {
-        this.state = validate(saved); this.exists = true;
+        this.state = validate(saved, this.provider); this.exists = true;
         let changed = false;
         for (const a of this.state.attempts) if (live.has(a.state)) {
           a.state = a.state === 'reserved' ? 'revoked' : 'uncertain'; a.reason = 'broker-restarted'; changed = true;
@@ -115,7 +126,7 @@ export class CacheWarmManager {
   }
   async save() {
     try {
-      validate(this.state);
+      validate(this.state, this.provider);
       await privateDir(this.root, true);
       await writeReceipt(this.path, this.state, { exclusive: !this.exists }); this.exists = true;
     } catch (cause) {
@@ -170,7 +181,7 @@ export class CacheWarmManager {
   }
   async list() {
     return this.transaction(() => {
-      const result = { providers: { claude: 'native-mod-only', codex: 'unsupported' },
+      const result = { providers: { claude: 'native-mod-only', codex: this.provider === 'codex' ? 'experimental-best-effort' : 'unsupported' },
         policies: this.state.policies.map(p => this.presentation(p)), attempts: [],
         attemptCount: this.state.attempts.length, attemptsTruncated: false };
       let bytes = Buffer.byteLength(JSON.stringify(result));
@@ -184,19 +195,26 @@ export class CacheWarmManager {
     });
   }
   async configure(input) {
-    if (input?.provider !== 'claude') throw error('CACHE_WARM_UNSUPPORTED', 'Only an existing loaded Claude native Mod session is supported.');
+    if (input?.provider !== this.provider) throw error('CACHE_WARM_UNSUPPORTED', 'Cache-warming provider does not match this ledger.');
     identity(input); requireValue(typeof input.enabled === 'boolean');
     requireValue(!input.enabled || word(input.requestId), 'Enabling requires a unique requestId.');
     requireValue(input.requestId === undefined || word(input.requestId));
     requireValue(input.ttl === undefined || ['1h', '5m'].includes(input.ttl), 'Cache-warming ttl must be 1h or 5m.');
+    if (this.provider === 'codex') {
+      requireValue(!input.enabled || input.bestEffort === true, 'Codex warming requires explicit bestEffort acceptance.');
+      requireValue(input.bestEffort === undefined || typeof input.bestEffort === 'boolean');
+      requireValue(input.ttl === undefined, 'Codex native TTL configuration is not supported.');
+      requireValue(integer(input.refreshMinutes ?? 20, 1, 25), 'Codex refreshMinutes must be an integer from 1 to 25.');
+    }
     const { maxMinutes = 60, maxRefreshes = 3, maxReadTokens = 250000, maxOutputTokens = 256 } = input;
     requireValue(integer(maxMinutes, 1, 1440) && integer(maxRefreshes, 1, 100)
       && integer(maxReadTokens, 1, 100000000) && integer(maxOutputTokens, 1, 1000000));
     const stopped = input.enabled ? await this.stopped() : false;
     return this.transaction(async () => {
       requireValue(!this.closed || !input.enabled, 'Cache-warming broker is stopping.');
-      const payload = JSON.stringify({ provider: 'claude', sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
-        maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens, ...(input.ttl === undefined ? {} : { ttl: input.ttl }) });
+      const payload = JSON.stringify({ provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
+        maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens, ...(input.ttl === undefined ? {} : { ttl: input.ttl }),
+        ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 20 } : {}) });
       const saved = input.requestId && this.state.requests.find(r => r.requestId === input.requestId);
       if (saved) {
         requireValue(saved.payload === payload, 'Cache-warming requestId was reused with different parameters.');
@@ -213,8 +231,10 @@ export class CacheWarmManager {
       if (input.enabled && this.pending(input.sessionId) && this.pending(input.sessionId).state !== 'reserved')
         throw error('CACHE_WARM_PENDING', 'A native attempt still awaits final evidence; do not start another.');
       for (const a of this.attempts(input.sessionId)) if (a.state === 'reserved') { a.state = 'revoked'; a.reason = 'policy-changed'; }
-      const value = { provider: 'claude', sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
-        generation: (p?.generation ?? 0) + 1, ttlPreference: input.ttl ?? '1h', maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens,
+      const value = { provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
+        generation: (p?.generation ?? 0) + 1,
+        ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 20 } : { ttlPreference: input.ttl ?? '1h' }),
+        maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens,
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
       // Disabling revokes authorization without erasing this enrollment's
@@ -228,7 +248,7 @@ export class CacheWarmManager {
   async observe(input) {
     bindingIdentity(input); requireValue(integer(input.sequence, 1) && integer(input.epoch)
       && ['idle', 'busy', 'ended'].includes(input.phase));
-    const sample = input.sample === undefined ? null : sampleValue(input.sample, this.now());
+    const sample = input.sample === undefined ? null : sampleValue(input.sample, this.now(), this.provider);
     requireValue(!sample || input.phase !== 'ended');
     requireValue(input.attemptId === undefined || word(input.attemptId));
     requireValue(!input.attemptId || !sample?.attemptId || input.attemptId === sample.attemptId);
@@ -251,7 +271,11 @@ export class CacheWarmManager {
       if (repeated && JSON.stringify(sample) !== JSON.stringify(old.sample))
         return { observed: false, reason: 'changed-sample' };
       if (sample && !repeated && old?.instanceId === input.instanceId && old.sample
-        && (sample.startedAt < old.sample.startedAt || sample.completedAt <= old.sample.completedAt))
+        && (sample.startedAt < old.sample.startedAt || sample.completedAt < old.sample.completedAt
+          // Codex can deliver distinct exact usage deltas in one socket batch.
+          // Its private service supplies their IDs and increasing observation
+          // sequences; equal clock values alone must not discard those deltas.
+          || this.provider !== 'codex' && sample.completedAt === old.sample.completedAt))
         return { observed: false, reason: 'stale-sample' };
       const b = { sessionId: input.sessionId, cwd: input.cwd, instanceId: input.instanceId,
         sequence: input.sequence, epoch: input.epoch, phase: input.phase,
@@ -267,8 +291,13 @@ export class CacheWarmManager {
           a.state = 'uncertain'; a.reason = 'native-activity-changed'; changed = true;
           const p = this.policy(a.sessionId); p.enabled = false; p.reason = a.reason;
         }
+        // Codex Turn.startedAt has second precision. Only the private native
+        // service may attribute an own sample after matching the exact returned
+        // turn ID; timestamps are an additional fence, never attribution proof.
+        // Claude native observations retain their millisecond precision fence.
+        const authorizedStart = this.provider === 'codex' ? Math.floor(a.authorizedAt / 1000) * 1000 : a.authorizedAt;
         if (sample && !repeated && own && ['dispatching', 'submitted', 'verified', 'failed'].includes(a.state) && a.instanceId === input.instanceId
-          && sample.id !== a.sampleId && sample.startedAt >= a.authorizedAt && input.epoch > a.epoch) {
+          && sample.id !== a.sampleId && sample.startedAt >= authorizedStart && input.epoch > a.epoch) {
           const responseIds = a.responseIds ?? [];
           if (responseIds.includes(sample.id)) continue;
           if (responseIds.length >= 64) {
@@ -280,13 +309,27 @@ export class CacheWarmManager {
           a.actual = Object.fromEntries(['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens']
             .map(k => [k, (a.actual?.[k] ?? 0) + sample[k]]));
           a.completedAt = sample.completedAt; a.responseId = sample.id;
-          a.state = a.state !== 'failed' && successful(sample) && sample.model === a.model && sample.effort === a.effort
-            && sample.cacheReadTokens >= a.requiredPrefixTokens ? 'verified' : 'failed';
-          a.reason = a.state === 'verified' ? 'native-cache-hit' : 'native-cache-verification-failed'; changed = true;
+          const verified = a.state !== 'failed' && successful(sample) && sample.model === a.model && sample.effort === a.effort
+            && sample.cacheReadTokens >= a.requiredPrefixTokens;
+          if (this.provider === 'codex' && verified) {
+            // Per-request cache hits are candidates only. The private service
+            // drains every exact usage delta before publishing the own idle
+            // boundary for the successfully completed native turn.
+            a.cacheVerified = true;
+            a.reason = 'native-cache-hit-pending-completion';
+          } else {
+            a.state = verified ? 'verified' : 'failed';
+            a.reason = verified ? 'native-cache-hit' : 'native-cache-verification-failed';
+          }
+          changed = true;
           const p = this.policy(a.sessionId), totals = this.totals(p);
           if (a.state === 'failed' || totals.readTokens > p.maxReadTokens || totals.outputTokens > p.maxOutputTokens) {
             p.enabled = false; p.reason = a.state === 'failed' ? a.reason : 'actual-budget-exceeded';
           }
+        }
+        if (this.provider === 'codex' && own && input.phase === 'idle' && input.epoch > a.epoch
+          && ['dispatching', 'submitted'].includes(a.state) && a.cacheVerified && a.responseIds?.length) {
+          a.state = 'verified'; a.reason = 'native-cache-hit'; changed = true;
         }
       }
       const p = this.policy(input.sessionId);

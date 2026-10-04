@@ -2,7 +2,12 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.4**, with **Claude Mod 0.8.4** bundled.
+Current development build: **Claudex.app 1.2.5**, with **Claude Mod 0.8.5** bundled.
+
+Codex Desktop cache warming is a separate, default-off experimental best-effort
+CLI feature. App setup and inspection never enable it. The Claude Mod's Cache
+settings pane controls only its own Claude TTL and preferences, not Codex.
+See [Codex confirmation and limitations](cache-warming.md#codex-desktop-experimental-best-effort).
 For the latest published release, **1.1.1**, see [release notes](releases/1.1.1.md) and the
 [published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v1.1.1).
 

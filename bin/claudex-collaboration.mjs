@@ -37,8 +37,16 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Inspect opt-in native cache warming (no inference)
   claudex collaboration cache-warm off --session ID --cwd PATH [--provider claude]
                                                 Revoke one exact conversation's warming policy
-Enable only inside the intended loaded conversation with /claudex warm on,
-then its explicit confirmation command. No conversation is enabled by default.
+  claudex collaboration cache-warm on --provider codex --session ID --cwd PATH --accept-best-effort
+                                                Preview bounded warming for a loaded Desktop owner
+  claudex collaboration cache-warm confirm TOKEN --provider codex --accept-best-effort
+                                                Confirm the exact reviewed Codex preview once
+Codex optional bounds: --refresh-minutes 20 --max-minutes 60 --max-refreshes 3
+  --max-read-tokens 250000 --max-output-tokens 256. Status/off accept --provider codex.
+No draft inspection, hard no-tools guarantee or configurable native TTL exists for
+Codex. Busy, tool activity, budget exhaustion or uncertainty stop future warming.
+Claude enables only inside its loaded conversation with /claudex warm on and confirm.
+No conversation is enabled by default; status never connects to a native owner.
 
 --root PATH selects the private collaboration root, not the synchronization root.
 --default-permission read-only|workspace-write selects the policy for new root tasks.
@@ -127,6 +135,9 @@ export async function collaborationMain(args = process.argv.slice(2)) {
     'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
     'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
     session: { type: 'string' }, cwd: { type: 'string' }, provider: { type: 'string' },
+    'accept-best-effort': { type: 'boolean' }, 'refresh-minutes': { type: 'string' },
+    'max-minutes': { type: 'string' }, 'max-refreshes': { type: 'string' },
+    'max-read-tokens': { type: 'string' }, 'max-output-tokens': { type: 'string' },
   } });
   const command = positionals[0] ?? 'help';
   if (values.help || command === 'help') { console.log(help); return; }
@@ -142,6 +153,39 @@ export async function collaborationMain(args = process.argv.slice(2)) {
   const peer = values.peer ?? 'codex';
   if (command === 'cache-warm') {
     const action = positionals[1] ?? 'status';
+    if (values.provider === 'codex') {
+      if (!['status', 'list', 'on', 'confirm', 'off'].includes(action)) throw new Error('Use Codex cache-warm status|on|confirm TOKEN|off.');
+      if (action !== 'on' && ['refresh-minutes', 'max-minutes', 'max-refreshes', 'max-read-tokens', 'max-output-tokens'].some(flag => values[flag] !== undefined))
+        throw new Error('Set bounds on cache-warm on, then review the new preview; confirmation cannot override its bounds.');
+      const params = {};
+      if (['on', 'off'].includes(action) || values.session || values.cwd) {
+        if (!values.session || !values.cwd) throw new Error('Both --session and --cwd are required.');
+        Object.assign(params, { sessionId: values.session, cwd: values.cwd });
+      }
+      if (['on', 'confirm'].includes(action)) {
+        if (values['accept-best-effort'] !== true) throw new Error('Read the Codex limitations and explicitly pass --accept-best-effort.');
+        params.bestEffort = true;
+      }
+      if (action === 'on') for (const [flag, key] of Object.entries({ 'refresh-minutes': 'refreshMinutes',
+        'max-minutes': 'maxMinutes', 'max-refreshes': 'maxRefreshes', 'max-read-tokens': 'maxReadTokens', 'max-output-tokens': 'maxOutputTokens' })) {
+        if (values[flag] !== undefined) {
+          if (!/^[1-9][0-9]*$/.test(values[flag]) || !Number.isSafeInteger(Number(values[flag]))) throw new Error(`Invalid --${flag}.`);
+          params[key] = Number(values[flag]);
+        }
+      }
+      if (action === 'confirm') {
+        if (!positionals[2] || positionals.length !== 3) throw new Error('Supply the exact confirmation token.');
+        params.confirmationId = positionals[2];
+      } else if (positionals.length > 2) throw new Error('Unexpected cache-warm arguments.');
+      const method = `codex_cache_warm_${action === 'on' ? 'prepare' : ['status', 'list'].includes(action) ? 'list' : action}`;
+      const result = await callCollaboration({ root, peer, token, method, params });
+      if (action === 'on') {
+        const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+        result.confirm = `claudex collaboration cache-warm confirm ${result.confirmationId} --provider codex --accept-best-effort --root ${quote(root)} --peer ${quote(peer)}`;
+      }
+      console.log(JSON.stringify(result, null, 2)); return;
+    }
+    if (values.provider !== undefined && values.provider !== 'claude') throw new Error('Unknown cache-warm provider.');
     if (!['status', 'list', 'off'].includes(action)) throw new Error('Use cache-warm status or off. Enable from the intended native conversation.');
     const params = action === 'off' ? { provider: values.provider ?? 'claude', sessionId: values.session,
       cwd: values.cwd, enabled: false, requestId: `cli-cache-warm:${randomUUID()}` } : {};

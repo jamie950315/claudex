@@ -106,13 +106,18 @@ never starts a thread/turn, forks, writes settings or extracts credentials.
 Run its offline tests with `node --test dev/cache-warm-probe/codex.test.mjs` from
 the repository root. Run the probe with the full script path from that root.
 
-Automatic dispatch intentionally stays blocked on reviewed Desktop
+This probe never dispatches automatically. Reviewed Desktop
 26.930.31730 (12947), CLI 0.160.0: owner discovery exposes untrusted-app-input
 support but no composer draft state; the turn request has no per-turn no-tools
 field. The owner can refuse busy turns, but that does not prove draft safety.
 Neither an OK-only instruction nor a budget reservation is a native tool/output
-cap. Enabling a weaker mode requires a separate product decision, not a hidden
-fallback. The shipping Claude warming implementation is unchanged.
+cap. The separately accepted shipping experimental best-effort adapter uses
+explicit CLI preview/confirmation and its own bounded journal; it does not
+silently weaken this probe. See
+[the Codex warming guide](../../docs/cache-warming.md#codex-desktop-experimental-best-effort)
+for same-owner scope, 20-minute default refresh, the local 30-minute evidence
+window, and the missing draft/no-tools controls. Claude native TTL and Mod pane
+controls remain separate.
 
 Read-only native observation confirmed cumulative/last token events, including
 duplicate notifications. The counter requires an observed baseline and exact

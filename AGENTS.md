@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.4 packages Claude Mod 0.8.4. Keep application and Mod versions
+Claudex.app 1.2.5 packages Claude Mod 0.8.5. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -53,10 +53,11 @@ fixtures use placeholder paths and IDs.
   prototype, not an enabled warmer. Optional observation only rejoins an
   already-loaded active thread; never start a thread, dispatch input or override
   native settings. The reviewed 0.160.0 owner route has no composer-state or
-  per-warm-turn no-tools contract, so automatic dispatch remains blocked.
+  per-warm-turn no-tools contract; this read-only probe never dispatches.
   Usage accounting needs an observed baseline and exact cumulative/last deltas;
   duplicate events do not renew cache evidence. Local sample IDs are not upstream
-  response IDs. A weaker mode requires explicit acceptance, not a silent fallback.
+  response IDs. The separate shipping best-effort adapter requires explicit
+  acceptance, not a silent fallback or a change to this probe.
 - Product repairs must apply through normal installation and runtime paths on
   other users' machines. Do not depend on one account, UID, project path, native
   conversation ID or manually repaired local state. Reproduce relevant failures
@@ -292,8 +293,8 @@ owns bounded durable policies and one-use attempts; the Mod's cache-warm client
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
 proof. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
-uncertain submission, read-only status and explicit bounded confirmation. Codex
-is unsupported. The warming window defaults to one hour; users can choose
+uncertain submission, read-only status and explicit bounded confirmation. The
+Claude warming window defaults to one hour; users can choose
 `ttl=5m` or `ttl=1h` in the confirmed native command. Confirmation synchronizes
 the current process's real CLAUDE_CODE_PROMPT_CACHE_TTL through the official Mod
 environment API, never global files or the separate subagent TTL variable.
@@ -332,6 +333,30 @@ Discard revokes the native confirmation; no UI-only permission or second ledger.
 No startup/inspection path enables warming, starts another owner, changes the
 model/effort or resumes expired work. See docs/cache-warming.md for operation and
 native activation limits. The older developer probe remains separate evidence.
+
+Codex Desktop warming is a separate experimental best-effort CLI opt-in with
+explicit acceptance on preview and confirmation. Only native 0.160.0 loaded
+persistent primary threads qualify; reject forks, subagents and active goals.
+This does not expand the synchronization allowlist. Dispatch once through the
+same native owner without navigation, new owners, API keys or model/effort
+overrides. Composer draft visibility and per-turn no-tools enforcement are
+unavailable: prompts are advisory, tool observations stop future warming but
+cannot undo already executed tools. Budgets are not hard native caps; native
+outputTokens already includes reasoning. Defaults are refreshMinutes=20
+(integer 1..25), maxMinutes=60, maxRefreshes=3, maxReadTokens=250000 and
+maxOutputTokens=256. The 30-minute configured-window is a local evidence bound,
+not native TTL configuration or retention proof; measure from native turn start
+and refuse expired long-turn evidence. Model/effort observations are configured
+metadata, not independent response-model proof. A baseline counter is not a
+sample: require fresh exact usage deltas and native completion. Preserve native
+second-precision starts and equal-time distinct socket deltas; exact returned
+turn ID plus service-owned accounting supplies attribution, never timestamp
+alone. Candidates become verified only after all warm samples and exact own
+successful completion. Use the isolated codex-cache-warm.json ledger; no public
+Codex observe/claim RPC, worker controls, uncertain replay, restart auto-resume
+or catch-up bursts. Claude Mod Cache settings remain Claude-only; Codex starts
+with CLI controls. Source tests and native observer evidence are not proof of
+real warming inference or TTL extension.
 
 Work observability is broker-owned and independently opt-in per task:
 `observability.timeline=public`, `reports=milestones`, and `blockerNotifications`.

@@ -1,6 +1,6 @@
 # Claude Mod integration validation
 
-The current source target is Claude Mod 0.8.4 in Claudex.app 1.2.4. The version-scoped
+The current source target is Claude Mod 0.8.5 in Claudex.app 1.2.5. The version-scoped
 cache-warm acceptance below used isolated staged sessions and did not update the installed
 app, global preferences or existing conversations. Version-scoped installation
 checkpoints remain historical evidence, not claims about the current installation.
@@ -8,6 +8,34 @@ The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker rout
 `mod-self`; source defaults remain false. Installation, native invocation and
 actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
+
+## Codex best-effort 1.2.5 / 0.8.5 verification scope (2026-10-04)
+
+Codex now has a separate, explicitly confirmed broker-owned best-effort scheduler
+and private journal. The complete Node run passed 1,674 tests with zero failures
+and 23 opt-in skips; subsequent focused service/RPC checks cover the final status
+metadata and exact-root/peer CLI confirmation. All 22 native Mod kit cases and
+strict staged validation passed. The Mod version changed because its packaged
+transport allowlist changed; its pane still controls its own Claude settings.
+
+Synthetic tests exercise a timed same-owner dispatch, exact returned-turn
+attribution, complete-turn cache verification, tool-activity stop, budgets,
+same-millisecond samples, second-precision starts, opt-out during awaited
+preflight, actor isolation, disconnect and timeout without replay. A candidate
+cache hit is not finalized until every buffered request has been accounted and
+the exact native turn completed successfully.
+
+Live Codex Desktop 0.160.0 inspection and observer attachment used the existing
+owner with no model input, new thread, fork or setting override. The private
+observer probe received two fresh counter-delta samples and stopped at its
+one-minute enrollment deadline; it made zero dispatch attempts and ended
+disabled. Earlier short probes observed no second sample and remain inconclusive.
+The one-minute probe's original harness assertion treated normal duration expiry
+as unexpected retirement; that assertion was corrected without weakening the
+product deadline or rewriting the retained report. These observations verify
+the native metadata/usage connection, not an actual Codex warm-turn reply or
+retention extension. No Codex cache-refresh inference was performed, and the
+new build has not replaced the installed 1.2.4 app in this verification step.
 
 ## Cache settings pane 1.2.4 / 0.8.4 validation (2026-10-04)
 

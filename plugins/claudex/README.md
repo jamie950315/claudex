@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.4
+# Claudex native companion, 0.8.5
 
 Cache warming is default-off and separately confirmed in the selected loaded
 conversation: `/claudex warm on` prints a bounded confirmation command;
@@ -26,9 +26,12 @@ turns using the existing native account/model, not a fork or another API key.
 Budgets are admission estimates and observed stop thresholds, not hard native
 output caps. Busy/draft/context changes suppress submission. Native acceptance
 must be verified separately from installation and static validation; no feature
-gate is overridden. Codex warming is unsupported.
+gate is overridden. These native controls apply only to the current Claude
+session. Codex Desktop has a separate experimental best-effort CLI opt-in;
+the Mod does not control Codex warming or its TTL. See the source repository's
+`docs/cache-warming.md` for its limitations and explicit confirmation.
 
-Claudex.app 1.1.2 installs and maintains this bundled companion during setup and
+Claudex.app 1.2.5 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
 never installs or configures it. Existing disabled/receiver preferences, other
 plugins and newer installed versions are preserved. Installed files and fresh
@@ -71,7 +74,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.4-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.5-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local
