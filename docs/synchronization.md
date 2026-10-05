@@ -1175,6 +1175,20 @@ trips through the Claude codec. This is saved readable display history, includin
 inert tool events and inline images, not decrypted reasoning or recovered
 source-truncated output. The destination transcript visibly states that limit.
 
+A native command completion can arrive after its parent turn has completed.
+The API may insert that result into the old turn. Claudex retains the complete
+result as inert historical data at its verified arrival boundary. This ordering
+requires stable original rollout snapshots, exact raw/API item correspondence,
+matching turn lifecycles, and an idle arrival after a completed turn. It never
+moves or rewrites native turns. An existing checkpoint must authenticate the
+entire portable prefix, including recovered images; an already authenticated
+API ordering remains preserved. Unknown item schemas, ambiguous lifecycles,
+changed sources and genuine prefix edits still block synchronization. The
+ordinary coordinator advances checkpoints only after native delivery succeeds.
+Normal API histories that match their complete checkpoint do not request this
+additional rollout proof. Initial enrollment retains normal API ordering, so the
+proof reader does not impose its raw-source limit on ordinary native histories.
+
 An exact completed turn containing only a `contextCompaction` item with `type`
 and `id` may be retained as inert metadata after verified prior request context
 and before a later completed assistant response. It is never an answer or a

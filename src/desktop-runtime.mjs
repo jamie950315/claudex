@@ -17,6 +17,7 @@ import { decodeCompletedOwnedClaudeHistory, completedClaudePrefix } from './owne
 import { buildOwnedCodexCommon, exportOwnedCodexHistory, decodeOwnedCodexHistoryWithArchives } from './owned-codex-history.mjs';
 import { exportNativeHistory, NATIVE_HISTORY_LIMITS } from './native-history.mjs';
 import { createNativeEmptyTurnResolver } from './native-empty-turn.mjs';
+import { createNativeLateItemResolver } from './native-late-items.mjs';
 import { createCodexRolloutLocator, createCodexLocalImageResolver } from './native-local-images.mjs';
 import { createNativeGoalRequestResolver } from './native-goal-request.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
@@ -158,7 +159,7 @@ export class DesktopRuntime {
     this.verificationCodeHash ??= Promise.all([
       'history.mjs', 'claude.mjs', 'codex.mjs', 'owned-claude-history.mjs', 'owned-codex-history.mjs',
       'base64.mjs', 'compaction.mjs', 'claude-parallel-tools.mjs', 'claude-fork.mjs', 'claude-image-assets.mjs',
-      'native-history.mjs', 'native-local-images.mjs', 'native-goal-request.mjs', 'native-empty-turn.mjs', 'context-archive.mjs', 'context-packet.mjs',
+      'native-history.mjs', 'native-history-order.mjs', 'native-local-images.mjs', 'native-goal-request.mjs', 'native-empty-turn.mjs', 'native-late-items.mjs', 'context-archive.mjs', 'context-packet.mjs',
       'context-packet-reader.mjs', 'desktop-runtime.mjs', 'desktop-watch-hints.mjs',
       'cold-verification-cache.mjs', 'verification-observations.mjs', 'storage.mjs', '../package-lock.json',
     ].map(async name => [name, await readFile(new URL(name, import.meta.url), 'utf8')]))
@@ -561,13 +562,40 @@ export class DesktopRuntime {
         onResolved: evidence => { imageEvidence = evidence; },
         validateRetainedPath: sourcePath => this.safePath(sourcePath, this.codexHome) });
       try {
-        data = record.managed
+        const exportHistory = async resolveLateItems => record.managed
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
-            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages, resolveEmptyTurns, displayScreenshots: record.displayScreenshots })
+            completedPrefix: true, archiveRoot: this.root, limits, resolveLocalImages, resolveEmptyTurns, resolveLateItems,
+            checkpoint: verifiedCheckpoint ? record.checkpoint : undefined, displayScreenshots: record.displayScreenshots })
           : await exportNativeHistory({ client, threadId: nativeId, cwd, completedPrefix: true, limits, displayScreenshots: record.displayScreenshots,
             checkpoint: verifiedCheckpoint ? record.checkpoint : undefined,
-            resolveLocalImages, resolveEmptyTurns, resolveInitialGoal: createNativeGoalRequestResolver({ path, threadId: nativeId, cwd }) });
+            resolveLocalImages, resolveEmptyTurns, resolveLateItems, resolveInitialGoal: createNativeGoalRequestResolver({ path, threadId: nativeId, cwd }) });
+        data = await exportHistory();
+        // Ordinary full API history remains authoritative when it preserves
+        // the entire verified prefix. Raw late-item proof is needed only to
+        // authenticate a changed representation, never for first enrollment.
+        if (verifiedCheckpoint && (data.common.messages.length < record.checkpoint.count
+          || fingerprint(data.common, record.checkpoint.count) !== record.checkpoint.digest)) {
+          imageEvidence = undefined;
+          data = await exportHistory(createNativeLateItemResolver({ path, threadId: nativeId, cwd }));
+          if (data.common.messages.length < record.checkpoint.count
+            || fingerprint(data.common, record.checkpoint.count) !== record.checkpoint.digest)
+            throw new Error('Codex native history diverged before the verified canonical checkpoint; synchronization paused.');
+        }
         if (imageEvidence) {
+          // Hydration authenticates bytes by exact native identity. The final
+          // checkpoint-authenticated display order supplies their positions.
+          const positions = new Map(data.nativeImagePositions.map(request =>
+            [JSON.stringify([request.turnId, request.itemId]), request.messageIndex]));
+          const positioned = request => {
+            const itemId = request.itemId ?? request.item?.id;
+            const messageIndex = positions.get(JSON.stringify([request.turnId, itemId]));
+            if (!Number.isSafeInteger(messageIndex) || messageIndex < 0)
+              failImageEvidence('Native image provenance is missing its canonical item position.');
+            return { ...request, messageIndex };
+          };
+          imageEvidence = { ...imageEvidence,
+            localImageRollouts: imageEvidence.localImageRollouts.map(entry => ({ ...entry, requests: entry.requests.map(positioned) })),
+            retainedRequests: imageEvidence.retainedRequests.map(positioned) };
           // An owned bootstrap expands two native items into its authenticated
           // portable prefix. Later native items retain that exact offset.
           const offset = data.common.messages.length - imageEvidence.nativeMessageCount;

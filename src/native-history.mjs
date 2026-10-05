@@ -5,6 +5,7 @@ import { assertComplete, fingerprint } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { isNativeInitialGoalRequest } from './native-goal-request.mjs';
+import { nativeHistoryEntries, nativeImagePositions } from './native-history-order.mjs';
 
 export const NATIVE_HISTORY_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
@@ -111,7 +112,7 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
   return startedAt ?? previousStart;
 }
 
-async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns) {
+async function readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns, resolveLateItems) {
   const turns = []; const ids = new Set(); const cursors = new Set();
   const emptyTurnEvidence = [];
   let initialGoal = null;
@@ -186,11 +187,20 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
   if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
   const incompleteTailCount = turns.length - exported.length;
-  return { turns: exported, initialGoal, digest: initialGoal === null ? canonicalDigest(exported)
+  const snapshot = { turns: exported, initialGoal, digest: initialGoal === null ? canonicalDigest(exported)
     : canonicalDigest(JSON.parse(serialize({ turns: exported, initialGoal: initialGoal.request }))),
     itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
     bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount, emptyTurnEvidence,
     emptyControlTurnCount: emptyTurnEvidence.reduce((sum, entry) => sum + entry.proof.turnIds.length, 0) };
+  if (resolveLateItems) {
+    const proof = await resolveLateItems({ ...snapshot, threadId }, { threadId });
+    if (proof !== null) {
+      if (!object(proof)) fail('invalid late item provenance.');
+      snapshot.lateItemEvidence = proof;
+      nativeHistoryEntries(snapshot);
+    }
+  }
+  return snapshot;
 }
 
 function inert(label, value) {
@@ -255,9 +265,12 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
   if (!responseBoundary(snapshot.turns.at(-1))) fail('snapshot does not end at a completed assistant response.');
   const messages = goal === undefined ? [] : [{ role: 'assistant', content: [inert('historical event', goal)],
     timestamp: new Date(goal.goal.createdAt * 1000).toISOString() }];
-  for (const turn of snapshot.turns) {
+  const turnById = new Map(snapshot.turns.map(turn => [turn.id, turn]));
+  for (const entry of nativeHistoryEntries(snapshot)) {
+    const turn = turnById.get(entry.turnId);
     const messageTimestamp = turn.startedAt == null ? suppliedTimestamp : new Date(turn.startedAt * 1000).toISOString();
-    for (const item of turn.items) {
+    if (entry.kind === 'item') {
+      const { item } = entry;
       let role = 'assistant'; let content;
       if (item.type === 'userMessage') {
         role = 'user'; content = userContent(item);
@@ -272,10 +285,9 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
         content = [inert('historical event', item)];
       }
       messages.push({ role, content, ...(messageTimestamp === undefined ? {} : { timestamp: messageTimestamp }) });
-    }
-    if (turn.status === 'failed' || turn.status === 'interrupted') {
+    } else {
       messages.push({ role: 'assistant', content: [inert('closed turn status', {
-        turnId: turn.id, status: turn.status, ...(turn.error === undefined ? {} : { error: turn.error }),
+        turnId: entry.turnId, status: entry.status, ...(entry.error === undefined ? {} : { error: entry.error }),
       })], ...(messageTimestamp === undefined ? {} : { timestamp: messageTimestamp }) });
     }
   }
@@ -303,18 +315,20 @@ export function convertNativeTurns(snapshot, { threadId, cwd, timestamp: supplie
 // database access, source transcript writes, or hidden partial-history fallback.
 // Two matching complete reads detect observed changes, not a writer lease. The
 // coordinator still rechecks source identity/checkpoints before publication.
-export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal, displayScreenshots, resolveEmptyTurns } = {}) {
+export async function readStableNativeHistory({ client, threadId, limits: inputLimits, completedPrefix = false, resolveInitialGoal, displayScreenshots, resolveEmptyTurns, resolveLateItems } = {}) {
   if (!client || typeof client.request !== 'function') fail('a native app-server client is required.');
   if (typeof threadId !== 'string' || !threadId) fail('thread identity is required.');
   if (typeof completedPrefix !== 'boolean') fail('invalid completed-prefix policy.');
   if (resolveInitialGoal !== undefined && typeof resolveInitialGoal !== 'function') fail('invalid initial goal resolver.');
   if (resolveEmptyTurns !== undefined && typeof resolveEmptyTurns !== 'function') fail('invalid empty control resolver.');
+  if (resolveLateItems !== undefined && typeof resolveLateItems !== 'function') fail('invalid late item resolver.');
   if (displayScreenshots !== undefined && displayScreenshots !== 'omitted') fail('invalid display screenshot policy.');
   const limits = checkedLimits(inputLimits);
-  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns);
-  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns);
+  const first = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns, resolveLateItems);
+  const second = await readPass(client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns, resolveLateItems);
   if (first.digest !== second.digest || serialize(first.initialGoal?.sourceIdentity ?? null) !== serialize(second.initialGoal?.sourceIdentity ?? null)
     || serialize(first.emptyTurnEvidence) !== serialize(second.emptyTurnEvidence)
+    || serialize(first.lateItemEvidence ?? null) !== serialize(second.lateItemEvidence ?? null)
     || serialize(first.initialGoal?.prefixHashAlternatives ?? null) !== serialize(second.initialGoal?.prefixHashAlternatives ?? null))
     fail('source history changed between complete reads; synchronization paused.');
   return { ...first, threadId, turnCount: first.turns.length };
@@ -326,26 +340,33 @@ function validateSource(threadId, cwd, suppliedTimestamp) {
   if (suppliedTimestamp !== undefined && (typeof suppliedTimestamp !== 'string' || !Number.isFinite(Date.parse(suppliedTimestamp)))) fail('invalid source timestamp.');
 }
 
-export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, resolveEmptyTurns, displayScreenshots, checkpoint } = {}) {
+export async function exportNativeHistory({ client, threadId, cwd, timestamp: suppliedTimestamp, limits: inputLimits, completedPrefix = false, resolveLocalImages, resolveInitialGoal, resolveEmptyTurns, resolveLateItems, displayScreenshots, checkpoint } = {}) {
   validateSource(threadId, cwd, suppliedTimestamp);
   const limits = checkedLimits(inputLimits);
-  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns });
+  const first = await readStableNativeHistory({ client, threadId, limits, completedPrefix, resolveInitialGoal, displayScreenshots, resolveEmptyTurns, resolveLateItems });
   const hydrated = await hydrateNativeLocalImages(first, resolveLocalImages, limits.maxBytes);
-  let common = convertNativeTurns(hydrated, { threadId, cwd, timestamp: suppliedTimestamp });
+  let selected = hydrated, common = convertNativeTurns(selected, { threadId, cwd, timestamp: suppliedTimestamp });
   // Preserve an existing representation only if the entire saved canonical
   // prefix authenticates it. Never choose a branch or renew a checkpoint.
   if (checkpoint && Number.isSafeInteger(checkpoint.count) && checkpoint.count > 0
-    && checkpoint.count <= common.messages.length && /^[a-f0-9]{64}$/.test(checkpoint.digest ?? '')
-    && fingerprint(common, checkpoint.count) !== checkpoint.digest && first.initialGoal) {
-    const alternatives = first.initialGoal.prefixHashAlternatives;
+    && /^[a-f0-9]{64}$/.test(checkpoint.digest ?? '')
+    && (first.lateItemEvidence || first.initialGoal && fingerprint(common, checkpoint.count) !== checkpoint.digest)) {
+    const alternatives = first.initialGoal?.prefixHashAlternatives;
+    const goals = [hydrated.initialGoal];
     if (Array.isArray(alternatives) && alternatives.length <= 2
-      && alternatives.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value))) {
-      for (const prefixHash of alternatives) {
-        const candidate = convertNativeTurns({ ...hydrated, initialGoal: { ...first.initialGoal,
-          request: { ...first.initialGoal.request, prefixHash } } }, { threadId, cwd, timestamp: suppliedTimestamp });
-        if (fingerprint(candidate, checkpoint.count) === checkpoint.digest) { common = candidate; break; }
+      && alternatives.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)))
+      goals.push(...alternatives.map(prefixHash => ({ ...first.initialGoal,
+        request: { ...first.initialGoal.request, prefixHash } })));
+    const orders = first.lateItemEvidence ? ['legacy', 'arrival'] : ['arrival'];
+    let matched = false;
+    outer: for (const nativeItemOrder of orders) for (const initialGoal of goals) {
+      const candidateSnapshot = { ...hydrated, nativeItemOrder, initialGoal };
+      const candidate = convertNativeTurns(candidateSnapshot, { threadId, cwd, timestamp: suppliedTimestamp });
+      if (candidate.messages.length >= checkpoint.count && fingerprint(candidate, checkpoint.count) === checkpoint.digest) {
+        common = candidate; selected = candidateSnapshot; matched = true; break outer;
       }
     }
+    if (!matched && first.lateItemEvidence) fail('late native item ordering does not match the verified canonical checkpoint; synchronization paused.');
   }
   // Key order never changes the serialized byte length of plain JSON values.
   let encoded;
@@ -354,5 +375,6 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
   return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
     incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount,
     emptyControlTurnCount: first.emptyControlTurnCount,
-    nativeMessageOffset: first.initialGoal === null ? 0 : 1 };
+    nativeMessageOffset: first.initialGoal === null ? 0 : 1,
+    nativeImagePositions: nativeImagePositions(selected) };
 }

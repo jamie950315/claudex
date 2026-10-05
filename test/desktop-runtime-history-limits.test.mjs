@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -75,6 +75,46 @@ test('explicit page sizes reach both native readers without changing stable two-
     assert.ok(reads.every(call => call.params.limit === 5));
     assert.deepEqual(reads.map(call => call.params.cursor), [undefined, '5', undefined, '5']);
     assert.equal(data.incompleteTail, false);
+  }
+});
+
+test('normal full API history and a matching verified prefix never request late raw proof', async t => {
+  for (const managed of [false, true]) {
+    const f = await fixture(t, { managed });
+    const continuation = apiTurn(1, [{ type: 'text', text: 'Historical command request' }], 'Completed answer');
+    continuation.items.splice(1, 0, { type: 'commandExecution', id: randomUUID(), source: 'unifiedExecStartup',
+      status: 'failed', command: 'Historical command', aggregatedOutput: 'Historical output', exitCode: -1 });
+    f.turns.push(continuation);
+    // This deliberately refuses the late resolver's strict private-file guard.
+    // No large fixture is needed: entering raw proof would fail immediately.
+    await chmod(f.record.path, 0o644);
+    const before = await readFile(f.record.path);
+    const fresh = await f.runtime.inspect(f.record);
+    assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 2);
+    Object.assign(f.record, { verified: true, checkpoint: { count: fresh.common.messages.length, digest: fresh.digest } });
+    f.calls.length = 0;
+    const verified = await f.runtime.inspect(f.record);
+    assert.equal(verified.digest, fresh.digest);
+    assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 2);
+    assert.deepEqual(await readFile(f.record.path), before);
+  }
+});
+
+test('a verified prefix mismatch invokes strict late proof and preserves native refusal without replay', async t => {
+  for (const managed of [false, true]) {
+    const f = await fixture(t, { managed });
+    const continuation = apiTurn(1, [{ type: 'text', text: 'Historical command request' }], 'Completed answer');
+    const command = { type: 'commandExecution', id: randomUUID(), source: 'unifiedExecStartup',
+      status: 'failed', command: 'Historical command', aggregatedOutput: 'Original output', exitCode: -1 };
+    continuation.items.splice(1, 0, command); f.turns.push(continuation);
+    await chmod(f.record.path, 0o644);
+    const baseline = await f.runtime.inspect(f.record), before = await readFile(f.record.path);
+    Object.assign(f.record, { verified: true, checkpoint: { count: baseline.common.messages.length, digest: baseline.digest } });
+    command.aggregatedOutput = 'Changed historical output'; f.calls.length = 0;
+    await assert.rejects(f.runtime.inspect(f.record), /Native Codex late item: source must be a private, owned, single-link bounded regular file/);
+    assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 3);
+    assert.deepEqual(await readFile(f.record.path), before);
+    assert.deepEqual(f.record.checkpoint, { count: baseline.common.messages.length, digest: baseline.digest });
   }
 });
 

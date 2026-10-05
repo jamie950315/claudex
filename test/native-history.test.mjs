@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { convertNativeTurns, exportNativeHistory } from '../src/native-history.mjs';
 import { encodeClaude, decodeClaude } from '../src/claude.mjs';
 import { fingerprint } from '../src/history.mjs';
+import { nativeItemDigest } from '../src/native-history-order.mjs';
 
 const user = (text = 'Question', id = 'u') => ({ type: 'userMessage', id, content: [{ type: 'text', text }] });
 const answer = (text = 'Answer', id = 'a') => ({ type: 'agentMessage', id, text, phase: 'final_answer' });
@@ -22,6 +23,47 @@ const delegation = () => ({ type: 'functionCallOutput', id: 'fco-native-request'
   output: '<codex_delegation>\n  <source_thread_id>00000000-0000-4000-8000-000000000002</source_thread_id>\n  <input>Explicit synthetic task request.\nPreserve this text exactly.</input>\n</codex_delegation>' });
 
 const emptyProof = async turns => ({ turnIds: turns.map(turn => turn.id), sourceIdentity: { dev: '1', ino: '2' }, evidenceDigest: 'a'.repeat(64) });
+
+test('proven late native completions preserve the entire old prefix and their fixed arrival boundary', async () => {
+  const first = turn('t1'), second = turn('t2', [user('Next', 'u2'), answer('Done', 'a2')], 200);
+  const baseline = await run(client([page([first, second])])), checkpoint = { count: 4, digest: fingerprint(baseline.common) };
+  const late = { type: 'commandExecution', id: 'late', status: 'failed', command: 'historical exact command', exitCode: -1,
+    aggregatedOutput: 'Historical failure output', source: 'unifiedExecStartup' };
+  const changed = { ...first, items: [first.items[0], late, first.items[1]] };
+  const proof = { placements: [{ turnId: first.id, itemId: late.id, afterTurnId: second.id, itemDigest: nativeItemDigest(late) }],
+    sourceIdentity: { ino: '1' }, evidenceDigest: 'b'.repeat(64) };
+  const options = { checkpoint, resolveLateItems: async () => proof };
+  const result = await run(client([page([changed, second])]), options);
+  assert.equal(fingerprint(result.common, checkpoint.count), checkpoint.digest);
+  assert.equal(result.common.messages.length, 5);
+  assert.deepEqual(JSON.parse(result.common.messages[4].content[0].text.split('\n').slice(1).join('\n')), late);
+  assert.equal(result.common.messages[4].timestamp, new Date(100000).toISOString());
+  const extended = await run(client([page([changed, second, turn('t3', [user('Later', 'u3'), answer('Latest', 'a3')], 300)])]),
+    { ...options, checkpoint: { count: 5, digest: fingerprint(result.common) } });
+  assert.equal(fingerprint(extended.common, 5), fingerprint(result.common));
+  assert.equal(extended.common.messages[5].content[0].text, 'Later');
+  const legacy = await run(client([page([changed, second])]));
+  const preserved = await run(client([page([changed, second])]), { ...options, checkpoint: { count: 5, digest: fingerprint(legacy.common) } });
+  assert.equal(fingerprint(preserved.common), fingerprint(legacy.common));
+});
+
+test('late completion ordering refuses changed, ambiguous, incomplete and unauthenticated provenance', async () => {
+  const late = { type: 'commandExecution', id: 'late', status: 'failed', command: 'historical', exitCode: -1 };
+  const turns = [turn('t1', [user(), late, answer()]), turn('t2', [user('Next', 'u2'), answer('Done', 'a2')], 200)];
+  const proof = { placements: [{ turnId: 't1', itemId: 'late', afterTurnId: 't2', itemDigest: nativeItemDigest(late) }],
+    sourceIdentity: { ino: '1' }, evidenceDigest: 'b'.repeat(64) };
+  for (const bad of [undefined, { ...proof, placements: [proof.placements[0], proof.placements[0]] },
+    { ...proof, placements: [{ ...proof.placements[0], itemDigest: '0'.repeat(64) }] },
+    { ...proof, placements: [{ ...proof.placements[0], afterTurnId: 'unknown' }] }])
+    await assert.rejects(run(client([page(turns)]), { resolveLateItems: async () => bad }), /late item/);
+  let serial = 0;
+  await assert.rejects(run(client([page(turns)]), { resolveLateItems: async () => ({ ...proof, sourceIdentity: { ino: String(++serial) } }) }), /source history changed/);
+  await assert.rejects(run(client([page(turns)]), { resolveLateItems: async () => proof,
+    checkpoint: { count: 4, digest: '0'.repeat(64) } }), /verified canonical checkpoint/);
+  const wrongType = { ...late, type: 'agentMessage', text: 'Must not be moved', phase: 'commentary' };
+  await assert.rejects(run(client([page([turn('t1', [user(), wrongType, answer()]), turns[1]])]), {
+    resolveLateItems: async () => ({ ...proof, placements: [{ ...proof.placements[0], itemDigest: nativeItemDigest(wrongType) }] }) }), /late item/);
+});
 
 test('proven empty controls preserve canonical messages and never become a response boundary', async () => {
   const control = turn('control', [], 200), baseline = await run(client([page([turn()])]));

@@ -11,6 +11,7 @@ import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 import { decodeClaude, encodeClaude } from '../src/claude.mjs';
 import { fingerprint } from '../src/history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory } from '../src/owned-codex-history.mjs';
+import { nativeItemDigest } from '../src/native-history-order.mjs';
 
 async function fixture(t) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-native-local-images-')));
@@ -80,6 +81,34 @@ async function ownedFixture(t) {
     runOwned: options => exportOwnedCodexHistory({ client: f.client, key, conversationId, targetSessionId: f.threadId,
       cwd: f.cwd, resolveLocalImages: f.resolver(), ...options }) };
 }
+
+test('late native completion ordering preserves image bytes and exposes the selected canonical identity position', async t => {
+  const f = await fixture(t), before = await readFile(f.path);
+  const earlier = { id: randomUUID(), status: 'completed', itemsView: 'full', startedAt: 1, completedAt: 2, items: [
+    { type: 'userMessage', id: randomUUID(), content: [{ type: 'text', text: 'Earlier request' }] },
+    { type: 'agentMessage', id: randomUUID(), phase: 'final_answer', text: 'Earlier answer' },
+  ] };
+  f.turns.unshift(earlier);
+  const baseline = await f.run(), checkpoint = { count: 4, digest: fingerprint(baseline.common) };
+  const late = { type: 'commandExecution', id: randomUUID(), status: 'failed', command: 'historical command', exitCode: -1 };
+  earlier.items.splice(1, 0, late);
+  const proof = { placements: [{ turnId: earlier.id, itemId: late.id, afterTurnId: f.turnId, itemDigest: nativeItemDigest(late) }],
+    sourceIdentity: { ino: '1' }, evidenceDigest: 'a'.repeat(64) };
+  let evidence;
+  const options = { resolveLateItems: async () => proof, resolveLocalImages: f.resolver({ onResolved: value => { evidence = value; } }) };
+  const result = await f.run({ ...options, checkpoint });
+  assert.equal(fingerprint(result.common, 4), checkpoint.digest);
+  assert.deepEqual(result.nativeImagePositions, [{ turnId: f.turnId, itemId: f.itemId, messageIndex: 2 }]);
+  assert.equal(evidence.localImageRollouts[0].requests[0].messageIndex, 2);
+  assert.deepEqual(result.common.messages[2].content.filter(block => block.type === 'image')
+    .map(block => `data:${block.source.media_type};base64,${block.source.data}`), f.urls);
+  const legacy = await f.run();
+  const preserved = await f.run({ ...options, checkpoint: { count: 5, digest: fingerprint(legacy.common) } });
+  assert.equal(fingerprint(preserved.common), fingerprint(legacy.common));
+  assert.deepEqual(preserved.nativeImagePositions, [{ turnId: f.turnId, itemId: f.itemId, messageIndex: 3 }]);
+  assert.equal(evidence.localImageRollouts[0].requests[0].messageIndex, 2); // Raw proof remains identity-bound, then runtime positions it.
+  assert.deepEqual(await readFile(f.path), before);
+});
 
 test('owned Codex continuations recover new native attachments without changing their authenticated bootstrap', async t => {
   const f = await ownedFixture(t), bytes = await readFile(f.path);

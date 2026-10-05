@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.21 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.22 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -277,6 +277,16 @@ bounded polling harness, not a production fallback.
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
+- Late native command completions may be rendered at their proven idle arrival
+  boundary without changing native turn grouping. Require an exact stable raw/API
+  item match and lifecycle proof, then authenticate the entire existing portable
+  checkpoint before using that ordering. Keep image positions bound to exact
+  native item identities. Preserve an already authenticated API ordering; unknown
+  schemas, ambiguous arrivals and real history edits still block. Never drop a
+  late result, rebase a checkpoint or repair native transcripts to clear a block.
+  Request this extra proof only after normal API export fails its whole verified
+  checkpoint match. Exact normal matches and initial enrollment retain their
+  existing export path; do not impose proof-reader bounds on ordinary histories.
 - Native completed turns with no full API items require independent stable
   rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
   exact lifecycle IDs/times and no response, tool or token activity; fresh native

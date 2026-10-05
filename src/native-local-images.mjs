@@ -3,6 +3,7 @@ import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { isDeepStrictEqual, TextDecoder } from 'node:util';
 import { isInlineBase64 } from './base64.mjs';
+import { nativeHistoryEntries } from './native-history-order.mjs';
 
 export const LOCAL_IMAGE_ROLLOUT_LIMITS = Object.freeze({ maxBytes: 512 * 1024 * 1024, maxRowBytes: 64 * 1024 * 1024, maxRollouts: 256 });
 const defaultIO = { lstat, open, realpath, readdir };
@@ -479,16 +480,10 @@ export function createCodexLocalImageResolver({ path, threadId, retainedRollouts
  * original input descriptor as inert metadata; no other native item is changed.
  */
 export async function hydrateNativeLocalImages(snapshot, resolveLocalImages, maxBytes) {
-  let nativeMessageCount = 0;
-  const requests = snapshot.turns.flatMap(turn => {
-    const items = turn.items.flatMap(item => {
-      const messageIndex = nativeMessageCount++;
-      return item.type === 'userMessage' && item.content?.some(input => input.type === 'localImage')
-        ? [{ turnId: turn.id, item, messageIndex }] : [];
-    });
-    if (['failed', 'interrupted'].includes(turn.status)) nativeMessageCount++;
-    return items;
-  });
+  const entries = nativeHistoryEntries(snapshot), nativeMessageCount = entries.length;
+  const requests = entries.flatMap(({ kind, turnId, item, messageIndex }) => kind === 'item'
+    && item.type === 'userMessage' && item.content?.some(input => input.type === 'localImage')
+    ? [{ turnId, item, messageIndex }] : []);
   if (!requests.length || resolveLocalImages === undefined) return snapshot;
   if (typeof resolveLocalImages !== 'function') fail('local-image resolver must be a function.');
   const resolved = await resolveLocalImages(requests, { maxBytes, threadId: snapshot.threadId, nativeMessageCount });

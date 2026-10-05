@@ -14,6 +14,7 @@ import { encodeClaude, decodeClaude } from '../src/claude.mjs';
 import { encodeArchivedContextPacket } from '../src/context-archive.mjs';
 import { prepareArchiveResolver } from '../src/context-packet-reader.mjs';
 import { decodeOwnedClaudeHistory } from '../src/owned-claude-history.mjs';
+import { nativeItemDigest } from '../src/native-history-order.mjs';
 
 const identity = { conversationId: 'conversation-1', targetSessionId: '00000000-0000-4000-8000-000000000001', operationId: 'operation-1', key: Buffer.alloc(32, 7) };
 const canonical = (cwd = '/tmp') => ({ meta: { id: 'original', cwd, timestamp: '2026-09-25T00:00:00Z' }, messages: [
@@ -36,6 +37,34 @@ function apiSnapshot(common = built()) {
   }] };
 }
 const decodeApi = snapshot => decodeOwnedCodexNativeHistory({ ...identity, snapshot, cwd: '/tmp' });
+
+test('owned late continuations preserve the expanded checkpoint and cannot reorder the immutable bootstrap', async () => {
+  const snapshot = apiSnapshot();
+  for (const [index, startedAt] of [[1, 200], [2, 300]]) snapshot.turns.push({ id: `later-${index}`, status: 'completed',
+    itemsView: 'full', startedAt, completedAt: startedAt + 1, items: [
+      { type: 'userMessage', id: `user-${index}`, content: [{ type: 'text', text: `Question ${index}` }] },
+      { type: 'agentMessage', id: `answer-${index}`, phase: 'final_answer', text: `Answer ${index}` },
+    ] });
+  const client = { async request() { return { data: structuredClone(snapshot.turns), nextCursor: null }; } };
+  const baseline = await exportOwnedCodexHistory({ ...identity, client, cwd: '/tmp' });
+  const late = { type: 'commandExecution', id: 'late', status: 'failed', command: 'historical command', exitCode: -1 };
+  snapshot.turns[1].items.splice(1, 0, late);
+  const proof = { placements: [{ turnId: 'later-1', itemId: 'late', afterTurnId: 'later-2', itemDigest: nativeItemDigest(late) }],
+    sourceIdentity: { ino: '1' }, evidenceDigest: 'a'.repeat(64) };
+  const options = { ...identity, client, cwd: '/tmp', resolveLateItems: async () => proof,
+    checkpoint: { count: baseline.common.messages.length, digest: baseline.digest } };
+  const result = await exportOwnedCodexHistory(options);
+  assert.equal(fingerprint(result.common, options.checkpoint.count), baseline.digest);
+  assert.equal(fingerprint(result.common, 2), fingerprint(canonical()));
+  assert.match(result.common.messages.at(-1).content[0].text, /historical command/);
+  const legacy = await exportOwnedCodexHistory({ ...identity, client, cwd: '/tmp' });
+  const preserved = await exportOwnedCodexHistory({ ...options, checkpoint: { count: legacy.common.messages.length, digest: legacy.digest } });
+  assert.equal(preserved.digest, legacy.digest);
+  await assert.rejects(exportOwnedCodexHistory({ ...options, checkpoint: { count: 6, digest: '0'.repeat(64) } }), /verified canonical checkpoint/);
+  const bad = apiSnapshot(); bad.turns[0].items.splice(1, 0, late);
+  bad.lateItemEvidence = { ...proof, placements: [{ ...proof.placements[0], turnId: 'bootstrap-turn', afterTurnId: 'bootstrap-turn' }] };
+  assert.throws(() => decodeApi(bad), /bootstrap cannot contain a late native item/);
+});
 
 function delegatedCanonical(includeNotice = true) {
   const item = { type: 'functionCallOutput', id: 'delegated-request', namespace: 'codex_app', name: 'create_thread',

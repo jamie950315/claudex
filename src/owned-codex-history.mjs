@@ -7,6 +7,7 @@ import { convertNativeTurns, readStableNativeHistory, NATIVE_HISTORY_LIMITS } fr
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { hasPortableInitialDelegation } from './codex-delegation.mjs';
 import { hasPortableInitialGoalRequest } from './native-goal-request.mjs';
+import { nativeImagePositions } from './native-history-order.mjs';
 
 const RECEIPT_LABEL = '[Claudex import receipt — not an AI response]';
 
@@ -118,6 +119,8 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   // This view is used only for the continuation, never for decoding the packet.
   const display = convertNativeTurns(snapshot, { threadId: sessionId, cwd, timestamp, includeNotice: false });
   const first = snapshot.turns[0];
+  if (snapshot.lateItemEvidence?.placements.some(placement => placement.turnId === first.id))
+    throw new Error('Owned Codex checkpoint bootstrap cannot contain a late native item.');
   if (first.items.length !== 2) throw new Error('Owned Codex checkpoint turn must contain exactly its packet and receipt.');
   const content = bootstrapContent(first.items[0]);
   const packet = decodeContextPacket({ content, conversationId, targetSessionId: sessionId, key, resolveArchive });
@@ -143,9 +146,9 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   return { common, digest: fingerprint(common), importedPackets: 1, operationId: packet.operationId, bootstrapDigest: packet.digest, nativeDigest: snapshot.digest };
 }
 
-export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, resolveLocalImages, resolveEmptyTurns, displayScreenshots, ...options }) {
+export async function exportOwnedCodexHistory({ client, limits, completedPrefix = false, archiveRoot, resolveLocalImages, resolveEmptyTurns, resolveLateItems, displayScreenshots, checkpoint, ...options }) {
   const sessionId = options.sessionId ?? options.targetSessionId;
-  const native = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix, displayScreenshots, resolveEmptyTurns });
+  const native = await readStableNativeHistory({ client, threadId: sessionId, limits, completedPrefix, displayScreenshots, resolveEmptyTurns, resolveLateItems });
   // An immutable checkpoint must still contain its exact inline packet; only
   // later native-authored inputs may use verified native-rollout image recovery.
   const content = bootstrapContent(native.turns[0].items[0]);
@@ -153,11 +156,20 @@ export async function exportOwnedCodexHistory({ client, limits, completedPrefix 
   if (archiveRoot) options.resolveArchive = await prepareArchiveResolver({ root: archiveRoot,
     contents: [content], conversationId: options.conversationId,
     targetSessionId: sessionId, key: options.key });
-  const result = decodeOwnedCodexNativeHistory({ ...options, snapshot });
+  let selected = snapshot, result = decodeOwnedCodexNativeHistory({ ...options, snapshot });
+  if (native.lateItemEvidence && checkpoint && Number.isSafeInteger(checkpoint.count) && checkpoint.count > 0
+    && /^[a-f0-9]{64}$/.test(checkpoint.digest ?? '')) {
+    const legacy = { ...snapshot, nativeItemOrder: 'legacy' };
+    const candidate = decodeOwnedCodexNativeHistory({ ...options, snapshot: legacy });
+    if (candidate.common.messages.length >= checkpoint.count && fingerprint(candidate.common, checkpoint.count) === checkpoint.digest) {
+      result = candidate; selected = legacy;
+    } else if (result.common.messages.length < checkpoint.count || fingerprint(result.common, checkpoint.count) !== checkpoint.digest)
+      throw new Error('Owned Codex late native item ordering does not match the verified canonical checkpoint; synchronization paused.');
+  }
   if (Buffer.byteLength(JSON.stringify(result.common)) > (limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes)) throw new Error('Owned Codex history exceeds the converted byte limit; no partial history was returned.');
   return { ...result, turnCount: snapshot.turnCount, itemCount: snapshot.itemCount, bytes: snapshot.bytes, pages: snapshot.pages,
     incompleteTail: snapshot.incompleteTail, incompleteTailCount: snapshot.incompleteTailCount,
-    emptyControlTurnCount: snapshot.emptyControlTurnCount };
+    emptyControlTurnCount: snapshot.emptyControlTurnCount, nativeImagePositions: nativeImagePositions(selected) };
 }
 
 export async function decodeOwnedCodexHistoryWithArchives({ archiveRoot, ...options }) {
