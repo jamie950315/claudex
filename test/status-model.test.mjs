@@ -93,6 +93,55 @@ check(health(changed).issues[0].target == "Affected work")
 check(health(changed).issues[0].reason == "Exact conflicting prefix")
 check(health(changed).issues[0].nextStep.contains("Do not retry setup"))
 check(health(changed).attention)
+let directoryReason = "Tracked claude history 00000000-0000-4000-8000-000000000098 working directory no longer exists; synchronization is paused."
+let directoryBlock: [String: Any] = ["title": "Removed project", "conversationId": "thread-directory", "reason": directoryReason,
+  "workingDirectoryUnavailable": ["side": "claude", "nativeId": "00000000-0000-4000-8000-000000000098",
+    "conversationId": "thread-directory", "savedCwd": "/deleted/project with spaces", "reason": "missing"]]
+changed = ready; changed["scheduler"] = "completion-events"; changed["blocked"] = directoryBlock
+let directoryIssue = health(changed).issues[0]
+check(health(changed).attention && health(changed).state == "paused" && health(changed).retryAt == nil)
+check(directoryIssue.target == "Removed project" && directoryIssue.identity == "thread-directory")
+check(directoryIssue.reason == directoryReason && directoryIssue.savedWorkingDirectory == "/deleted/project with spaces")
+check(directoryIssue.nextStep.contains("stops tracking automatically") && directoryIssue.nextStep.contains("preserves all histories"))
+check(directoryIssue.nextStep.contains("safety hold") && !directoryIssue.nextStep.contains("conflict"))
+changed["blocked"] = nil; changed["blockedConversationCount"] = 1; changed["blockedConversations"] = [directoryBlock]
+check(health(changed).issues[0] == directoryIssue)
+var failedStop = directoryBlock; failedStop["reason"] = "Automatic stop was refused: pending handoff must be recovered."
+var failedDirectory = directoryBlock["workingDirectoryUnavailable"] as! [String: Any]; failedDirectory["autoStopFailed"] = true
+failedStop["workingDirectoryUnavailable"] = failedDirectory; changed["blockedConversations"] = [failedStop]
+check(health(changed).issues[0].reason == (failedStop["reason"] as? String))
+check(health(changed).issues[0].savedWorkingDirectory == "/deleted/project with spaces")
+check(health(changed).issues[0].nextStep.contains("could not safely stop tracking") && !health(changed).issues[0].nextStep.contains("automatically"))
+var aliasBlock = directoryBlock; aliasBlock["reason"] = "Saved working directory is now an alias; verify its native move."
+var aliasDirectory = directoryBlock["workingDirectoryUnavailable"] as! [String: Any]; aliasDirectory["reason"] = "alias"
+aliasBlock["workingDirectoryUnavailable"] = aliasDirectory
+changed["blockedConversations"] = [aliasBlock]
+check(health(changed).issues[0].reason == (aliasBlock["reason"] as? String))
+check(health(changed).issues[0].savedWorkingDirectory == "/deleted/project with spaces")
+check(health(changed).issues[0].nextStep.contains("Restore the saved working directory"))
+check(health(changed).issues[0].nextStep.contains("Stop synchronization normally") && !health(changed).issues[0].nextStep.contains("automatically"))
+for directoryReason in [nil, "unresolved", "unknown"] as [String?] {
+  var unresolvedBlock = directoryBlock
+  var directory = aliasDirectory; directory["reason"] = directoryReason
+  unresolvedBlock["workingDirectoryUnavailable"] = directory
+  changed["blockedConversations"] = [unresolvedBlock]
+  check(health(changed).issues[0].reason == (directoryBlock["reason"] as? String))
+  check(health(changed).issues[0].savedWorkingDirectory == "/deleted/project with spaces")
+  check(health(changed).issues[0].nextStep.contains("Check the saved working directory"))
+  check(!health(changed).issues[0].nextStep.contains("automatically") && !health(changed).issues[0].nextStep.contains("stop tracking"))
+}
+for invalidPath in ["relative/project", "/deleted\\nproject", String(repeating: "/", count: 4097)] {
+  var invalidBlock = directoryBlock; invalidBlock["workingDirectoryUnavailable"] = ["savedCwd": invalidPath]
+  changed["blockedConversations"] = [invalidBlock]
+  check(health(changed).issues[0].savedWorkingDirectory == nil)
+  check(health(changed).issues[0].nextStep.contains("exact conflict"))
+}
+changed["blockedConversations"] = [["conversationId": "thread-directory", "reason": directoryReason]]
+check(health(changed).issues[0].savedWorkingDirectory == nil && health(changed).issues[0].nextStep.contains("exact conflict"))
+changed["blockedConversations"] = [["reason": "Tracked history is unavailable", "historyUnavailable": ["savedPath": "/deleted/session.jsonl"]]]
+check(health(changed).issues[0].savedWorkingDirectory == nil && health(changed).issues[0].nextStep.contains("exact conflict"))
+changed["blockedConversations"] = [["reason": "Another writer owns the conversation"]]
+check(health(changed).issues[0].reason == "Another writer owns the conversation" && health(changed).issues[0].nextStep.contains("exact conflict"))
 check(health().issues.isEmpty)
 let recovering: [String: Any] = ["pid": 42, "state": "backoff", "autoRestart": true, "nextAttemptAt": now + 5000]
 check(health(ready, recovering).state == "recovering" && health(ready, recovering).autoRestart)

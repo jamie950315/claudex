@@ -309,5 +309,11 @@
   "%@ task(s) stay open:": "%@ 件のタスクは開いたままです:",
   "Could not close the tasks": "タスクを終了できませんでした",
   "Some collaboration tasks could not be confirmed stopped. Only related work waits; other work continues. Close them after checking that no agent from them is still running.": "一部の協調タスクが停止したことを確認できません。関連する作業だけが待機し、その他の作業は続行します。関連するエージェントが作業していないことを確認してから終了してください。",
-  "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.": "サブエージェントはフルアクセスで動作します: サンドボックスや権限確認はありません。すべてのプロジェクトを利用できます。"
+  "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.": "サブエージェントはフルアクセスで動作します: サンドボックスや権限確認はありません。すべてのプロジェクトを利用できます。",
+  "Saved working directory: %@": "保存された作業ディレクトリ: %@",
+  "Restore the saved working directory, or stop tracking this conversation while preserving its histories. Stop synchronization normally before changing tracking; do not retry setup or resend messages.": "保存された作業ディレクトリを復元するか、履歴を保持したままこの会話の追跡を停止してください。追跡を変更する前に同期を正常に停止し、セットアップの再試行やメッセージの再送信はしないでください。",
+  "Review the reported reason and next step. Open diagnostics for full details.": "表示された理由と次の手順を確認してください。詳細は診断で確認できます。",
+  "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages.": "保存された作業ディレクトリが存在しないと確認されると、Claudex は追跡を自動的に停止し、すべての履歴を保持します。停止状態が続く場合は、安全上の制約を診断で確認してください。セットアップの再試行やメッセージの再送信はしないでください。",
+  "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "保存された作業ディレクトリを確認し、正確な理由を診断で確認してください。すべての履歴は保持されます。セットアップの再試行やメッセージの再送信はしないでください。",
+  "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex はこの会話の追跡を安全に停止できませんでした。すべての履歴は保持されています。停止を妨げている理由を診断で確認し、セットアップの再試行やメッセージの再送信はしないでください。"
 }

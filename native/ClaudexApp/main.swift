@@ -705,7 +705,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             statusDetail.stringValue = LF("Needs attention: %@", attention.map { L($0.label) }.joined(separator: ", "))
                 + "\n" + L(attention.contains { $0.action == .modSetup || $0.action == .modEnable || $0.action == .openClaude }
                     ? "Follow the Claude Mod instructions below. Installation and loaded-session readiness are checked separately."
-                    : report?.needsSetupRetry == true ? "Complete the required sign-in or install the missing component below." : "Open diagnostics for the exact conflict. Do not retry setup or resend messages.")
+                    : report?.needsSetupRetry == true ? "Complete the required sign-in or install the missing component below." : "Review the reported reason and next step. Open diagnostics for full details.")
         } else { statusDetail.stringValue = LD(failure ?? report?.message ?? (busy ? "Checking and configuring local components." : "Waiting for a verified setup report.")) }
         statusIcon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: L(title))
         statusIcon.contentTintColor = color

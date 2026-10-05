@@ -148,6 +148,7 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
             let identity = includeIdentity ? issue.identity.map { $0 == target ? "" : " [\($0)]" } ?? "" : ""
             return LF("Conversation: %@", target) + identity + "\n"
                 + LF("Reason: %@", LD(issue.reason)) + "\n"
+                + (issue.savedWorkingDirectory.map { LF("Saved working directory: %@", $0) + "\n" } ?? "")
                 + LF("Next step: %@", L(issue.nextStep))
         }.joined(separator: "\n\n")
     }

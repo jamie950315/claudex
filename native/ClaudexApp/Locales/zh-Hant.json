@@ -309,5 +309,11 @@
   "%@ task(s) stay open:": "%@ 個任務維持開啟：",
   "Could not close the tasks": "無法結案這些任務",
   "Some collaboration tasks could not be confirmed stopped. Only related work waits; other work continues. Close them after checking that no agent from them is still running.": "部分協作任務無法確認已停止。只有相關工作會等待，其他工作照常進行。請先確認沒有相關 agent 仍在工作，再結案這些任務。",
-  "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.": "子代理以完全存取執行：沒有 sandbox，也不會詢問權限。所有專案皆可使用。"
+  "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.": "子代理以完全存取執行：沒有 sandbox，也不會詢問權限。所有專案皆可使用。",
+  "Saved working directory: %@": "保存的工作目錄：%@",
+  "Restore the saved working directory, or stop tracking this conversation while preserving its histories. Stop synchronization normally before changing tracking; do not retry setup or resend messages.": "請恢復保存的原工作目錄，或停止追蹤這個對話並保留所有歷史。變更追蹤前，請正常停止同步；請勿重試設定或重送訊息。",
+  "Review the reported reason and next step. Open diagnostics for full details.": "請查看顯示的原因與下一步。完整資訊可在診斷中查看。",
+  "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages.": "工作目錄確認不存在後，Claudex 會自動停止追蹤，並保留所有歷史。若仍顯示暫停，請查看診斷中的安全阻礙。請勿重試設定或重送訊息。",
+  "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "請檢查保存的工作目錄，並開啟診斷查看確切原因。所有歷史均保留；請勿重試設定或重送訊息。",
+  "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex 無法安全停止追蹤這個對話，所有歷史均保留。請開啟診斷查看阻擋原因；請勿重試設定或重送訊息。"
 }

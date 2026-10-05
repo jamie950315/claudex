@@ -230,7 +230,8 @@ export class DesktopRuntime {
     if (stored?.cwd === cwd && await this.nativeWorkingDirectory(cwd,
       { side: 'claude', nativeId: stored.sessionId, conversationId, verified: true }) !== cwd)
       throw Object.assign(new Error(`Claude owner working directory ${cwd} is now an alias of another directory; synchronization is paused until the project move is verified.`), {
-        code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: 'claude', nativeId: stored.sessionId, savedCwd: cwd, conversationId });
+        code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: 'claude', nativeId: stored.sessionId, savedCwd: cwd, conversationId,
+        workingDirectoryReason: 'alias' });
     const saved = this.contextMode === 'archive' ? stored : null;
     if (forceNormal && saved?.reset) throw new Error('A pending native context reset must be restored before a normal owner starts.');
     const maintenanceOnly = !forceNormal && Boolean(saved?.remoteId);
@@ -474,6 +475,7 @@ export class DesktopRuntime {
         : `Native ${record.side} working directory no longer exists; source enrollment is paused.`, { cause }), {
         code: tracked ? 'CLAUDEX_TRACKED_CWD_UNAVAILABLE' : 'CLAUDEX_NATIVE_CWD_UNAVAILABLE',
         side: record.side, nativeId: record.nativeId, savedCwd: cwd, conversationId: record.conversationId,
+        workingDirectoryReason: await this.workingDirectoryAbsent(cwd) ? 'missing' : 'unresolved',
       });
     }
   }
@@ -508,6 +510,7 @@ export class DesktopRuntime {
         throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} working directory no longer exists; synchronization is paused.`, { cause: error }), {
           code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
           savedCwd: record.cwd, conversationId: record.conversationId,
+          workingDirectoryReason: 'missing',
         });
       }
       throw error;

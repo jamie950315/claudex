@@ -309,5 +309,11 @@
   "%@ task(s) stay open:": "%@ task(s) stay open:",
   "Could not close the tasks": "Could not close the tasks",
   "Some collaboration tasks could not be confirmed stopped. Only related work waits; other work continues. Close them after checking that no agent from them is still running.": "Some collaboration tasks could not be confirmed stopped. Only related work waits; other work continues. Close them after checking that no agent from them is still running.",
-  "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.": "Sub-agents run with full access: no sandbox or permission prompts. All projects are available."
+  "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.": "Sub-agents run with full access: no sandbox or permission prompts. All projects are available.",
+  "Saved working directory: %@": "Saved working directory: %@",
+  "Restore the saved working directory, or stop tracking this conversation while preserving its histories. Stop synchronization normally before changing tracking; do not retry setup or resend messages.": "Restore the saved working directory, or stop tracking this conversation while preserving its histories. Stop synchronization normally before changing tracking; do not retry setup or resend messages.",
+  "Review the reported reason and next step. Open diagnostics for full details.": "Review the reported reason and next step. Open diagnostics for full details.",
+  "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages.": "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages.",
+  "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.",
+  "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages."
 }

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.20 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.21 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -70,6 +70,13 @@ fixtures use placeholder paths and IDs.
   Accept these as ancillary tails only with system provenance, exact queue evidence
   and a parent chain from the completed assistant. Preserve their original bytes
   and the canonical checkpoint; ordinary input and ambiguous tails still wait.
+- During normal synchronization, automatically stop enrollment when the exact
+  saved working directory is confirmed absent, including before a cached skip.
+  Use the existing locked tracking transition after pending recovery; revoke
+  archival commands and preserve histories, checkpoints, records and assets.
+  Keep stopped native identities excluded across startup and event discovery.
+  Directory restoration requires explicit resume-tracking. Permission errors,
+  existing aliases and history conflicts remain visible under their normal guards.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
 - Read transcript snapshots through a no-follow file descriptor and compare its
   nanosecond file identity with the named file before and after reading. Size and

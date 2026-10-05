@@ -16,7 +16,7 @@ Claudex provides two independent capabilities:
 Collaboration runs models using your native accounts. Synchronization transports
 history without asking a model to generate a reply or summarize it.
 
-Current development build: **Claudex.app 1.2.20**, bundling **Claude Mod 0.8.15**.
+Current development build: **Claudex.app 1.2.21**, bundling **Claude Mod 0.8.15**.
 Latest published release: **1.1.1** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.1.1)
 · [Release notes](docs/releases/1.1.1.md).
 App and Mod versions are separate. Guides on `main` describe current behavior;
@@ -204,9 +204,12 @@ through your Claude account; it is not a local-only transport.
 See the [synchronization guide](docs/synchronization.md) for activation, daily use,
 optional folder integration, retention, and recovery.
 
-Desktop `untrack CONVERSATION_ID` stops one enrollment while preserving its native
-histories, checkpoints and assets. `resume-tracking CONVERSATION_ID` verifies and
-restores that enrollment. Both require the owned watcher to be stopped; see
+Desktop synchronization automatically stops tracking conversations whose saved
+working directory is confirmed absent, preserving their histories, checkpoints
+and assets. They remain stopped after restart or restoration of the directory.
+Desktop `untrack CONVERSATION_ID` also stops one enrollment manually.
+`resume-tracking CONVERSATION_ID` verifies and restores that enrollment. Both
+commands require the owned watcher to be stopped; see
 [history-preserving maintenance](docs/synchronization.md#stop-tracking-while-preserving-history)
 for retention limits and explicit branch repair.
 

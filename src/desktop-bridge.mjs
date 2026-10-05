@@ -80,19 +80,54 @@ export class DesktopBridge {
     return withLock(join(this.root, 'desktop-operation.lock'), async () => fn(await this.load()), { recoverDead: true });
   }
   status() { return this.load(); }
-  /** Stop only enrollment, without inspecting a possibly missing cwd or
-   * changing any native session. The outer watcher lock belongs to CLI callers.
+  /** Stop only enrollment, without changing any native session. Manual calls
+   * need no cwd inspection; automatic calls verify the saved directory below.
+   * The outer watcher lock belongs to CLI callers.
    */
-  async untrack(id) {
+  async untrack(id, { missingWorkingDirectoryOnly = false } = {}) {
     return this.locked(async state => {
       if (state.pending) throw new Error('Recover the pending desktop handoff before changing tracking.');
       const conversation = state.conversations[id];
       if (!conversation) throw new Error('Unknown desktop bridge conversation.');
       if (!isDesktopTracked(conversation)) return { changed: false, conversationId: id, tracking: 'stopped', historyPreserved: true };
-      await revokeClaudeDesktopHandoffActions({ root: this.root });
-      conversation.tracking = { status: 'stopped', stoppedAt: this.now() };
-      await this.save(state, { event: 'tracking-stopped', conversationId: id });
-      return { changed: true, conversationId: id, tracking: 'stopped', historyPreserved: true };
+      const absent = async () => {
+        // The logical saved project is authoritative after verified relocation.
+        // Historical records and a superseded target retain their old cwd.
+        if (typeof conversation.cwd !== 'string' || !isAbsolute(conversation.cwd)) return null;
+        for (const record of state.records) {
+          if (record.conversationId !== id || record.status !== 'current' || record.verified !== true
+            || !UUID.test(record.nativeId) || record.cwd !== conversation.cwd) continue;
+          const probe = this.adapters[record.side]?.workingDirectoryAbsent;
+          if (probe) return await probe(record.cwd) === true ? record : null;
+        }
+        return null;
+      };
+      // The exact saved cwd is checked under the same coordinator lock as the
+      // metadata change. Native errors and old status reports grant no authority.
+      let missing = missingWorkingDirectoryOnly ? await absent() : null;
+      if (missingWorkingDirectoryOnly && !missing) return { changed: false, conversationId: id, tracking: 'active' };
+      let stopOperation = 'revoke-archive-actions';
+      try {
+        await revokeClaudeDesktopHandoffActions({ root: this.root });
+        // Revocation awaits private storage; a directory restored meanwhile
+        // must not be stopped using the earlier absence observation.
+        if (missingWorkingDirectoryOnly && !(missing = await absent()))
+          return { changed: false, conversationId: id, tracking: 'active' };
+        stopOperation = 'save-tracking';
+        conversation.tracking = { status: 'stopped', stoppedAt: this.now() };
+        await this.save(state, { event: 'tracking-stopped', conversationId: id,
+          ...(missing ? { reason: 'working-directory-missing', side: missing.side,
+            nativeId: missing.nativeId, savedCwd: missing.cwd } : {}) });
+        return { changed: true, conversationId: id, tracking: 'stopped', historyPreserved: true };
+      } catch (cause) {
+        if (!missingWorkingDirectoryOnly) throw cause;
+        const detail = String(cause?.message ?? cause).slice(0, 300);
+        throw Object.assign(new Error(`Automatic tracking stop could not be verified during ${stopOperation}; native history was preserved. ${detail}`, { cause }), {
+          code: 'CLAUDEX_TRACKING_STOP_BLOCKED', conversationId: id, side: missing.side,
+          nativeId: missing.nativeId, savedCwd: missing.cwd, workingDirectoryReason: 'missing',
+          stopOperation, ...(typeof cause?.code === 'string' ? { causeCode: cause.code } : {}),
+        });
+      }
     });
   }
   async resumeTracking(id) {

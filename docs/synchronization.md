@@ -268,8 +268,17 @@ or backup collection; neither history is overwritten.
 
 ### Stop tracking while preserving history
 
-Stop the owned watcher normally before changing enrollment. In Desktop mode,
-`untrack` accepts the exact logical conversation ID shown by `status`:
+During normal synchronization, Claudex automatically stops tracking a conversation
+when its saved working directory is confirmed absent. The check also runs before
+reusing a verification cache entry. History, checkpoints and assets are preserved,
+and the saved native identities remain excluded from discovery after a restart.
+Restoring the directory does not automatically resume tracking. A pending handoff
+must be recovered before enrollment can change; a failed safety check remains
+visible. Permission errors, existing aliases and history conflicts retain their
+normal guards.
+
+For other manual enrollment changes, stop the owned watcher normally. In Desktop
+mode, `untrack` accepts the exact logical conversation ID shown by `status`:
 
 ```sh
 node bin/claudex.mjs untrack CONVERSATION_ID

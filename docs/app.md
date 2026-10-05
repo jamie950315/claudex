@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.20**, with **Claude Mod 0.8.15** bundled.
+Current development build: **Claudex.app 1.2.21**, with **Claude Mod 0.8.15** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -271,7 +271,12 @@ instead of force-closing processes or claiming an upgrade succeeded.
 New graphical installations permit newer native versions without version-only
 warnings. The existing `warn` configuration name is retained; an explicitly
 selected `strict` policy remains available. Actual protocol and history failures
-still pause unsafe operations. A missing or changed frontend resource prevents the folder patch;
+still pause unsafe operations. The synchronization runtime automatically stops
+tracking a conversation when its saved working directory is confirmed absent,
+while preserving its native histories, snapshots, checkpoints and assets. These
+conversations stay excluded after a restart; restoring a directory requires
+explicit `resume-tracking` verification. A missing or changed frontend resource
+prevents the folder patch;
 there is no guessed resource or signature bypass. Refer to
 [synchronization](synchronization.md) for the exact boundaries.
 

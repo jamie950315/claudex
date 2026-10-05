@@ -38,6 +38,7 @@ const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOC
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
   || error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
   || error?.code === 'CLAUDEX_TRACKED_CWD_UNAVAILABLE'
+  || error?.code === 'CLAUDEX_TRACKING_STOP_BLOCKED'
   || error?.code === 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED' || error?.code === 'CLAUDE_RELOCATION_BLOCKED'
   || HISTORY_BLOCKED.test(reason(error)) || isUnsupported(error);
 
@@ -107,9 +108,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       side: error.side, nativeId: error.nativeId, savedPath: String(error.savedPath).slice(0, 4096),
       conversationId: error.conversationId ?? null,
     } } : {}),
-    ...(error?.code === 'CLAUDEX_TRACKED_CWD_UNAVAILABLE' ? { workingDirectoryUnavailable: {
+    ...(['CLAUDEX_TRACKED_CWD_UNAVAILABLE', 'CLAUDEX_TRACKING_STOP_BLOCKED'].includes(error?.code) ? { workingDirectoryUnavailable: {
       side: error.side, nativeId: error.nativeId, savedCwd: String(error.savedCwd).slice(0, 4096),
       conversationId: error.conversationId ?? null,
+      ...(['missing', 'alias', 'unresolved'].includes(error.workingDirectoryReason) ? { reason: error.workingDirectoryReason } : {}),
+      ...(error.code === 'CLAUDEX_TRACKING_STOP_BLOCKED' ? { autoStopFailed: true } : {}),
     } } : {}),
     since: previous?.since ?? now(), lastAttemptAt: now(), retryAt: now() + blockedRetryMs,
     attempts: Math.min(Number.MAX_SAFE_INTEGER, (previous?.attempts ?? 0) + 1) });
@@ -330,10 +333,28 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           const codex = await runtime.codex();
           if (events && runtime.synchronizationHooks) hookStatus = await runtime.synchronizationHooks();
           const cacheContext = proofCache ? await runtime.verificationCacheContext() : null;
+          const stopMissing = async id => {
+            // Injected legacy test bridges may omit the metadata-only API.
+            const enrollment = await bridge.untrack?.(id, { missingWorkingDirectoryOnly: true });
+            if (enrollment?.tracking === 'stopped') {
+              for (const cache of [coldHints, coldObserved, coldDirty, activeObserved, activeDirty]) cache.delete(id);
+              for (const [key, entry] of blockedConversations)
+                if (key === id || entry.conversationId === id) blockedConversations.delete(key);
+              checkedConversations.delete(id); reusedConversations.delete(id);
+              checkingConversationCount = activeDesktopConversationIds(await bridge.status()).length;
+              if (proofCache) await proofCache.invalidate(id);
+            }
+            return enrollment;
+          };
           const sync = async id => {
             if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt && !events) return { blocked: true };
             try {
               const state = await bridge.status();
+              if (state.pending) { clearHints(); await bridge.recover(); return { recovered: true }; }
+              // Before any cached proof or native read, stop only enrollment
+              // when the locked bridge confirms an exact saved cwd is absent.
+              const enrollment = await stopMissing(id);
+              if (enrollment?.tracking === 'stopped') return enrollment;
               const before = await coldImportHint(state, id);
               const previous = coldHints.get(id);
               const observedAt = now();
@@ -442,6 +463,18 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 await bridge.recover();
                 return { recovered: true };
               }
+              // A global allocation guard can encounter a different missing
+              // project before its scheduled sync. Confirm that exact ledger
+              // entry now so it cannot starve the remaining startup queue.
+              const missingId = error.conversationId ?? id;
+              if (error?.code === 'CLAUDEX_TRACKED_CWD_UNAVAILABLE' && latest.conversations[missingId]) {
+                const enrollment = await stopMissing(missingId);
+                if (enrollment?.tracking === 'stopped') {
+                  if (missingId === id) return enrollment;
+                  activeDirty.add(id); // Enrollment changed; normal fair scheduling rechecks this caller.
+                  return { changed: false, stoppedConversationId: missingId };
+                }
+              }
               if (isWaiting(error)) {
                 if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
                 const waitingId = error.conversationId ?? id;
@@ -452,7 +485,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 // An allocation's global original/retention guard can identify
                 // another conversation. Keep that coordinator-wide source hold
                 // attached to its actual identity instead of the caller's title.
-                if (['CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED',
+                if (['CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', 'CLAUDEX_TRACKING_STOP_BLOCKED', 'CLAUDEX_CLAUDE_RELOCATION_BLOCKED',
                   'CLAUDE_RELOCATION_BLOCKED'].includes(error?.code)
                   && error.conversationId && error.conversationId !== id) throw error;
                 // No durable intent exists, so other conversations may still
@@ -714,7 +747,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               waiting = waitingContexts[0]?.reason ?? null;
               eventSyncCount++;
               const result = await sync(id);
-              if (result?.waiting || result?.incompleteTail || result?.changed === false) {
+              if (result?.tracking !== 'stopped' && (result?.waiting || result?.incompleteTail || result?.changed === false)) {
                 for (const event of sourceEvents) if (event.kind !== 'session') deferEvent(event, event.retryAttempt ?? 0);
               }
             }

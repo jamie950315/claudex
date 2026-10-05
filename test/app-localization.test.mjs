@@ -50,6 +50,16 @@ for (language, _) in Localization.languages {
   precondition(localization.text("Available: codex-cli 99.0.0").contains("codex-cli 99.0.0"))
   precondition(localization.text("The setup engine exited with code 42. Check the app installation, then retry.").contains("42"))
   precondition(!localization.format(" · next check in %@s", ["18"]).contains("%@"))
+  let savedDirectory = localization.format("Saved working directory: %@", ["/deleted/project with spaces"])
+  precondition(savedDirectory.contains("/deleted/project with spaces") && !savedDirectory.contains("%@"))
+  let directoryNextStep = "Restore the saved working directory, or stop tracking this conversation while preserving its histories. Stop synchronization normally before changing tracking; do not retry setup or resend messages."
+  precondition(language == "en" || localization.text(directoryNextStep) != directoryNextStep)
+  let missingDirectoryNextStep = "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages."
+  precondition(language == "en" || localization.text(missingDirectoryNextStep) != missingDirectoryNextStep)
+  let unresolvedDirectoryNextStep = "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages."
+  precondition(language == "en" || localization.text(unresolvedDirectoryNextStep) != unresolvedDirectoryNextStep)
+  let failedStopNextStep = "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages."
+  precondition(language == "en" || localization.text(failedStopNextStep) != failedStopNextStep)
   precondition(localization.text("3 conversation(s) need attention. raw-proof-ABC").contains("raw-proof-ABC"))
   precondition(localization.text("raw-proof-ABC") == "raw-proof-ABC")
   let progress = localization.detail("Checked 3 of 12 conversations.\\nChecking Translation task (65 seconds elapsed).\\nSaved histories are being checked in the background; they are not being imported again. New and changed conversations are prioritized. Wait for the latest messages in the conversation you are using before switching apps.")

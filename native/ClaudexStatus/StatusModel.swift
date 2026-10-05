@@ -6,6 +6,7 @@ struct HealthIssue: Codable, Equatable {
     var identity: String?
     var reason: String
     var nextStep: String
+    var savedWorkingDirectory: String? = nil
 }
 
 struct HealthReport: Codable, Equatable {
@@ -204,8 +205,26 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
     func append(_ entry: [String: Any], target: String, waiting: Bool, fallback: String) {
         guard issues.count < 20 else { return }
         let reason = bounded(entry["reason"], fallback, 1000)
+        let directoryUnavailable = entry["workingDirectoryUnavailable"] as? [String: Any]
+        let savedWorkingDirectory = directoryUnavailable?["savedCwd"] as? String
+        let unavailableDirectory = savedWorkingDirectory.flatMap { path -> String? in
+            guard path.hasPrefix("/"), path.utf8.count <= 4096,
+                  !path.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }) else { return nil }
+            return path
+        }
         let nextStep: String
-        if !waiting { nextStep = "Open diagnostics for the exact conflict. Do not retry setup or resend messages." }
+        if !waiting && unavailableDirectory != nil {
+            switch directoryUnavailable?["reason"] as? String {
+            case "missing":
+                nextStep = directoryUnavailable?["autoStopFailed"] as? Bool == true
+                    ? "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages."
+                    : "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages."
+            case "alias":
+                nextStep = "Restore the saved working directory, or stop tracking this conversation while preserving its histories. Stop synchronization normally before changing tracking; do not retry setup or resend messages."
+            default:
+                nextStep = "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages."
+            }
+        } else if !waiting { nextStep = "Open diagnostics for the exact conflict. Do not retry setup or resend messages." }
         else if ["backend is not ready", "sign-in", "permission prompt"].contains(where: reason.localizedCaseInsensitiveContains) {
             nextStep = "Open Codex or Claude and finish any sign-in or permission prompt."
         } else if ["still running", "complete assistant", "unfinished", "in-progress", "incomplete", "changed", "active writer", "destination is active", "Claude Code is open", "another bridge operation"].contains(where: reason.localizedCaseInsensitiveContains) {
@@ -213,7 +232,7 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
         } else { nextStep = "Waiting for a connection. Claudex will retry automatically; no setup changes are needed." }
         let id = entry["conversationId"] as? String ?? entry["nativeId"] as? String
         issues.append(HealthIssue(target: bounded(entry["title"], id ?? target, 200), identity: id.map { String($0.prefix(100)) },
-                                  reason: reason, nextStep: nextStep))
+                                  reason: reason, nextStep: nextStep, savedWorkingDirectory: unavailableDirectory))
     }
     let fresh = watcher?["running"] as? Bool == true && alive(watcher?["pid"])
         && ((watcher?["updatedAt"] as? NSNumber).map { now - $0.doubleValue >= -5000 && now - $0.doubleValue < 120000 } ?? false)

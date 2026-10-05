@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, realpath, writeFile, chmod } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, writeFile, chmod, symlink } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -11,6 +11,7 @@ import { writeJSON } from '../src/storage.mjs';
 import { discoverSources } from '../src/discovery.mjs';
 import { activeDesktopState } from '../src/desktop-enrollment.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
+import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 
 async function fixture(policy = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-enrollment-')));
@@ -220,4 +221,92 @@ test('watcher excludes stopped groups from native sync and event observation whi
   for (const observed of observations) { assert.deepEqual(observed.records, []); assert.deepEqual(observed.conversations, {}); }
   assert.ok(writes.some(write => write.running === true && write.checkingConversationCount === 0));
   assert.equal(writes.at(-1).blockedConversationCount, 0);
+});
+
+test('normal startup automatically stops a missing saved project and restart/events cannot reenroll it', async () => {
+  const f = await fixture(), before = await f.bridge.status(), bytes = await f.bytes(), observed = [], statuses = [];
+  for (const side of ['codex', 'claude']) f.adapters[side].workingDirectoryAbsent = DesktopRuntime.prototype.workingDirectoryAbsent;
+  await writeJSON(join(f.root, 'desktop-handoff.json'), { version: 1, kind: 'claude-local-archive',
+    actions: [{ conversationId: f.id }], anchors: [{ conversationId: f.id }] });
+  const runtime = { codex: async () => ({}), ownedNativeIds: async () => new Set() };
+  const discover = async (config, known) => {
+    assert.equal(config.allProjects, true);
+    for (const record of before.records) assert.ok(known.has(`${record.side}:${record.nativeId}`));
+    return [];
+  };
+  const run = (bridge, options = {}) => runDesktopWatch({ root: f.root, bridge, runtime, config: {},
+    maxPasses: 1, now: () => 0, pollMs: 0, discover,
+    writeStatus: async (_path, value) => statuses.push(structuredClone(value)), ...options });
+  await run(f.bridge);
+  const stopped = await f.bridge.status();
+  assert.equal(stopped.conversations[f.id].tracking.status, 'stopped');
+  assert.deepEqual(stopped.records, before.records);
+  assert.deepEqual(stopped.conversations[f.id].canonical, before.conversations[f.id].canonical);
+  assert.deepEqual(await f.bytes(), bytes); assert.deepEqual(f.calls, []);
+  assert.equal(stopped.audit.at(-1).reason, 'working-directory-missing');
+  assert.equal(stopped.audit.at(-1).savedCwd, f.cwd);
+  const manifest = JSON.parse(await readFile(join(f.root, 'desktop-handoff.json')));
+  assert.deepEqual(manifest.actions, []); assert.deepEqual(manifest.anchors, []);
+  const restarted = new DesktopBridge({ root: f.root, adapters: f.adapters });
+  await run(restarted, { maxPasses: 2, events: { metrics: {},
+    wait: async () => [{ side: 'claude', nativeId: before.records[0].nativeId, kind: 'completed' }],
+    observe: async (_batch, active) => observed.push(active), acknowledge: async () => {} } });
+  assert.deepEqual(await restarted.status(), stopped);
+  assert.deepEqual(f.calls, []); assert.deepEqual(await f.bytes(), bytes);
+  for (const active of observed) assert.deepEqual(active.records, []);
+  assert.equal(statuses.at(-1).blockedConversationCount, 0);
+  assert.equal(statuses.filter(status => status.running).at(-1).checkingConversationCount, 0);
+});
+
+test('automatic stop does not adopt aliases, unresolved symlinks, files or historical relocated directories', async () => {
+  for (const mode of ['alias', 'broken-symlink', 'file', 'relocated']) {
+    const f = await fixture();
+    for (const side of ['codex', 'claude']) f.adapters[side].workingDirectoryAbsent = DesktopRuntime.prototype.workingDirectoryAbsent;
+    if (mode === 'file') await writeFile(f.cwd, 'Existing file, not an absent directory');
+    else if (mode === 'broken-symlink') await symlink(join(f.root, 'absent-target'), f.cwd);
+    else {
+      const existing = join(f.root, 'existing-project'); await mkdir(existing);
+      if (mode === 'alias') await symlink(existing, f.cwd);
+      else {
+        const state = await f.bridge.status(); state.conversations[f.id].cwd = existing;
+        for (const record of state.records.filter(record => record.status === 'current')) record.cwd = existing;
+        await f.bridge.save(state); // Historical previous record retains its old, absent cwd.
+      }
+    }
+    const before = await f.bridge.status();
+    assert.equal((await f.bridge.untrack(f.id, { missingWorkingDirectoryOnly: true })).tracking, 'active', mode);
+    assert.deepEqual(await f.bridge.status(), before, mode);
+    if (mode === 'broken-symlink') await assert.rejects(DesktopRuntime.prototype.nativeWorkingDirectory.call({
+      workingDirectoryAbsent: DesktopRuntime.prototype.workingDirectoryAbsent,
+    }, f.cwd, before.records[0]), error => error.workingDirectoryReason === 'unresolved');
+  }
+  const permission = await fixture(), before = await permission.bridge.status();
+  permission.adapters.claude.workingDirectoryAbsent = async () => { throw Object.assign(new Error('Permission denied'), { code: 'EACCES' }); };
+  await assert.rejects(permission.bridge.untrack(permission.id, { missingWorkingDirectoryOnly: true }), { code: 'EACCES' });
+  assert.deepEqual(await permission.bridge.status(), before);
+});
+
+test('automatic stop preserves pending priority and gives an actionable private revocation failure', async () => {
+  const f = await fixture(), bytes = await f.bytes();
+  for (const side of ['codex', 'claude']) f.adapters[side].workingDirectoryAbsent = DesktopRuntime.prototype.workingDirectoryAbsent;
+  await f.bridge.save({ ...f.state, pending: { phase: 'prepared', record: { conversationId: f.id } } });
+  await assert.rejects(f.bridge.untrack(f.id, { missingWorkingDirectoryOnly: true }), /Recover the pending/);
+  const order = [];
+  f.bridge.recover = async () => { order.push('recover'); const state = await f.bridge.status(); state.pending = null; await f.bridge.save(state); };
+  const untrack = f.bridge.untrack.bind(f.bridge);
+  f.bridge.untrack = async (...args) => { assert.equal((await f.bridge.status()).pending, null); order.push('stop'); return untrack(...args); };
+  await runDesktopWatch({ root: f.root, bridge: f.bridge, runtime: { codex: async () => ({}), ownedNativeIds: async () => new Set() },
+    config: {}, maxPasses: 1, now: () => 0, pollMs: 0, discover: async () => [] });
+  assert.deepEqual(order, ['recover', 'stop']); assert.deepEqual(await f.bytes(), bytes);
+  const failed = await fixture();
+  for (const side of ['codex', 'claude']) failed.adapters[side].workingDirectoryAbsent = DesktopRuntime.prototype.workingDirectoryAbsent;
+  await writeJSON(join(failed.root, 'desktop-handoff.json'), { version: 1, kind: 'claude-local-archive', actions: [] });
+  await chmod(join(failed.root, 'desktop-handoff.json'), 0o644);
+  const before = await failed.bridge.status();
+  await assert.rejects(failed.bridge.untrack(failed.id, { missingWorkingDirectoryOnly: true }), error => {
+    assert.equal(error.code, 'CLAUDEX_TRACKING_STOP_BLOCKED');
+    assert.equal(error.workingDirectoryReason, 'missing'); assert.equal(error.stopOperation, 'revoke-archive-actions');
+    assert.match(error.message, /private|owned|permission/i); return true;
+  });
+  assert.deepEqual(await failed.bridge.status(), before);
 });

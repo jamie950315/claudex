@@ -93,6 +93,8 @@ test('settings owns retry setup; menus only expose the settings entry', async ()
   assert.match(source, /NSButton\(title: L\("Retry setup"\), target: self, action: #selector\(retrySetup\(_:\)\)\)/);
   assert.match(source, /if !inspectOnly && !uiSmoke \{ UserDefaults.standard.set\(true, forKey: settingsPresentedKey\) \}/);
   assert.match(source, /if launch.showSettings \{ showSetup\(nil\) \}/);
+  assert.match(source, /Review the reported reason and next step\. Open diagnostics for full details\./);
+  assert.doesNotMatch(source, /Open diagnostics for the exact conflict/);
 });
 
 test('Claude Mod management is scoped, explicit and disabled in read-only or synthetic UI', async () => {
@@ -147,6 +149,7 @@ test('graphical app owns one status item and integrates the bounded health contr
     assert.match(source, new RegExp(`#selector\\(${action}\\(_:\\)\\)`));
   }
   assert.match(controller, /report = loadHealth\(root\)/);
+  assert.match(controller, /issue\.savedWorkingDirectory\.map \{ LF\("Saved working directory: %@", \$0\)/);
   assert.match(controller, /guard !readOnly else \{ return \}/);
   assert.match(controller, /gate\.event\(for: report/);
   assert.match(builder, /StatusController\.swift/);

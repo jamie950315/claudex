@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { loadContextArchive, persistContextArchive } from '../src/context-archive.mjs';
+import { DesktopRuntime } from '../src/desktop-runtime.mjs';
 
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-watch-persistent-')));
@@ -50,6 +51,7 @@ async function fixture(t) {
     async recover() { events.push('recover'); state.pending = null; },
     async collect() { events.push('collect'); },
   };
+  f.bridge = bridge;
   const codex = { async request(method, params) {
     assert.equal(method, 'thread/read');
     assert.equal(params.threadId, codexId);
@@ -66,6 +68,27 @@ async function fixture(t) {
   });
   return f;
 }
+
+test('a removed saved cwd stops tracking before persisted cold proof reuse', async t => {
+  const f = await fixture(t), cwd = join(f.root, 'project'); await mkdir(cwd);
+  f.state.conversations[f.id].cwd = cwd;
+  for (const record of f.records) record.cwd = cwd;
+  f.thread.cwd = cwd;
+  f.bridge.untrack = async (id, options) => {
+    assert.equal(id, f.id); assert.equal(options.missingWorkingDirectoryOnly, true);
+    if (!await DesktopRuntime.prototype.workingDirectoryAbsent(cwd)) return { tracking: 'active', changed: false };
+    f.state.conversations[id].tracking = { status: 'stopped', stoppedAt: 1000 };
+    f.events.push('stopped'); return { tracking: 'stopped', changed: true };
+  };
+  await f.run();
+  assert.equal(f.events.filter(event => event === 'sync').length, 1);
+  const before = await Promise.all(f.records.map(record => readFile(record.path)));
+  await rm(cwd, { recursive: true }); f.clear(); await f.run();
+  assert.ok(f.events.includes('stopped'));
+  assert.equal(f.events.includes('sync'), false); assert.equal(f.events.includes('metadata'), false);
+  assert.deepEqual(await Promise.all(f.records.map(record => readFile(record.path))), before);
+  assert.equal(f.statuses.findLast(status => status.running).blockedConversationCount, 0);
+});
 
 test('a new watcher reuses signed unchanged cold verification beyond the former validation deadline', async t => {
   const f = await fixture(t);

@@ -465,6 +465,28 @@ test('a removed working directory stays paced per conversation with its saved cw
   assert.deepEqual(f.calls.sync, ['new']); assert.equal(f.state.pending, null);
 });
 
+test('an exact missing project found by another caller is stopped without starving the startup queue', async () => {
+  const f = await fixture({ discover: async () => [] });
+  for (const id of ['caller', 'missing', 'healthy']) f.state.conversations[id] = { id };
+  f.bridge.untrack = async (id, options) => {
+    assert.equal(options.missingWorkingDirectoryOnly, true);
+    if (id !== 'missing') return { tracking: 'active', changed: false };
+    f.state.conversations[id].tracking = { status: 'stopped', stoppedAt: 0 };
+    return { tracking: 'stopped', changed: true };
+  };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id === 'caller' && !f.state.conversations.missing.tracking)
+      throw Object.assign(new Error('Exact saved working directory is missing'), {
+        code: 'CLAUDEX_TRACKED_CWD_UNAVAILABLE', conversationId: 'missing', workingDirectoryReason: 'missing',
+      });
+  };
+  await f.run({ maxPasses: 1 });
+  assert.ok(f.calls.sync.includes('healthy')); assert.ok(!f.calls.sync.includes('missing'));
+  assert.equal((await f.status()).blockedConversationCount, 0);
+  assert.equal((await f.status()).blocked, null);
+});
+
 test('missing original during global collection holds the coordinator without restarting or clearing state', async () => {
   const f = await fixture(); let clock = 0, pass;
   f.bridge.collect = async () => { f.calls.collect++; throw missingTrackedHistory(); };
