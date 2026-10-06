@@ -920,6 +920,20 @@ prior blocker or question. See docs/collaboration.md for exact native versions
 and verification scope. This is cooperative check-in/MCP-return delivery, not
 instantaneous interruption, external idle wake or synchronization certification.
 
+## Holds that recover on their own
+
+These relaxations are user decisions; keep them when touching the same code.
+A conversation that only waited during the startup sweep gets the same three
+bounded follow-ups as a completion event. A Claude owner block persisted by one
+engine version (`blockedEngine`) is judged again by another through the normal
+checkpoint checks. Anchors and frozen snapshots over the backup quota are
+reported by collection (`retained`) and never pause deliveries, because nothing
+there can be removed; a removable snapshot that cannot be retired still does.
+The Mod cache check accepts any native-generated `types/<package>/index.d.ts`
+and `.orphaned_at`, never an additional script, skill or packaged file. The
+collaboration process sampler ends tracking only after the process table stays
+unreadable for ten seconds; each tracker's own identity checks still fail at once.
+
 ## Current boundary
 
 Claude Desktop may move a current unmanaged Local original to another project.
@@ -937,9 +951,11 @@ a Claude writer or editing any native transcript or registry.
 
 By user decision Codex project moves are followed too. Only a current unmanaged
 Codex original qualifies: the saved cwd must be absent or an alias resolving to
-the new directory Codex thread/read reports (an existing independent saved
-directory is another project and stays held; check the filesystem first so
-unmoved conversations never contact the backend), the complete history must keep
+the new directory Codex thread/read reports (global checks use the filesystem
+alone so unmoved conversations never contact the backend; only after that
+conversation's own read reports another working directory does its sync ask
+for a thorough proof, which also follows a move whose saved directory still
+exists, such as into a worktree), the complete history must keep
 the saved prefix and two reads must agree. The managed Claude owner must be
 idle and unchanged. Claude owners are per conversation and bound to their cwd,
 so the move retires the old owner: close it at an idle boundary, move its state
@@ -1013,7 +1029,14 @@ source, never an adopted parent identity or a worker crash. Allocation-time coll
 conversation's history failure with that conversation's identity for status. In Desktop mode, recognized tracked-history guards
 pause synchronization without exiting the watcher or closing live Claude owners.
 A pending transaction blocks all discovery, new syncs and collection until normal
-verified recovery succeeds; it is never cleared or resent to regain availability.
+verified recovery succeeds; it is never resent to regain availability. By user
+decision a failed recovery no longer ends the watcher: the transaction stays
+visibly blocked and the next pass retries it. Only one case is dropped
+(`abandonUnapplied`, also `claudex abort` in Desktop mode): a prepared new Codex
+snapshot whose planned rollout file is absent and whose thread Codex does not
+know wrote nothing natively, so its conversation is held with the failure
+reason and the others continue. Applied, promoted, owner-reusing and
+original-archive transactions, and any unreadable answer, are always recovered.
 Missing tracked transcript paths are explicit history blocks, not repeated
 worker crashes. Preserve the saved native identity/path and pending evidence.
 A removed saved working directory (such as a cleaned-up Codex worktree) is the
@@ -1072,6 +1095,12 @@ The installed macOS service has an independent supervisor. Unexpected worker
 exits restart after 5/10/20/40/60 seconds; two stable minutes reset backoff.
 Read-only ownership preflight must find prior writers and recorded children dead.
 Live/malformed/reclaiming locks or unrecorded children block duplicate writers.
+By user decision leftover lock states no longer block forever: a holder PID
+born more than two seconds after its lock was written (coordinator `started`,
+owner lock mtime) is a reused PID, not the holder; a lock still empty after a
+minute and a `.reclaim` claim older than a minute are reclaimed; an owner lock
+without a recorded child blocks only while a parentless process under a Claude
+path born with that lock exists. Unreadable start times stay live holders.
 Never clear pending work, kill native user work or resend uncertain inputs to
 recover. Launchd recovers supervisor crashes; detached workers and
 AbandonProcessGroup retain surviving work until it exits safely. Normal exit
@@ -1271,6 +1300,11 @@ join and reject intervening authored input or alternate continuations. Only
 virtual graph-validation parents change; native bytes, codec input, message
 order and every tool record remain untouched. Missing/ambiguous evidence and
 actual competing branches still block; saved semantic prefixes must still match.
+By user decision one fork is followed: a native rewind. The decoded history is
+the branch ending at the last authored row, each fork on it must continue with
+a real user prompt, and only rows under a replaced branch are left out. A
+second assistant reply or competing tool results stay refused, and a rewind
+that removes synchronized turns still fails the prefix check.
 The observed empty-display successful PreToolUse hook attachment may occur
 between results when its tool, native parent, session and pending-result position
 all match. Its historical command/stdout remain inert and are never executed.
@@ -1400,7 +1434,13 @@ DesktopRuntime reads optional `nativeHistoryMaxBytes` and `nativeHistoryPageSize
 from the private root's config.json. Defaults remain 16 MiB and 100 turns/page;
 explicit bounds are 1024..268435456 bytes (raised from 64 MiB by user decision) and 1..100 turns/page. Both original and
 owned native exports enforce the configured raw/converted byte budget. Keep the
-256-page, 25,000-item and 64 MiB transport-frame limits unchanged. Limit errors
+256-page and 25,000-item limits unchanged. The history client's frame limit is
+64 MiB or the configured byte budget, whichever is larger, and an oversized
+response is reported as such. The Desktop-to-backend launcher only forwards
+Codex Desktop's own traffic and uses a 1 GiB sanity bound: stopping there would
+end the user's backend. Context packets keep their 64 MiB cap, so the packet
+limit is the smaller of the budget and that cap. Rollout sources read for
+empty-turn, goal and late-item proofs may be up to 480 MiB. Limit errors
 identify the source thread; never add automatic retries, truncation or fallback.
 Codex Desktop attaches a display-only data-URL screenshot at mcpToolCall
 result._meta["codex/toolSurface"].screenshot.url (Browser Use/CUA); it is not

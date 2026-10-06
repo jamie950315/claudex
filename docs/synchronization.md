@@ -181,7 +181,9 @@ page. The private state root's `config.json` can explicitly set
 with smaller native response pages. The watcher holds a history in memory while
 it reads it, so a larger budget raises its peak memory use for large conversations. Apply changes only when the watcher can
 restart safely. Both original and managed Codex histories use these settings;
-the 256-page, 25,000-item and 64 MiB WebSocket-frame limits remain unchanged.
+the 256-page and 25,000-item limits remain unchanged. A response page may be as
+large as the configured budget (at least 64 MiB); a delivery packet is still
+limited to 64 MiB.
 Raw and converted histories must both fit the byte budget. Exceeding a limit
 reports the source thread ID and stops that operation without retry, truncation,
 fallback, or weakening authentication and canonical-history checks.
@@ -939,7 +941,12 @@ node bin/claudex.mjs gc
 ```
 
 `recover` finishes the same interrupted transaction; it does not allocate a new
-generation. `abort` discards only an unchanged unpublished owned candidate.
+generation. `abort` discards only an unchanged unpublished owned candidate. In
+Desktop mode that means a prepared new Codex copy whose file was never
+published and whose thread Codex does not know; the watcher drops such a
+delivery itself when its recovery fails and holds only that conversation. Any
+other failed recovery stays visibly blocked and is retried, without ending the
+watcher.
 Promoted transactions must be recovered. If a process crashed holding a lock,
 `recover-lock` or `recover-lock --watch` removes only a lock whose PID is no
 longer alive. Desktop mode also reclaims verified dead coordinator locks at
