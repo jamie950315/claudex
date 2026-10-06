@@ -131,12 +131,17 @@ test('known native-generated types and live lease metadata do not hide unlisted 
   const { o, model } = await fixture(t);
   await ensureAppMod(o);
   const installed = model.installed.installPath;
-  for (const name of ['.claude-plugin/types/claude-code/index.d.ts', '.claude-plugin/types/tsconfig.json', '.claude-plugin/types/.gitignore', 'tsconfig.json', '.in_use/123']) {
+  for (const name of ['.claude-plugin/types/claude-code/index.d.ts', '.claude-plugin/types/claude-code-tools/index.d.ts',
+    '.claude-plugin/types/claude-code-mcp/index.d.ts', '.claude-plugin/types/tsconfig.json', '.claude-plugin/types/.gitignore', 'tsconfig.json', '.in_use/123']) {
     await mkdir(dirname(join(installed, name)), { recursive: true, mode: 0o700 });
     await writeFile(join(installed, name), '{}');
   }
   assert.equal((await inspectAppMod(o)).state, 'ready');
   await writeFile(join(installed, '.claude-plugin/types/unlisted.mjs'), 'export default 1;');
+  assert.equal((await inspectAppMod(o)).reason, 'content-mismatch');
+  await rm(join(installed, '.claude-plugin/types/unlisted.mjs'));
+  await mkdir(join(installed, '.claude-plugin/types/claude-code-other'), { mode: 0o700 });
+  await writeFile(join(installed, '.claude-plugin/types/claude-code-other/index.d.ts'), '{}');
   assert.equal((await inspectAppMod(o)).reason, 'content-mismatch');
 });
 

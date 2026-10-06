@@ -73,7 +73,8 @@ async function fileTree(root, hashes, { nativeMetadata = false } = {}) {
         const generated = nativeMetadata && !Object.hasOwn(hashes, relative)
           && (/^\.in_use\/[1-9][0-9]{0,9}$/.test(relative)
             || ['tsconfig.json', '.claude-plugin/types/.gitignore', '.claude-plugin/types/tsconfig.json',
-              '.claude-plugin/types/claude-code/index.d.ts'].includes(relative));
+              '.claude-plugin/types/claude-code/index.d.ts', '.claude-plugin/types/claude-code-tools/index.d.ts',
+              '.claude-plugin/types/claude-code-mcp/index.d.ts'].includes(relative));
         if (generated) { await safeBytes(child); continue; }
         requireValue(/^[a-f0-9]{64}$/.test(hashes[relative] ?? '') && digest(await safeBytes(child)) === hashes[relative],
           'content-mismatch', 'The installed Mod differs from its verified packaged files.');
