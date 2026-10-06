@@ -311,3 +311,25 @@ for (const change of ['inode', 'contents', 'permissions']) {
     assert.ok((await readdir(root)).includes('operation.lock'));
   });
 }
+
+test('a lock naming a reused PID, an old empty lock and an abandoned claim are reclaimed', async () => {
+  const { lockHolderAlive, processStartedAt } = await import('../src/storage.mjs');
+  const born = await processStartedAt(process.pid);
+  assert.ok(Number.isFinite(born) && Math.abs(born - (Date.now() - process.uptime() * 1000)) < 5000);
+  // The current process existed before a lock written now, but not before one written a day earlier.
+  assert.equal(await lockHolderAlive(process.pid, Date.now()), true);
+  assert.equal(await lockHolderAlive(process.pid, born - 86_400_000), false);
+  assert.equal(await lockHolderAlive(process.pid, NaN), true);
+  assert.equal(await lockHolderAlive(process.pid, born - 86_400_000, { startedAt: async () => null }), true);
+
+  const root = await mkdtemp(join(tmpdir(), 'claudex-reused-lock-'));
+  const path = join(root, 'watch.lock');
+  await writeFile(path, JSON.stringify({ pid: process.pid, started: new Date(born - 86_400_000).toISOString() }), { mode: 0o600 });
+  assert.equal(await withLock(path, async () => 'reused', { recoverDead: true }), 'reused');
+
+  await writeFile(path, '', { mode: 0o600 });
+  const old = new Date(Date.now() - 61_000);
+  await utimes(path, old, old);
+  assert.equal(await withLock(path, async () => 'empty', { recoverDead: true }), 'empty');
+  await rm(root, { recursive: true, force: true });
+});

@@ -256,6 +256,27 @@ test('completion events run the startup sweep once, then only synchronize their 
   assert.ok(f.calls.status.some(status => status.scheduler === 'completion-events'));
 });
 
+test('a conversation that only waited during the startup sweep gets bounded follow-ups without an event', async () => {
+  const f = await fixture(), racing = f.add(), other = f.add('codex');
+  let failures = 1;
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id === racing.id && failures-- > 0) throw new Error('Transcript changed while being read.');
+    return { changed: true, incompleteTail: false };
+  };
+  await f.run({ events: f.eventQueue([]), maxPasses: 2 });
+  assert.deepEqual(f.calls.sync, [racing.id, other.id, racing.id]);
+  assert.deepEqual(f.calls.wait.map(call => call.timeoutMs), [250]);
+  assert.equal(f.calls.status.findLast(status => 'waiting' in status).waiting, null);
+  // A wait that never clears stops after the same three bounded attempts.
+  const g = await fixture(), stuck = g.add();
+  g.bridge.sync = async id => { g.calls.sync.push(id); throw new Error('Transcript changed while being read.'); };
+  // The fixture rejects the unbounded wait that follows the last follow-up.
+  await assert.rejects(g.run({ events: g.eventQueue([]), maxPasses: 8 }), /Unexpected unbounded event wait/);
+  assert.equal(g.calls.sync.filter(id => id === stuck.id).length, 4);
+  assert.deepEqual(g.calls.wait.map(call => call.timeoutMs), [250, 1000, 3000, undefined]);
+});
+
 test('known managed session registration and started events do not trigger synchronization or discovery', async () => {
   const f = await fixture(), pair = f.add('claude');
   pair.record.managed = true; pair.record.kind = 'owner';

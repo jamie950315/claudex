@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, unlink, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, unlink, symlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -32,7 +32,12 @@ test('read-only preflight blocks a live native child and malformed locks without
   assert.equal((await inspectServiceStart(root, { alive: () => false })).allowed, true);
   assert.equal(await readFile(path, 'utf8'), before, 'dead locks remain for native exclusive acquisition');
   await writeJSON(path, { pid: 100, childPid: null, nonce: randomUUID() });
-  assert.equal((await inspectServiceStart(root, { alive: () => false })).blockers[0].code, 'unrecorded-native-child');
+  const orphan = [{ pid: 300, startedAt: Date.now(), command: '/synthetic/claude' }];
+  assert.equal((await inspectServiceStart(root, { alive: () => false, orphans: async () => orphan })).blockers[0].code, 'unrecorded-native-child');
+  // No parentless Claude process was born with this lock, so native acquisition may reclaim it.
+  assert.equal((await inspectServiceStart(root, { alive: () => false, orphans: async () => [] })).allowed, true);
+  assert.equal((await inspectServiceStart(root, { alive: () => false,
+    orphans: async () => [{ ...orphan[0], startedAt: Date.now() - 3_600_000 }, { ...orphan[0], command: '/bin/zsh' }] })).allowed, true);
   await writeJSON(path, { pid: 100, childPid: 200 });
   assert.equal((await inspectServiceStart(root, { alive: () => false })).blockers[0].code, 'malformed-lock');
   await unlink(path); await symlink(join(root, 'missing'), path);
@@ -124,4 +129,21 @@ test('real synthetic process crash restarts once, preserving a sole watcher leas
   controller.abort(); await running;
   assert.equal((await readStatus(root)).restartCount, 1);
   assert.equal(await readFile(join(root, 'watch.lock')).catch(error => error.code), 'ENOENT');
+});
+
+test('locks naming a reused PID, old empty locks and abandoned claims do not block a start', async () => {
+  const root = await fresh(), written = Date.now() - 86_400_000;
+  await writeJSON(join(root, 'watch.lock'), { pid: 4242, started: new Date(written).toISOString() });
+  const reused = { alive: () => true, startedAt: async () => written + 3_600_000 };
+  assert.equal((await inspectServiceStart(root, reused)).allowed, true);
+  // The same PID born before the lock was written is still its holder; unreadable start times stay conservative.
+  assert.equal((await inspectServiceStart(root, { alive: () => true, startedAt: async () => written - 5000 })).blockers[0].code, 'live-owner');
+  assert.equal((await inspectServiceStart(root, { alive: () => true, startedAt: async () => null })).blockers[0].code, 'live-owner');
+  await writeFile(join(root, 'watch.lock'), '', { mode: 0o600 });
+  assert.equal((await inspectServiceStart(root, reused)).blockers[0].code, 'unverified-lock');
+  assert.equal((await inspectServiceStart(root, { ...reused, now: () => Date.now() + 61_000 })).allowed, true);
+  await unlink(join(root, 'watch.lock'));
+  await writeFile(join(root, 'watch.lock.reclaim'), 'claim', { mode: 0o600 });
+  assert.equal((await inspectServiceStart(root, reused)).blockers[0].code, 'recovery-claim-present');
+  assert.equal((await inspectServiceStart(root, { ...reused, now: () => Date.now() + 61_000 })).allowed, true);
 });

@@ -2,6 +2,8 @@ import { mkdir, open, readFile, rename, chmod, unlink, link, lstat, realpath } f
 import { constants } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 export const hash = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 
@@ -84,6 +86,14 @@ async function reclaimDeadLock(path) {
   const directory = await lstat(dirname(path));
   if (!directory.isDirectory() || directory.isSymbolicLink() || directory.uid !== process.getuid()
       || (directory.mode & 0o077) !== 0) throw new Error('Lock directory is not private and owned; stale lock was preserved.');
+  // A recovery takes milliseconds. A claim left for a minute belongs to a
+  // reclaimer that died; remove only that marker, never the lock itself.
+  const claim = `${path}.reclaim`;
+  try {
+    const abandoned = await lstat(claim);
+    if (abandoned.isFile() && !abandoned.isSymbolicLink() && abandoned.uid === process.getuid()
+        && Date.now() - Math.floor(abandoned.ctimeMs) >= STALE_CLAIM_MS) await unlink(claim);
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
   let original;
   try { original = await lstat(path); }
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
@@ -111,19 +121,23 @@ async function reclaimDeadLock(path) {
     const ageMs = Date.now() - Math.floor(original.mtimeMs);
     if (ageMs >= 0 && ageMs <= 1000)
       throw new Error('Another bridge operation holds the lock; lock owner publication is pending. Inspect status before retrying.');
-    throw new Error('Malformed lock owner; stale lock was preserved.');
+    // An owner publishes itself right after creating the file. One that is
+    // still empty after a minute was left by a process that died in between.
+    if (ageMs < STALE_EMPTY_LOCK_MS) throw new Error('Malformed lock owner; stale lock was preserved.');
   }
-  let owner;
-  try { owner = JSON.parse(contents); }
-  catch { throw new Error('Malformed lock owner; stale lock was preserved.'); }
-  if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.started !== 'string'
-      || !Number.isFinite(Date.parse(owner.started))) throw new Error('Malformed lock owner; stale lock was preserved.');
+  let owner = null;
+  if (contents !== '') {
+    try { owner = JSON.parse(contents); }
+    catch { throw new Error('Malformed lock owner; stale lock was preserved.'); }
+    if (!Number.isSafeInteger(owner?.pid) || owner.pid <= 0 || typeof owner.started !== 'string'
+        || !Number.isFinite(Date.parse(owner.started))) throw new Error('Malformed lock owner; stale lock was preserved.');
+  }
+  const held = async () => owner !== null && lockHolderAlive(owner.pid, Date.parse(owner.started));
   let current;
   try { current = await lstat(path); }
   catch (error) { if (error.code === 'ENOENT') return; throw error; }
   if (!sameFile(original, current)) throw new Error('Lock identity changed; stale lock was preserved.');
-  if (alive(owner.pid)) throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
-  const claim = `${path}.reclaim`;
+  if (await held()) throw new Error('Another bridge operation holds the lock. Inspect status before retrying.');
   try { await link(path, claim); }
   catch (error) {
     if (error.code === 'ENOENT') return;
@@ -134,7 +148,7 @@ async function reclaimDeadLock(path) {
     const claimed = await lstat(claim);
     const current = await lstat(path);
     if (!sameFile(original, claimed) || !sameFile(original, current) || claimed.nlink !== 2
-        || current.nlink !== 2 || (await readFile(claim, 'utf8')) !== contents || alive(owner.pid))
+        || current.nlink !== 2 || (await readFile(claim, 'utf8')) !== contents || await held())
       throw new Error('Lock changed during stale recovery; lock was preserved.');
     await unlink(path);
   } finally {
@@ -149,6 +163,29 @@ function alive(pid) {
     if (error.code === 'EPERM') return true;
     throw error;
   }
+}
+
+const STALE_EMPTY_LOCK_MS = 60_000, STALE_CLAIM_MS = 60_000;
+
+/** Start time of a live process in epoch milliseconds, or null when unreadable. */
+export async function processStartedAt(pid) {
+  try {
+    const { stdout } = await promisify(execFile)('/bin/ps', ['-o', 'lstart=', '-p', String(pid)],
+      { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, timeout: 5000 });
+    const at = Date.parse(`${stdout.trim()} UTC`);
+    return Number.isFinite(at) ? at : null;
+  } catch { return null; }
+}
+
+/** A lock names its holder by PID, and a PID is reused after its process
+ * exits, typically after a restart. A process born after the lock was written
+ * cannot be its holder. Anything that cannot be read stays a live holder.
+ */
+export async function lockHolderAlive(pid, writtenAtMs, { isAlive = alive, startedAt = processStartedAt } = {}) {
+  if (!isAlive(pid)) return false;
+  if (!Number.isFinite(writtenAtMs)) return true;
+  const born = await startedAt(pid);
+  return !(born !== null && born > writtenAtMs + 2000);
 }
 
 export async function withLock(path, fn, { recoverDead = false } = {}) {

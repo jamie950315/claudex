@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { open, readFile, unlink, lstat, link, realpath, access } from 'node:fs/promises';
 import { ftruncateSync, writeSync, fsyncSync, constants } from 'node:fs';
-import { hash, privateDirectory, readJSON, snapshot, writeJSON } from './storage.mjs';
+import { hash, lockHolderAlive, privateDirectory, readJSON, snapshot, writeJSON } from './storage.mjs';
 import { sessionPath } from './claude.mjs';
 import { captureImageAssets, restoreImageAssets } from './claude-image-assets.mjs';
 import { inspectMaintenancePolicy } from './maintenance-policy.mjs';
@@ -86,7 +86,11 @@ async function acquireLock(path) {
   catch (error) {
     if (error.code !== 'EEXIST') throw error;
     const { state: old, identity: original, text } = await readOwnerJSON(path);
-    if (alive(old.pid) || old.childPid && alive(old.childPid)) throw new Error('Claude owner is already running; refusing a second writer.');
+    // A reused PID born after this lock was last written is not its holder.
+    const writtenAt = Number(original.mtimeNs / 1_000_000n);
+    const running = async () => await lockHolderAlive(old.pid, writtenAt, { isAlive: alive })
+      || Boolean(old.childPid) && await lockHolderAlive(old.childPid, writtenAt, { isAlive: alive });
+    if (await running()) throw new Error('Claude owner is already running; refusing a second writer.');
     // One reaper at a time. A crash during reaping remains explicit, not an
     // invitation to race another process or discard an uncertain live owner.
     const claim = `${path}.reap`;
@@ -97,7 +101,7 @@ async function acquireLock(path) {
       if (current.ino !== original.ino || current.dev !== original.dev
           || current.ino !== claimed.ino || current.dev !== claimed.dev
           || (await readFile(claim, 'utf8')) !== text
-          || alive(old.pid) || old.childPid && alive(old.childPid)) throw new Error('Claude owner lock changed during recovery.');
+          || await running()) throw new Error('Claude owner lock changed during recovery.');
       await unlink(path);
       file = await open(path, 'wx', 0o600);
     } finally { await unlink(claim); }

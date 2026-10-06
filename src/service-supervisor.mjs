@@ -1,9 +1,10 @@
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { constants } from 'node:fs';
 import { lstat, open, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { privateDirectory, withLock, writeDiagnosticJSON } from './storage.mjs';
+import { privateDirectory, processStartedAt, withLock, writeDiagnosticJSON } from './storage.mjs';
 
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const OWNER_LOCK = /^[a-f0-9]{64}\.json\.lock$/;
@@ -13,6 +14,17 @@ export function processAlive(pid) {
   if (!validPid(pid)) throw new Error('Invalid service process identity.');
   try { process.kill(pid, 0); return true; }
   catch (error) { if (error.code === 'ESRCH') return false; if (error.code === 'EPERM') return true; throw error; }
+}
+
+/** Metadata of processes that lost their parent: PID, start time and executable name. */
+export async function orphanedProcesses() {
+  const { stdout } = await promisify(execFile)('/bin/ps', ['-axo', 'pid=,ppid=,uid=,lstart=,comm='],
+    { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }, maxBuffer: 4 * 1024 * 1024, timeout: 5000 });
+  return stdout.split('\n').flatMap(row => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([A-Z][a-z]{2} [A-Z][a-z]{2}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})\s+(.*)$/.exec(row);
+    return match && Number(match[2]) === 1 && Number(match[3]) === process.getuid()
+      ? [{ pid: Number(match[1]), startedAt: Date.parse(`${match[4]} UTC`), command: match[5] }] : [];
+  });
 }
 
 // This is a read-only prerequisite, not a writer lease. Native acquisition
@@ -33,23 +45,43 @@ async function privateJSON(path) {
   } finally { await file.close(); }
 }
 
-export async function inspectServiceStart(root, { alive = processAlive, includeSupervisor = false } = {}) {
+export async function inspectServiceStart(root, { alive = processAlive, startedAt = processStartedAt, orphans = orphanedProcesses, includeSupervisor = false, now = Date.now } = {}) {
   const blockers = [];
   const add = (kind, code, extra = {}) => blockers.push({ kind, code, ...extra });
+  // A PID is reused after its process exits, typically after a restart. A
+  // process born after the lock was last written cannot be its holder.
+  const holds = async (pid, writtenAt) => {
+    if (!alive(pid)) return false;
+    const born = await startedAt(pid);
+    return !(born !== null && Number.isFinite(writtenAt) && born > writtenAt + 2000);
+  };
   const inspect = async (path, kind, owner = false) => {
     try {
+      const info = await lstat(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+      // The holder publishes itself right after exclusive creation. A lock
+      // still empty after a minute was left by a process that died in
+      // between, and exclusive acquisition reclaims it.
+      if (!owner && info?.isFile() && info.size === 0 && now() - Math.floor(info.mtimeMs) >= 60_000) return;
       const value = await privateJSON(path);
       if (value === null) return;
+      const writtenAt = owner ? Math.floor(info?.mtimeMs ?? NaN) : Date.parse(value.started);
       if (!validPid(value.pid) || (owner
         ? !UUID.test(value.nonce ?? '') || (value.childPid !== null && !validPid(value.childPid))
         : typeof value.started !== 'string' || !Number.isFinite(Date.parse(value.started)))) {
         add(kind, 'malformed-lock'); return;
       }
-      if (alive(value.pid)) add(kind, 'live-owner', { pid: value.pid });
-      else if (owner && value.childPid !== null && alive(value.childPid)) add(kind, 'live-native-child', { childPid: value.childPid });
+      if (await holds(value.pid, writtenAt)) add(kind, 'live-owner', { pid: value.pid });
+      else if (owner && value.childPid !== null && await holds(value.childPid, writtenAt)) add(kind, 'live-native-child', { childPid: value.childPid });
       // The former parent can die between spawn() and persisting childPid.
-      // An absent child identity is not proof that no native writer exists.
-      else if (owner && value.childPid === null) add(kind, 'unrecorded-native-child');
+      // An absent child identity is not proof that no native writer exists,
+      // but such a child would now be a parentless process under a Claude
+      // path (the CLI binary itself is named by its version) born right
+      // after this lock. Without one, native acquisition reclaims the lock.
+      else if (owner && value.childPid === null) {
+        const created = Math.floor(info.birthtimeMs);
+        if ((await orphans()).some(row => /claude/i.test(row.command) && row.startedAt >= created - 2000 && row.startedAt <= writtenAt + 120_000))
+          add(kind, 'unrecorded-native-child');
+      }
     } catch { add(kind, 'unverified-lock'); }
   };
   const directory = await lstat(root);
@@ -59,7 +91,9 @@ export async function inspectServiceStart(root, { alive = processAlive, includeS
   if (includeSupervisor) roots.push(['service-supervisor.lock', 'supervisor']);
   for (const [name, kind] of roots) {
     await inspect(join(root, name), kind);
-    try { await lstat(join(root, `${name}.reclaim`)); add(kind, 'recovery-claim-present'); }
+    // Recovery takes milliseconds; a claim left for a minute was abandoned
+    // and exclusive acquisition removes it.
+    try { if (now() - Math.floor((await lstat(join(root, `${name}.reclaim`))).ctimeMs) < 60_000) add(kind, 'recovery-claim-present'); }
     catch (error) { if (error.code !== 'ENOENT') add(kind, 'unverified-recovery-claim'); }
   }
   const ownerRoot = join(root, 'owners');

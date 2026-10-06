@@ -493,7 +493,14 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 if (activeDirty.delete(id)) activeDirty.add(id); // Busy work yields to the next dirty owner.
                 const waitingId = error.conversationId ?? id;
                 wait(error, { scope: waitingId === id ? 'conversation' : 'coordinator',
-                  ...conversationContext(latest, waitingId) }); return { waiting: true };
+                  ...conversationContext(latest, waitingId) });
+                // The startup sweep has no event to retry. Give its own wait the
+                // same bounded follow-ups a completion event gets, so a brief
+                // race cannot leave an offline completion undelivered.
+                const current = events && broadPass && waitingId === id
+                  && latest.records.find(record => record.conversationId === id && record.status === 'current');
+                if (current) deferEvent({ side: current.side, nativeId: current.nativeId, kind: 'completed' }, 0);
+                return { waiting: true };
               }
               if (isHistoryBlocked(error)) {
                 // An allocation's global original/retention guard can identify
