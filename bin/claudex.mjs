@@ -234,7 +234,7 @@ async function main() {
     return;
   }
   if (config.mode === 'desktop') {
-    if (!['watch', 'track', 'sync', 'gc', 'recover', 'archive-original', 'untrack', 'resume-tracking', 'split-original'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, recover, archive-original, untrack, resume-tracking, and split-original; owner appends cannot be aborted as disposable files.');
+    if (!['watch', 'track', 'sync', 'gc', 'recover', 'abort', 'archive-original', 'untrack', 'resume-tracking', 'split-original'].includes(command)) throw new Error('Desktop mode supports watch, track, sync, gc, recover, abort, archive-original, untrack, resume-tracking, and split-original.');
     if (command === 'untrack') {
       if (!positionals[1]) throw new Error('Supply the logical conversation ID.');
       // Stopping enrollment is metadata-only, including when its saved cwd is
@@ -279,6 +279,9 @@ async function main() {
           const { splitDesktopOriginal } = await import('../src/desktop-original-split.mjs');
           output(await splitDesktopOriginal({ bridge, conversationId: positionals[1], originalNativeId: values.id,
             originalRecordId: values['record-id'], expectedCheckpoint: { count, digest } }));
+        } else if (command === 'abort') {
+          // Only a prepared delivery that wrote nothing natively can be dropped.
+          output(await bridge.abandonUnapplied());
         } else output(await bridge[command === 'gc' ? 'collect' : 'recover']());
       });
     } finally {

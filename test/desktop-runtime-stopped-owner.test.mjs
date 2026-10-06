@@ -163,9 +163,10 @@ test('a verified dead owner lock is reclaimed without a process or native mutati
 
 test('mismatched state, pending work and native Remote Control disagreements fail without startup', async t => {
   const f = await fixture(t);
+  const engineVersion = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
   for (const change of [{ version: 2 }, { conversationId: randomUUID() }, { sessionId: randomUUID() },
     { cwd: f.base }, { claudeHome: f.base }, { pending: { phase: 'sent' } }, { reset: { phase: 'restoring' } },
-    { blocked: 'Synthetic owner blocked' }, { remoteId: 'cse_foreign' }]) {
+    { blocked: 'Synthetic owner blocked', blockedEngine: engineVersion }, { remoteId: 'cse_foreign' }]) {
     await writeJSON(f.statePath, { ...f.saved, ...change });
     await assert.rejects(f.runtime.inspect(f.record), /identity|pending|blocked|disagree/);
     assert.equal(f.calls.starts.length, 0);

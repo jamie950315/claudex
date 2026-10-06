@@ -213,3 +213,27 @@ test('held snapshots are retained and reported against the quota and an unavaila
   };
   await assert.rejects(allocate(), /shared Codex transport closed/);
 });
+
+test('only a prepared Codex delivery whose rollout was never published can be abandoned', async () => {
+  const f = await fixture();
+  f.owned('active');
+  const candidate = { id: 'candidate', nativeId: 'candidate', conversationId: 'active', side: 'codex', kind: 'snapshot',
+    managed: true, path: '/native/candidate', cwd: common.meta.cwd };
+  const pending = extra => ({ phase: 'prepared', operationId: 'synthetic-operation', record: candidate, ...extra });
+  const attempt = async value => { f.state.pending = value; await f.bridge.save(f.state); return f.bridge.abandonUnapplied(); };
+  for (const kept of [pending({ phase: 'applied' }), pending({ phase: 'promoted' }), pending({ reuse: true }),
+    pending({ kind: 'original-archive' }), pending({ record: { ...candidate, side: 'claude', kind: 'owner' } }),
+    pending({ record: { ...candidate, path: undefined } })]) {
+    assert.equal((await attempt(kept)).abandoned, false);
+    assert.deepEqual((await f.bridge.status()).pending, JSON.parse(JSON.stringify(kept)));
+  }
+  // A published rollout may already be registered natively; it must be recovered.
+  f.files.set('candidate', { common: structuredClone(common), bytes: 1, busy: false });
+  assert.equal((await attempt(pending())).abandoned, false);
+  f.files.delete('candidate');
+  assert.deepEqual(await attempt(pending()), { abandoned: true, conversationId: 'active' });
+  const state = await f.bridge.status();
+  assert.equal(state.pending, null);
+  assert.equal(state.audit.at(-1).event, 'abandoned');
+  assert.deepEqual(await f.bridge.abandonUnapplied(), { abandoned: false, pending: null });
+});

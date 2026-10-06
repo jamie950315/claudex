@@ -804,13 +804,23 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
               for (const event of retry) deferEvent(event, event.retryAttempt ?? 0);
             }
           }
-          else if (isHistoryBlocked(error)) {
+          else {
             const state = await bridge.status(), pending = state.pending;
+            const known = isHistoryBlocked(error);
+            if (!known && (!pending || signal?.aborted || error?.name === 'AbortError' || !(error instanceof Error))) throw error;
             const conversationId = pending?.record?.conversationId ?? error.conversationId ?? null;
-            blocked = block(blocked, error, { scope: pending ? 'pending' : 'coordinator',
+            // A delivery that failed before writing anything natively is
+            // dropped and held on its own conversation. Otherwise the single
+            // pending transaction stays, visibly blocked and retried by the
+            // next pass, instead of ending the worker into the same failure.
+            const abandoned = pending ? await bridge.abandonUnapplied?.() : null;
+            if (abandoned?.abandoned) {
+              blocked = null;
+              blockedConversations.set(conversationId, block(blockedConversations.get(conversationId), error, conversationContext(state, conversationId)));
+            } else blocked = block(blocked, error, { scope: pending ? 'pending' : 'coordinator',
               conversationId, ...conversationContext(state, conversationId),
               operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
-          } else throw error;
+          }
         }
         // Activation alone keeps the last synchronization report and never
         // renews archival proofs or performs presentation history inspection.

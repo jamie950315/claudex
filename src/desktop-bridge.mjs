@@ -528,6 +528,25 @@ export class DesktopBridge {
 
   async recover() { return this.locked(state => state.pending ? this.finish(state) : { changed: false }); }
 
+  /** Drop a prepared delivery that provably wrote nothing natively: a new
+   * Codex copy whose planned rollout file was never published. Its
+   * conversation returns to its last checkpoint and the next sync plans a
+   * fresh delivery. Anything applied, promoted, reusing an owner or
+   * archiving an original must still be recovered, never dropped.
+   */
+  async abandonUnapplied() {
+    return this.locked(async state => {
+      const pending = state.pending, record = pending?.record;
+      if (!pending || pending.kind === 'original-archive' || pending.phase !== 'prepared' || pending.reuse
+          || record?.side !== 'codex' || record.kind !== 'snapshot' || typeof record.path !== 'string'
+          || !this.adapters.codex?.exists || await this.adapters.codex.exists(record) !== false)
+        return { abandoned: false, pending: pending ? { phase: pending.phase ?? null, side: record?.side ?? null } : null };
+      state.pending = null;
+      await this.save(state, { event: 'abandoned', conversationId: record.conversationId });
+      return { abandoned: true, conversationId: record.conversationId };
+    });
+  }
+
   /** Explicit legacy reconciliation only: preserves the exact original and its
    * native spawned-agent tree, without allocating or deleting any session.
    */

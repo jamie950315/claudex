@@ -13,6 +13,12 @@ import { captureImageAssets, restoreImageAssets } from './claude-image-assets.mj
 import { inspectMaintenancePolicy } from './maintenance-policy.mjs';
 import { normalizeVersionPolicy, runtimeVersionPermitted } from './runtime-version-policy.mjs';
 
+// A persisted block records what one past native stream looked like to this
+// engine. Another engine version judges the saved history again through the
+// normal checkpoint checks instead of keeping the conversation held forever.
+const ENGINE_VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
+const blockPersists = state => Boolean(state?.blocked) && state.blockedEngine === ENGINE_VERSION;
+
 export const CLAUDE_OWNER_SDK_VERSION = '0.3.281';
 export const CLAUDE_OWNER_CLI_VERSION = '2.1.281';
 const execute = promisify(execFile);
@@ -195,7 +201,7 @@ export class ClaudeOwner {
           || owner.state.claudeHome !== claudeHome || await realpath(cwd) !== cwd
           || await realpath(claudeHome) !== claudeHome || path !== sessionPath(claudeHome, cwd, sessionId))
         throw new Error('Stored Claude owner state identity does not match its record.');
-      if (owner.state.blocked) throw new Error(owner.state.blocked);
+      if (blockPersists(owner.state)) throw new Error(owner.state.blocked);
       if (owner.state.reset) throw new Error('A pending native context reset requires owner recovery before process-free inspection.');
       if (owner.state.pending) throw new Error('A pending native append requires owner recovery before process-free inspection.');
       if (owner.state.remoteId && !REMOTE_ID.test(owner.state.remoteId)) throw new Error('Invalid saved native remote identity.');
@@ -310,7 +316,8 @@ export class ClaudeOwner {
       if (this.state.displayTitle !== undefined && (typeof this.state.displayTitle !== 'string' || !this.state.displayTitle.trim()))
         throw new Error('Saved Claude owner display title must be nonempty text.');
       this.transcriptPath = sessionPath(this.claudeHome, this.cwd, this.state.sessionId);
-      if (this.state.blocked) throw new Error(this.state.blocked);
+      if (blockPersists(this.state)) throw new Error(this.state.blocked);
+      if (this.state.blocked) { delete this.state.blocked; delete this.state.blockedEngine; await this.save(); }
       if (this.state.reset && !this.deferRemoteConnection) throw new Error('A pending context reset requires a deferred cold maintenance owner.');
       if (this.state.reset) await this.validateResetRecovery();
       const transcript = await this.inspectTranscript();
@@ -866,7 +873,7 @@ export class ClaudeOwner {
           this.nativeState = 'unknown';
           this.identityUncertain = true;
           this.blocked = 'SDK event belongs to another session.';
-          this.state.blocked = this.blocked; await this.save();
+          this.state.blocked = this.blocked; this.state.blockedEngine = ENGINE_VERSION; await this.save();
           this.waiting?.reject(new Error(this.blocked));
           this.resetWaiting?.reject(new Error(this.blocked));
           this.resetIdleWaiting?.reject(new Error(this.blocked));
@@ -897,7 +904,7 @@ export class ClaudeOwner {
           if (event.subtype !== 'success' || event.is_error || event.num_turns !== 0 || event.duration_api_ms !== 0
             || !Number.isFinite(event.total_cost_usd) || event.total_cost_usd < 0 || keys.size !== 1) {
             this.blocked = 'Bridge append received a querying or ambiguous result; synchronization is paused without stopping user work.';
-            this.state.blocked = this.blocked; await this.save();
+            this.state.blocked = this.blocked; this.state.blockedEngine = ENGINE_VERSION; await this.save();
             this.waiting?.reject(new Error(this.blocked));
             await this.emit({ type: 'owner_error', message: this.blocked });
           } else {
@@ -919,7 +926,7 @@ export class ClaudeOwner {
             } catch { /* Unverifiable provenance pauses appends without stopping the native process. */ }
             if (!actualUserTurn) {
               this.blocked = 'A querying result has no verified external user turn; synchronization is paused without stopping user work.';
-              this.state.blocked = this.blocked; await this.save();
+              this.state.blocked = this.blocked; this.state.blockedEngine = ENGINE_VERSION; await this.save();
               this.waiting?.reject(new Error(this.blocked));
               await this.emit({ type: 'owner_error', message: this.blocked });
             }
@@ -936,7 +943,7 @@ export class ClaudeOwner {
       }
     } catch (error) {
       this.blocked = this.state.reset ? `Context-reset stream failed: ${error.message}` : 'Claude owner stream failed; synchronization is paused.';
-      if (this.state.reset) { this.state.blocked = this.blocked; await this.save(); }
+      if (this.state.reset) { this.state.blocked = this.blocked; this.state.blockedEngine = ENGINE_VERSION; await this.save(); }
       this.waiting?.reject(new Error(this.blocked));
       this.resetWaiting?.reject(new Error(this.blocked));
       this.resetIdleWaiting?.reject(new Error(this.blocked));

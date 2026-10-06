@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, appendFile, readFile, writeFile, realpath, lstat, chmod, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, appendFile, readFile, readdir, writeFile, realpath, lstat, chmod, rm } from 'node:fs/promises';
 import { join, dirname, basename, resolve } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -361,6 +361,18 @@ test('unknown querying results pause appends but preserve the remote process', a
   await assert.rejects(owner.append({ operationId: 'a', content: 'Synthetic handoff' }), /no verified external user turn/);
   assert.equal(f.closeCount(), 0);
   await owner.close();
+  // The same engine keeps its persisted block across a restart.
+  await assert.rejects(ClaudeOwner.open(f.config), /no verified external user turn/);
+  // Another engine version judges the saved history again instead of holding it forever.
+  const directory = join(f.config.root, 'owners'), name = (await readdir(directory)).find(entry => entry.endsWith('.json'));
+  const saved = JSON.parse(await readFile(join(directory, name), 'utf8'));
+  assert.equal(typeof saved.blockedEngine, 'string');
+  await writeFile(join(directory, name), JSON.stringify({ ...saved, blockedEngine: '0.0.0' }), { mode: 0o600 });
+  const reopened = await ClaudeOwner.open(f.config);
+  assert.equal(reopened.status().blocked, null);
+  const cleared = JSON.parse(await readFile(join(directory, name), 'utf8'));
+  assert.equal(cleared.blocked, undefined); assert.equal(cleared.blockedEngine, undefined);
+  await reopened.close();
 });
 
 test('querying bridge receipts pause synchronization without killing user work', async () => {

@@ -216,8 +216,7 @@ test('different blocked reasons publish immediately during rapid progress', asyn
 
 test('fatal diagnostic errors bypass the progress interval', async () => {
   const f = await fixture(), publications = [];
-  f.state.pending = { phase: 'prepared' };
-  f.bridge.recover = async () => { throw new Error('Unexpected native failure'); };
+  f.runtime.codex = async () => { throw new Error('Unexpected native failure'); };
   await assert.rejects(f.run({ maxPasses: 1,
     writeStatus: async (_path, value) => publications.push(structuredClone(value)) }), /Unexpected native failure/);
   assert.equal(publications[0].running, true);
@@ -742,14 +741,39 @@ test('blocked recovery remains abortable without clearing its pending transactio
   assert.equal((await f.status()).running, false);
 });
 
-test('unclassified recovery failures still end the worker and are not silently retried', async () => {
+test('a failed recovery stays visibly blocked on its transaction instead of ending the worker', async () => {
   const f = await fixture();
-  f.state.pending = { phase: 'prepared' };
+  f.state.pending = { phase: 'applied', operationId: 'synthetic-operation', record: { conversationId: 'new' } };
   const fail = async () => { throw new Error('Unexpected native lifecycle schema.'); };
   f.bridge.sync = fail;
   f.bridge.recover = fail;
-  await assert.rejects(f.run({ maxPasses: 2 }), /Unexpected native lifecycle schema/);
-  assert.equal((await f.status()).error, 'Unexpected native lifecycle schema.');
+  f.bridge.abandonUnapplied = async () => ({ abandoned: false });
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.synchronization, 'blocked');
+  assert.equal(pass.blocked.scope, 'pending');
+  assert.equal(pass.blocked.reason, 'Unexpected native lifecycle schema.');
+  assert.deepEqual(f.state.pending.phase, 'applied');
+});
+
+test('a prepared delivery that wrote nothing natively is dropped and held on its own conversation', async () => {
+  const f = await fixture();
+  f.state.conversations.stuck = { id: 'stuck', title: 'Stuck delivery' };
+  f.state.pending = { phase: 'prepared', operationId: 'synthetic-operation', record: { conversationId: 'stuck', side: 'codex' } };
+  let recoveries = 0;
+  f.bridge.recover = async () => { recoveries++; throw new Error('Invalid Claudex context archive: invalid native packet byte limit.'); };
+  f.bridge.abandonUnapplied = async () => { f.state.pending = null; return { abandoned: true, conversationId: 'stuck' }; };
+  let pass;
+  await f.run({ maxPasses: 3, sleep: async () => { pass = await f.status(); } });
+  assert.equal(recoveries, 1);
+  assert.equal(f.state.pending, null);
+  assert.equal(pass.synchronization, 'degraded');
+  assert.equal(pass.blocked, null);
+  assert.equal(pass.blockedConversations[0].conversationId, 'stuck');
+  assert.match(pass.blockedConversations[0].reason, /invalid native packet byte limit/);
+  // Other conversations are synchronized again once the transaction is gone.
+  assert.ok(f.calls.sync.length > 0);
 });
 
 test('an unclassified read failure without a durable intent holds only its conversation', async () => {
