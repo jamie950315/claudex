@@ -135,6 +135,43 @@ function resultsAfterTheirCalls(rows) {
   return rows.flatMap(row => moved.has(row) ? [] : [row, ...late.get(row.uuid) ?? []]);
 }
 
+// Rewinding in Claude and sending another prompt leaves the replaced turns in
+// the file as a sibling branch. The native conversation is the branch that
+// ends at the last authored row, and every fork on it must continue with a
+// real user prompt. Rows of the replaced branches are left out of the decoded
+// history; nothing else is dropped, and any other fork (a second assistant
+// reply, competing tool results) is still refused. A rewind that removes
+// already synchronized turns then fails the saved prefix check as before.
+function withoutRewoundBranches(rows, parallelParents, children) {
+  const refuse = () => { throw new Error('Nonlinear Claude history requires an explicit branch selection.'); };
+  const authored = row => row.type === 'user' || row.type === 'assistant';
+  const byId = new Map(rows.filter(row => row.uuid).map(row => [row.uuid, row]));
+  const parentOf = row => authored(row) ? parallelParents.get(row.uuid) ?? row.parentUuid : row.parentUuid;
+  const parents = new Set(rows.filter(row => row.uuid).map(parentOf).filter(Boolean));
+  const leaf = rows.findLast(row => authored(row) && row.uuid && !parents.has(row.uuid));
+  if (!leaf) refuse();
+  const ancestors = start => {
+    const chain = new Set();
+    for (let row = start; row && !chain.has(row.uuid); row = byId.get(parentOf(row))) chain.add(row.uuid);
+    return chain;
+  };
+  const active = ancestors(leaf), replaced = new Set();
+  const prompt = row => row.type === 'user' && !row.isMeta && (typeof row.message?.content === 'string'
+    || Array.isArray(row.message?.content) && row.message.content.length > 0 && row.message.content.every(block => block.type !== 'tool_result'));
+  for (const siblings of children.values()) {
+    if (siblings.size < 2) continue;
+    const kept = [...siblings].filter(uuid => active.has(uuid));
+    if (kept.length !== 1 || !prompt(byId.get(kept[0]))) refuse();
+    for (const uuid of siblings) if (uuid !== kept[0]) replaced.add(uuid);
+  }
+  return rows.filter(row => {
+    if (!authored(row) || !row.uuid || active.has(row.uuid)) return true;
+    // Only rows under a replaced branch may be left out.
+    if (![...ancestors(row)].some(uuid => replaced.has(uuid))) refuse();
+    return false;
+  });
+}
+
 export function decodeClaude(text, { preserveCompactionHistory = false, authenticatePreservedPacket } = {}) {
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
   const compact = preserveCompactionHistory ? claudeCompactionHistory(text, rows, authenticatePreservedPacket) : claudeCompaction(text, rows);
@@ -142,17 +179,19 @@ export function decodeClaude(text, { preserveCompactionHistory = false, authenti
   const ids = new Set(main.filter(row => row.uuid).map(row => row.uuid));
   const parallelParents = parallelToolGraphParents(main);
   const children = new Map();
+  let forked = false;
   for (const row of main.filter(row => row.type === 'user' || row.type === 'assistant')) {
     if (row.parentUuid && !ids.has(row.parentUuid)) throw new Error('Dependent Claude history is missing its parent; automatic handoff paused.');
     const parentUuid = parallelParents.get(row.uuid) ?? row.parentUuid;
     if (parentUuid) {
       const siblings = children.get(parentUuid) ?? new Set();
       siblings.add(row.uuid);
-      if (siblings.size > 1) throw new Error('Nonlinear Claude history requires an explicit branch selection.');
+      if (siblings.size > 1) forked = true;
       children.set(parentUuid, siblings);
     }
   }
-  const common = JSON.parse(toCommon(resultsAfterTheirCalls(main).map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
+  const current = forked ? withoutRewoundBranches(main, parallelParents, children) : main;
+  const common = JSON.parse(toCommon(resultsAfterTheirCalls(current).map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
   preserveUnpairedLocalCommands(common, main);
   if (compact) common.meta.compaction = compact.metadata;
   return common;

@@ -173,7 +173,7 @@ export class DesktopBridge {
    * The adapter proves the native move; the coordinator proves that adopting it
    * cannot select between competing histories or reroute an existing operation.
    */
-  async reconcileOriginalRelocations(state, conversationId, hold) {
+  async reconcileOriginalRelocations(state, conversationId, hold, thorough = false) {
     if (state.pending) return;
     for (const record of state.records.filter(record => this.adapters[record.side]?.reconcileRelocation
       && record.status === 'current' && record.managed === false && record.kind === 'original'
@@ -182,7 +182,7 @@ export class DesktopBridge {
       const reconcile = this.adapters[record.side].reconcileRelocation;
       const label = record.side === 'claude' ? 'Claude' : 'Codex';
       try {
-        const proof = await reconcile(record);
+        const proof = await reconcile(record, { thorough });
         if (!proof) continue;
         const conversation = state.conversations[record.conversationId];
         const validate = candidate => {
@@ -220,7 +220,7 @@ export class DesktopBridge {
             || !isDeepStrictEqual(target.checkpoint, conversation.canonical))
             throw relocationGuard(`${record.side === 'claude' ? 'Codex' : 'Claude'} changed during ${label} relocation; no branch was selected.`);
         }
-        const latest = await reconcile(record);
+        const latest = await reconcile(record, { thorough });
         const latestCommon = validate(latest);
         if (!isDeepStrictEqual(latest.record, proof.record) || latest.bytes !== proof.bytes
           || !isDeepStrictEqual(latest.relocationProof, proof.relocationProof)
@@ -424,11 +424,21 @@ export class DesktopBridge {
       await this.reconcileOriginalRelocations(state, id);
       await this.assertOriginalsUnchanged(state, id);
       const records = ['codex', 'claude'].map(side => this.current(state, id, side)).filter(Boolean);
-      const readings = await readBatches(records, async record => {
+      const read = () => readBatches(records, async record => {
         const data = await this.inspect(record);
         if (!readingMatches(data, conversation.canonical)) throw new Error('Conversation history diverged before the common checkpoint; no branch was selected.');
         return { record, data };
       });
+      let readings;
+      try { readings = await read(); }
+      catch (error) {
+        // The native app may have moved this conversation while its saved
+        // directory still exists (for example into a worktree). Only then ask
+        // the adapter for a thorough move proof; without one the hold remains.
+        if (error?.message !== 'Source working directory changed; synchronization paused.') throw error;
+        await this.reconcileOriginalRelocations(state, id, undefined, true);
+        readings = await read();
+      }
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
       const maintenance = [];

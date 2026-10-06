@@ -43,10 +43,19 @@ test('only a proven Codex project move produces relocation evidence', async () =
     const codex = f.runtime.codex;
     f.runtime.codex = async () => { throw new Error('Codex backend must not be needed.'); };
     assert.equal(await f.runtime.reconcileCodexRelocation(f.record), null);
-    // Another existing project is a different directory, never a move.
+    // Global checks never ask Codex about a saved directory that still exists.
     await mkdir(f.newCwd); f.setThreadCwd(f.newCwd);
     assert.equal(await f.runtime.reconcileCodexRelocation(f.record), null);
     f.runtime.codex = codex;
+    // The conversation's own sync does: Codex moved the thread while the old
+    // directory stayed, as after a move into a worktree.
+    const moved = await f.runtime.reconcileCodexRelocation(f.record, { thorough: true });
+    assert.equal(moved.record.cwd, f.newCwd);
+    assert.equal(moved.record.relocation.previousCwdState, 'independent');
+    assert.equal(moved.relocationProof.previousCwdState, 'independent');
+    f.setThreadCwd(f.oldCwd);
+    assert.equal(await f.runtime.reconcileCodexRelocation(f.record, { thorough: true }), null);
+    f.setThreadCwd(f.newCwd);
     // An alias that leads somewhere else is not this move either.
     const elsewhere = join(f.root, 'elsewhere'); await mkdir(elsewhere);
     const aliasRecord = { ...f.record, cwd: join(f.root, 'alias') };

@@ -182,3 +182,25 @@ test('new enrollments fix the display screenshot policy for every Codex record t
   assert.equal(snapshot.kind, 'snapshot');
   assert.equal(snapshot.displayScreenshots, 'omitted');
 });
+
+test('a move whose saved directory still exists is followed only through a thorough proof after the mismatch', async () => {
+  const f = await fixture();
+  const oldOwner = await f.current('claude');
+  // The cheap check sees an existing saved directory and reports no move.
+  const reconcile = f.bridge.adapters.codex.reconcileRelocation, thorough = [];
+  f.bridge.adapters.codex.reconcileRelocation = async (record, options) => {
+    thorough.push(options?.thorough === true);
+    return options?.thorough ? reconcile(record) : null;
+  };
+  f.move();
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, true);
+  assert.ok(thorough.includes(false) && thorough.includes(true));
+  assert.equal((await f.current('codex')).cwd, '/new/project');
+  assert.notEqual((await f.current('claude')).nativeId, oldOwner.nativeId);
+  // Without any proof the working-directory hold remains.
+  const g = await fixture();
+  g.bridge.adapters.codex.reconcileRelocation = async () => null;
+  g.move();
+  await assert.rejects(g.bridge.sync(g.conversationId), /Source working directory changed; synchronization paused/);
+  assert.equal((await g.current('codex')).cwd, '/old/project');
+});

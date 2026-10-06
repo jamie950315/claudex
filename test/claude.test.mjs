@@ -104,3 +104,28 @@ test('missing parents and competing branches are not silently flattened', () => 
   const rows = [row('a', null, 'user'), row('b', 'a', 'assistant'), row('c', 'a', 'assistant')];
   assert.throws(() => decodeClaude(rows.map(value => JSON.stringify(value)).join('\n') + '\n'), /Nonlinear/);
 });
+
+test('a rewound branch is left out and every other fork is still refused', () => {
+  const base = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/tmp/claudex-rewind', version: '2.1.281',
+    timestamp: '2026-10-06T00:00:00.000Z', isSidechain: false, userType: 'external' };
+  const row = (uuid, parentUuid, type, content, extra = {}) => ({ ...base, uuid, parentUuid, type,
+    message: { role: type, content, ...(type === 'assistant' ? { id: 'msg-' + uuid, model: 'synthetic-fixture',
+      stop_reason: 'end_turn', usage: { input_tokens: 0, output_tokens: 0 } } : {}) }, ...extra });
+  const text = rows => rows.map(value => JSON.stringify(value)).join('\n') + '\n';
+  const reply = (uuid, parent, value) => row(uuid, parent, 'assistant', [{ type: 'text', text: value }]);
+  const start = [row('u1', null, 'user', 'First question'), reply('a1', 'u1', 'First answer')];
+  const replacedBranch = [row('u2', 'a1', 'user', 'Replaced question'), reply('a2', 'u2', 'Replaced answer')];
+  const kept = [row('u3', 'a1', 'user', 'Rewritten question'), reply('a3', 'u3', 'Rewritten answer')];
+  const texts = common => common.messages.map(message => message.content.map(block => block.text).join(''));
+  assert.deepEqual(texts(decodeClaude(text([...start, ...replacedBranch, ...kept]))),
+    ['First question', 'First answer', 'Rewritten question', 'Rewritten answer']);
+  assert.deepEqual(decodeClaude(text([...start, ...replacedBranch, ...kept])).messages, decodeClaude(text([...start, ...kept])).messages);
+  // Rewinding twice from the same point keeps only the last branch.
+  const again = [row('u4', 'a1', 'user', 'Third wording'), reply('a4', 'u4', 'Third answer')];
+  assert.deepEqual(texts(decodeClaude(text([...start, ...replacedBranch, ...kept, ...again]))).slice(2), ['Third wording', 'Third answer']);
+  // A second assistant reply or a competing tool result is not a rewind.
+  assert.throws(() => decodeClaude(text([...start, reply('a1b', 'u1', 'Competing answer')])), /Nonlinear/);
+  const call = row('c1', 'u3', 'assistant', [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: {} }]);
+  const result = uuid => row(uuid, 'c1', 'user', [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }]);
+  assert.throws(() => decodeClaude(text([...start, kept[0], call, result('r1'), result('r2')])), /Nonlinear/);
+});

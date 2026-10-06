@@ -141,7 +141,7 @@ export class DesktopRuntime {
       assertDependencyAnchor: record => this.assertDependencyAnchor(record),
     });
     this.adapters.claude.reconcileRelocation = record => this.reconcileClaudeRelocation(record);
-    this.adapters.codex.reconcileRelocation = record => this.reconcileCodexRelocation(record);
+    this.adapters.codex.reconcileRelocation = (record, options) => this.reconcileCodexRelocation(record, options);
   }
   async initialize() {
     this.root = await privateDirectory(this.root);
@@ -355,10 +355,13 @@ export class DesktopRuntime {
 
   /** True only when the exact saved directory is gone, never for other errors. */
   /** Prove that Codex itself moved an unmanaged original to another project:
-   * the same thread now reports a different canonical directory, and the saved
-   * one is gone or only an alias of the new one. Anything else stays a hold.
+   * the same thread now reports a different canonical directory. Global checks
+   * use the filesystem alone, so unmoved conversations never need the backend:
+   * the saved directory must be gone or an alias of the new one. The moved
+   * conversation's own sync is thorough and also asks Codex when the saved
+   * directory still exists, as it does after a move into a worktree.
    */
-  async reconcileCodexRelocation(record) {
+  async reconcileCodexRelocation(record, { thorough = false } = {}) {
     if (record.side !== 'codex' || record.managed !== false || record.kind !== 'original' || record.status !== 'current'
       || record.verified !== true || !UUID.test(record.nativeId) || typeof record.cwd !== 'string' || !isAbsolute(record.cwd)) return null;
     // A saved directory that still exists on its own is not a move. Check the
@@ -366,7 +369,7 @@ export class DesktopRuntime {
     let previous;
     try { previous = await realpath(record.cwd); }
     catch (error) { if (!['ENOENT', 'ENOTDIR'].includes(error.code)) throw error; }
-    if (previous === record.cwd) return null;
+    if (previous === record.cwd && !thorough) return null;
     const client = await this.codex();
     const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
     if (thread.id !== record.nativeId || typeof thread.cwd !== 'string' || !isAbsolute(thread.cwd)) return null;
@@ -374,12 +377,12 @@ export class DesktopRuntime {
     try { cwd = await realpath(thread.cwd); } catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return null; throw error; }
     if (cwd === record.cwd || !(await lstat(cwd)).isDirectory()) return null;
     // An alias must lead to the reported new project, never somewhere else.
-    if (previous !== undefined && previous !== cwd) return null;
+    if (previous !== undefined && previous !== cwd && previous !== record.cwd) return null;
     const data = await this.inspectNative(record);
     if (data.common.meta.cwd !== cwd) return null;
     const directory = await lstat(cwd, { bigint: true });
     const relocation = { version: 1, kind: 'codex-project-move', originCwd: record.relocation?.originCwd ?? record.cwd,
-      previousCwd: record.cwd, previousPath: record.path, previousCwdState: previous === undefined ? 'absent' : 'alias' };
+      previousCwd: record.cwd, previousPath: record.path, previousCwdState: previous === undefined ? 'absent' : previous === record.cwd ? 'independent' : 'alias' };
     return { ...data, record: { ...record, path: data.path, cwd, relocation },
       relocationProof: { cwd, dev: directory.dev.toString(), ino: directory.ino.toString(), previousCwdState: relocation.previousCwdState } };
   }
