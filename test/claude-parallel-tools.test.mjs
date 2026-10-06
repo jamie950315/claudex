@@ -215,3 +215,24 @@ test('ambiguous tool metadata, missing results and real competing continuations 
     assert.throws(() => read(f.rows), /Nonlinear|missing its parent/, mutate.toString());
   }
 });
+
+test('a native result persisted one row before its exact parent call decodes after that call', () => {
+  const f = fixture();
+  // Observed physical order: the first response block, the second block's result, then the second block.
+  f.get('result-a').parentUuid = 'stream-2';
+  f.get('result-a').sourceToolAssistantUUID = 'stream-2';
+  f.get('result-a').message.content[0].tool_use_id = 'tool-b';
+  f.get('result-b').parentUuid = 'result-a';
+  f.get('result-b').sourceToolAssistantUUID = 'stream-1';
+  f.get('result-b').message.content[0].tool_use_id = 'tool-a';
+  const early = f.rows.filter(row => row.uuid !== 'stream-2');
+  early.splice(early.indexOf(f.get('result-a')) + 1, 0, f.get('stream-2'));
+  const logical = f.rows.filter(row => row.uuid !== 'result-a');
+  logical.splice(logical.indexOf(f.get('stream-2')) + 1, 0, f.get('result-a'));
+  assert.ok(early.indexOf(f.get('result-a')) < early.indexOf(f.get('stream-2')));
+  const actual = read(early); assertComplete(actual);
+  assert.equal(fingerprint(actual), fingerprint(read(logical)));
+  // A result naming a call its parent never issued keeps its physical position and still fails.
+  f.get('result-a').message.content[0].tool_use_id = 'tool-missing';
+  assert.throws(() => assertComplete(read(early)));
+});

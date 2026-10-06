@@ -114,6 +114,27 @@ function preserveUnpairedLocalCommands(common, rows) {
   }
 }
 
+// The native CLI can persist a tool result one row before the assistant row
+// that issued the call (observed 11 ms apart with a coherent parent chain).
+// Decode such a result directly after its exact parent call. Every other row
+// keeps its physical position, so existing digests are unchanged.
+function resultsAfterTheirCalls(rows) {
+  const index = new Map(rows.map((row, position) => [row.uuid, position]));
+  const late = new Map();
+  rows.forEach((row, position) => {
+    const call = rows[index.get(row.parentUuid)], content = row.message?.content;
+    if (row.type !== 'user' || !row.uuid || !Array.isArray(content) || call?.type !== 'assistant' || index.get(call.uuid) < position
+        || row.sourceToolAssistantUUID !== call.uuid || !Array.isArray(call.message?.content)) return;
+    const calls = new Set(call.message.content.filter(block => block.type === 'tool_use').map(block => block.id));
+    const results = content.filter(block => block.type === 'tool_result');
+    if (!results.length || !results.every(block => calls.has(block.tool_use_id))) return;
+    late.set(call.uuid, [...late.get(call.uuid) ?? [], row]);
+  });
+  if (!late.size) return rows;
+  const moved = new Set([...late.values()].flat());
+  return rows.flatMap(row => moved.has(row) ? [] : [row, ...late.get(row.uuid) ?? []]);
+}
+
 export function decodeClaude(text, { preserveCompactionHistory = false, authenticatePreservedPacket } = {}) {
   const rows = text.split('\n').filter(Boolean).map(JSON.parse);
   const compact = preserveCompactionHistory ? claudeCompactionHistory(text, rows, authenticatePreservedPacket) : claudeCompaction(text, rows);
@@ -131,7 +152,7 @@ export function decodeClaude(text, { preserveCompactionHistory = false, authenti
       children.set(parentUuid, siblings);
     }
   }
-  const common = JSON.parse(toCommon(main.map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
+  const common = JSON.parse(toCommon(resultsAfterTheirCalls(main).map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
   preserveUnpairedLocalCommands(common, main);
   if (compact) common.meta.compaction = compact.metadata;
   return common;
