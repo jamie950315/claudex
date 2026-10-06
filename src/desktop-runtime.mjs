@@ -102,8 +102,8 @@ export class DesktopRuntime {
     nativeHistoryMaxBytes = NATIVE_HISTORY_LIMITS.maxBytes, nativeHistoryPageSize = NATIVE_HISTORY_LIMITS.pageSize,
     claudeOwnerIdleSeconds = 900, now = () => Date.now(), onEvent = () => {} }) {
     if (!['inline', 'archive'].includes(contextMode)) throw new Error('Unsupported Desktop context mode.');
-    if (!Number.isSafeInteger(nativeHistoryMaxBytes) || nativeHistoryMaxBytes < 1024 || nativeHistoryMaxBytes > 64 * 1024 * 1024)
-      throw new Error('nativeHistoryMaxBytes must be an integer from 1024 through 67108864 bytes.');
+    if (!Number.isSafeInteger(nativeHistoryMaxBytes) || nativeHistoryMaxBytes < 1024 || nativeHistoryMaxBytes > 256 * 1024 * 1024)
+      throw new Error('nativeHistoryMaxBytes must be an integer from 1024 through 268435456 bytes.');
     if (!Number.isSafeInteger(nativeHistoryPageSize) || nativeHistoryPageSize < 1 || nativeHistoryPageSize > 100)
       throw new Error('nativeHistoryPageSize must be an integer from 1 through 100.');
     if (!Number.isSafeInteger(claudeOwnerIdleSeconds) || claudeOwnerIdleSeconds < 60 || claudeOwnerIdleSeconds > 86400)

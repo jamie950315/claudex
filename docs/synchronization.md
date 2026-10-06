@@ -176,9 +176,10 @@ receiving model can see the images.
 
 Desktop native history reads default to a 16 MiB byte budget and 100 turns per
 page. The private state root's `config.json` can explicitly set
-`nativeHistoryMaxBytes` (1024 through 67108864 bytes) and `nativeHistoryPageSize`
-(1 through 100); for example, `67108864` and `5` support a larger bounded export
-with smaller native response pages. Apply changes only when the watcher can
+`nativeHistoryMaxBytes` (1024 through 268435456 bytes) and `nativeHistoryPageSize`
+(1 through 100); for example, `268435456` and `5` support a larger bounded export
+with smaller native response pages. The watcher holds a history in memory while
+it reads it, so a larger budget raises its peak memory use for large conversations. Apply changes only when the watcher can
 restart safely. Both original and managed Codex histories use these settings;
 the 256-page, 25,000-item and 64 MiB WebSocket-frame limits remain unchanged.
 Raw and converted histories must both fit the byte budget. Exceeding a limit

@@ -156,10 +156,23 @@ test('smaller explicit pages do not raise the unchanged 256-page ceiling', async
 test('invalid Desktop byte or page limits fail before native clients or owners are created', () => {
   const options = { root: '/unused', codexHome: '/unused-codex', claudeHome: '/unused-claude',
     clientFactory() { assert.fail('No native client may be started'); }, ownerFactory() { assert.fail('No native owner may be started'); } };
-  for (const nativeHistoryMaxBytes of [null, 0, 1023, 1.5, '16777216', Infinity, NaN, 64 * 1024 * 1024 + 1])
+  for (const nativeHistoryMaxBytes of [null, 0, 1023, 1.5, '16777216', Infinity, NaN, 256 * 1024 * 1024 + 1])
     assert.throws(() => new DesktopRuntime({ ...options, nativeHistoryMaxBytes }), /nativeHistoryMaxBytes must be an integer/);
   for (const nativeHistoryPageSize of [null, 0, 101, 1.5, '5', Infinity, NaN])
     assert.throws(() => new DesktopRuntime({ ...options, nativeHistoryPageSize }), /nativeHistoryPageSize must be an integer/);
   assert.doesNotThrow(() => new DesktopRuntime({ ...options, nativeHistoryMaxBytes: 1024, nativeHistoryPageSize: 1 }));
-  assert.doesNotThrow(() => new DesktopRuntime({ ...options, nativeHistoryMaxBytes: 64 * 1024 * 1024, nativeHistoryPageSize: 100 }));
+  assert.doesNotThrow(() => new DesktopRuntime({ ...options, nativeHistoryMaxBytes: 256 * 1024 * 1024, nativeHistoryPageSize: 100 }));
+});
+
+test('a history larger than 64 MiB is read within an explicitly raised budget and still refused by a smaller one', async t => {
+  const answer = 'x'.repeat(15 * 1024 * 1024);
+  for (const [nativeHistoryMaxBytes, accepted] of [[256 * 1024 * 1024, true], [64 * 1024 * 1024, false]]) {
+    const f = await fixture(t, { nativeHistoryPageSize: 1, nativeHistoryMaxBytes });
+    for (let index = 1; index <= 5; index++) f.turns.push(apiTurn(index, [{ type: 'text', text: `Request ${index}` }], answer));
+    if (!accepted) { await assert.rejects(f.runtime.inspect(f.record), /byte limit exceeded; no partial export is returned/); continue; }
+    const data = await f.runtime.inspect(f.record);
+    assert.equal(data.turnCount, 6);
+    assert.equal(data.common.messages.length, 12);
+    assert.equal(data.common.messages.at(-1).content[0].text.length, answer.length);
+  }
 });

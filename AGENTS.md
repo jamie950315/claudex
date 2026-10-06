@@ -1398,7 +1398,7 @@ or error-bearing control turns retain normal rejection; never fabricate a reply.
 
 DesktopRuntime reads optional `nativeHistoryMaxBytes` and `nativeHistoryPageSize`
 from the private root's config.json. Defaults remain 16 MiB and 100 turns/page;
-explicit bounds are 1024..67108864 bytes and 1..100 turns/page. Both original and
+explicit bounds are 1024..268435456 bytes (raised from 64 MiB by user decision) and 1..100 turns/page. Both original and
 owned native exports enforce the configured raw/converted byte budget. Keep the
 256-page, 25,000-item and 64 MiB transport-frame limits unchanged. Limit errors
 identify the source thread; never add automatic retries, truncation or fallback.
