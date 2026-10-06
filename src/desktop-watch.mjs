@@ -512,7 +512,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 blockedConversations.set(id, block(blockedConversations.get(id), error, conversationContext(latest, blockedId)));
                 return { blocked: true };
               }
-              throw error;
+              if (signal?.aborted || error?.name === 'AbortError' || !(error instanceof Error)) throw error;
+              // No durable intent exists (checked above), the ledger was just
+              // read and the backend still answers, so this failure belongs to
+              // one conversation. Hold it visibly with its own reason instead
+              // of ending the worker for every conversation. Nothing is retried
+              // or reported as synchronized.
+              await runtime.codex();
+              blockedConversations.set(id, block(blockedConversations.get(id), error, conversationContext(latest,
+                typeof error.conversationId === 'string' && latest.conversations[error.conversationId] ? error.conversationId : id)));
+              return { blocked: true };
             }
           };
           const discoverNew = async onlyKeys => {

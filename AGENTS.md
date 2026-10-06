@@ -1057,8 +1057,12 @@ a frozen one: nothing of it is retired, its snapshots still count toward the
 quota, bridge.collectionHolds keeps it visible as blocked, and its own syncs keep
 their explicit hold. The caller's own conversation, an unavailable backend and an
 exceeded quota still stop the delivery; explicit collection reports every failure. In event mode a new relevant
-event revalidates a hold; no recurring scan attempts to clear it. Unclassified unsafe failures remain
-fatal to that worker rather than being treated as successful. Discovery starts
+event revalidates a hold; no recurring scan attempts to clear it. By user decision, an
+unclassified failure of one conversation's sync holds only that conversation,
+shown as blocked with its own reason: it requires no pending transaction, a
+readable ledger and a shared backend that still answers. It is never retried or
+reported as synchronized. Failed recovery of a pending transaction, an unreadable
+ledger, aborts and failures outside a conversation's sync still end the worker. Discovery starts
 at initialization, not a bulk history import.
 An unenrolled source with no completed first turn does not make the entire
 watcher wait. Transport failures and tracked waits remain visible. The status

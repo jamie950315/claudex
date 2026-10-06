@@ -91,7 +91,9 @@ test('missing paths never cache success and missing-path sync failures remain vi
   await f.run({ maxPasses: 3 });
   assert.equal(f.calls.sync.filter(id => id === 'cold').length, 3);
   f.bridge.sync = async () => { throw new Error('Missing native source history.'); };
-  await assert.rejects(f.run({ maxPasses: 1 }), /Missing native source history/);
+  await f.run({ maxPasses: 1 });
+  const status = JSON.parse(await readFile(join(f.root, 'watcher-status.json'), 'utf8'));
+  assert.equal(status.blockedConversations[0].reason, 'Missing native source history.');
 });
 
 test('symlinked source files cannot establish cold hints', async () => {

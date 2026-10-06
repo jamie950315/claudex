@@ -832,7 +832,10 @@ verification is held on its own and reported as blocked: none of its copies is
 retired and they still count toward the backup quota. It no longer stops the
 delivery. The delivering conversation's own failures, an unavailable Codex
 backend and an exceeded backup quota still do.
-Unclassified unsafe failures stop the affected worker. The installed supervisor
+An unrecognized failure while reading or planning one conversation holds only
+that conversation and reports its reason as blocked; it is not retried or treated
+as synchronized. Failed recovery of a pending transaction, an unreadable ledger
+and failures outside a single conversation stop the worker. The installed supervisor
 restarts unexpected exits with 5/10/20/40/60-second backoff, preserving pending
 work and checking writer locks first. Live native children, malformed locks or
 uncertain child identities block another writer. Launchd also recovers supervisor

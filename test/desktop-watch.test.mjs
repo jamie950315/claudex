@@ -216,7 +216,8 @@ test('different blocked reasons publish immediately during rapid progress', asyn
 
 test('fatal diagnostic errors bypass the progress interval', async () => {
   const f = await fixture(), publications = [];
-  f.bridge.sync = async () => { throw new Error('Unexpected native failure'); };
+  f.state.pending = { phase: 'prepared' };
+  f.bridge.recover = async () => { throw new Error('Unexpected native failure'); };
   await assert.rejects(f.run({ maxPasses: 1,
     writeStatus: async (_path, value) => publications.push(structuredClone(value)) }), /Unexpected native failure/);
   assert.equal(publications[0].running, true);
@@ -741,16 +742,45 @@ test('blocked recovery remains abortable without clearing its pending transactio
   assert.equal((await f.status()).running, false);
 });
 
-test('unclassified native sync and recovery failures are not silently retried', async () => {
-  for (const pending of [null, { phase: 'prepared' }]) {
-    const f = await fixture();
-    f.state.pending = pending;
-    const fail = async () => { throw new Error('Unexpected native lifecycle schema.'); };
-    f.bridge.sync = fail;
-    f.bridge.recover = fail;
-    await assert.rejects(f.run({ maxPasses: 2 }), /Unexpected native lifecycle schema/);
-    assert.equal((await f.status()).error, 'Unexpected native lifecycle schema.');
-  }
+test('unclassified recovery failures still end the worker and are not silently retried', async () => {
+  const f = await fixture();
+  f.state.pending = { phase: 'prepared' };
+  const fail = async () => { throw new Error('Unexpected native lifecycle schema.'); };
+  f.bridge.sync = fail;
+  f.bridge.recover = fail;
+  await assert.rejects(f.run({ maxPasses: 2 }), /Unexpected native lifecycle schema/);
+  assert.equal((await f.status()).error, 'Unexpected native lifecycle schema.');
+});
+
+test('an unclassified read failure without a durable intent holds only its conversation', async () => {
+  const f = await fixture();
+  f.state.conversations.other = { id: 'other', title: 'Healthy conversation' };
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    if (id === 'other') return { changed: false };
+    throw new Error('Codex native history diverged before the verified canonical checkpoint; synchronization paused.');
+  };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.running, true);
+  assert.equal(pass.synchronization, 'degraded');
+  assert.equal(pass.blockedConversationCount, 1);
+  assert.match(pass.blockedConversations[0].reason, /diverged before the verified canonical checkpoint/);
+  assert.notEqual(pass.blockedConversations[0].conversationId, 'other');
+  assert.ok(f.calls.sync.includes('other'));
+  assert.equal((await f.status()).error, null);
+});
+
+test('an unclassified failure while the backend is unavailable is not attributed to a conversation', async () => {
+  const f = await fixture();
+  let failed = false;
+  f.bridge.sync = async () => { failed = true; throw new Error('Unexpected native lifecycle schema.'); };
+  const codex = f.runtime.codex;
+  f.runtime.codex = async () => { if (failed) throw new Error('Shared Codex Desktop backend is not ready.'); return codex(); };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass ??= await f.status(); } });
+  assert.equal(pass.blockedConversationCount, 0);
+  assert.match(pass.waiting, /backend is not ready/);
 });
 
 const boundedNativeDiscoveryErrors = [
