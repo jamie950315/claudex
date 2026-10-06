@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DesktopBridge } from '../src/desktop-bridge.mjs';
@@ -217,8 +217,9 @@ test('held snapshots are retained and reported against the quota and an unavaila
 test('only a prepared Codex delivery whose rollout was never published can be abandoned', async () => {
   const f = await fixture();
   f.owned('active');
+  const published = join(await mkdtemp(join(tmpdir(), 'claudex-abandon-')), 'rollout.jsonl');
   const candidate = { id: 'candidate', nativeId: 'candidate', conversationId: 'active', side: 'codex', kind: 'snapshot',
-    managed: true, path: '/native/candidate', cwd: common.meta.cwd };
+    managed: true, path: published, cwd: common.meta.cwd };
   const pending = extra => ({ phase: 'prepared', operationId: 'synthetic-operation', record: candidate, ...extra });
   const attempt = async value => { f.state.pending = value; await f.bridge.save(f.state); return f.bridge.abandonUnapplied(); };
   for (const kept of [pending({ phase: 'applied' }), pending({ phase: 'promoted' }), pending({ reuse: true }),
@@ -227,10 +228,18 @@ test('only a prepared Codex delivery whose rollout was never published can be ab
     assert.equal((await attempt(kept)).abandoned, false);
     assert.deepEqual((await f.bridge.status()).pending, JSON.parse(JSON.stringify(kept)));
   }
-  // A published rollout may already be registered natively; it must be recovered.
+  // A published rollout or a natively known thread must be recovered, and an
+  // unreadable native answer proves nothing.
+  await writeFile(published, '{}\n');
+  assert.equal((await attempt(pending())).abandoned, false);
+  await rm(published);
   f.files.set('candidate', { common: structuredClone(common), bytes: 1, busy: false });
   assert.equal((await attempt(pending())).abandoned, false);
   f.files.delete('candidate');
+  const exists = f.bridge.adapters.codex.exists;
+  f.bridge.adapters.codex.exists = async () => { throw new Error('The shared Codex transport closed.'); };
+  assert.equal((await attempt(pending())).abandoned, false);
+  f.bridge.adapters.codex.exists = exists;
   assert.deepEqual(await attempt(pending()), { abandoned: true, conversationId: 'active' });
   const state = await f.bridge.status();
   assert.equal(state.pending, null);

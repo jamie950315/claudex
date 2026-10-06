@@ -813,7 +813,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             // dropped and held on its own conversation. Otherwise the single
             // pending transaction stays, visibly blocked and retried by the
             // next pass, instead of ending the worker into the same failure.
-            const abandoned = pending ? await bridge.abandonUnapplied?.() : null;
+            const abandoned = pending ? await Promise.resolve().then(() => bridge.abandonUnapplied?.()).catch(() => null) : null;
             if (abandoned?.abandoned) {
               blocked = null;
               blockedConversations.set(conversationId, block(blockedConversations.get(conversationId), error, conversationContext(state, conversationId)));
