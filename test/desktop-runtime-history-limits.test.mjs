@@ -176,3 +176,10 @@ test('a history larger than 64 MiB is read within an explicitly raised budget an
     assert.equal(data.common.messages.at(-1).content[0].text.length, answer.length);
   }
 });
+
+test('a history budget above the packet cap still encodes deliveries within the 64 MiB packet limit', async t => {
+  const f = await fixture(t, { nativeHistoryMaxBytes: 256 * 1024 * 1024, contextMode: 'archive' });
+  const record = { conversationId: f.record.conversationId, nativeId: randomUUID(), packetVersion: 2, archiveVersion: 2, imageProjectionVersion: 1 };
+  const packet = await f.runtime.packet(record, f.common, { operationId: 'synthetic-delivery', previous: { count: 0, digest: null } });
+  assert.ok(Array.isArray(packet) && packet.length > 0);
+});

@@ -21,7 +21,7 @@ import { createNativeLateItemResolver } from './native-late-items.mjs';
 import { createCodexRolloutLocator, createCodexLocalImageResolver } from './native-local-images.mjs';
 import { createNativeGoalRequestResolver } from './native-goal-request.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
-import { encodeArchivedContextPacket, hasProjectedImages } from './context-archive.mjs';
+import { encodeArchivedContextPacket, hasProjectedImages, MAX_CONTEXT_PACKET_BYTES } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
 import { assertComplete, fingerprint, portableMessages } from './history.mjs';
 import { isAllowedCodexVersion } from './codex-versions.mjs';
@@ -822,7 +822,7 @@ export class DesktopRuntime {
     const encode = record.packetVersion === 2 ? encodeArchivedContextPacket : encodeContextPacket;
     return encode({ root: this.root, archiveVersion: record.archiveVersion ?? 1,
       imageProjectionVersion: record.imageProjectionVersion ?? 0,
-      maxNativeBytes: this.nativeHistoryMaxBytes,
+      maxNativeBytes: Math.min(this.nativeHistoryMaxBytes, MAX_CONTEXT_PACKET_BYTES),
       ...(record.contextRefresh ? { historyPrefixCount: pending.previous.count } : {}),
       messages: record.contextRefresh ? common.messages : common.messages.slice(pending.previous.count), key: this.key,
       conversationId: record.conversationId, sourceSide: 'codex', targetSessionId: record.nativeId,
@@ -875,7 +875,7 @@ export class DesktopRuntime {
     if (record.packetVersion === 2) {
       contextContent = await encodeArchivedContextPacket({ root: this.root, common, key: this.key, archiveVersion: record.archiveVersion ?? 1,
         imageProjectionVersion: record.imageProjectionVersion ?? 0,
-        maxNativeBytes: this.nativeHistoryMaxBytes,
+        maxNativeBytes: Math.min(this.nativeHistoryMaxBytes, MAX_CONTEXT_PACKET_BYTES),
         conversationId: record.conversationId, targetSessionId: record.nativeId, sourceSide: 'claude', operationId: pending.operationId });
       resolveArchive = await prepareArchiveResolver({ root: this.root, contents: [contextContent], key: this.key,
         conversationId: record.conversationId, targetSessionId: record.nativeId });
