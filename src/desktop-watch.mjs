@@ -102,6 +102,19 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let blocked = null;
   const blockedConversations = new Map();
   const deferredBlock = Symbol('deferred history revalidation');
+  // Allocation-time collection holds another conversation that fails its own
+  // verification instead of stopping the delivery. Keep those holds visible.
+  let collectionHolds = null, reportedHolds = new Set();
+  const reflectCollectionHolds = async bridge => {
+    const holds = bridge.collectionHolds;
+    if (!(holds instanceof Map) || holds === collectionHolds) return;
+    collectionHolds = holds;
+    const state = await bridge.status();
+    for (const id of reportedHolds) if (!holds.has(id)) blockedConversations.delete(id);
+    reportedHolds = new Set(holds.keys());
+    for (const [id, error] of holds)
+      blockedConversations.set(id, block(blockedConversations.get(id), error, conversationContext(state, id)));
+  };
   const deletedSource = Symbol('deleted discovered source');
   const block = (previous, error, fields) => ({ ...fields, reason: reason(error),
     ...(error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE' ? { historyUnavailable: {
@@ -409,6 +422,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 currentOperation = null;
                 lastSync = { conversationId: id, durationMs: now() - beganAt };
                 if (!slowestSync || lastSync.durationMs > slowestSync.durationMs) slowestSync = lastSync;
+                await reflectCollectionHolds(bridge);
               }
               if (heartbeatError) throw heartbeatError;
               blockedConversations.delete(id);
@@ -756,6 +770,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           if (!signal?.aborted && initialSweepCompletedAt === null) initialSweepCompletedAt = now();
           if (!signal?.aborted && broadPass && now() - lastCollection >= 60_000) {
             await bridge.collect();
+            await reflectCollectionHolds(bridge);
             lastCollection = now();
           }
           blocked = null;

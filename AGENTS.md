@@ -1050,8 +1050,13 @@ when its exact discovered rollout file is now absent (Desktop deleted a
 transient thread); other metadata failures keep their severity.
 Never scan for same-ID substitutes; only the explicit native registry relocation
 protocol above may adopt a verified new project location without pending work.
-Without pending work, affected syncs are held individually, but global original
-and quota guards still apply to other deliveries (except frozen conversations). In event mode a new relevant
+Without pending work, affected syncs are held individually. By user decision,
+allocation-time collection holds another conversation that fails its own
+relocation, original, anchor, current-side or snapshot verification exactly like
+a frozen one: nothing of it is retired, its snapshots still count toward the
+quota, bridge.collectionHolds keeps it visible as blocked, and its own syncs keep
+their explicit hold. The caller's own conversation, an unavailable backend and an
+exceeded quota still stop the delivery; explicit collection reports every failure. In event mode a new relevant
 event revalidates a hold; no recurring scan attempts to clear it. Unclassified unsafe failures remain
 fatal to that worker rather than being treated as successful. Discovery starts
 at initialization, not a bulk history import.

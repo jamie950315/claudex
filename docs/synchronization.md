@@ -826,8 +826,12 @@ showing a scheduled retry countdown. Only actual supervisor backoff supplies a
 recovery time. The injected non-event harness retains bounded timed revalidation;
 neither path clears failed operations or resends uncertain input. A pending transaction blocks
 all discovery, new syncs and collection until verified recovery succeeds. Without
-a pending transaction, other conversations continue their normal checks, including
-global original-history and quota guards that may still block new deliveries.
+a pending transaction, other conversations continue their normal checks. Before a
+new delivery allocates a copy, another conversation that fails its own history
+verification is held on its own and reported as blocked: none of its copies is
+retired and they still count toward the backup quota. It no longer stops the
+delivery. The delivering conversation's own failures, an unavailable Codex
+backend and an exceeded backup quota still do.
 Unclassified unsafe failures stop the affected worker. The installed supervisor
 restarts unexpected exits with 5/10/20/40/60-second backoff, preserving pending
 work and checking writer locks first. Live native children, malformed locks or

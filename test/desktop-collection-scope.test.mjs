@@ -172,3 +172,39 @@ test('frozen snapshots still count toward the global backup quota', async () => 
   await assert.rejects(f.collect(), /Snapshot retention cannot be satisfied safely/);
   assert.deepEqual(f.calls.remove, []);
 });
+
+test('allocation-time collection holds another failing conversation without retiring anything of it', async () => {
+  const f = await fixture({ previousPerSide: 0 });
+  const broken = f.owned('broken'), healthy = f.owned('healthy');
+  const original = f.add('stale', 'superseded', 'claude', 'original', false, 'original');
+  f.files.get(broken.paired.id).common.messages[0].content[0].text = 'Changed prefix';
+  f.files.get(original.id).common.messages[0].content[0].text = 'Conflicting original';
+  await f.bridge.save(f.state);
+  const allocate = caller => f.bridge.locked(state => f.bridge.collectInLock(state, caller));
+  const result = await allocate('healthy');
+  assert.deepEqual(result.frozen, ['broken', 'stale']);
+  assert.deepEqual([...f.bridge.collectionHolds.keys()].sort(), ['broken', 'stale']);
+  assert.match(f.bridge.collectionHolds.get('broken').message, /Current history changed/);
+  assert.deepEqual(f.calls.remove, [healthy.previous.id]);
+  assert.ok(f.files.has(broken.previous.id));
+  // The same failures still stop their own conversation and explicit collection.
+  await assert.rejects(allocate('broken'), /Current history changed|Superseded original/);
+  await assert.rejects(f.bridge.collect(), /Superseded original.*changed/);
+});
+
+test('held snapshots still count toward the quota and an unavailable backend still stops the allocation', async () => {
+  const f = await fixture({ previousPerSide: 0, maxBackupBytes: 0 });
+  const broken = f.owned('broken'); f.owned('healthy');
+  f.files.get(broken.paired.id).common.messages[0].content[0].text = 'Changed prefix';
+  await f.bridge.save(f.state);
+  const allocate = () => f.bridge.locked(state => f.bridge.collectInLock(state, 'healthy'));
+  await assert.rejects(allocate(), /Snapshot retention cannot be satisfied safely/);
+  assert.ok(f.files.has(broken.previous.id));
+  f.files.delete(broken.paired.id);
+  const inspect = f.bridge.adapters.claude.inspect;
+  f.bridge.adapters.claude.inspect = async record => {
+    if (record.id === broken.paired.id) throw new Error('The shared Codex transport closed.');
+    return inspect(record);
+  };
+  await assert.rejects(allocate(), /shared Codex transport closed/);
+});

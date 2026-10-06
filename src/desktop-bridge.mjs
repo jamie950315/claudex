@@ -24,6 +24,9 @@ function readingMatches(data, checkpoint) {
 }
 function checkpoint(common) { return { count: common.messages.length, digest: fingerprint(common) }; }
 
+// Failures of the shared backend are not evidence about one conversation.
+const TRANSPORT = /shared Codex Desktop backend is not ready|shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET/i;
+
 async function readBatches(records, read) {
   const readings = [];
   for (let index = 0; index < records.length; index += 4) {
@@ -169,7 +172,7 @@ export class DesktopBridge {
    * The adapter proves the native move; the coordinator proves that adopting it
    * cannot select between competing histories or reroute an existing operation.
    */
-  async reconcileOriginalRelocations(state, conversationId) {
+  async reconcileOriginalRelocations(state, conversationId, hold) {
     if (state.pending) return;
     for (const record of state.records.filter(record => this.adapters[record.side]?.reconcileRelocation
       && record.status === 'current' && record.managed === false && record.kind === 'original'
@@ -234,7 +237,7 @@ export class DesktopBridge {
         // Global collection can encounter another conversation's migration.
         // Preserve its identity so the caller does not blame the current task.
         error.conversationId ??= record.conversationId;
-        throw error;
+        if (!hold?.(error, record.conversationId)) throw error;
       }
     }
   }
@@ -265,11 +268,11 @@ export class DesktopBridge {
     return frozen;
   }
 
-  async assertOriginalsUnchanged(state, conversationId, frozen = new Set()) {
+  async assertOriginalsUnchanged(state, conversationId, frozen = new Set(), hold) {
     const included = record => conversationId ? record.conversationId === conversationId : !frozen.has(record.conversationId);
     for (const record of state.records.filter(record => record.status === 'dependency-anchor' && included(record))) {
-      try { await this.assertDependencyAnchor(record); }
-      catch (error) { error.conversationId ??= record.conversationId; throw error; }
+      try { if (included(record)) await this.assertDependencyAnchor(record); }
+      catch (error) { error.conversationId ??= record.conversationId; if (!hold?.(error, record.conversationId)) throw error; }
     }
     await readBatches(state.records.filter(record => !record.managed && record.status === 'original' && included(record)), async record => {
       try {
@@ -281,7 +284,7 @@ export class DesktopBridge {
         if (data.incompleteTail) throw new Error('A superseded original has an in-progress turn; synchronization postponed.');
       } catch (error) {
         error.conversationId ??= record.conversationId;
-        throw error;
+        if (!hold?.(error, record.conversationId)) throw error;
       }
     });
   }
@@ -484,7 +487,7 @@ export class DesktopBridge {
       // Cleanup precedes allocation; a protected backup cannot create an
       // unlimited stream of replacement generations.
       const ownerAppend = side === 'claude' && target?.managed && target.kind === 'owner' && !upkeep;
-      if (!ownerAppend) await this.collectInLock(state);
+      if (!ownerAppend) await this.collectInLock(state, id);
       if (source.cwd !== data.common.meta.cwd || conversation.cwd !== data.common.meta.cwd)
         throw Object.assign(relocationGuard('Source project changed while preparing synchronization; no handoff was allocated.'), { conversationId: id });
       if (side === 'codex' && target?.managed && this.adapters.codex.prepareDependencyAnchor) {
@@ -501,7 +504,7 @@ export class DesktopBridge {
       const reuse = Boolean(target?.managed && target.nativeId === planned.nativeId);
       // Ordinary owner appends allocate no retained Codex snapshot. If planning
       // instead requires a replacement or maintenance, keep normal collection.
-      if (ownerAppend && (!reuse || planned.contextReset || planned.contextRefresh)) await this.collectInLock(state);
+      if (ownerAppend && (!reuse || planned.contextReset || planned.contextRefresh)) await this.collectInLock(state, id);
       if (ownerRelocation && (reuse || planned.kind !== 'owner')) throw new Error('A moved Claude owner requires a new native owner.');
       if (contextReset && (side !== 'claude' || !reuse || planned.kind !== 'owner' || planned.contextReset !== true))
         throw new Error('Context migration requires a reusable owned Claude reset plan.');
@@ -680,7 +683,7 @@ export class DesktopBridge {
     await this.save(state, { event: 'completed', conversationId: result.conversationId, side: result.side });
     if (!(pending.reuse && pending.record.side === 'claude' && pending.record.kind === 'owner'
       && !pending.record.contextReset && !pending.record.contextRefresh && !pending.relocation))
-      await this.collectInLock(state);
+      await this.collectInLock(state, result.conversationId);
     return result;
   }
 
@@ -699,10 +702,25 @@ export class DesktopBridge {
       return this.collectInLock(state);
     });
   }
-  async collectInLock(state) {
-    await this.reconcileOriginalRelocations(state);
-    const frozen = await this.frozenConversations(state);
-    await this.assertOriginalsUnchanged(state, undefined, frozen);
+  /** Retention before an allocation reads other conversations. One of them
+   * failing its own verification is held like a frozen conversation: nothing
+   * of it is retired, its snapshots still count toward the quota, and its own
+   * syncs keep their explicit hold. The caller's conversation and an
+   * unavailable backend still stop the allocation. Explicit collection has no
+   * caller and reports every failure.
+   */
+  async collectInLock(state, callerId) {
+    const holds = new Map(), frozen = new Set();
+    const hold = (error, conversationId) => {
+      if (!callerId || !conversationId || conversationId === callerId || TRANSPORT.test(String(error?.message ?? error))) return false;
+      frozen.add(conversationId);
+      if (!holds.has(conversationId)) holds.set(conversationId, error);
+      return true;
+    };
+    this.collectionHolds = holds;
+    await this.reconcileOriginalRelocations(state, undefined, hold);
+    for (const id of await this.frozenConversations(state)) frozen.add(id);
+    await this.assertOriginalsUnchanged(state, undefined, frozen, hold);
     const snapshots = state.records.filter(record => record.managed && record.kind === 'snapshot');
     const retainedConversations = new Set(snapshots.map(record => record.conversationId)
       .filter(id => !frozen.has(id)));
@@ -712,6 +730,7 @@ export class DesktopBridge {
     // Both current sides of every affected conversation still gate retirement.
     for (const current of state.records.filter(record => record.status === 'current'
       && retainedConversations.has(record.conversationId))) {
+      if (frozen.has(current.conversationId)) continue;
       try {
         const data = await this.inspect(current);
         if (!readingMatches(data, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
@@ -719,7 +738,7 @@ export class DesktopBridge {
         // Allocation-time collection reads other conversations. Preserve the
         // failing history's identity so the caller does not blame its own task.
         error.conversationId ??= current.conversationId;
-        throw error;
+        if (!hold(error, current.conversationId)) throw error;
       }
     }
     const previous = [];
@@ -742,9 +761,15 @@ export class DesktopBridge {
         throw new Error('Snapshot dependency batch is incomplete; prior snapshots were preserved.');
     }
     for (const record of previous) {
-      if (!await this.preserveDependentSnapshot(state, record, undefined, prepared?.get(record.id))) {
-        const data = await this.assertUnchanged(record);
-        record.bytes = data.bytes ?? record.bytes;
+      if (frozen.has(record.conversationId)) continue;
+      try {
+        if (!await this.preserveDependentSnapshot(state, record, undefined, prepared?.get(record.id))) {
+          const data = await this.assertUnchanged(record);
+          record.bytes = data.bytes ?? record.bytes;
+        }
+      } catch (error) {
+        error.conversationId ??= record.conversationId;
+        if (!hold(error, record.conversationId)) throw error;
       }
     }
     const plan = planRetention(state.records.filter(record => record.managed && record.kind === 'snapshot')

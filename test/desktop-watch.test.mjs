@@ -415,6 +415,20 @@ test('a global collection guard reports the conversation whose history failed, n
   assert.equal(f.state.pending, null);
 });
 
+test('a conversation held by allocation-time collection stays visible while the caller delivers', async () => {
+  const f = await fixture({ bridge: { async sync() {
+    f.bridge.collectionHolds = new Map([['other', new Error('Nonlinear Claude history requires an explicit branch selection.')]]);
+    return { changed: true };
+  } } });
+  f.state.conversations.other = { id: 'other', title: 'Branched conversation' };
+  let pass;
+  await f.run({ maxPasses: 2, sleep: async () => { pass = await f.status(); } });
+  assert.equal(pass.synchronization, 'degraded');
+  assert.equal(pass.blockedConversationCount, 1);
+  assert.equal(pass.blockedConversations[0].conversationId, 'other');
+  assert.equal(pass.blockedConversations[0].title, 'Branched conversation');
+});
+
 test('conflicting tracked histories stay blocked without stopping owners or choosing a branch', async () => {
   const f = await fixture({ bridge: { async sync() { throw new Error('Both sides changed; no history was replaced.'); } } });
   const track = f.bridge.track;
