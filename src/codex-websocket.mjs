@@ -62,9 +62,10 @@ export async function connectCodexSocket(socketPath, { timeoutMs = 30000, maxPay
 
 /** A connection, not an owner: close() never stops the shared native process. */
 export class CodexWebSocketClient extends EventEmitter {
-  constructor({ socketPath, timeoutMs = 30000, maxPending = 128 } = {}) {
+  constructor({ socketPath, timeoutMs = 30000, maxPending = 128, maxPayload = MAX_FRAME_BYTES } = {}) {
     super();
-    this.options = { socketPath, timeoutMs, maxPending };
+    if (!Number.isSafeInteger(maxPayload) || maxPayload < MAX_FRAME_BYTES) throw new Error('Invalid shared Codex frame limit.');
+    this.options = { socketPath, timeoutMs, maxPending, maxPayload };
     this.pending = new Map();
     this.nextId = 1;
     this.initializing = false;
@@ -77,7 +78,10 @@ export class CodexWebSocketClient extends EventEmitter {
     try {
       this.ws = await connectCodexSocket(this.options.socketPath, this.options);
       if (this.closed) { this.ws.terminate(); throw new Error('Codex client closed'); }
-      this.ws.on('error', () => this.rejectPending(new Error('Shared Codex transport failed; completion is unknown, do not retry writes automatically')));
+      this.ws.on('error', cause => this.rejectPending(cause?.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH'
+        // An oversized response is a property of that request, not an outage.
+        ? Object.assign(new Error('Shared Codex response exceeded the transport frame limit.'), { code: 'CLAUDEX_CODEX_FRAME_TOO_LARGE' })
+        : new Error('Shared Codex transport failed; completion is unknown, do not retry writes automatically')));
       this.ws.on('close', () => {
         this.closed = true;
         this.rejectPending(new Error('Shared Codex transport closed; completion is unknown, do not retry writes automatically'));

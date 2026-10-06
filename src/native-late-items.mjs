@@ -133,10 +133,10 @@ function boundaryProof(state, api, source, cwd) {
  * Native turns and items stay intact; the caller uses placements only for the
  * portable order and still verifies the whole saved canonical checkpoint.
  */
-export function createNativeLateItemResolver({ path, threadId, cwd, maxBytes = 64 * 1024 * 1024 }) {
+export function createNativeLateItemResolver({ path, threadId, cwd, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd) || resolve(cwd) !== cwd
-    || !integer(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) fail('invalid source identity or byte limit.');
+    || !integer(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024) fail('invalid source identity or byte limit.');
   return async (snapshot, { threadId: expectedThreadId }) => {
     if (expectedThreadId !== threadId || !Array.isArray(snapshot?.turns)) fail('source and API identities differ.');
     if (!snapshot.turns.some(turn => turn.items?.some(item => item.type === 'commandExecution'))) return null;

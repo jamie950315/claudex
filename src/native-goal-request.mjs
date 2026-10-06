@@ -71,10 +71,10 @@ export function hasPortableInitialGoalRequest(message) {
  * only the exact initial goal from the authoritative rollout, never a guessed
  * user message, another rollout, or a partial-history replacement.
  */
-export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes = 64 * 1024 * 1024 }) {
+export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd)
-    || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024) fail('invalid source identity or byte limit.');
+    || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024) fail('invalid source identity or byte limit.');
   return async (turn, { threadId: expectedThreadId }) => {
     if (expectedThreadId !== threadId || !UUID.test(turn.id)) fail('source and API identities differ.');
     if (await realpath(dirname(path)) !== dirname(path)) fail('source parent must be canonical.');

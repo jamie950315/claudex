@@ -140,8 +140,16 @@ test('known native-generated types and live lease metadata do not hide unlisted 
   await writeFile(join(installed, '.claude-plugin/types/unlisted.mjs'), 'export default 1;');
   assert.equal((await inspectAppMod(o)).reason, 'content-mismatch');
   await rm(join(installed, '.claude-plugin/types/unlisted.mjs'));
+  // A later native release may add another declaration package or its orphan marker.
   await mkdir(join(installed, '.claude-plugin/types/claude-code-other'), { mode: 0o700 });
   await writeFile(join(installed, '.claude-plugin/types/claude-code-other/index.d.ts'), '{}');
+  await writeFile(join(installed, '.orphaned_at'), '1');
+  assert.equal((await inspectAppMod(o)).state, 'ready');
+  await writeFile(join(installed, '.claude-plugin/types/claude-code-other/index.mjs'), 'export default 1;');
+  assert.equal((await inspectAppMod(o)).reason, 'content-mismatch');
+  await rm(join(installed, '.claude-plugin/types/claude-code-other/index.mjs'));
+  await mkdir(join(installed, 'skills/unlisted'), { recursive: true, mode: 0o700 });
+  await writeFile(join(installed, 'skills/unlisted/SKILL.md'), 'unlisted');
   assert.equal((await inspectAppMod(o)).reason, 'content-mismatch');
 });
 

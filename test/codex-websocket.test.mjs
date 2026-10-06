@@ -122,3 +122,26 @@ test('an absent direct endpoint or native alias target reports transport unavail
   await assert.rejects(inspectCodexSocket(foreign), error => /Unexpected native Codex socket alias/.test(error.message)
     && error.code !== 'ENOENT');
 });
+
+test('a response above the frame limit is reported as such and a raised limit reads it', async t => {
+  const { readStableNativeHistory } = await import('../src/native-history.mjs');
+  const answer = 'x'.repeat(65 * 1024 * 1024);
+  const { socketPath } = await fixture(t, (message, socket) => {
+    if (message.method === 'thread/turns/list') socket.send(JSON.stringify({ id: message.id, result: { nextCursor: null, data: [{
+      id: 'turn', status: 'completed', itemsView: 'full', items: [
+        { id: 'user', type: 'userMessage', content: [{ type: 'text', text: 'Question', text_elements: [] }] },
+        { id: 'answer', type: 'agentMessage', text: answer, phase: 'final_answer' }] }] } }));
+  });
+  const threadId = '11111111-1111-4111-8111-111111111111', limits = { maxBytes: 256 * 1024 * 1024, pageSize: 1 };
+  const bounded = new CodexWebSocketClient({ socketPath });
+  t.after(() => bounded.close());
+  await bounded.initialize();
+  await assert.rejects(readStableNativeHistory({ client: bounded, threadId, limits }),
+    /a response page exceeds the transport frame limit; lower nativeHistoryPageSize or raise nativeHistoryMaxBytes/);
+  assert.throws(() => new CodexWebSocketClient({ socketPath, maxPayload: 1024 }), /Invalid shared Codex frame limit/);
+  const raised = new CodexWebSocketClient({ socketPath, maxPayload: 256 * 1024 * 1024 });
+  t.after(() => raised.close());
+  await raised.initialize();
+  const history = await readStableNativeHistory({ client: raised, threadId, limits });
+  assert.equal(history.turns[0].items[1].text.length, answer.length);
+});

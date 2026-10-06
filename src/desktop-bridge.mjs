@@ -775,7 +775,12 @@ export class DesktopBridge {
     const plan = planRetention(state.records.filter(record => record.managed && record.kind === 'snapshot')
       .map(record => ({ ...record, createdAt: record.retiredAt ?? record.createdAt,
         ...(frozen.has(record.conversationId) ? { frozen: true } : {}) })), { now: this.now(), policy: this.policy });
-    if (plan.blocked.length) throw new Error('Snapshot retention cannot be satisfied safely; new allocations are paused.');
+    // Anchors and frozen snapshots can never be removed here. Refusing every
+    // new delivery because of them would reclaim nothing, so they are only
+    // reported; a removable snapshot that cannot be retired still pauses.
+    const unremovable = new Set(['dependency-anchor-quota', 'dependency-anchor-limit', 'frozen-quota']);
+    if (plan.blocked.some(entry => !unremovable.has(entry.reason)))
+      throw new Error('Snapshot retention cannot be satisfied safely; new allocations are paused.');
     for (const id of plan.remove) {
       const record = state.records.find(value => value.id === id);
       if (!record || record.status !== 'previous') throw new Error('Invalid snapshot collection target.');
@@ -785,6 +790,7 @@ export class DesktopBridge {
       await this.save(state, { event: 'pruned', conversationId: record.conversationId });
     }
     await this.save(state);
-    return { removed: plan.remove.length, backupBytes: plan.backupBytes, frozen: [...frozen].sort() };
+    return { removed: plan.remove.length, backupBytes: plan.backupBytes, frozen: [...frozen].sort(),
+      ...(plan.blocked.length ? { retained: [...new Set(plan.blocked.map(entry => entry.reason))].sort() } : {}) };
   }
 }

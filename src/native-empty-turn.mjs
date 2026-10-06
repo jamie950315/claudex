@@ -161,10 +161,10 @@ function nextAppIngress(rows, index, stop, completed, cwd, selectedIds) {
  * Each nonempty batch reads one fresh stable rollout. Any unproven candidate
  * throws; no partial allowlist is returned. No candidates require no source I/O.
  */
-export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 64 * 1024 * 1024 }) {
+export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd) || resolve(cwd) !== cwd
-    || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 64 * 1024 * 1024)
+    || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024)
     fail('invalid source identity or byte limit.');
   return async (turns, { threadId: expectedThreadId } = {}) => {
     if (expectedThreadId !== threadId || !Array.isArray(turns)) fail('source and API identities differ.');

@@ -67,19 +67,29 @@ export async function signalOwnedProcesses(records, signal, readTable = readColl
 
 // One metadata sampler per broker process, including when many workers are active.
 const subscribers = new Set();
-let samplerTimer, sampling = false;
-async function sample() {
+let samplerTimer, sampling = false, unreadableSince = null;
+const UNREADABLE_TABLE_MS = 10_000;
+/** One unreadable process table is not evidence about any worker. Only a
+ * table that stays unreadable ends tracking; each tracker's own identity
+ * checks still fail immediately on a readable table. */
+export async function sampleOwnedProcesses({ read = readCollaborationProcessTable, now = Date.now } = {}) {
   if (sampling || !subscribers.size) return;
   sampling = true;
   try {
-    const table = await readCollaborationProcessTable();
+    let table;
+    try { table = await read(); unreadableSince = null; }
+    catch (error) {
+      unreadableSince ??= now();
+      if (now() - unreadableSince >= UNREADABLE_TABLE_MS) for (const subscriber of subscribers) subscriber.fail(error);
+      return;
+    }
     await Promise.allSettled([...subscribers].map(subscriber => subscriber.accept(table)));
-  } catch (error) { for (const subscriber of subscribers) subscriber.fail(error); }
-  finally { sampling = false; }
+  } finally { sampling = false; }
 }
 function subscribe(subscriber) {
   subscribers.add(subscriber);
-  samplerTimer ??= setInterval(sample, 250);
+  if (subscribers.size === 1) unreadableSince = null;
+  samplerTimer ??= setInterval(() => sampleOwnedProcesses(), 250);
   samplerTimer.unref();
   return () => {
     subscribers.delete(subscriber);

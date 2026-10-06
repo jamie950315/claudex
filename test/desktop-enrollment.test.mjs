@@ -95,7 +95,7 @@ test('stopped snapshots remain frozen and counted even after their cwd becomes a
   assert.deepEqual(f.calls, []); assert.deepEqual(await f.bytes(), before);
   assert.deepEqual((await f.bridge.status()).records, stopped.records);
   const limited = new DesktopBridge({ root: f.root, adapters: f.adapters, policy: { maxBackupBytes: 0 } });
-  await assert.rejects(limited.collect(), /Snapshot retention cannot be satisfied safely/);
+  assert.deepEqual(await limited.collect(), { removed: 0, backupBytes: 47, frozen: [f.id], retained: ['frozen-quota'] });
   assert.deepEqual(f.calls, []); assert.deepEqual(await f.bytes(), before);
 });
 

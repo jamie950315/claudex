@@ -8,7 +8,13 @@ import { delimiter, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
-import { connectCodexSocket, inspectCodexSocket, MAX_FRAME_BYTES } from '../src/codex-websocket.mjs';
+import { connectCodexSocket, inspectCodexSocket } from '../src/codex-websocket.mjs';
+
+// This process carries Codex Desktop's own traffic to its backend. Native
+// stdio has no frame limit, and a thread with large tool screenshots can
+// answer in one frame well above the history bridge's 64 MiB budget. Stopping
+// here would end the user's Desktop backend, so this is only a sanity bound.
+const MAX_FRAME_BYTES = 1024 * 1024 * 1024;
 import { isAllowedCodexVersion, isSupportedCodexVersion, SUPPORTED_CODEX_VERSIONS } from '../src/codex-versions.mjs';
 import { readVersionPolicy, runtimeVersionPermitted } from '../src/runtime-version-policy.mjs';
 import { resolveBundledCodex } from '../src/codex-app-layout.mjs';
@@ -264,7 +270,7 @@ export async function runCodexLauncher(args = process.argv.slice(2), env = proce
       await delay(25);
     }
     if (stopped) throw new Error('Codex backend exited before transport was ready');
-    ws = await connectCodexSocket(resolvedSocketPath);
+    ws = await connectCodexSocket(resolvedSocketPath, { maxPayload: MAX_FRAME_BYTES });
     ws.on('error', () => { failure = true; stop(); });
     ws.on('close', () => { if (!stopped) { failure = true; stop(); } });
     let awaitingDrain = false;

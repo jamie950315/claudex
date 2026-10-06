@@ -162,15 +162,20 @@ test('a conversation whose working directory was deleted is frozen instead of bl
   await assert.rejects(f.bridge.assertOriginalsUnchanged(state, 'gone'), /Missing native history: gone-superseded/);
 });
 
-test('frozen snapshots still count toward the global backup quota', async () => {
+test('frozen snapshots still count toward the quota, evict removable ones first and never pause other deliveries', async () => {
   const f = await fixture({ maxBackupBytes: 50 });
-  f.owned('active');
+  const active = f.owned('active');
   const gone = f.owned('gone');
   for (const record of [gone.current, gone.paired, gone.previous]) record.cwd = '/deleted/worktree';
   for (const side of ['codex', 'claude'])
     f.bridge.adapters[side].workingDirectoryAbsent = async cwd => cwd === '/deleted/worktree';
-  await assert.rejects(f.collect(), /Snapshot retention cannot be satisfied safely/);
-  assert.deepEqual(f.calls.remove, []);
+  const result = await f.collect();
+  // The unremovable snapshot alone still exceeds the quota. It is reported,
+  // retained and counted; refusing every delivery would reclaim nothing.
+  assert.deepEqual(result.retained, ['frozen-quota']);
+  assert.equal(result.backupBytes, 90);
+  assert.deepEqual(f.calls.remove, [active.previous.id]);
+  assert.ok(f.files.has(gone.previous.id));
 });
 
 test('allocation-time collection holds another failing conversation without retiring anything of it', async () => {
@@ -192,13 +197,13 @@ test('allocation-time collection holds another failing conversation without reti
   await assert.rejects(f.bridge.collect(), /Superseded original.*changed/);
 });
 
-test('held snapshots still count toward the quota and an unavailable backend still stops the allocation', async () => {
+test('held snapshots are retained and reported against the quota and an unavailable backend still stops the allocation', async () => {
   const f = await fixture({ previousPerSide: 0, maxBackupBytes: 0 });
   const broken = f.owned('broken'); f.owned('healthy');
   f.files.get(broken.paired.id).common.messages[0].content[0].text = 'Changed prefix';
   await f.bridge.save(f.state);
   const allocate = () => f.bridge.locked(state => f.bridge.collectInLock(state, 'healthy'));
-  await assert.rejects(allocate(), /Snapshot retention cannot be satisfied safely/);
+  assert.deepEqual((await allocate()).retained, ['frozen-quota']);
   assert.ok(f.files.has(broken.previous.id));
   f.files.delete(broken.paired.id);
   const inspect = f.bridge.adapters.claude.inspect;

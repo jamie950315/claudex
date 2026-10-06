@@ -67,14 +67,15 @@ async function fileTree(root, hashes, { nativeMetadata = false } = {}) {
       requireValue(++entries <= 256 && prefix.split('/').length <= 16 && !stat.isSymbolicLink(), 'unsafe-stage', 'The Mod tree contains an unsafe entry.');
       if (stat.isDirectory()) await visit(child, `${relative}/`);
       else {
-        // The native manager's type generator and loaded-plugin leases add
-        // these metadata files to its cache. They are not shipping code and
-        // must never exempt an arbitrary additional script or packaged file.
+        // The native manager's type generator, loaded-plugin leases and
+        // orphan marker add these metadata files to its cache. Each native
+        // release may add another declaration package, so any
+        // types/<package>/index.d.ts is accepted. They are not shipping code
+        // and must never exempt an additional script or packaged file.
         const generated = nativeMetadata && !Object.hasOwn(hashes, relative)
           && (/^\.in_use\/[1-9][0-9]{0,9}$/.test(relative)
-            || ['tsconfig.json', '.claude-plugin/types/.gitignore', '.claude-plugin/types/tsconfig.json',
-              '.claude-plugin/types/claude-code/index.d.ts', '.claude-plugin/types/claude-code-tools/index.d.ts',
-              '.claude-plugin/types/claude-code-mcp/index.d.ts'].includes(relative));
+            || /^\.claude-plugin\/types\/[a-z0-9][a-z0-9-]{0,63}\/index\.d\.ts$/.test(relative)
+            || ['tsconfig.json', '.orphaned_at', '.claude-plugin/types/.gitignore', '.claude-plugin/types/tsconfig.json'].includes(relative));
         if (generated) { await safeBytes(child); continue; }
         requireValue(/^[a-f0-9]{64}$/.test(hashes[relative] ?? '') && digest(await safeBytes(child)) === hashes[relative],
           'content-mismatch', 'The installed Mod differs from its verified packaged files.');

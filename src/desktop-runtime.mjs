@@ -6,7 +6,7 @@ import { lstat, realpath, readFile, access, readdir, open, mkdir, rename } from 
 import { createReadStream, constants } from 'node:fs';
 import { createInterface } from 'node:readline';
 import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
-import { CodexWebSocketClient, inspectCodexSocket } from './codex-websocket.mjs';
+import { CodexWebSocketClient, inspectCodexSocket, MAX_FRAME_BYTES } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
 import { decodeClaude, sessionPath } from './claude.mjs';
 import { readAppStopState } from './app-stop-state.mjs';
@@ -205,7 +205,10 @@ export class DesktopRuntime {
       this.codexVersionWarning = null;
       const socket = await inspectCodexSocket(manifest.socketPath);
       if (socket.socketStat.dev !== manifest.socketIdentity?.dev || socket.socketStat.ino !== manifest.socketIdentity?.ino) throw new Error('Shared Codex socket identity changed.');
-      this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath });
+      // A response page can never usefully exceed the history budget, so a
+      // raised budget also raises the frame limit above its 64 MiB floor.
+      this.client = new CodexWebSocketClient({ socketPath: manifest.socketPath,
+        maxPayload: Math.max(MAX_FRAME_BYTES, this.nativeHistoryMaxBytes) });
     }
     try {
       const initialized = await this.client.initialize();

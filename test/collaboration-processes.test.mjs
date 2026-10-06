@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createOwnedProcessTracker, inspectOwnedProcesses, readCollaborationProcessTable, signalOwnedProcesses } from '../src/collaboration-processes.mjs';
+import { createOwnedProcessTracker, inspectOwnedProcesses, readCollaborationProcessTable, sampleOwnedProcesses, signalOwnedProcesses } from '../src/collaboration-processes.mjs';
 
 test('group disappearance and leader PID reuse are distinguished from a surviving leaderless group', async () => {
   const leader = { pid: 54321, ppid: 1, pgid: 54321, uid: process.getuid(), startedAt: 'Wed Sep 30 20:00:00 2026' };
@@ -131,4 +131,27 @@ test('process birth metadata is stable when the caller changes its timezone envi
     const second = (await readCollaborationProcessTable()).find(row => row.pid === process.pid);
     assert.equal(first.startedAt, second.startedAt);
   } finally { if (saved === undefined) delete process.env.TZ; else process.env.TZ = saved; }
+});
+
+test('a briefly unreadable process table does not end tracking, a persistently unreadable one does', async () => {
+  const table = [row(42, 10)], errors = [];
+  const tracker = await createOwnedProcessTracker({ pid: 42, readTable: async () => table, onError: error => errors.push(error.message) });
+  const unreadable = async () => { throw new Error('Synthetic process table failure.'); };
+  let clock = 1_000;
+  try {
+    await sampleOwnedProcesses({ read: unreadable, now: () => clock });
+    clock += 9_000;
+    await sampleOwnedProcesses({ read: unreadable, now: () => clock });
+    assert.deepEqual(errors, []);
+    // A readable sample ends the outage; a later one starts counting again.
+    await sampleOwnedProcesses({ read: async () => table, now: () => clock });
+    clock += 5_000;
+    await sampleOwnedProcesses({ read: unreadable, now: () => clock });
+    clock += 9_999;
+    await sampleOwnedProcesses({ read: unreadable, now: () => clock });
+    assert.deepEqual(errors, []);
+    clock += 1;
+    await sampleOwnedProcesses({ read: unreadable, now: () => clock });
+    assert.deepEqual(errors, ['Synthetic process table failure.']);
+  } finally { await tracker.close().catch(() => {}); }
 });

@@ -128,6 +128,8 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
     } catch (error) {
       // Native errors may include private text or paths. Keep the public error
       // explicit without leaking an arbitrary server error message.
+      if (error?.code === 'CLAUDEX_CODEX_FRAME_TOO_LARGE')
+        fail('a response page exceeds the transport frame limit; lower nativeHistoryPageSize or raise nativeHistoryMaxBytes. No partial export is returned.');
       if (client.closed) fail('native transport unavailable; no export was produced.');
       const code = Number.isInteger(error?.code) ? ` (code ${error.code})` : '';
       fail(`thread/turns/list is unavailable or failed${code}; no export was produced.`);
