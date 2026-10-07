@@ -34,6 +34,7 @@ fixtures use placeholder paths and IDs.
 - Node.js 22.15+ (22.x) or 23.8+, ES modules; install with `npm ci`.
 - Run `npm test` for the coordinator and adapter contracts.
 - Native integration checks use isolated temporary homes and synthetic transcripts.
+- Machine-specific notes (hosts, local paths, archives) belong in the untracked `AGENTS.local.md`; read it when present and keep such details out of tracked files.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
 - `dev/cache-warm-probe` is a manual, authorization-gated Sonnet 5.5/medium
   cache-retention experiment, not an installed warming service. It uses private

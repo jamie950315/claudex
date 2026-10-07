@@ -7,3 +7,4 @@ coverage/
 *.dmg
 *.zip
 .claudex-app-*/
+AGENTS.local.md
