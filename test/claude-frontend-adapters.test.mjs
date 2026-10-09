@@ -104,14 +104,25 @@ test('reversed native capability and nested cold catalogue retain normal install
 });
 
 test('nested cold catalogue refuses an enclosing native binding shadow', async t => {
-  const f = await fixture(t), resource = f.resources.commands;
-  const source = f.build.sources.commands.replace('async function commandsa(cwd,session){return ',
-    'async function commandsa(cwd,session){let La=other;return await(async function(cwd,session){return ')
-    .replace(':[]}function selecteda', ':[]})(cwd,session)}function selecteda');
-  const original = cacheBytes(resource.url, source, Date.now() - 10000);
-  await writeFile(resource.path, original);
-  assert.equal((await discoverClaudeFrontend(f)).adapters.commands.status, 'skipped');
-  assert.deepEqual(await readFile(resource.path), original);
+  // A plain local, a hoisted var, a catch binding and a loop binding all hide
+  // the module import; a property or a sibling function's parameter does not.
+  for (const [before, after, status] of [
+    ['let La=other;return await(', ')', 'skipped'],
+    ['return await(', ');var La', 'skipped'],
+    ['try{throw 0}catch(La){return await(', ')}', 'skipped'],
+    ['for(const La of [other])return await(', ')', 'skipped'],
+    ['other.La=((La)=>La)(1);return await(', ')', 'matched'],
+  ]) {
+    const f = await fixture(t), resource = f.resources.commands;
+    const source = f.build.sources.commands.replace('async function commandsa(cwd,session){return ',
+      `async function commandsa(cwd,session){${before}async function(cwd,session){return `)
+      .replace(':[]}function selecteda', `:[]})(cwd,session${after}}function selecteda`);
+    assert.notEqual(source, f.build.sources.commands);
+    const original = cacheBytes(resource.url, source, Date.now() - 10000);
+    await writeFile(resource.path, original);
+    assert.equal((await discoverClaudeFrontend(f)).adapters.commands.status, status, before);
+    assert.deepEqual(await readFile(resource.path), original);
+  }
 });
 
 test('public React.memo preserves owner identity and native component wrapper', async t => {

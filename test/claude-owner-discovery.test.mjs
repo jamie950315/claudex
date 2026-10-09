@@ -84,6 +84,26 @@ test('retained ref discovery refuses changed seeds, mirrors, readers, escaped re
   }
 });
 
+test('owner bindings are followed by declaration, so hidden writes and shadows refuse and unrelated names do not', async t => {
+  for (const [build, change, status] of [
+    // A nested callback replaces the send; a pattern writes it; the send's own
+    // hoisted var hides the getter it appears to call.
+    [frontendBuild, s => s.replace('let dispatcha=eventa(senda);', 'later(()=>{senda=other});let dispatcha=eventa(senda);'), 'skipped'],
+    [frontendBuild, s => s.replace('let dispatcha=eventa(senda);', '[senda]=list;let dispatcha=eventa(senda);'), 'skipped'],
+    [frontendBuild, s => s.replace('let selecteda=currenta();', 'let selecteda=currenta();var currenta;'), 'skipped'],
+    [frontendBuild, s => s.replace('function viewa(e){', 'function viewa(e){if(e.debug){var effecta}'), 'skipped'],
+    // A property and another function's parameter merely share the ref's name.
+    [retainedRefBuild, s => s.replace('let senda;', 'log.retaineda=1;later(function(retaineda){return retaineda.current});let senda;'), 'matched'],
+    [retainedRefBuild, s => s.replace('let senda;', 'later(()=>retaineda);let senda;'), 'skipped'],
+    [retainedRefBuild, s => s.replace('let selecteda=retaineda.current', 'let selecteda=retaineda.current;var retaineda'), 'skipped'],
+  ]) {
+    const made = build(), before = made.sources.ownerWake; made.sources.ownerWake = change(before);
+    assert.notEqual(made.sources.ownerWake, before);
+    const f = await fixture(t, made), matched = (await discoverClaudeFrontend(f)).adapters.ownerWake;
+    assert.equal(matched.status, status, `${made.sources.ownerWake.slice(0, 0)}${change}`);
+  }
+});
+
 test('semantic discovery survives compiler forms, callback aliases, export forwarding and neighbouring lookalikes', async t => {
   const build = barrels(frontendBuild());
   const decoy = build.sources.ownerWake.replace('()=>refa', '()=>unrelated').replace('function viewa(e)', 'function decoy(e)');

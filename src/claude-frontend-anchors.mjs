@@ -1,4 +1,5 @@
 import { parse } from 'acorn';
+import { analyzeScopes } from './claude-frontend-scope.mjs';
 
 const fail = label => { throw new Error(`Claude frontend anchors: ${label} missing or ambiguous`); };
 export function unique(values, label) { if (values.length !== 1) fail(label); return values[0]; }
@@ -223,7 +224,7 @@ function legacyLocalCLIKey(key, ast) {
   return calls.some(call => {
     // Preserve the older native key, including its local/CLI cwd branch. A
     // changed helper, a shadowed binding or an arbitrary call is no proof.
-    if (nodes(key, n => id(n) === id(call.callee)).length !== 1) return false;
+    if (!analyzeScopes(key).isFree(call.callee)) return false;
     const helpers = functions(ast).filter(f => id(f.id) === id(call.callee));
     if (helpers.length !== 1) return false;
     const helper = helpers[0], ref = !helper.async && !helper.generator && helper.params.length === 1 && id(helper.params[0]);
@@ -296,9 +297,12 @@ export function folderAnchors(source, graph) {
     return { key, grouping, label, rows, row, memo, cache, size, condition };
   });
   const key = unique([...new Set(variants.map(v => v.key))], 'sidebar shared native key');
+  const subscribe = variants[0].pure ? null : importedAPI(source, graph, 'useSyncExternalStore').local;
+  // The subscription is injected at the top of each grouping function, where
+  // the hook's module name must not denote a parameter or local.
+  if (subscribe && variants.some(v => analyzeScopes(v.grouping).at(v.grouping, subscribe))) fail('sidebar subscription lexical binding');
   return { ...variants[0], key, variants, groupingBinding: binding.name,
-    native: importedAPI(source, graph, 'LocalSessions', true).local,
-    subscribe: variants[0].pure ? null : importedAPI(source, graph, 'useSyncExternalStore').local };
+    native: importedAPI(source, graph, 'LocalSessions', true).local, subscribe };
 }
 
 /** Resolve the sole reachable caller of a split pure grouping export. All
@@ -421,9 +425,10 @@ export function commandCatalogAnchors(source, graph) {
   const fn = unique(scopes.filter(f => f.async && f.body.type === 'BlockStatement' && f.body.body.length === 1
     && f.body.body[0].type === 'ReturnStatement' && f.body.body[0].argument?.type === 'ConditionalExpression'
     && f.body.body[0].argument.consequent === call), 'local command catalogue function');
-  if (scopes.some(f => f.params.some(p => nodes(p, n => id(n) === native).length)
-    || scopeNodes(f, n => /^(?:VariableDeclarator|FunctionDeclaration|ClassDeclaration)$/.test(n.type)
-      && id(n.id) === native).length)) fail('command catalogue native lexical binding');
+  // Both native reads must denote the module import from every enclosing scope.
+  const lexical = analyzeScopes(scopes.reduce((outer, f) => f.start < outer.start ? f : outer));
+  if (!lexical.isFree(call.callee.object) || !lexical.isFree(unwrap(fn.body.body[0].argument.test)?.object))
+    fail('command catalogue native lexical binding');
   if (fn.params.length !== 2 || !fn.params.every(id) || fn.body.body.length !== 1
     || fn.body.body[0].type !== 'ReturnStatement' || fn.params.some(p => id(p) === native)) fail('command catalogue scope');
   const result = fn.body.body[0].argument, [cwd, session] = fn.params.map(id);
@@ -515,21 +520,37 @@ function scopeNodes(component, predicate) {
   }
   walk(component); return result;
 }
-function retainedReferenceUses(component, name) {
-  // A later August send branch reuses the minified ref name for a block-local
-  // error record. Its let/const binding shadows the outer ref for that whole
-  // block; those identifiers are not another reader or writer of the ref.
-  const shadows = nodes(component, n => n.type === 'BlockStatement' && n !== component.body
-    && n.body.some(s => s.type === 'VariableDeclaration' && ['let', 'const'].includes(s.kind)
-      && s.declarations.some(d => id(d.id) === name)));
-  return nodes(component, n => id(n) === name).filter(n => !shadows.some(s => s.start <= n.start && s.end >= n.end));
-}
 function callbackResolver(component, resolver) {
-  const bindings = scopeNodes(component, n => n.type === 'VariableDeclarator' || n.type === 'AssignmentExpression');
-  const definitions = name => bindings.filter(n => id(n.id ?? n.left) === name);
-  const patterns = [...component.params, ...scopeNodes(component, n => n.type === 'VariableDeclarator'
-    || n.type === 'FunctionDeclaration' || n.type === 'ClassDeclaration' || n.type === 'CatchClause').map(n => n.id ?? n.param)];
-  const shadowed = name => patterns.some(pattern => nodes(pattern, n => id(n) === name).length);
+  const scopes = analyzeScopes(component);
+  // Identifiers written through a pattern, a loop head or an update have no
+  // single assigned value; a binding with such a write is never followed.
+  const targets = new Set();
+  const target = n => {
+    if (id(n)) targets.add(n);
+    else if (n?.type === 'ObjectPattern') n.properties.forEach(p => target(p.type === 'RestElement' ? p.argument : p.value));
+    else if (n?.type === 'ArrayPattern') n.elements.forEach(target);
+    else if (n?.type === 'AssignmentPattern') target(n.left);
+    else if (n?.type === 'RestElement') target(n.argument);
+  };
+  for (const n of nodes(component, n => /^(?:AssignmentExpression|ForInStatement|ForOfStatement|UpdateExpression)$/.test(n.type)))
+    target(n.type === 'UpdateExpression' ? n.argument : n.left);
+  // Every row that gives the denoted component binding a value: its simple
+  // declarators and plain assignments, wherever they are written.
+  const definitions = node => {
+    const binding = scopes.binding(node), rows = [];
+    if (!binding) return rows;
+    for (const d of binding.declarations) {
+      if (d.node.type !== 'VariableDeclarator' || d.node.id !== d.id) return [];
+      rows.push(d.node);
+    }
+    for (const reference of binding.references) {
+      if (!targets.has(reference)) continue;
+      const use = scopes.use(reference);
+      if (use.parent.type !== 'AssignmentExpression' || use.key !== 'left') return [];
+      rows.push(use.parent);
+    }
+    return rows.sort((a, b) => a.start - b.start);
+  };
   function inlineMemo(name, rows) {
     const assignments = rows.filter(n => n.type === 'AssignmentExpression');
     if (rows.length !== 3 || assignments.length !== 2 || rows.some(n => n.type === 'VariableDeclarator' && n.init)
@@ -551,7 +572,7 @@ function callbackResolver(component, resolver) {
       || !assignments.includes(create) || !callbackFunction(create.right) || writes.length < 2
       || !writes.slice(1).every(n => n.type === 'AssignmentExpression' && n.operator === '='
         && cacheSlot(n.left) && id(n.left.object) === id(slot.object))
-      || code(resolver.root.source, store.left) !== code(resolver.root.source, slot) || id(store.right) !== name
+      || code(resolver.root.source, store.left) !== code(resolver.root.source, slot) || !scopes.same(store.right, name)
       || new Set(writes.slice(1).map(n => n.left.property.value)).size !== writes.length - 1) return null;
     const dependencies = writes.slice(1, -1);
     const tests = n => n.type === 'LogicalExpression' && n.operator === (reversed ? '&&' : '||') ? [...tests(n.left), ...tests(n.right)] : [n];
@@ -569,7 +590,7 @@ function callbackResolver(component, resolver) {
     return create.right;
   }
   function helperArgument(call) {
-    if (shadowed(id(call.callee))) return null;
+    if (!scopes.isFree(call.callee)) return null;
     const resolved = resolver.local(id(call.callee));
     let f = resolved && resolver.definition(resolved);
     if (f?.type === 'VariableDeclarator') f = f.init;
@@ -621,12 +642,12 @@ function callbackResolver(component, resolver) {
     seen = [...seen, value];
     if (callbackFunction(value)) return [value];
     if (id(value)) {
-      const rows = definitions(id(value));
+      const rows = definitions(value);
       // The older compiler assigns a fresh callback or its exact cached slot.
       // Validate both branches and every dependency store before accepting it.
       const values = rows.map(n => n.init ?? n.right).filter(Boolean);
       if (values.length === 2) {
-        const callback = inlineMemo(id(value), rows); return callback ? [callback] : [];
+        const callback = inlineMemo(value, rows); return callback ? [callback] : [];
       }
       if (rows.some(n => n.type === 'AssignmentExpression' && n.operator !== '=') || values.length !== 1) return [];
       return resolve(values[0], seen, cache);
@@ -635,9 +656,9 @@ function callbackResolver(component, resolver) {
     if (value.type === 'ConditionalExpression') {
       const slot = value.alternate;
       if (slot.type !== 'MemberExpression' || !slot.computed || !id(slot.object) || typeof slot.property.value !== 'number') return [];
-      return resolve(value.consequent, seen, id(slot.object));
+      return resolve(value.consequent, seen, slot.object);
     }
-    if (value.type !== 'CallExpression' || !id(value.callee) || !cache || id(value.arguments[0]) !== cache
+    if (value.type !== 'CallExpression' || !id(value.callee) || !cache || !scopes.same(value.arguments[0], cache)
       || typeof value.arguments[1]?.value !== 'number' || value.arguments.some(n => n.type === 'SpreadElement')) return [];
     const index = helperArgument(value);
     if (index === null) return [];
@@ -646,7 +667,7 @@ function callbackResolver(component, resolver) {
     if (returned.length === 1 && !candidates.includes(returned[0])) candidates.push(returned[0]);
     return candidates.length === 1 && returned.length === 1 && returned[0] === candidates[0] ? returned : [];
   }
-  return { resolve, definitions, shadowed };
+  return { resolve, definitions, scopes };
 }
 
 function attachedClientLookup(lookup) {
@@ -685,32 +706,41 @@ export function ownerAnchors(source, graph) {
   const wrapper = wrapped ? importedAPI(source, graph, 'memo', false, resolver).local : null;
   const candidates = functionBindings(ast, { arrows: true, wrapper }).filter(b => b.variants.some(plausible));
   function proveComponent(component) {
-    const callbacks = callbackResolver(component, resolver);
-    if (callbacks.shadowed(effect)) fail('Code effect lexical binding');
+    const callbacks = callbackResolver(component, resolver), { scopes } = callbacks;
+    // The selection effect is injected at the component's top level, where the
+    // hook's module name and the session reference must denote these bindings.
+    if (scopes.at(component, effect)) fail('Code effect lexical binding');
+    const declared = node => callbacks.definitions(node).some(n => n.type === 'VariableDeclarator');
+    const topLevel = (node, before) => scopes.owns(component, scopes.binding(node))
+      && scopes.binding(node).declarations.every(d => d.node.end <= before);
     const selections = scopeNodes(component, n => member(n, 'id') && id(unwrap(n).object));
     const submit = unique(nodes(component, n => prop(n, 'submitMessage')), 'Code imperative submit');
     const submitCall = unique(nodes(submit.value, n => n.type === 'CallExpression' && id(n.callee)), 'Code submit callback');
-    const wrapper = unique(scopeNodes(component, n => n.type === 'VariableDeclarator' && id(n.id) === id(submitCall.callee)
+    const wrapper = unique(callbacks.definitions(submitCall.callee).filter(n => n.type === 'VariableDeclarator'
       && n.init?.type === 'CallExpression' && id(n.init.callee)
       && n.init.arguments.length === 1), 'Code retained submit wrapper');
     const send = unique(callbacks.resolve(wrapper.init.arguments[0]), 'Code retained send callback');
     if (!send.async || send.body.type !== 'BlockStatement' || !hasMember(send, 'waitForImagesReady')) fail('Code async send');
-    const identities = [], selectedRefs = new Set(selections.map(n => id(unwrap(n).object)));
+    const identities = [], selectedRefs = new Set(selections.map(n => scopes.key(unwrap(n).object)));
     // Resolve each getter once. Trying every getter again for every .id reader
     // multiplies parsing on large components without adding identity evidence.
     for (const getter of scopeNodes(component, n => n.type === 'VariableDeclarator' && id(n.id)
-      && n.init?.type === 'CallExpression' && id(n.init.callee) === id(wrapper.init.callee) && n.init.arguments.length === 1
+      && n.init?.type === 'CallExpression' && scopes.same(n.init.callee, wrapper.init.callee) && n.init.arguments.length === 1
       && (callbackFunction(n.init.arguments[0]) || id(n.init.arguments[0])))) {
       const readers = callbacks.resolve(getter.init.arguments[0]).filter(cb => !cb.async && !cb.params.length);
       if (!readers.length) continue;
       const reader = unique(readers, 'Code reference reader callback');
-      const ref = id(reader.body) ?? (reader.body.type === 'BlockStatement' && reader.body.body.length === 1
-        && reader.body.body[0].type === 'ReturnStatement' ? id(reader.body.body[0].argument) : null);
-      if (!ref || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')) continue;
+      const ref = id(reader.body) ? reader.body : reader.body.type === 'BlockStatement' && reader.body.body.length === 1
+        && reader.body.body[0].type === 'ReturnStatement' && id(reader.body.body[0].argument) ? reader.body.body[0].argument : null;
+      if (!ref || !selectedRefs.has(scopes.key(ref)) || !declared(ref)) continue;
+      const selectionEnd = unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
+        && n.declarations.includes(getter)), 'Code getter declaration').end;
+      // The send must call this getter, by a name it still denotes at its start.
+      const current = scopes.binding(getter.id);
+      if (!topLevel(ref, selectionEnd) || scopes.at(send, getter.id.name) !== current) continue;
       if (nodes(send.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
-        && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter: id(getter.id),
-        selectionEnd: unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
-          && n.declarations.includes(getter)), 'Code getter declaration').end });
+        && scopes.binding(n.init.callee) === current && !n.init.arguments.length).length === 1)
+        identities.push({ ref: ref.name, getter: getter.id.name, selectionEnd });
     }
     // Early September Code builds read a retained React ref after images are
     // ready. Prove its public useRef import, exact selection seed and sole
@@ -718,31 +748,31 @@ export function ownerAnchors(source, graph) {
     const retainedReads = scopeNodes(send, n => n.type === 'VariableDeclarator' && member(n.init, 'current') && id(n.init.object));
     if (retainedReads.length) {
       const useRef = importedAPI(source, graph, 'useRef', false, resolver).local;
-      if (callbacks.shadowed(useRef)) fail('Code ref lexical binding');
       for (const read of retainedReads) {
-        const retainedRef = id(read.init.object), rows = callbacks.definitions(retainedRef);
+        const retained = scopes.binding(read.init.object), rows = callbacks.definitions(read.init.object);
         if (rows.length !== 1 || rows[0].type !== 'VariableDeclarator') continue;
-        const declaration = rows[0], init = declaration.init, ref = id(init?.arguments?.[0]);
-        if (init?.type !== 'CallExpression' || id(init.callee) !== useRef || init.arguments.length !== 1
-          || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')) continue;
-        // The three visible uses must be exactly the declaration, the mirror
-        // write and this send read; a shadowed read plus an escape is no proof.
-        const uses = retainedReferenceUses(component, retainedRef);
+        const declaration = rows[0], init = declaration.init, ref = init?.arguments?.[0];
+        if (init?.type !== 'CallExpression' || id(init.callee) !== useRef || !scopes.isFree(init.callee) || init.arguments.length !== 1
+          || !id(ref) || !selectedRefs.has(scopes.key(ref)) || !declared(ref)) continue;
+        // The binding's three identifiers must be exactly the declaration, the
+        // mirror write and this send read; any other use is an escape.
+        const uses = retained.identifiers;
         if (uses.length !== 3 || !uses.includes(declaration.id) || !uses.includes(read.init.object)) continue;
-        const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && n.arguments.length === 2
-          && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1 && id(n.arguments[1].elements[0]) === ref)
+        const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && scopes.isFree(n.callee)
+          && n.arguments.length === 2 && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1
+          && scopes.same(n.arguments[1].elements[0], ref))
           .filter(call => callbacks.resolve(call.arguments[0]).some(cb => {
             const statement = cb.body.type === 'BlockStatement' && cb.body.body.length === 1 ? cb.body.body[0] : null;
             const write = cb.body.type === 'BlockStatement' ? statement?.type === 'ExpressionStatement' && statement.expression : cb.body;
             return !cb.async && !cb.params.length && write?.type === 'AssignmentExpression' && write.operator === '='
-              && member(write.left, 'current') && id(write.left.object) === retainedRef && id(write.right) === ref;
+              && member(write.left, 'current') && uses.includes(write.left.object) && scopes.same(write.right, ref);
           }));
         if (mirrors.length !== 1) continue;
         const mirror = mirrors[0], boundary = component.body.body.filter(n => n.type === 'ExpressionStatement'
           && n.start <= mirror.start && n.end >= mirror.end);
         if (boundary.length !== 1 || declaration.start >= mirror.start || mirror.end >= send.start
-          || !uses.some(n => n.start > mirror.start && n.end < mirror.end)) continue;
-        identities.push({ ref, retainedRef, selectionEnd: boundary[0].end });
+          || !topLevel(ref, boundary[0].end) || scopes.at(send, retained.name) !== retained) continue;
+        identities.push({ ref: ref.name, retainedRef: retained.name, selectionEnd: boundary[0].end });
       }
     }
     return { component, send, ...unique(identities, 'Code selection and native send identity') };
