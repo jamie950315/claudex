@@ -136,6 +136,55 @@ test('upgrades only exact previously owned commands while retaining new native u
   assert.match(after.hooks.Stop[1].hooks[0].command, /updated\/runtime/);
 });
 
+test('a foreign handler placed in an owned group keeps the hooks configured and upgradable', async () => {
+  const { options, definitions } = await fixture();
+  await installSyncHooks(options);
+  const foreign = { type: 'command', command: "'/Applications/Notifier.app/Contents/MacOS/Notifier' stop-hook", timeout: 5 };
+  const shared = async () => {
+    const config = await read(definitions.claude.path);
+    config.hooks.Stop = [{ hooks: [definitions.claude.group.hooks[0], foreign] }];
+    config.hooks.PostToolUse = [{ ...definitions.claude.originGroup, hooks: [foreign, definitions.claude.originGroup.hooks[0]] }];
+    await writeFile(definitions.claude.path, JSON.stringify(config));
+    return config;
+  };
+  const config = await shared();
+  const status = await inspectSyncHooks(options);
+  assert.equal(status.configured, true); assert.equal(status.originConfigured, true);
+  // A working shared group is left exactly as the other tool wrote it.
+  assert.equal((await installSyncHooks(options)).changed, false);
+  assert.deepEqual(await read(definitions.claude.path), config);
+  // A duplicate standalone group collapses into the shared one.
+  config.hooks.Stop.push(definitions.claude.group);
+  await writeFile(definitions.claude.path, JSON.stringify(config));
+  assert.equal((await installSyncHooks(options)).changed, true);
+  assert.deepEqual((await read(definitions.claude.path)).hooks.Stop, [{ hooks: [definitions.claude.group.hooks[0], foreign] }]);
+  // An upgrade removes only the superseded handler and adds its own group.
+  await shared();
+  const changed = { ...options, nodePath: '/updated/runtime/node' }, updated = syncHookDefinitions(changed).claude;
+  const result = await installSyncHooks(changed);
+  assert.equal(result.changed, true); assert.equal(result.configured, true); assert.equal(result.originConfigured, true);
+  const after = await read(definitions.claude.path);
+  assert.deepEqual(after.hooks.Stop, [{ hooks: [foreign] }, updated.group]);
+  assert.deepEqual(after.hooks.PostToolUse, [{ matcher: updated.originGroup.matcher, hooks: [foreign] }, updated.originGroup]);
+  assert.equal((await installSyncHooks(changed)).changed, false);
+});
+
+test('an owned handler in a differently shaped or altered group is still unrecognized', async () => {
+  for (const mutate of [
+    (group, handler) => ({ ...group, matcher: '.*', hooks: [handler, { type: 'command', command: '/foreign' }] }),
+    (group, handler) => ({ ...group, hooks: [{ ...handler, timeout: 9 }, { type: 'command', command: '/foreign' }] }),
+  ]) {
+    const { options, definitions } = await fixture();
+    await installSyncHooks(options);
+    const config = await read(definitions.claude.path);
+    config.hooks.Stop = [mutate(definitions.claude.group, definitions.claude.group.hooks[0])];
+    await writeFile(definitions.claude.path, JSON.stringify(config));
+    assert.equal((await inspectSyncHooks(options)).providers.claude.configured, false);
+    await assert.rejects(installSyncHooks(options), /unrecognized Claudex hook/);
+    assert.deepEqual(await read(definitions.claude.path), config);
+  }
+});
+
 test('malformed second provider fails before writing first provider', async () => {
   const { options, definitions } = await fixture();
   await writeFile(definitions.claude.path, '{"hooks": []}');

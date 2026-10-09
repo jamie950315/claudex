@@ -105,10 +105,28 @@ export function syncHookDefinitions(options) {
   }));
 }
 
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const shape = ({ hooks, ...rest }) => rest;
+function ownedGroups(definition, event) {
+  return !definition ? [] : [definition.events.includes(event) && definition.group,
+    event === 'UserPromptSubmit' && definition.warmGroup,
+    event === 'PostToolUse' && definition.originGroup].filter(Boolean);
+}
 function ownsGroup(definition, event, group) {
-  return definition && (definition.events.includes(event) && JSON.stringify(group) === JSON.stringify(definition.group)
-    || event === 'UserPromptSubmit' && definition.warmGroup && JSON.stringify(group) === JSON.stringify(definition.warmGroup)
-    || event === 'PostToolUse' && definition.originGroup && JSON.stringify(group) === JSON.stringify(definition.originGroup));
+  return ownedGroups(definition, event).some(owned => same(group, owned));
+}
+// Another tool or a manual edit may place its handlers in the group Claudex
+// installed. The exact owned handler is still recognized there, but only in a
+// group that is otherwise identical (same matcher, no other fields).
+function holds(owned, group, handler) {
+  return same(shape(group), shape(owned)) && same(handler, owned.hooks[0]);
+}
+function ownsHandler(definition, event, group, handler) {
+  return ownedGroups(definition, event).some(owned => holds(owned, group, handler));
+}
+function present(config, event, owned) {
+  return Array.isArray(config.hooks?.[event]) && config.hooks[event].some(group => object(group)
+    && Array.isArray(group.hooks) && group.hooks.some(handler => holds(owned, group, handler)));
 }
 
 function merge(snapshot, definition, prior) {
@@ -119,16 +137,26 @@ function merge(snapshot, definition, prior) {
       throw new Error('Native hook matcher groups have an unsupported shape; they were preserved.');
     for (const group of groups) for (const handler of group.hooks) {
       if (typeof handler?.command !== 'string') continue;
-      const owned = ownsGroup(definition, event, group) || ownsGroup(prior, event, group);
+      const owned = ownsHandler(definition, event, group, handler) || ownsHandler(prior, event, group, handler);
       if ((handler.command.includes('claudex-sync-hook.mjs') || handler.command.includes('claudex-codex-warm-hook.mjs')) && !owned)
         throw new Error('An unrecognized Claudex hook already exists; review it before installing another.');
     }
   }
   for (const event of new Set([...definition.events, ...(prior?.events ?? []), 'PostToolUse'])) {
-    const retained = (hooks[event] ?? []).filter(group => !ownsGroup(definition, event, group) && !ownsGroup(prior, event, group));
-    if (definition.events.includes(event)) retained.push(definition.group);
-    if (event === 'UserPromptSubmit' && definition.warmGroup) retained.push(definition.warmGroup);
-    if (event === 'PostToolUse') retained.push(definition.originGroup);
+    const wanted = ownedGroups(definition, event), kept = new Set(), retained = [];
+    for (const group of hooks[event] ?? []) {
+      if (ownsGroup(definition, event, group) || ownsGroup(prior, event, group)) continue;
+      // A shared group keeps one current handler in place, so a working
+      // configuration is not rewritten; superseded handlers leave it.
+      const handlers = group.hooks.filter(handler => {
+        const index = wanted.findIndex(owned => holds(owned, group, handler));
+        if (index < 0) return !ownsHandler(prior, event, group, handler);
+        return !kept.has(index) && Boolean(kept.add(index));
+      });
+      if (handlers.length === group.hooks.length) retained.push(group);
+      else if (handlers.length) retained.push({ ...group, hooks: handlers });
+    }
+    wanted.forEach((owned, index) => { if (!kept.has(index)) retained.push(owned); });
     hooks[event] = retained;
   }
   return { ...config, hooks };
@@ -184,14 +212,12 @@ export async function inspectSyncHooks(options) {
   const result = {};
   for (const [provider, definition] of Object.entries(definitions)) {
     const config = decode(await readStable(definition.path));
-    const lifecycleConfigured = definition.events.every(event => Array.isArray(config.hooks?.[event])
-      && config.hooks[event].some(group => JSON.stringify(group) === JSON.stringify(definition.group)));
-    const originConfigured = Array.isArray(config.hooks?.PostToolUse)
-      && config.hooks.PostToolUse.some(group => JSON.stringify(group) === JSON.stringify(definition.originGroup));
+    const lifecycleConfigured = definition.events.every(event => present(config, event, definition.group));
+    const originConfigured = present(config, 'PostToolUse', definition.originGroup);
     result[provider] = { configured: lifecycleConfigured, lifecycleConfigured, originConfigured,
       path: definition.path, events: definition.events,
-      ...(provider === 'codex' ? { warmCommandConfigured: Array.isArray(config.hooks?.UserPromptSubmit)
-        && config.hooks.UserPromptSubmit.some(group => JSON.stringify(group) === JSON.stringify(definition.warmGroup)) } : {}),
+      ...(provider === 'codex'
+        ? { warmCommandConfigured: present(config, 'UserPromptSubmit', definition.warmGroup) } : {}),
       ...(provider === 'codex' ? { trust: 'not-inspected', requiresTrustReview: true } : {}) };
   }
   return { configured: Object.values(result).every(value => value.configured),
