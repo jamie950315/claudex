@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.33 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.34 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1799,6 +1799,10 @@ app-stop guards remain unchanged. Owner activation refreshes idle eviction witho
 Codex transport, sync, archival proof publication or queued-message replay. Native
 RC owns delivery. Promoted recovery reconnects the normal owner without a cached
 handle. Ignored hints have bounded diagnostics, no automatic wake retry.
+The publisher reads the ledger without the coordinator lock, so it normally
+sees another conversation's delivery in flight. It still publishes the durable
+hint (every other check applies); the watcher handles it under the lock after
+that delivery and keeps refusing a transaction that is really left pending.
 
 src/claude-frontend-graph.mjs discovers the latest fetched index entry from the
 private HTTP cache using verified Chromium HttpResponseInfo response timestamps,

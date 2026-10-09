@@ -25,7 +25,11 @@ export function createClaudeOwnerWakePublisher({ root, inbox = new SyncEventInbo
         return { accepted: false, reason: 'rate limited' };
       if (recent.size >= 16) return { accepted: false, reason: 'rate limited' };
       const state = await readClaudeOwnerWakeLedger(root);
-      const target = await inspectClaudeOwnerWake({ root, state, remoteId });
+      // This unlocked read usually sees another conversation's delivery in
+      // flight. The hint is durable: the watcher handles it under the
+      // coordinator lock after that delivery and still refuses a transaction
+      // that is really left pending.
+      const target = await inspectClaudeOwnerWake({ root, state, remoteId, allowPending: true });
       if (target.ignored) return { accepted: false, reason: target.ignored };
       await target.recheck();
       if ((await readAppStopState(root))?.stopped) return { accepted: false, reason: 'application stopped' };

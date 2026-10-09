@@ -94,10 +94,10 @@ async function unchangedFile(snapshot) {
  * hint: bind it again to the current ledger and stable registered owner state.
  * No native history, transport, model input or registration is touched here.
  */
-export async function inspectClaudeOwnerWake({ root, state, remoteId }) {
+export async function inspectClaudeOwnerWake({ root, state, remoteId, allowPending = false }) {
   if (!REMOTE_ID.test(remoteId ?? '') || state?.version !== 2 || !object(state.conversations) || !Array.isArray(state.records))
     fail('invalid owner wake request or ledger.');
-  if (state.pending != null) return { ignored: 'pending transaction' };
+  if (state.pending != null && !allowPending) return { ignored: 'pending transaction' };
   const rootIdentity = await privateDirectory(root);
   const map = await readMetadata(join(root, 'folder-map.json'), { optional: true });
   if (!map) return { ignored: 'folder map unavailable' };

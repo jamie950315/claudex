@@ -72,6 +72,19 @@ test('identity-only publisher validates input, authenticates ownership, bounds r
   assert.equal(f.calls.start, 0); assert.equal(f.calls.codex, 0);
 });
 
+test('a wake requested during another delivery is published and handled once that delivery is over', async () => {
+  const f = await fixture(), inbox = await new SyncEventInbox({ root: f.root }).initialize();
+  const publish = createClaudeOwnerWakePublisher({ root: f.root, inbox });
+  f.state.pending = { operationId: 'synthetic' }; await f.save();
+  assert.deepEqual(await publish({ remoteId: f.saved.remoteId }), { accepted: true });
+  assert.deepEqual((await inbox.list()).map(event => event.kind), ['owner-wake']);
+  // A transaction that is still pending under the coordinator lock is refused.
+  assert.equal((await f.handle()).ignored, 'pending transaction'); assert.equal(f.calls.start, 0);
+  f.state.pending = null; await f.save();
+  assert.deepEqual(await f.handle(), { woken: true, conversationId: f.record.conversationId });
+  assert.equal(f.calls.start, 1); assert.equal(f.calls.codex, 0);
+});
+
 test('activation starts the same normal owner with no Codex, sync, rename or transcript mutation and refreshes eviction', async () => {
   const f = await fixture(), before = await readFile(f.record.path);
   assert.deepEqual(await f.handle(), { woken: true, conversationId: f.record.conversationId });
