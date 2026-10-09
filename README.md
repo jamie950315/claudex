@@ -16,9 +16,9 @@ Claudex provides two independent capabilities:
 Collaboration runs models using your native accounts. Synchronization transports
 history without asking a model to generate a reply or summarize it.
 
-Current development build: **Claudex.app 1.2.41**, bundling **Claude Mod 0.8.15**.
-Latest published release: **1.2.27** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.2.27)
-· [Release notes](docs/releases/1.2.27.md).
+Current development build: **Claudex.app 1.3.0**, bundling **Claude Mod 0.8.15**.
+Latest published release: **1.3.0** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.3.0)
+· [Release notes](docs/releases/1.3.0.md).
 App and Mod versions are separate. Guides on `main` describe current behavior;
 documents viewed under a release tag remain that release's original snapshot.
 

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.41 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.0 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1891,6 +1891,8 @@ wrapper exposes the component to the existing identity/send/client proofs;
 arbitrary helpers and imperative forwarding wrappers do not qualify. Ignore a
 same-name block-local let/const when counting retained ref uses, preserving the
 exact useRef seed, sole useEffect mirror and non-escape checks of the outer ref.
+The ref's three visible uses must be exactly its declaration, the mirror write
+and the send read; never accept a count that a shadowed read and an escape satisfy.
 Builds fetched from 2026-10-09 read and write compiler memo slots through
 helper calls: changed(cache, i, ...deps) ? store(cache, i, ...deps, value) :
 cache[n], with helpers that differ in where the value sits and may nest. The

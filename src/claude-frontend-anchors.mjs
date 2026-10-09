@@ -721,8 +721,11 @@ export function ownerAnchors(source, graph) {
         if (rows.length !== 1 || rows[0].type !== 'VariableDeclarator') continue;
         const declaration = rows[0], init = declaration.init, ref = id(init?.arguments?.[0]);
         if (init?.type !== 'CallExpression' || id(init.callee) !== useRef || init.arguments.length !== 1
-          || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')
-          || retainedReferenceUses(component, retainedRef).length !== 3) continue;
+          || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')) continue;
+        // The three visible uses must be exactly the declaration, the mirror
+        // write and this send read; a shadowed read plus an escape is no proof.
+        const uses = retainedReferenceUses(component, retainedRef);
+        if (uses.length !== 3 || !uses.includes(declaration.id) || !uses.includes(read.init.object)) continue;
         const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && n.arguments.length === 2
           && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1 && id(n.arguments[1].elements[0]) === ref)
           .filter(call => callbacks.resolve(call.arguments[0]).some(cb => {
@@ -734,7 +737,8 @@ export function ownerAnchors(source, graph) {
         if (mirrors.length !== 1) continue;
         const mirror = mirrors[0], boundary = component.body.body.filter(n => n.type === 'ExpressionStatement'
           && n.start <= mirror.start && n.end >= mirror.end);
-        if (boundary.length !== 1 || declaration.start >= mirror.start || mirror.end >= send.start) continue;
+        if (boundary.length !== 1 || declaration.start >= mirror.start || mirror.end >= send.start
+          || !uses.some(n => n.start > mirror.start && n.end < mirror.end)) continue;
         identities.push({ ref, retainedRef, selectionEnd: boundary[0].end });
       }
     }

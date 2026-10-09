@@ -73,6 +73,8 @@ test('retained ref discovery refuses changed seeds, mirrors, readers, escaped re
     s => s.replace('let senda;', 'escape(retaineda);let senda;'),
     s => s.replace('selecteda=retaineda.current', 'selecteda=other.current'),
     s => s.replace('function viewa(e){', 'function viewa(e){let useRefa=other;'),
+    // A send-local binding hides the read while an escape keeps three uses.
+    s => s.replace('let senda;', 'escape(retaineda);let senda;').replace('senda=async(text,options)=>{', 'senda=async(text,options)=>{const retaineda=other;'),
     s => s.replace('effecta(()=>{retaineda.current=refa}', 'effecta(()=>{dispatch();retaineda.current=refa}'),
   ]) {
     const build = retainedRefBuild(); build.sources.ownerWake = change(build.sources.ownerWake);
