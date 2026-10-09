@@ -18,7 +18,7 @@ export const CLAUDE_DESKTOP_BUNDLE_ID = 'com.anthropic.claudefordesktop';
  * It never force-quits, never repeats for the same frontend entry and never
  * touches native histories or sessions.
  */
-export function createClaudeDesktopRelaunch({ root, run = execute, now = () => Date.now(), windowMs = 120_000,
+export function createClaudeDesktopRelaunch({ root, run = execute, now = () => Date.now(), windowMs = 60_000,
   quitTimeoutMs = 60_000, sleep = delay, stopState = readAppStopState, alive = pid => {
     try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; }
   } } = {}) {

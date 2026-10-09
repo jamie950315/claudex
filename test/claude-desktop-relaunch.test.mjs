@@ -68,7 +68,7 @@ test('nothing is restarted when adapters were already installed or the pass is n
 
 test('work, age, identity and lifecycle each keep the resource restart-required without quitting', async t => {
   for (const [options, reason, state = 'restart-required'] of [
-    [{ age: 121_000 }, 'Desktop is no longer newly started'],
+    [{ age: 61_000 }, 'Desktop is no longer newly started'],
     [{ age: -5_000 }, 'Desktop is no longer newly started'],
     [{ extra: [[300, 100, '/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup --'], [301, 300, SESSION]] }, 'a Code session is running'],
     [{ entries: { a: { side: 'claude', kind: 'started', at: NOW - 5_000 } } }, 'Claude activity since start'],
@@ -81,6 +81,7 @@ test('work, age, identity and lifecycle each keep the resource restart-required 
     assert.equal(result.state, state, JSON.stringify(options)); assert.equal(result.reason, reason);
     assert.equal(f.count('/usr/bin/osascript'), 0); assert.equal(f.count('/usr/bin/open'), 0);
   }
+  assert.equal((await (await fixture(t, { age: 58_000 })).relaunch.consider(pass('index-b.js', installed(true)))).state, 'relaunched');
   // A session elsewhere on the machine and a prompt from before this start are not this Desktop's work.
   const f = await fixture(t, { extra: [[400, 1, SESSION]], entries: { a: { side: 'claude', kind: 'started', at: NOW - 60_000 },
     b: { side: 'codex', kind: 'started', at: NOW } } });
