@@ -79,6 +79,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   publishFolders = publishClaudeFolderMap,
   createHandoffPublisher = createClaudeDesktopHandoffPublisher,
   startRendererMaintenance = startClaudeRendererMaintenance,
+  claudeRelaunch,
   maintainFolders = async options => (await import('./claude-folder-presentation-cache.mjs')).ensureClaudeFolderPresentationCache(options) }) {
   if (!root || !bridge || !runtime || !config) throw new Error('Desktop watcher requires root, bridge, runtime, and discovery configuration.');
   if (!Number.isInteger(pollMs) || pollMs < 0 || !(maxPasses > 0)) throw new Error('Invalid Desktop watcher interval or pass limit.');
@@ -312,6 +313,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       if (autoRenderers) rendererMaintenance = await startRendererMaintenance({ root,
         folders: config.folderProjection?.enabled === true, signal,
         watchAppStop: events?.watchAppStop,
+        afterPass: config.rendererAdapters?.relaunchAfterUpdate === false ? undefined : claudeRelaunch?.consider,
         onStatus: updateRendererStatus });
       await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
       while (!signal?.aborted && passes++ < maxPasses) {

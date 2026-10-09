@@ -543,6 +543,18 @@ comparator; its native identity/send/client proofs still apply. A retained ref
 may be read through `.current` any number of times; a bare use, an update, a
 delete or a write other than its selection mirror refuses it.
 Value flow is bounded to twelve bindings. Unknown forms remain skipped.
+A Claude Desktop start that fetches a new frontend evaluates it before the
+watcher can patch it, so its adapters load only at the following start. Claudex
+makes that following start automatically, once, while Desktop has just been
+opened: it is at most two minutes old, has no Code session process, no prompt
+has been submitted since it started and every enabled adapter is installed for
+the new frontend. It asks the application to quit, never signals it, and reopens
+it. It does not repeat for the same frontend, restarts at most twice in ten
+minutes and treats a declined quit as final; `claude-relaunch-status.json` shows
+the last decision. Otherwise the resource stays `restart-required` until you
+restart Claude yourself. A draft typed into the composer within those first
+moments cannot be seen from outside and would be lost. Set
+`rendererAdapters.relaunchAfterUpdate` to `false` in `config.json` to disable it.
 This search runs only during normal cache discovery/maintenance and does not
 change owner eviction, start model input or add periodic native history reads.
 

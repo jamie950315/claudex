@@ -32,7 +32,7 @@ const heldReason = 'Desktop integration is waiting for Claudex to resume and fin
  */
 export async function startClaudeRendererMaintenance({ root, home = homedir(), folders = true, signal, onStatus = () => {},
   settleMs = 1000, watchFactory = watch, watchAppStop, maintain = ensureClaudeRendererAdapters, stopState = readAppStopState,
-  writeStatus = writeDiagnosticJSON } = {}) {
+  writeStatus = writeDiagnosticJSON, afterPass } = {}) {
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 60_000) throw new Error('Invalid renderer maintenance settle interval');
   let closed = false, dirty = false, pending, timer, watcher, stopWatcher, closing, notificationsFailed = false, publication = Promise.resolve();
   const files = new Set(); let anonymous = true, observations = new Map();
@@ -49,7 +49,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
       catch { summary.state = 'skipped'; summary.reason = 'Renderer maintenance status could not be published'; }
       onStatus(summary);
     });
-    return publication;
+    return publication.then(() => summary);
   };
   const checkHold = async () => {
     if (closed || signal?.aborted) throw new Error('Renderer maintenance stopped');
@@ -96,12 +96,15 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           else if (lastFailure && !lastFailure.recoveredAt) lastFailure.recoveredAt = Date.now();
           const retryScheduled = retryInterruptedCache();
           const checking = retryScheduled && refusals.every(a => transientCodes.has(a.failure?.code));
-          await present({ state: notificationsFailed ? 'skipped' : checking ? 'checking' : refused ? 'degraded' : 'ready',
+          const summary = await present({ state: notificationsFailed ? 'skipped' : checking ? 'checking' : refused ? 'degraded' : 'ready',
             ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : checking ? { reason: checkingReason } : {}),
             entry: result.entry, missingChunks: result.missingChunks,
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
               { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation', 'search'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
                 ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) });
+          // An optional consumer of coherent passes (the one-time Desktop
+          // restart after a frontend update). Its failure is not a cache failure.
+          if (afterPass && !closed && !signal?.aborted) await (async () => afterPass(summary))().catch(() => {});
         } catch (error) {
           // A prior successful observation cannot prove a failed pass healthy.
           // The next JS hint must revalidate, including unchanged known assets.
