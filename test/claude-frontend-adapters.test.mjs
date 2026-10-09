@@ -358,6 +358,26 @@ test('a session-action module without its former markers is selected by its uniq
   assert.equal(selected.adapters.chatWake.target.url,resources.chatWake.url);
 });
 
+test('compiler memo helper calls are recognized for the send callback, its reader and the folder consumer',async t=>{
+  const f=await fixture(t,'a',{split:true,helpers:true}),graph=await discoverClaudeFrontend(f);
+  assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'),JSON.stringify(Object.values(graph.adapters).map(a=>a.reason)));
+  const owner=graph.adapters.ownerWake.bindings,consumer=graph.adapters.folders.consumer;
+  assert.equal(owner.send.async,true);assert.equal(owner.ref,'refa');assert.equal(owner.getter,'currenta');
+  assert.equal(consumer.bindings.guards.length,3);assert.equal(consumer.bindings.rows,'rows');
+  const result=await ensureClaudeRendererAdapters(f);
+  assert.ok(Object.values(result.adapters).every(a=>a.status==='installed'));
+  const installed=await sourceOf(f.resources.ownerWake),patched=await sourceOf(f.resources.consumer);
+  syntax(installed);syntax(patched);
+  // The submit signal sits inside the stored callback, the version guard on every memo test.
+  assert.match(installed,/async\(text,options\)=>\{\{const ref=currenta\(\);void __cldxOwnerWake\.signal\(ref\?\.id,"submit"/);
+  assert.equal(patched.split('||cache[11]!==__cldxVersion').length,4);
+  assert.ok(patched.includes('(changed4(cache,0,rows,env,sort,order))||cache[11]!==__cldxVersion'));
+  assert.ok(patched.includes('memoa(12)'));
+  // Two candidate values in one store call do not identify the callback.
+  const ambiguous=await fixture(t,'a',{helpers:'ambiguous'}),refused=await discoverClaudeFrontend(ambiguous);
+  assert.equal(refused.adapters.ownerWake.status,'skipped');assert.match(refused.adapters.ownerWake.reason,/Code retained send callback/);
+});
+
 test('shared folder/chat resources have one atomic journal, recover, disable folders and restore',async t=>{
   const f=await fixture(t,'a',{variants:true,shared:true}),graph=await discoverClaudeFrontend(f);
   assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));assert.equal(graph.adapters.folders.target.url,graph.adapters.chatWake.target.url);

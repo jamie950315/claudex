@@ -4,7 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FRONTEND_ASSET_ROOT, claudeCacheDirectory } from '../../src/claude-frontend-graph.mjs';
 
-export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shared = false, split = false, moved = false } = {}) {
+export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shared = false, split = false, moved = false, helpers = false } = {}) {
   const names = { entry: `index-${tag}.js`, native: `native-${tag}.js`, react: `vendor-${tag}.js`, client: `mcp-${tag}.js`,
     folders: `sidebar-${tag}.js`, chatWake: `actions-${tag}.js`, ownerWake: `code-${tag}.js`, commands: `commands-${tag}.js` };
   const nativeImport = `import{Native${tag} as L${tag}}from"./${names.native}";`;
@@ -39,6 +39,24 @@ export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shar
       + `var empty${tag}=[];function group${tag}(rows${tag},env,sort="recent",order=empty${tag}){let map=new Map;for(let row${tag} of rows${tag}){let k${tag}=key${tag}(row${tag}),repo=row${tag}.repoInfo;if(!k${tag})continue;map.set(k${tag},{name:repo?.name??k${tag},hasActive:row${tag}.sessionStatus==="running",latestTimestamp:row${tag}.timestamp})}let out=[];for(let[k,e]of map)out.push({key:k,name:e.name,hasActiveSessions:e.hasActive,disambiguationText:null,latestTimestamp:e.latestTimestamp});return out}export{group${tag} as Group,key${tag} as Key};`;
     consumer = `import{Group as group${tag},Key as key${tag}}from"./${names.folders}";import{Subscribe${tag} as sub${tag}}from"./${names.react}";`
       + `function section${tag}(rows,env,sort,order){let cache=memo${tag}(${memoSize}),out,before,after,sub${tag};if(cache[5]!==rows){before=[];for(let row of rows)before.push(key${tag}(row));cache[5]=rows;cache[6]=before}else before=cache[6];cache[0]!==rows||cache[1]!==env||cache[2]!==sort||cache[3]!==order?(out=group${tag}(rows,env,sort,order),cache[0]=rows,cache[1]=env,cache[2]=sort,cache[3]=order,cache[4]=out):out=cache[4];if(cache[7]!==rows){after=[];for(let row of rows)after.push(key${tag}(row));cache[7]=rows;cache[8]=after}else after=cache[8];captureKeys(before,after);return out}`;
+  }
+  if (helpers) {
+    // The 2026-10-09 layout: compiler memo slots are read and written through
+    // helper calls, with the stored value before or after its dependencies.
+    const swap = (text, from, to) => { if (!text.includes(from)) throw new Error('helper fixture anchor missing'); return text.replace(from, to); };
+    ownerWake = swap(ownerWake, `reader${tag}=()=>ref${tag};`, `reader${tag}=changed1(M${tag},0,ref${tag})?store1(M${tag},0,ref${tag},()=>ref${tag}):M${tag}[1];`);
+    ownerWake = swap(ownerWake, `send${tag}=async(text,options)=>{`, `send${tag}=changed1(M${tag},2,ref${tag})?outer(M${tag},9,inner(M${tag},2,async(text,options)=>{`);
+    ownerWake = swap(ownerWake, `return nativeSend(text,options,selected${tag})};`,
+      helpers === 'ambiguous' ? `return nativeSend(text,options,selected${tag})},()=>0),ref${tag}):M${tag}[10];`
+        : `return nativeSend(text,options,selected${tag})},ref${tag}),ref${tag}):M${tag}[10];`);
+    if (split) {
+      consumer = swap(consumer, `cache[0]!==rows||cache[1]!==env||cache[2]!==sort||cache[3]!==order?(out=group${tag}(rows,env,sort,order),cache[0]=rows,cache[1]=env,cache[2]=sort,cache[3]=order,cache[4]=out):out=cache[4];`,
+        `out=changed4(cache,0,rows,env,sort,order)?store4(cache,0,rows,env,sort,order,group${tag}(rows,env,sort,order)):cache[4];`);
+      for (const [name, at] of [['before', 5], ['after', 7]]) {
+        consumer = swap(consumer, `if(cache[${at}]!==rows){`, `if(changed1(cache,${at},rows)){`);
+        consumer = swap(consumer, `cache[${at}]=rows;cache[${at + 1}]=${name}}`, `store1(cache,${at},rows,${name})}`);
+      }
+    }
   }
   const entry = [...new Set(Object.values(names).filter(f => f !== names.entry))].map(f => `import"./${f}";`).join('') + 'document.getElementById("root");';
   const commands = nativeImport + `async function commands${tag}(cwd,session){return L${tag}?.getSupportedCommands?L${tag}.getSupportedCommands({cwd:session?void 0:cwd??void 0,sessionId:session??void 0}):[]}function selected${tag}(e){return e.trustedSelectedFolder}const cold${tag}="empty slash-command list (cold CLI bridge)";`;

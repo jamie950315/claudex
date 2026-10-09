@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.31 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.32 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1839,7 +1839,15 @@ forkSession capability read). Builds that still carry the markers keep the
 marker selection, because several of their modules pass that proof; two proven
 modules without markers stay ambiguous and skipped. There the target is the
 folder resource, so the shared combined recipe applies. Folder
-bootstrap no longer embeds another chat-wake consumer. Every adapter's entire
+bootstrap no longer embeds another chat-wake consumer.
+Builds fetched from 2026-10-09 read and write compiler memo slots through
+helper calls: changed(cache, i, ...deps) ? store(cache, i, ...deps, value) :
+cache[n], with helpers that differ in where the value sits and may nest. The
+owner-wake callbacks are the single function or nested store call among a store
+call's arguments; two candidates stay unrecognized. The folder consumer accepts
+the helper form of its grouping and key memo guards, with the same four
+dependencies, store index and result slot; the extra version slot and guard
+edits are unchanged. Earlier slot-by-slot builds keep their exact checks. Every adapter's entire
 transformed module must pass Acorn syntax validation before any cache publication.
 
 The independent `commands` adapter journals the exact LocalSessions cold-command

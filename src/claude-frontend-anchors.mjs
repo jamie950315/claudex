@@ -178,6 +178,22 @@ export function folderConsumerAnchors(source, graph, helper, importedPath) {
   if (!cache || size < 1 || size > 4096) fail('folder consumer cache bound');
   const condition = unique(nodes(component, n => n.type === 'ConditionalExpression'
     && n.consequent.start < call.start && n.consequent.end > call.end), 'folder consumer invalidation');
+  // Builds fetched from 2026-10-09 call compiler memo helpers instead of
+  // spelling out each cache slot: changed(cache, i, ...deps) compares the slots
+  // from i and store(cache, i, ...deps, value) writes them and the value after.
+  const memoCall = n => n?.type === 'CallExpression' && id(n.callee) && id(n.arguments[0]) === cache
+    && Number.isInteger(n.arguments[1]?.value);
+  let result;
+  if (memoCall(condition.test)) {
+    const compared = condition.test.arguments.slice(2), stored = condition.consequent, first = condition.test.arguments[1].value;
+    const slot = condition.alternate;
+    if (compared.length !== 4 || !compared.every(id) || !call.arguments.every(arg => compared.some(n => id(n) === id(arg)))) fail('folder consumer dependencies');
+    if (!memoCall(stored) || stored.arguments[1].value !== first || stored.arguments.length !== compared.length + 3
+      || stored.arguments.at(-1) !== call || compared.some((n, index) => id(stored.arguments[index + 2]) !== id(n))
+      || slot.type !== 'MemberExpression' || id(slot.object) !== cache || !slot.computed
+      || slot.property.value !== first + compared.length) fail('folder consumer result');
+    if (first < 0 || first + compared.length >= size) fail('folder consumer cache writes');
+  } else {
   const tests = nodes(condition.test, n => n.type === 'BinaryExpression' && n.operator === '!=='
     && n.left.type === 'MemberExpression' && id(n.left.object) === cache && n.left.computed
     && Number.isInteger(n.left.property.value) && id(n.right));
@@ -185,7 +201,7 @@ export function folderConsumerAnchors(source, graph, helper, importedPath) {
     || new Set(tests.map(n => n.left.property.value)).size !== 4
     || !call.arguments.every(arg => tests.some(n => id(n.right) === id(arg)))) fail('folder consumer dependencies');
   if (condition.consequent.type !== 'SequenceExpression') fail('folder consumer stores');
-  const expressions = condition.consequent.expressions, result = expressions.at(-1);
+  const expressions = condition.consequent.expressions; result = expressions.at(-1);
   if (result?.type !== 'AssignmentExpression' || result.operator !== '='
     || result.left.type !== 'MemberExpression' || id(result.left.object) !== cache || !result.left.computed
     || !Number.isInteger(result.left.property.value) || !id(result.right)
@@ -197,6 +213,7 @@ export function folderConsumerAnchors(source, graph, helper, importedPath) {
     n.type === 'AssignmentExpression' && n.operator === '=' && code(source, n.left) === code(source, test.left)
     && id(n.right) === id(test.right))) || [...tests.map(n => n.left.property.value), result.left.property.value]
     .some(index => index < 0 || index >= size)) fail('folder consumer cache writes');
+  }
   const keyCalls = nodes(component, n => n.type === 'CallExpression' && id(n.callee) === id(key.local));
   const guards = [condition];
   let prepareAt = condition.start, rows = id(call.arguments[0]);
@@ -212,10 +229,11 @@ export function folderConsumerAnchors(source, graph, helper, importedPath) {
     for (const keyCall of keyCalls) {
       const candidates = nodes(component, n => ['IfStatement', 'ConditionalExpression'].includes(n.type)
         && n.consequent.start < keyCall.start && n.consequent.end > keyCall.end
-        && nodes(n.test, x => x.type === 'MemberExpression' && id(x.object) === cache && x.computed).length);
+        && (memoCall(n.test) || nodes(n.test, x => x.type === 'MemberExpression' && id(x.object) === cache && x.computed).length));
       const guard = unique(candidates, 'folder key memo guard');
       if (!nodes(guard.consequent, n => n.type === 'AssignmentExpression' && n.left.type === 'MemberExpression'
-        && id(n.left.object) === cache).length) fail('folder key memo store');
+        && id(n.left.object) === cache || memoCall(guard.test) && memoCall(n) && n.arguments[1].value === guard.test.arguments[1].value).length)
+        fail('folder key memo store');
       if (!guards.includes(guard)) guards.push(guard);
     }
     prepareAt = unique(component.body.body.filter(n => n.start <= rowLoop.start && n.end >= rowLoop.end), 'folder rows preparation').start;
@@ -294,6 +312,26 @@ export function chatAnchors(source, graph) {
   return { native: native.local };
 }
 
+// Builds fetched from 2026-10-09 inline the compiler memo as helper calls:
+//   value = changed(cache, 1, ...deps) ? store(cache, 1, ...deps, callback) : cache[n]
+// Helpers differ in where the stored value sits among their dependencies and
+// store calls may nest, so the callback is the one function or nested store
+// call among a store call's arguments. Any other shape stays unrecognized.
+function memoized(value) {
+  if (value?.type !== 'ConditionalExpression') return value;
+  const slot = value.alternate, cache = id(slot?.object);
+  if (slot?.type !== 'MemberExpression' || !slot.computed || !cache || typeof slot.property?.value !== 'number') return value;
+  const store = node => node?.type === 'CallExpression' && id(node.callee) && node.arguments.length >= 3
+    && id(node.arguments[0]) === cache && typeof node.arguments[1].value === 'number';
+  let stored = value.consequent;
+  while (store(stored)) {
+    const values = stored.arguments.slice(2).filter(node => node.type === 'ArrowFunctionExpression' || store(node));
+    if (values.length !== 1) return value;
+    stored = values[0];
+  }
+  return stored?.type === 'ArrowFunctionExpression' ? stored : value;
+}
+
 function attachedClientExport(module) {
   const ast = syntax(module.source);
   const lookups = functions(ast).filter(f => f.params.length === 1 && id(f.params[0])
@@ -339,7 +377,7 @@ export function ownerAnchors(source, graph) {
       if (!id(arg)) return [];
       return nodes(component, n => n.type === 'AssignmentExpression' && id(n.left) === id(arg)
         || n.type === 'VariableDeclarator' && id(n.id) === id(arg))
-        .map(n => n.right ?? n.init).filter(n => n?.type === 'ArrowFunctionExpression');
+        .map(n => memoized(n.right ?? n.init)).filter(n => n?.type === 'ArrowFunctionExpression');
     };
     const send = unique(callbacks(wrapper.init.arguments[0]), 'Code retained send callback');
     if (!send.async || send.body.type !== 'BlockStatement' || !hasMember(send, 'waitForImagesReady')) fail('Code async send');
