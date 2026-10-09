@@ -28,6 +28,149 @@ async function fixture(t, tag = 'a', options = {}) {
 const sourceOf = async resource => inspectFolderCache(await readFile(resource.path),{targetURL:resource.url}).source;
 const withoutImports = source => { const imports=syntax(source).body.filter(n=>n.type==='ImportDeclaration');for(const n of imports.reverse())source=source.slice(0,n.start)+source.slice(n.end);return source; };
 
+test('native API host-read prelude preserves all adapter bindings and normal installation', async t => {
+  const f = await fixture(t), resource = f.resources.native;
+  const source = f.build.sources.native.replace('globalThis["claude.web"]?.LocalSessions',
+    '(globalThis["claude.web"],globalThis["claude.web"]?.LocalSessions)');
+  const original = cacheBytes(resource.url, source, Date.now() - 10000);
+  await writeFile(resource.path, original);
+  const graph = await discoverClaudeFrontend(f);
+  assert.ok(Object.values(graph.adapters).every(a => a.status === 'matched'));
+  assert.ok(Object.values((await ensureClaudeRendererAdapters({ ...f, graph })).adapters)
+    .every(a => a.status === 'installed'));
+  assert.deepEqual(await readFile(resource.path), original);
+});
+
+test('native API prelude refuses calls, other hosts and additional expressions', async t => {
+  const f = await fixture(t), resource = f.resources.native;
+  for (const prelude of ['unknown()', 'globalThis["other.web"]', 'globalThis["claude.web"],null']) {
+    const source = f.build.sources.native.replace('globalThis["claude.web"]?.LocalSessions',
+      `(${prelude},globalThis["claude.web"]?.LocalSessions)`);
+    const original = cacheBytes(resource.url, source, Date.now() - 10000);
+    await writeFile(resource.path, original);
+    const graph = await discoverClaudeFrontend(f);
+    for (const adapter of ['folders', 'chatWake', 'commands']) assert.equal(graph.adapters[adapter].status, 'skipped');
+    assert.deepEqual(await readFile(resource.path), original);
+  }
+});
+
+test('legacy local and CLI key helper preserves folder behavior and refuses changed semantics', async t => {
+  const f = await fixture(t), resource = f.resources.folders;
+  const source = f.build.sources.folders.replace('if(e.isScratchWorkspace)return;', '')
+    .replace('e.type==="local"?e.cwd', 'localCLIa(e)?e.cwd')
+    + 'function localCLIa(e){return "local"===e.type||"cli"===e.type}';
+  await writeFile(resource.path, cacheBytes(resource.url, source, Date.now() - 10000));
+  let graph = await discoverClaudeFrontend(f), folder = graph.adapters.folders;
+  assert.equal(folder.status, 'matched');
+  assert.equal((await ensureClaudeRendererAdapter({ ...f, graph, adapter: 'folders' })).status, 'installed');
+  patchContracts.folders(await sourceOf(resource), folder.target.source, folder.bindings);
+  await restoreClaudeRendererAdapter({ ...f, adapter: 'folders', cachePath: resource.path });
+  for (const changed of [source.replace('"cli"===e.type', '"bridge"===e.type'),
+    source.replace('function localCLIa(e)', 'async function localCLIa(e)'),
+    source.replace('let t=e.repoInfo;', 'let localCLIa=other;let t=e.repoInfo;')]) {
+    const fresh = await fixture(t), target = fresh.resources.folders;
+    const original = cacheBytes(target.url, changed, Date.now() - 10000);
+    await writeFile(target.path, original);
+    graph = await discoverClaudeFrontend(fresh);
+    assert.equal(graph.adapters.folders.status, 'skipped');
+    assert.deepEqual(await readFile(target.path), original);
+  }
+});
+
+test('reversed native capability and nested cold catalogue retain normal installation', async t => {
+  const f = await fixture(t), chat = f.resources.chatWake, command = f.resources.commands;
+  await writeFile(chat.path, cacheBytes(chat.url, f.build.sources.chatWake.replace('La?.forkSession!==void 0',
+    'void 0!==La?.forkSession'), Date.now() - 10000));
+  const source = f.build.sources.commands.replace('async function commandsa(cwd,session){return ',
+    'async function commandsa(cwd,session){return await(async function(cwd,session){return ')
+    .replace(':[]}function selecteda', ':[]})(cwd,session)}function selecteda');
+  await writeFile(command.path, cacheBytes(command.url, source, Date.now() - 10000));
+  const graph = await discoverClaudeFrontend(f);
+  assert.equal(graph.adapters.chatWake.status, 'matched'); assert.equal(graph.adapters.commands.status, 'matched');
+  const installed = await ensureClaudeRendererAdapters({ ...f, graph });
+  assert.equal(installed.adapters.chatWake.status, 'installed'); assert.equal(installed.adapters.commands.status, 'installed');
+  const transformed = await sourceOf(command);
+  patchContracts.commands(transformed, graph.adapters.commands.target.source, graph.adapters.commands.bindings);
+  const calls = [], context = { La: { getSupportedCommands: async options => {
+    calls.push(options); return [{ name: 'claudex:claudex-workflow' }];
+  } } };
+  runInNewContext(withoutImports(transformed), context);
+  assert.equal((await context.commandsa('/selected-project', null))[0].name, 'claudex');
+  assert.equal(calls.length, 1); assert.equal(calls[0].cwd, '/selected-project');
+  assert.equal(calls[0].sessionId, undefined);
+  const failure = new Error('Native catalogue refused');
+  context.La.getSupportedCommands = async () => { throw failure; };
+  await assert.rejects(context.commandsa('/selected-project'), error => error === failure);
+});
+
+test('nested cold catalogue refuses an enclosing native binding shadow', async t => {
+  const f = await fixture(t), resource = f.resources.commands;
+  const source = f.build.sources.commands.replace('async function commandsa(cwd,session){return ',
+    'async function commandsa(cwd,session){let La=other;return await(async function(cwd,session){return ')
+    .replace(':[]}function selecteda', ':[]})(cwd,session)}function selecteda');
+  const original = cacheBytes(resource.url, source, Date.now() - 10000);
+  await writeFile(resource.path, original);
+  assert.equal((await discoverClaudeFrontend(f)).adapters.commands.status, 'skipped');
+  assert.deepEqual(await readFile(resource.path), original);
+});
+
+test('public React.memo preserves owner identity and native component wrapper', async t => {
+  const f = await fixture(t), owner = f.resources.ownerWake, react = f.resources.react;
+  const source = `import{ComponentMemoa as reactMemoa}from"./${f.build.names.react}";`
+    + f.build.sources.ownerWake.replace('function viewa(e){', 'var viewa=reactMemoa(function(e){').replace(/\}$/, '});');
+  await writeFile(react.path, cacheBytes(react.url, f.build.sources.react
+    + 'var ComponentMemoa=Ra.memo;var componentGetters={memo:()=>ComponentMemoa};export{ComponentMemoa};', Date.now() - 10000));
+  await writeFile(owner.path, cacheBytes(owner.url, source, Date.now() - 10000));
+  const graph = await discoverClaudeFrontend(f), b = graph.adapters.ownerWake.bindings;
+  assert.equal(graph.adapters.ownerWake.status, 'matched');
+  assert.equal((await ensureClaudeRendererAdapter({ ...f, graph, adapter: 'ownerWake' })).status, 'installed');
+  patchContracts.ownerWake(await sourceOf(owner), graph.adapters.ownerWake.target.source, b);
+  for (const changed of [source.replace('viewa=reactMemoa(', 'viewa=unknown('),
+    source.replace(/\}\);$/, '},comparator);')]) {
+    const g = { get: path => graph.modules.get(new URL(path, owner.url).href) };
+    assert.throws(() => ownerAnchors(changed, g), /missing or ambiguous/);
+  }
+});
+
+test('block-local names do not count as additional retained native ref uses', async t => {
+  const f = await fixture(t), resource = f.resources.ownerWake, react = f.resources.react;
+  const source = f.build.sources.ownerWake.replace('let currenta=eventa(readera)',
+    'let retained=useRefa(refa);effecta(()=>{retained.current=refa},[refa]);let currenta=eventa(readera)')
+    .replace('let selecteda=currenta();', 'let selecteda=retained.current;{let retained=null;record(retained)}');
+  await writeFile(react.path, cacheBytes(react.url, f.build.sources.react
+    + 'var Refa=Ra.useRef;var refGetters={useRef:()=>Refa};export{Refa};', Date.now() - 10000));
+  await writeFile(resource.path, cacheBytes(resource.url,
+    `import{Refa as useRefa}from"./${f.build.names.react}";` + source, Date.now() - 10000));
+  const graph = await discoverClaudeFrontend(f);
+  assert.equal(graph.adapters.ownerWake.status, 'matched');
+  assert.equal(graph.adapters.ownerWake.bindings.retainedRef, 'retained');
+  const lookup = { get: path => graph.modules.get(new URL(path, resource.url).href) };
+  assert.throws(() => ownerAnchors(graph.adapters.ownerWake.target.source.replace('record(retained)}',
+    'record(retained)}escape(retained);'), lookup), /missing or ambiguous/);
+  assert.equal((await ensureClaudeRendererAdapter({ ...f, graph, adapter: 'ownerWake' })).status, 'installed');
+  patchContracts.ownerWake(await sourceOf(resource), graph.adapters.ownerWake.target.source, graph.adapters.ownerWake.bindings);
+});
+
+test('competing capability displays require one exact native fork action', async t => {
+  const action = 'const forkNative=async function(e,n){const f=La?.forkSession;if(!f)return null;'
+    + 'const s=`local_${crypto.randomUUID()}`,owner=stage(e);try{const result=await f(e.ref.id,s,e.forkAtMessageUuid,e.targetCwd);'
+    + 'return result.sessionId}finally{close(owner)}};';
+  const f = await fixture(t, 'a', { moved: 'duplicate' }), resource = f.resources.chatWake;
+  const source = f.build.sources.chatWake + action;
+  await writeFile(resource.path, cacheBytes(resource.url, source, Date.now() - 10000));
+  const graph = await discoverClaudeFrontend(f);
+  assert.equal(graph.adapters.chatWake.status, 'matched');
+  assert.equal(graph.adapters.chatWake.target.url, resource.url);
+  assert.equal((await ensureClaudeRendererAdapter({ ...f, graph, adapter: 'chatWake' })).status, 'installed');
+  patchContracts.chatWake(await sourceOf(resource), graph.adapters.chatWake.target.source, graph.adapters.chatWake.bindings);
+  for (const changed of [source.replace('e.ref.id,s,e.forkAtMessageUuid,e.targetCwd', 'other.id,s,e.forkAtMessageUuid,e.targetCwd'),
+    source.replace('const result=await f(', 'const f=other;const result=await f('),
+    source + action.replace('forkNative', 'otherFork')]) {
+    const lookup = { get: path => graph.modules.get(new URL(path, resource.url).href) };
+    assert.equal(chatAnchors(changed, lookup).forkAction, false);
+  }
+});
+
 test('large frontend caches use the same bound during discovery, installation, reinstallation and restore', async t => {
   const f = await fixture(t), resource = f.resources.folders;
   const source = f.build.sources.folders + '\n/*' + randomBytes(2 * 1024 * 1024 + 65536).toString('base64') + '*/';

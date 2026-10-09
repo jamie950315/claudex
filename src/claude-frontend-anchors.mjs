@@ -25,18 +25,26 @@ export const member = (node, key) => {
   return node?.type === 'MemberExpression' && !node.computed && id(node.property) === key;
 };
 const prop = (node, key) => node?.type === 'Property' && !node.computed && (id(node.key) ?? node.key.value) === key;
+const nativeHost = node => node?.type === 'MemberExpression' && node.computed
+  && id(node.object) === 'globalThis' && node.property?.value === 'claude.web';
+function nativeAPIExpression(node) {
+  if (node?.type !== 'SequenceExpression') return node;
+  // August bundles retain an otherwise unused host read before the actual API
+  // access. Only this exact two-expression native prelude has been observed.
+  return Array.isArray(node.expressions) && node.expressions.length === 2 && nativeHost(node.expressions[0])
+    ? node.expressions[1] : null;
+}
 const nativeObject = node => {
-  node = unwrap(node);
+  node = unwrap(nativeAPIExpression(node));
   const object = node?.object;
-  return node?.optional === true && object?.type === 'MemberExpression' && object.computed
-    && id(object.object) === 'globalThis' && object.property?.value === 'claude.web';
+  return node?.optional === true && nativeHost(object);
 };
 const hasMember = (node, key) => nodes(node, n => member(n, key)).length > 0;
 const functions = ast => ast.body.filter(n => n.type === 'FunctionDeclaration');
 // Older real bundles retain compiler and non-compiler implementations under
 // one conditional binding. Both branches must validate; never choose a branch
 // from the host's feature flags or confuse two independent bindings with one.
-function functionBindings(ast, { arrows = false } = {}) {
+function functionBindings(ast, { arrows = false, wrapper = null } = {}) {
   const callable = n => n?.type === 'FunctionExpression' || arrows && n?.type === 'ArrowFunctionExpression' && n.body.type === 'BlockStatement';
   return ast.body.flatMap(n => {
     if (arrows && n.type === 'ExportNamedDeclaration') n = n.declaration;
@@ -46,6 +54,9 @@ function functionBindings(ast, { arrows = false } = {}) {
     return n.declarations.flatMap(d => {
       if (!id(d.id)) return [];
       if (callable(d.init)) return [{ name: id(d.id), variants: [d.init] }];
+      if (wrapper && d.init?.type === 'CallExpression' && id(d.init.callee) === wrapper
+        && d.init.arguments.length === 1 && callable(d.init.arguments[0]))
+        return [{ name: id(d.id), variants: [d.init.arguments[0]] }];
       const v = d.init;
       return v?.type === 'ConditionalExpression' && callable(v.consequent)
         && callable(v.alternate) ? [{ name: id(d.id), variants: [v.consequent, v.alternate] }] : [];
@@ -73,7 +84,9 @@ const apiExpression = n => !n ? null : n.type === 'Identifier' ? { type: n.type,
   : n.type === 'Literal' ? { type: n.type, value: n.value }
     : n.type === 'ChainExpression' ? { type: n.type, expression: apiExpression(n.expression) }
       : n.type === 'MemberExpression' ? { type: n.type, computed: n.computed, optional: n.optional,
-        object: apiExpression(n.object), property: apiExpression(n.property) } : { type: n.type };
+        object: apiExpression(n.object), property: apiExpression(n.property) }
+      : n.type === 'SequenceExpression' && n.expressions.length === 2
+        ? { type: n.type, expressions: n.expressions.map(apiExpression) } : { type: n.type };
 function bindingIndex(ast, { full = false, getters = nodes(ast, publicGetter) } = {}) {
   const locals = new Map(), statements = ast.body.flatMap(n => n.type === 'ExportNamedDeclaration' && n.declaration ? [n.declaration] : [n]);
   const exports = ast.body.filter(n => ['ExportNamedDeclaration', 'ExportAllDeclaration'].includes(n.type)).map(n => ({
@@ -85,7 +98,8 @@ function bindingIndex(ast, { full = false, getters = nodes(ast, publicGetter) } 
   for (const statement of statements) for (const node of statement.type === 'FunctionDeclaration' ? [statement]
     : statement.type === 'VariableDeclaration' ? statement.declarations : []) {
     if (!id(node.id) || !full && !exportedLocals.has(id(node.id))) continue;
-    const api = ['LocalSessions', 'useEffect', 'useRef', 'useSyncExternalStore', 'useMemo'].some(p => member(node.init, p));
+    const api = ['LocalSessions', 'useEffect', 'useRef', 'useSyncExternalStore', 'useMemo', 'memo'].some(p => member(node.init, p))
+      || member(nativeAPIExpression(node.init), 'LocalSessions');
     const entry = full ? node : { type: node.type, id: node.id, start: node.start, end: node.end,
       ...(node.type === 'VariableDeclarator' ? { init: api ? apiExpression(node.init) : null } : {}) };
     const rows = locals.get(id(node.id)) ?? []; rows.push(entry); locals.set(id(node.id), rows);
@@ -189,7 +203,8 @@ function importedAPI(source, graph, property, native = false, resolver = binding
   const matches = [];
   for (const imp of resolver.root.ast.body.filter(n => n.type === 'ImportDeclaration')) for (const spec of imp.specifiers) {
     const resolved = resolver.imported(imp, spec);
-    if (!resolved || resolved.node.type !== 'VariableDeclarator' || !member(resolved.node.init, property)) continue;
+    if (!resolved || resolved.node.type !== 'VariableDeclarator'
+      || !member(native ? nativeAPIExpression(resolved.node.init) : resolved.node.init, property)) continue;
     if (native) { if (!nativeObject(resolved.node.init)) continue; }
     else {
       const getters = resolved.getters.filter(n => prop(n, property));
@@ -198,6 +213,29 @@ function importedAPI(source, graph, property, native = false, resolver = binding
     matches.push({ local: id(spec.local), exported: id(spec.imported), path: imp.source.value });
   }
   return unique(matches, `${property} import`);
+}
+
+function legacyLocalCLIKey(key, ast) {
+  const parameter = key.params.length === 1 && id(key.params[0]);
+  if (!parameter || !hasMember(key, 'cwd')) return false;
+  const calls = nodes(key, n => n.type === 'CallExpression' && id(n.callee)
+    && n.arguments.length === 1 && id(n.arguments[0]) === parameter);
+  return calls.some(call => {
+    // Preserve the older native key, including its local/CLI cwd branch. A
+    // changed helper, a shadowed binding or an arbitrary call is no proof.
+    if (nodes(key, n => id(n) === id(call.callee)).length !== 1) return false;
+    const helpers = functions(ast).filter(f => id(f.id) === id(call.callee));
+    if (helpers.length !== 1) return false;
+    const helper = helpers[0], ref = !helper.async && !helper.generator && helper.params.length === 1 && id(helper.params[0]);
+    const value = helper.body.body.length === 1 && helper.body.body[0].type === 'ReturnStatement'
+      && helper.body.body[0].argument;
+    const type = (test, literal) => test?.type === 'BinaryExpression' && test.operator === '==='
+      && ((member(test.left, 'type') && id(test.left.object) === ref && test.right.value === literal)
+        || (member(test.right, 'type') && id(test.right.object) === ref && test.left.value === literal));
+    return ref && value?.type === 'LogicalExpression' && value.operator === '||'
+      && ((type(value.left, 'local') && type(value.right, 'cli'))
+        || (type(value.left, 'cli') && type(value.right, 'local')));
+  });
 }
 
 export function folderAnchors(source, graph) {
@@ -216,7 +254,7 @@ export function folderAnchors(source, graph) {
       && id(n.init.callee) && n.init.arguments.length === 1 && id(n.init.arguments[0]) === row
       && id(n.id) === id(label.value.right)), 'sidebar project key call');
     const key = unique(functions(ast).filter(f => id(f.id) === id(keyCall.init.callee)
-      && hasMember(f, 'repoInfo') && hasMember(f, 'isScratchWorkspace') && hasMember(f, 'environmentId')
+      && hasMember(f, 'repoInfo') && (hasMember(f, 'isScratchWorkspace') || legacyLocalCLIKey(f, ast)) && hasMember(f, 'environmentId')
       && nodes(f, n => n.type === 'Literal' && n.value === 'bridge').length), 'native project key');
     const memos = nodes(grouping.body.body[0], n => n.type === 'VariableDeclarator'
       && n.init?.type === 'CallExpression' && n.init.arguments.length === 1
@@ -375,7 +413,14 @@ export function commandCatalogAnchors(source, graph) {
   const ast = syntax(source), native = importedAPI(source, graph, 'LocalSessions', true).local;
   const call = unique(nodes(ast, n => n.type === 'CallExpression' && member(n.callee, 'getSupportedCommands')
     && id(n.callee.object) === native), 'local command catalogue call');
-  const fn = unique(functions(ast).filter(f => f.async && f.start < call.start && f.end > call.end), 'local command catalogue function');
+  const scopes = nodes(ast, n => /^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(n.type)
+    && n.start < call.start && n.end > call.end);
+  const fn = unique(scopes.filter(f => f.async && f.body.type === 'BlockStatement' && f.body.body.length === 1
+    && f.body.body[0].type === 'ReturnStatement' && f.body.body[0].argument?.type === 'ConditionalExpression'
+    && f.body.body[0].argument.consequent === call), 'local command catalogue function');
+  if (scopes.some(f => f.params.some(p => nodes(p, n => id(n) === native).length)
+    || scopeNodes(f, n => /^(?:VariableDeclarator|FunctionDeclaration|ClassDeclaration)$/.test(n.type)
+      && id(n.id) === native).length)) fail('command catalogue native lexical binding');
   if (fn.params.length !== 2 || !fn.params.every(id) || fn.body.body.length !== 1
     || fn.body.body[0].type !== 'ReturnStatement' || fn.params.some(p => id(p) === native)) fail('command catalogue scope');
   const result = fn.body.body[0].argument, [cwd, session] = fn.params.map(id);
@@ -408,11 +453,48 @@ export function chatAnchors(source, graph) {
   // uses one uniquely imported native binding. Older compiler/non-compiler
   // action branches repeat the capability read; no patch targets that read.
   const ast = syntax(source);
+  const voidZero = n => n?.type === 'UnaryExpression' && n.operator === 'void' && n.argument.value === 0;
   const capabilities = nodes(ast, n => n.type === 'BinaryExpression' && n.operator === '!=='
-    && n.right.type === 'UnaryExpression' && n.right.operator === 'void' && n.right.argument.value === 0
-    && member(n.left, 'forkSession') && unwrap(n.left).optional === true).map(n => id(unwrap(n.left).object));
+    && ((voidZero(n.right) && member(n.left, 'forkSession') && unwrap(n.left).optional === true)
+      || (voidZero(n.left) && member(n.right, 'forkSession') && unwrap(n.right).optional === true)))
+    .map(n => id(unwrap(voidZero(n.right) ? n.left : n.right).object));
   if (unique([...new Set(capabilities)], 'native fork capability binding') !== native.local) fail('native fork capability import');
-  return { native: native.local };
+  // August also reads the capability in its shortcut help. When such reads
+  // compete, the actual action has this exact native alias, null guard and
+  // awaited four-argument fork call. Never choose a mere capability display.
+  const actions = nodes(ast, n => n.type === 'FunctionExpression' && n.async && !n.generator
+    && n.params.length === 2 && n.params.every(id) && n.body.type === 'BlockStatement').filter(fn => {
+    const first = fn.body.body[0], guard = fn.body.body[1];
+    if (first?.type !== 'VariableDeclaration' || first.kind !== 'const' || first.declarations.length !== 1) return false;
+    const alias = first.declarations[0], name = id(alias.id), init = unwrap(alias.init), request = id(fn.params[0]);
+    if (!name || !member(init, 'forkSession') || !init.optional || id(init.object) !== native.local
+      || nodes(fn, n => id(n) === native.local).length !== 1
+      || fn.params.some(p => id(p) === name)
+      || guard?.type !== 'IfStatement' || guard.alternate || guard.test.type !== 'UnaryExpression'
+      || guard.test.operator !== '!' || id(guard.test.argument) !== name
+      || guard.consequent.type !== 'ReturnStatement' || guard.consequent.argument?.value !== null) return false;
+    const calls = nodes(fn, n => n.type === 'AwaitExpression' && n.argument.type === 'CallExpression'
+      && id(n.argument.callee) === name);
+    if (calls.length !== 1) return false;
+    const branch = fn.body.body[3], firstCall = branch?.type === 'TryStatement' && branch.block.body[0];
+    if (fn.body.body[2]?.type !== 'VariableDeclaration'
+      || fn.body.body[2].declarations.some(d => id(d.id) === name)
+      || firstCall?.type !== 'VariableDeclaration' || firstCall.declarations.length !== 1
+      || id(firstCall.declarations[0].id) === name || firstCall.declarations[0].init !== calls[0]
+      || nodes(fn, n => n.type === 'CallExpression' && id(n.callee) === name).length !== 1) return false;
+    const args = calls[0].argument.arguments;
+    if (args.length !== 4 || !member(args[0], 'id') || !member(args[0].object, 'ref')
+      || id(args[0].object.object) !== request || !id(args[1])
+      || !member(args[2], 'forkAtMessageUuid') || id(args[2].object) !== request
+      || !member(args[3], 'targetCwd') || id(args[3].object) !== request) return false;
+    const seeds = scopeNodes(fn, n => n.type === 'VariableDeclarator' && id(n.id) === id(args[1]));
+    const seed = seeds.length === 1 && seeds[0].init;
+    return seed?.type === 'TemplateLiteral' && seed.quasis.length === 2 && seed.expressions.length === 1
+      && seed.quasis[0].value.cooked === 'local_' && seed.quasis[1].value.cooked === ''
+      && seed.expressions[0].type === 'CallExpression' && member(seed.expressions[0].callee, 'randomUUID')
+      && id(seed.expressions[0].callee.object) === 'crypto' && !seed.expressions[0].arguments.length;
+  });
+  return { native: native.local, forkAction: actions.length === 1 };
 }
 
 const callbackFunction = node => ['ArrowFunctionExpression', 'FunctionExpression'].includes(node?.type);
@@ -429,6 +511,15 @@ function scopeNodes(component, predicate) {
     }
   }
   walk(component); return result;
+}
+function retainedReferenceUses(component, name) {
+  // A later August send branch reuses the minified ref name for a block-local
+  // error record. Its let/const binding shadows the outer ref for that whole
+  // block; those identifiers are not another reader or writer of the ref.
+  const shadows = nodes(component, n => n.type === 'BlockStatement' && n !== component.body
+    && n.body.some(s => s.type === 'VariableDeclaration' && ['let', 'const'].includes(s.kind)
+      && s.declarations.some(d => id(d.id) === name)));
+  return nodes(component, n => id(n) === name).filter(n => !shadows.some(s => s.start <= n.start && s.end >= n.end));
 }
 function callbackResolver(component, resolver) {
   const bindings = scopeNodes(component, n => n.type === 'VariableDeclarator' || n.type === 'AssignmentExpression');
@@ -582,7 +673,14 @@ export function ownerAnchors(source, graph) {
   const plausible = f => nodes(f, n => prop(n, 'submitMessage')).length
     && nodes(f, n => prop(n, 'getComposerSnapshot')).length && nodes(f, n => prop(n, 'sessionType')).length
     && nodes(f, n => prop(n, 'initialSessionId')).length && hasMember(f, 'waitForImagesReady');
-  const candidates = functionBindings(ast, { arrows: true }).filter(b => b.variants.some(plausible));
+  const wrapped = ast.body.flatMap(n => n.type === 'VariableDeclaration' ? n.declarations : [])
+    .some(d => d.init?.type === 'CallExpression' && id(d.init.callee) && d.init.arguments.length === 1
+      && callbackFunction(d.init.arguments[0]) && plausible(d.init.arguments[0]));
+  // The observed August component is memo(component), with no comparator.
+  // Only the public React.memo import authorizes looking through that wrapper;
+  // arbitrary helpers and forwarding shells retain the complete send guards.
+  const wrapper = wrapped ? importedAPI(source, graph, 'memo', false, resolver).local : null;
+  const candidates = functionBindings(ast, { arrows: true, wrapper }).filter(b => b.variants.some(plausible));
   function proveComponent(component) {
     const callbacks = callbackResolver(component, resolver);
     if (callbacks.shadowed(effect)) fail('Code effect lexical binding');
@@ -624,7 +722,7 @@ export function ownerAnchors(source, graph) {
         const declaration = rows[0], init = declaration.init, ref = id(init?.arguments?.[0]);
         if (init?.type !== 'CallExpression' || id(init.callee) !== useRef || init.arguments.length !== 1
           || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')
-          || nodes(component, n => id(n) === retainedRef).length !== 3) continue;
+          || retainedReferenceUses(component, retainedRef).length !== 3) continue;
         const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && n.arguments.length === 2
           && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1 && id(n.arguments[1].elements[0]) === ref)
           .filter(call => callbacks.resolve(call.arguments[0]).some(cb => {

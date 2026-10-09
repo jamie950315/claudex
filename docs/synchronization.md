@@ -514,6 +514,17 @@ must validate. Inline memo branches require the exact callback/result slot and
 matching dependency tests/stores, including reversed equality branches.
 Named imports/re-exports resolve to the actual defining native,
 React and attached-client binding, with an eight-module bound and cycle refusal.
+The observed LocalSessions initializer may retain one unused native host read
+before accessing the same optional API. Its two-expression form is checked
+exactly; other hosts, calls and additional expressions are refused. Older folder
+keys can retain their exact local-or-CLI cwd helper, and nested cold catalogues
+retain the same request/routing proof with enclosing lexical shadows refused.
+When August shortcut-help reads compete with the session action, require one
+exact native fork alias, null guard and awaited request. The observed owner
+component's public React.memo wrapper must retain a single argument and no
+comparator; its native identity/send/client proofs still apply. Same-name
+block-local let/const bindings are excluded from outer ref use counts, without
+exempting another outer ref reader, writer or escape.
 Callback resolution is bounded to twelve steps. Unknown forms remain skipped.
 This search runs only during normal cache discovery/maintenance and does not
 change owner eviction, start model input or add periodic native history reads.

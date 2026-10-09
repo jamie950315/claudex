@@ -168,7 +168,7 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
   if (!same(entry.snapshot.info, await nativeCacheRead(() => lstat(entry.path, { bigint: true })))) fail('entry changed during discovery');
   const adapters = {};
   for (const [adapter, probe, plausible, byProof] of [
-    ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('isScratchWorkspace')],
+    ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('repoInfo') && s.includes('environmentId')],
     ['chatWake', chatAnchors, s => s.includes('forkSession') && s.includes('amber_tributary_lantern_overview_toggle') && s.includes('reopenClosed'),
       // The 2026-10-08 build moved the shortcut and reopen handlers out of the
       // session-action module. When no module carries all three markers, its
@@ -183,12 +183,14 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
       const imports = module => ({ get: path => modules.get(new URL(path, module.url).href) });
       const proven = module => { try { probe(module.source, imports(module)); return true; } catch { return false; } };
       const marked = [...modules.values()].filter(m => plausible(m.source));
-      // Markers shortlist modules; they cannot decide between a real Code
-      // component and a neighbouring wrapper. For owner activation, require
-      // the complete identity/send/client proof on every competing candidate.
-      const selected = adapter === 'ownerWake' && marked.length > 1 ? marked.filter(proven) : marked;
-      const target = unique(marked.length || !byProof ? selected
-        : [...modules.values()].filter(m => byProof(m.source) && proven(m)), `${adapter} target module`);
+      // Markers shortlist modules. Competing folders and owner components
+      // require their complete grouping/key or identity/send/client proof.
+      const selected = ['ownerWake', 'folders'].includes(adapter) && marked.length > 1 ? marked.filter(proven) : marked;
+      let candidates = marked.length || !byProof ? selected
+        : [...modules.values()].filter(m => byProof(m.source) && proven(m));
+      if (adapter === 'chatWake' && !marked.length && candidates.length > 1)
+        candidates = candidates.filter(m => probe(m.source, imports(m)).forkAction);
+      const target = unique(candidates, `${adapter} target module`);
       const graph = imports(target);
       const bindings = probe(target.source, graph);
       if (adapter === 'ownerWake') bindings.search.moduleCandidates = marked.length;

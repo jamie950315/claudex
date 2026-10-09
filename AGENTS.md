@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.38 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.39 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1836,9 +1836,15 @@ lazy chunks are counted, never fetched or replaced with an older graph. Cache
 recency cannot prove which graph a running renderer has already evaluated.
 Resolve LocalSessions from its globalThis["claude.web"] binding/export/import and
 React hooks from their public getter, definition and export/import relationships.
+Also accept the observed two-expression LocalSessions initializer containing
+only a discarded globalThis["claude.web"] read followed by that exact optional
+native API access. Other hosts, calls and additional expressions remain refused.
 The folder adapter requires the unique repoInfo/isScratchWorkspace/environmentId
 project-key function and sidebar sessionStatus/hasActiveSessions/disambiguationText
-aggregation. Retain its native key/label fallback and extend its compiled memo
+aggregation. Retain its native key/label fallback. Older keys can instead call
+their exact one-return local-or-CLI type helper and retain the native cwd branch. Changed,
+async or shadowed helpers remain refused. Broader folder role markers require
+one complete grouping/key/native proof among competing modules. Extend its compiled memo
 cache with the map subscription version. Older conditional bindings retain a
 compiler and an uncompiled implementation: validate and patch both branches of
 the one exact binding, including useMemo's version dependency; never choose a
@@ -1865,16 +1871,26 @@ resize layouts remain refused. Historical source profiles use reconstructed
 containers, not evidence of historical renderer evaluation.
 The independent chat-wake adapter uses the session-action module's unique native
 import binding and optional forkSession capability relationship (older branches
-repeat the same read),
+repeat the same read, and strict undefined comparisons may reverse operands),
 reopenClosed and amber_tributary_lantern_overview_toggle shortcut anchors. The
 2026-10-08 build moved the shortcut and reopen handlers into other chunks: when
 no reachable module carries all three markers, the target is the single module
 that passes the structural proof (unique native import plus its optional
 forkSession capability read). Builds that still carry the markers keep the
 marker selection, because several of their modules pass that proof; two proven
-modules without markers stay ambiguous and skipped. There the target is the
-folder resource, so the shared combined recipe applies. Folder
+modules without markers require one further unique, exact native fork action:
+an optional imported fork alias, immediate null guard, fresh local UUID and
+awaited four-argument fork request with the same native reference. This
+distinguishes the observed August shortcut-help reads from its session action;
+missing or competing action proofs remain skipped. For the 2026-10-08 build,
+the target is the folder resource, so the shared combined recipe applies. Folder
 bootstrap no longer embeds another chat-wake consumer.
+The observed August owner component is wrapped by the uniquely imported public
+React.memo with exactly one component argument and no comparator. Only that
+wrapper exposes the component to the existing identity/send/client proofs;
+arbitrary helpers and imperative forwarding wrappers do not qualify. Ignore a
+same-name block-local let/const when counting retained ref uses, preserving the
+exact useRef seed, sole useEffect mirror and non-escape checks of the outer ref.
 Builds fetched from 2026-10-09 read and write compiler memo slots through
 helper calls: changed(cache, i, ...deps) ? store(cache, i, ...deps, value) :
 cache[n], with helpers that differ in where the value sits and may nest. The
@@ -1891,9 +1907,13 @@ cannot run the Mod's session.start registration. For a sessionless local query
 only, advertise the literal `/claudex` panel command when the native catalogue
 already advertises `claudex:claudex-workflow`. This is presentation metadata, not
 activation or execution authority. Preserve live-session lists, native errors,
-existing commands/aliases and exact cwd/session routing. Never enable hooks in
-the temporary query, create a model session, replace a native command, install a
-same-name prompt skill, or change submission/dispatch to make the item appear.
+existing commands/aliases and exact cwd/session routing.
+The observed nested async query retains the same single-return native request
+and two-parameter cwd/session routing proof; enclosing native-binding shadows
+remain refused. Preserve the outer catalogue's native errors and result checks.
+Never enable hooks in the temporary query, create a model session, replace a
+native command, install a same-name prompt skill, or change submission/dispatch
+to make the item appear.
 Use reserved identifiers and the normal original/journal and reload boundaries.
 
 src/claude-renderer-maintenance.mjs is owned by the normal Desktop watcher under

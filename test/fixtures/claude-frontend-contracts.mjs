@@ -16,6 +16,8 @@ const functionsFor = (ast, name) => {
   if (declared) return [declared];
   const d = body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations).find(n => n.id.name === name);
   if (!d) return [];
+  if (d.init.type === 'CallExpression' && d.init.arguments.length === 1
+    && ['FunctionExpression', 'ArrowFunctionExpression'].includes(d.init.arguments[0].type)) return [d.init.arguments[0]];
   return d.init.type === 'ConditionalExpression' ? [d.init.consequent, d.init.alternate] : [d.init];
 };
 const only = (values, label) => { assert.equal(values.length, 1, label); return values[0]; };
@@ -53,6 +55,10 @@ export function ownerPatchContract(source, original, b) {
     assert.deepEqual(squashDeclarations(f), squashDeclarations(functionsFor(orig, b.componentBinding)[i]), 'all native component AST retained');
     contract.push({ ref: v.ref, getter: v.getter, retainedRef: v.retainedRef, effect: b.effect });
   }
+  const binding = tree => tree.body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations)
+    .find(n => n.id.name === b.componentBinding);
+  if (binding(orig)?.init.type === 'CallExpression')
+    assert.deepEqual(astValue(binding(ast).init), astValue(binding(orig).init), 'all native component wrapper AST retained');
   const client = only(ast.body.filter(n => n.type === 'ImportDeclaration' && n.specifiers.some(s => s.local.name === '__cldxOwnerWakeClient')), 'attached client import');
   assert.equal(client.source.value, b.client.path); assert.equal(client.specifiers[0].imported.name, b.client.exported);
   const options = only(nodes(ast, n => n.type === 'CallExpression' && n.callee.name === 'createClaudeOwnerWakeRuntime'), 'owner runtime').arguments[0];
@@ -146,7 +152,7 @@ export function commandCatalogPatchContract(source, original, b) {
   const ast = syntax(source), orig = syntax(original);
   const helper = ast.body.pop();
   assert.equal(helper.type, 'FunctionDeclaration'); assert.equal(helper.id.name, '__cldxCommandCatalog');
-  const fn = only(functionsFor(ast, b.fn.id.name), 'catalogue query');
+  const fn = only(nodes(ast, n => n.type === b.fn.type && n.start === b.fn.start), 'catalogue query');
   const call = fn.body.body[0].argument;
   assert.equal(call.callee.name, '__cldxCommandCatalog'); assert.equal(call.arguments.length, 2);
   assert.equal(call.arguments[0].type, 'AwaitExpression'); assert.equal(call.arguments[1].name, b.session);
