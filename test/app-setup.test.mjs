@@ -425,6 +425,11 @@ test('an immediate renderer recheck is a normal wait; a genuine folder-map error
   let report = await setup.inspect(), row = report.components.find(r => r.id === 'folders');
   assert.equal(report.phase, 'waiting'); assert.equal(row.state, 'waiting');
   assert.match(row.detail, /checking it again; no action is required/); assert.equal(row.action, 'diagnostics');
+  watcher.rendererAdapters.state = 'held';
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(watcher), { mode: 0o600 });
+  report = await setup.inspect(); row = report.components.find(r => r.id === 'folders');
+  assert.equal(report.phase, 'waiting'); assert.equal(row.state, 'waiting');
+  assert.match(row.detail, /resume and finish checking.*No action is required/); assert.equal(row.action, 'diagnostics');
   watcher.folderProjection = { state: 'error', error: 'Exact map conflict' };
   await writeFile(join(root, 'watcher-status.json'), JSON.stringify(watcher), { mode: 0o600 });
   report = await setup.inspect(); row = report.components.find(r => r.id === 'folders');

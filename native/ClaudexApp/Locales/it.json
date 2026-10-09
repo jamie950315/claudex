@@ -317,5 +317,7 @@
   "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "Controlla la directory di lavoro salvata e apri la diagnostica per conoscere il motivo esatto. Tutta la cronologia viene conservata; non ripetere la configurazione e non reinviare i messaggi.",
   "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex non ha potuto interrompere in sicurezza il monitoraggio di questa conversazione. Tutta la cronologia è conservata. Apri la diagnostica per conoscere il motivo del blocco; non ripetere la configurazione e non reinviare i messaggi.",
   "Checking Desktop integration": "Verifica dell’integrazione desktop",
-  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "La cache del frontend è cambiata durante la verifica. Claudex la sta verificando di nuovo; non è necessario intervenire."
+  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "La cache del frontend è cambiata durante la verifica. Claudex la sta verificando di nuovo; non è necessario intervenire.",
+  "Waiting for Desktop integration": "In attesa dell’integrazione desktop",
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Si attende che Claudex riprenda l’integrazione desktop e completi la verifica. Non è necessario intervenire."
 }

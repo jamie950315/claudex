@@ -328,10 +328,12 @@ export class AppSetup {
           : !configured ? 'Existing synchronization settings are preserved until a safe configuration change is possible.'
             : synchronized ? 'The watcher reports ready and is running for all projects.'
               : live && watcher.waiting ? watcher.waiting : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', held ? 'diagnostics' : 'retry'));
-      const rendererChecking = live && watcher?.rendererAdapters?.state === 'checking';
+      const rendererHeld = live && watcher?.rendererAdapters?.state === 'held';
+      const rendererChecking = live && ['checking', 'held'].includes(watcher?.rendererAdapters?.state);
       rows.push(component('folders', 'Native project folders', watcher?.folderProjection?.state === 'error' ? 'blocked'
         : rendererChecking ? 'waiting' : config?.folderProjection?.enabled && live && watcher.folderProjection?.state === 'ready' ? 'ready' : 'waiting',
         watcher?.folderProjection?.state === 'error' ? watcher.folderProjection.error ?? 'The current frontend resource could not be verified. No replacement resource was assumed.'
+          : rendererHeld ? 'Desktop integration is waiting for Claudex to resume and finish checking. No action is required.'
           : rendererChecking ? 'The frontend cache changed during inspection. Claudex is checking it again; no action is required.'
           : config?.folderProjection?.enabled ? 'The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required.'
           : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', watcher?.folderProjection?.state === 'error' || rendererChecking ? 'diagnostics' : 'retry'));

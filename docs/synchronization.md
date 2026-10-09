@@ -476,6 +476,9 @@ explicit. This does not add retry timers or relax installation proofs. The
 renderer status retains the current maintenance process's most recent fixed
 failure phase/code/time and its recovery time, so successful discovery does not
 erase that diagnostic. No native error text, paths or cache keys are retained.
+Normal reopening may start the watcher before its app-stop hold is released.
+That lifecycle fence is a normal wait, retained through release-triggered cache
+verification, not a frontend failure. It never permits publication while held.
 
 The watcher publishes `folder-map.json` atomically, using only verified current
 owner IDs and canonical directories. The renderer uses Claude's existing guarded

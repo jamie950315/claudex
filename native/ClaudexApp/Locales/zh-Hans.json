@@ -317,5 +317,7 @@
   "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "请检查保存的工作目录，并打开诊断查看确切原因。所有历史均保留；请勿重试设置或重发消息。",
   "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex 无法安全停止跟踪这个对话，所有历史均保留。请打开诊断查看阻挡原因；请勿重试设置或重发消息。",
   "Checking Desktop integration": "正在检查桌面集成",
-  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "检查期间前端缓存发生变动，Claudex 正在重新检查；不需要您操作。"
+  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "检查期间前端缓存发生变动，Claudex 正在重新检查；不需要您操作。",
+  "Waiting for Desktop integration": "等待桌面集成",
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex 正在恢复桌面集成并等待检查完成，不需要您操作。"
 }

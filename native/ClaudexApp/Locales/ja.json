@@ -317,5 +317,7 @@
   "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "保存された作業ディレクトリを確認し、正確な理由を診断で確認してください。すべての履歴は保持されます。セットアップの再試行やメッセージの再送信はしないでください。",
   "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex はこの会話の追跡を安全に停止できませんでした。すべての履歴は保持されています。停止を妨げている理由を診断で確認し、セットアップの再試行やメッセージの再送信はしないでください。",
   "Checking Desktop integration": "デスクトップ連携を確認中",
-  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "確認中にフロントエンドのキャッシュが変更されました。Claudex が再確認しています。操作は不要です。"
+  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "確認中にフロントエンドのキャッシュが変更されました。Claudex が再確認しています。操作は不要です。",
+  "Waiting for Desktop integration": "デスクトップ連携を待機中",
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex によるデスクトップ連携の再開と確認の完了を待っています。操作は不要です。"
 }

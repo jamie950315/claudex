@@ -24,6 +24,7 @@ const transientCodes = new Set(['cache-entry-missing', 'cache-changed']);
 const diagnosticCodes = new Set([...transientCodes, 'recovery-evidence-missing', 'required-file-missing',
   'access-denied', 'stopped', 'validation-refused']);
 const checkingReason = 'The frontend cache changed during inspection. Claudex is checking it again; no action is required.';
+const heldReason = 'Desktop integration is waiting for Claudex to resume and finish checking. No action is required.';
 
 /** One watcher-owned, serialized cache consumer. It never touches histories,
  * native owners, inference, archive proof lifetimes or service/app lifecycle.
@@ -106,15 +107,16 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           // The next JS hint must revalidate, including unchanged known assets.
           observations = new Map();
           const code = failureCode(error);
+          const held = error.message === 'Renderer maintenance held by app stop';
           cacheRevalidationNeeded = transientCodes.has(code);
-          rememberFailure(phase, code);
+          if (!held) rememberFailure(phase, code);
           // Chromium can evict an entry during the inventory walk, after its
           // last notification. Re-discover once in this pass; never replay a
           // native operation or poll persistent validation/permission failures.
           const checking = retryInterruptedCache() && !notificationsFailed;
-          if (!closed) await present({ state: checking ? 'checking' : 'skipped',
-            reason: checking ? checkingReason : `Frontend cache discovery or maintenance refused; no native work was restarted [${phase}/${code}]`,
-            failure: { phase, code } });
+          if (!closed) await present({ state: held && !notificationsFailed ? 'held' : checking ? 'checking' : 'skipped',
+            reason: held && !notificationsFailed ? heldReason : checking ? checkingReason : `Frontend cache discovery or maintenance refused; no native work was restarted [${phase}/${code}]`,
+            ...(!held ? { failure: { phase, code } } : {}) });
         }
       }
     })().finally(() => { pending = undefined; });

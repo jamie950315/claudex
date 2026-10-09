@@ -317,5 +317,7 @@
   "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "저장된 작업 디렉터리를 확인하고 진단에서 정확한 이유를 확인하세요. 모든 기록은 보존됩니다. 설정을 다시 시도하거나 메시지를 다시 보내지 마세요.",
   "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex가 이 대화의 추적을 안전하게 중지하지 못했습니다. 모든 기록은 보존됩니다. 진단에서 차단 이유를 확인하세요. 설정을 다시 시도하거나 메시지를 다시 보내지 마세요.",
   "Checking Desktop integration": "데스크톱 연동 확인 중",
-  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "확인 중 프런트엔드 캐시가 변경되었습니다. Claudex가 다시 확인하고 있으므로 별도 조치가 필요하지 않습니다."
+  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "확인 중 프런트엔드 캐시가 변경되었습니다. Claudex가 다시 확인하고 있으므로 별도 조치가 필요하지 않습니다.",
+  "Waiting for Desktop integration": "데스크톱 연동 대기 중",
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex의 데스크톱 연동 재개 및 확인 완료를 기다리고 있습니다. 별도 조치가 필요하지 않습니다."
 }

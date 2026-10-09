@@ -446,7 +446,8 @@ test('graphical resume clears the startup hold and runs maintenance without a ca
     maintain:async(options,deps)=>{calls++;return ensureClaudeRendererAdapters(options,deps)},
     writeStatus:async(_path,value)=>statuses.push(value)});
   t.after(async()=>{await maintenance.close();await events.close()});
-  assert.equal(calls,0);assert.equal(statuses.at(-1).failure.code,'stopped');
+  assert.equal(calls,0);assert.equal(statuses.at(-1).state,'held');
+  assert.equal(statuses.at(-1).failure,undefined);assert.equal(statuses.at(-1).lastFailure,undefined);
   await writeFile(join(f.root,'app-stop.json'),JSON.stringify({version:1,stopped:false}),{mode:0o600});
   for(let i=0;i<100&&statuses.at(-1).state!=='ready';i++)await new Promise(r=>setTimeout(r,20));
   assert.equal(statuses.at(-1).state,'ready');assert.ok(calls>=1);assert.equal(published,0);

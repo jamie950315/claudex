@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.40 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.41 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1927,6 +1927,8 @@ Do not schedule polling or retry timers. A missing cache entry or changed graph
 during discovery permits one immediate full rediscovery in the same pass; a
 second failure stays explicit until another native event. While that one immediate
 rediscovery is scheduled, report checking, not ready or a request for user action.
+An app-stop hold reports held until its existing release-triggered discovery completes;
+never record that normal lifecycle fence as a frontend failure or poll its release.
 Mixed permanent refusals still degrade; genuine map/history errors keep priority.
 Retain one bounded lastFailure with fixed phase/code/times for the current maintenance
 process, including recoveredAt after a coherent pass; no native error text or paths.
