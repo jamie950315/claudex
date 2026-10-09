@@ -19,7 +19,7 @@ export function buildClaudeChatWakeBootstrap({ root, registryRoot, wakeSource, n
   if (typeof wakeSource !== 'string' || !wakeSource.includes('export function createClaudeChatWakeRuntime('))
     throw new Error('Claude chat wake runtime source is unavailable');
   const runtime = wakeSource.replace(/^export /gm, '');
-  return `\n;(()=>{${runtime}\nconst wake=createClaudeChatWakeRuntime({native:${native},registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>${native}.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake] "+e)});console.warn("[Claudex chat wake] loaded "+${JSON.stringify(assetName)});wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});})();\n`;
+  return `\n;(()=>{try{${runtime}\nconst wake=createClaudeChatWakeRuntime({native:${native},registryRoot:${JSON.stringify(registryRoot)},readManifest:()=>${native}.readFileAtCwd(${JSON.stringify(root)},"collaboration/chat-mailbox/wake-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake] "+e)});console.warn("[Claudex chat wake] loaded "+${JSON.stringify(assetName)});wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});}catch{try{console.warn("[Claudex chat wake] disabled")}catch{}}})();\n`;
 }
 
 /** Production bindings come from the validated current import graph. */

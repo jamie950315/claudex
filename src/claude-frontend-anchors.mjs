@@ -403,10 +403,13 @@ export function transformFolderConsumer(source, b) {
  * the enabled companion's shipped workflow. Its panel command is dispatched by
  * the ordinary native session, never by this catalogue or by a prompt skill. */
 export function exposeClaudexCommand(commands, sessionId) {
-  if (sessionId != null || !Array.isArray(commands)
-    || commands.some(c => c?.name === 'claudex' || Array.isArray(c?.aliases) && c.aliases.includes('claudex'))
-    || !commands.some(c => c?.name === 'claudex:claudex-workflow')) return commands;
-  return [{ name: 'claudex', description: 'Open the Claudex control pane.', argumentHint: '[receipt UUID]' }, ...commands];
+  // Any unexpected native value returns the catalogue exactly as received.
+  try {
+    if (sessionId != null || !Array.isArray(commands)
+      || commands.some(c => c?.name === 'claudex' || Array.isArray(c?.aliases) && c.aliases.includes('claudex'))
+      || !commands.some(c => c?.name === 'claudex:claudex-workflow')) return commands;
+    return [{ name: 'claudex', description: 'Open the Claudex control pane.', argumentHint: '[receipt UUID]' }, ...commands];
+  } catch { return commands; }
 }
 
 export function commandCatalogAnchors(source, graph) {
@@ -788,9 +791,13 @@ export function transformAnchoredFolder(source, b, bootstrap) {
     ...(b.pure ? [insert(source.length, ';export{__cldx as __cldxFolderStore,__cldxNativeProjectKey};')] : []),
   ]);
 }
+// Injected statements never propagate a failure into native code: a wrong
+// anchor or a broken runtime loses the wake signal, not the user's send.
+export const ownerSelectionSignal = ref => `{try{void __cldxOwnerWake.signal(${ref}?.id,"selection",${ref}?.type)}catch{}}`;
+export const ownerSubmitSignal = read => `try{const ref=${read};void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type)}catch{}`;
 export function transformAnchoredOwner(source, b, bootstrap) {
   return applyEdits(source, [...(b.variants ?? [b]).flatMap(v => [insert(v.selectionEnd,
-    `;${b.effect}(()=>{void __cldxOwnerWake.signal(${v.ref}?.id,"selection",${v.ref}?.type)},[${v.ref}?.id,${v.ref}?.type]);`),
-  insert(v.send.body.start + 1, `{const ref=${v.retainedRef ? `${v.retainedRef}.current` : `${v.getter}()`};void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`)]),
+    `;${b.effect}(()=>${ownerSelectionSignal(v.ref)},[${v.ref}?.id,${v.ref}?.type]);`),
+  insert(v.send.body.start + 1, ownerSubmitSignal(v.retainedRef ? `${v.retainedRef}.current` : `${v.getter}()`))]),
   insert(source.length, bootstrap)]);
 }

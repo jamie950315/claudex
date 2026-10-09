@@ -599,7 +599,7 @@ test('compiler memo helper calls are recognized for the send callback, its reade
   const installed=await sourceOf(f.resources.ownerWake),patched=await sourceOf(f.resources.consumer);
   syntax(installed);syntax(patched);
   // The submit signal sits inside the stored callback, the version guard on every memo test.
-  assert.match(installed,/async\(text,options\)=>\{\{const ref=currenta\(\);void __cldxOwnerWake\.signal\(ref\?\.id,"submit"/);
+  assert.match(installed,/async\(text,options\)=>\{try\{const ref=currenta\(\);void __cldxOwnerWake\.signal\(ref\?\.id,"submit"/);
   assert.equal(patched.split('||cache[11]!==__cldxVersion').length,4);
   assert.ok(patched.includes('(changed4(cache,0,rows,env,sort,order))||cache[11]!==__cldxVersion'));
   assert.ok(patched.includes('memoa(12)'));
