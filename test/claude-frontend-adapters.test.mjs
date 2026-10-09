@@ -378,6 +378,26 @@ test('compiler memo helper calls are recognized for the send callback, its reade
   assert.equal(refused.adapters.ownerWake.status,'skipped');assert.match(refused.adapters.ownerWake.reason,/Code retained send callback/);
 });
 
+test('an independent chat-wake installation moves to the shared journal once folders match the same resource',async t=>{
+  const f=await fixture(t,'a',{moved:true,shared:true}),first=await discoverClaudeFrontend(f);
+  // An engine that cannot match the folder adapter installs chat wake alone.
+  first.adapters.folders={status:'skipped',reason:'synthetic unmatched folder adapter'};
+  let result=await ensureClaudeRendererAdapters({...f,graph:first});
+  assert.equal(result.adapters.chatWake.status,'installed');assert.equal(result.adapters.folders.status,'skipped');
+  const independent=join(f.root,'ui-chat-wake',f.resources.folders.filename,'ui-folder-compat');
+  const original=await readFile(join(independent,'original.cache'));assert.deepEqual(original,f.resources.folders.bytes);
+  result=await ensureClaudeRendererAdapters(f);
+  assert.equal(result.adapters.folders.status,'installed');assert.equal(result.adapters.chatWake.sharedResource,true);
+  const source=await sourceOf(f.resources.folders);
+  assert.equal(source.split('[Claudex chat wake] loaded').length,2);assert.equal(source.split('[Claudex folder mapping] loaded').length,2);
+  // The shared journal holds the vendor original; the independent one is kept.
+  assert.deepEqual(await readFile(join(f.root,'ui-folders',f.resources.folders.filename,'ui-folder-compat','original.cache')),f.resources.folders.bytes);
+  assert.deepEqual(await readFile(join(independent,'original.cache')),original);
+  result=await ensureClaudeRendererAdapters(f);assert.ok(Object.values(result.adapters).every(a=>a.status==='installed'&&!a.changed));
+  await restoreClaudeRendererAdapter({...f,adapter:'chatWake',cachePath:f.resources.folders.path});
+  assert.deepEqual(await readFile(f.resources.folders.path),f.resources.folders.bytes);
+});
+
 test('shared folder/chat resources have one atomic journal, recover, disable folders and restore',async t=>{
   const f=await fixture(t,'a',{variants:true,shared:true}),graph=await discoverClaudeFrontend(f);
   assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));assert.equal(graph.adapters.folders.target.url,graph.adapters.chatWake.target.url);

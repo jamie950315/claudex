@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.32 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.33 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1908,6 +1908,12 @@ original/journal under ui-folders/<cache filename>/ui-folder-compat. A disabled
 folder choice installs chat only there. Individual adapter calls refuse a shared
 resource without the explicit combined/chat-only mode. Restoring that shared
 resource restores both transforms; earlier independent journals remain intact.
+While the folder adapter cannot be matched on a graph, chat wake installs under
+its own ui-chat-wake journal. Once both match the same resource, the
+all-adapter installer first restores the vendor bytes through that independent
+journal (only while its own patch is the installed bytes), then installs the
+shared recipe; the independent journal is kept. Chat-wake restore uses
+whichever journal currently owns the cache.
 Normal graphical chat setup passes the saved folder choice to that shared recipe;
 explicit folder enable selects the combined recipe. Never remove an enabled
 folder patch merely because chat setup runs before synchronization setup.

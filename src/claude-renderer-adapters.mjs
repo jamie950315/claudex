@@ -130,27 +130,54 @@ export async function ensureClaudeRendererAdapters({ root, home = homedir(), fol
   for (const adapter of Object.keys(directories)) {
     if (adapter === 'folders' && !folders) { adapters[adapter] = { status: 'disabled' }; continue; }
     if (shared && folders && adapter === 'chatWake') { adapters[adapter] = { ...adapters.folders }; continue; }
-    try { adapters[adapter] = await ensureClaudeRendererAdapter({ root, home, adapter, graph,
-      ...(shared && ['folders', 'chatWake'].includes(adapter) ? { sharedResourceMode: folders ? 'combined' : 'chat-only' } : {}) }, dependencies); }
-    catch (error) { adapters[adapter] = { status: 'skipped', reason: 'Cache publication or recovery refused; original and journal preserved',
+    try {
+      if (shared && ['folders', 'chatWake'].includes(adapter)) await releaseIndependentChatWake(root, graph.adapters[adapter].target);
+      adapters[adapter] = await ensureClaudeRendererAdapter({ root, home, adapter, graph,
+      ...(shared && ['folders', 'chatWake'].includes(adapter) ? { sharedResourceMode: folders ? 'combined' : 'chat-only' } : {}) }, dependencies);
+    } catch (error) { adapters[adapter] = { status: 'skipped', reason: 'Cache publication or recovery refused; original and journal preserved',
       failure: { code: publicationFailure(error, graph.adapters[adapter]?.target?.path) } }; }
   }
   return { entry: graph.entry, missingChunks: graph.missing, adapters, observations: captureClaudeFrontendHints(graph) };
+}
+// Chat wake installs under its own journal while the folder adapter cannot be
+// matched on a graph. Once both match the same resource, the shared recipe owns
+// it: restore the vendor bytes through that independent journal first, so the
+// shared journal records the real original. The independent journal stays.
+async function releaseIndependentChatWake(root, target) {
+  let manifest;
+  try { manifest = JSON.parse((await snapshotClaudeCache(join(root, directories.chatWake, target.name, 'ui-folder-compat', 'manifest.json'), 16 * 1024)).bytes.toString()); }
+  catch (error) { if (error.code === 'ENOENT') return; throw error; }
+  const current = await snapshotClaudeCache(target.path);
+  if (current.hash !== target.currentHash) throw new Error('Claude renderer cache changed after graph validation');
+  if (manifest?.phase !== 'installed' || manifest.action !== 'install' || manifest.patchedHash !== current.hash) return;
+  await restoreClaudeRendererAdapter({ root, cachePath: target.path, adapter: 'chatWake' });
+  const restored = await snapshotClaudeCache(target.path);
+  if (restored.hash !== manifest.originalHash) throw new Error('Claude renderer cache changed after publication');
+  target.currentHash = restored.hash; target.identity = restored.info;
 }
 export async function restoreClaudeRendererAdapter({ root, cachePath, adapter }) {
   if (!directories[adapter] || !/^[a-f0-9]{16}_0$/.test(basename(cachePath))) throw new Error('Invalid renderer restore target');
   let stateRoot = join(root, directories[adapter], basename(cachePath));
   if (adapter === 'chatWake') {
-    try { await snapshotClaudeCache(join(stateRoot, 'ui-folder-compat', 'manifest.json'), 16 * 1024); }
-    catch (e) {
-      if (e.code !== 'ENOENT') throw e;
+    // The independent journal owns the cache only while its own patch is the
+    // installed bytes; otherwise the shared folder journal does, when present.
+    let owned = false;
+    try {
+      const manifest = JSON.parse((await snapshotClaudeCache(join(stateRoot, 'ui-folder-compat', 'manifest.json'), 16 * 1024)).bytes.toString());
+      owned = manifest?.action === 'install' && manifest.patchedHash === (await snapshotClaudeCache(cachePath)).hash;
+    } catch (e) { if (e.code !== 'ENOENT') throw e; owned = null; }
+    if (!owned) {
       const sharedRoot = join(root, directories.folders, basename(cachePath));
-      const original = await snapshotClaudeCache(join(sharedRoot, 'ui-folder-compat', 'original.cache'));
-      const url = original.bytes.subarray(24, 24 + original.bytes.readUInt32LE(12)).toString().slice(4);
-      const { source } = inspectFolderCache(original.bytes, { targetURL: url });
-      if (!source.includes('forkSession') || !source.includes('reopenClosed') || !source.includes('amber_tributary_lantern_overview_toggle'))
-        throw new Error('Resource is not a shared chat-wake installation');
-      stateRoot = sharedRoot;
+      let original;
+      try { original = await snapshotClaudeCache(join(sharedRoot, 'ui-folder-compat', 'original.cache')); }
+      catch (e) { if (e.code !== 'ENOENT' || owned === null) throw e; }
+      if (original) {
+        const url = original.bytes.subarray(24, 24 + original.bytes.readUInt32LE(12)).toString().slice(4);
+        const { source } = inspectFolderCache(original.bytes, { targetURL: url });
+        // Later builds keep only the capability read in the session-action module.
+        if (!source.includes('forkSession')) throw new Error('Resource is not a shared chat-wake installation');
+        stateRoot = sharedRoot;
+      }
     }
   }
   const journal = join(stateRoot, 'ui-folder-compat');
