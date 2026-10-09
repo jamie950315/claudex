@@ -93,6 +93,52 @@ test('native transcript-only task notifications retain the completed checkpoint 
   assert.equal(completedClaudePrefix({ text: original.text + rows.map(JSON.stringify).join('\n') + '\n', key }).incompleteTail, true);
 });
 
+test('finished native local commands and a compaction summary do not leave a turn running', () => {
+  const original = encodeClaude({ meta, messages: turn('A') }, sessionId);
+  const assistant = original.rows.findLast(row => row.type === 'assistant');
+  const user = (content, fields = {}) => ({ type: 'user', uuid: randomUUID(), parentUuid: assistant.uuid, sessionId,
+    cwd: assistant.cwd, promptId: 'prompt-synthetic', message: { role: 'user', content }, ...fields });
+  const caveat = () => user('<local-command-caveat>Synthetic caveat.</local-command-caveat>', { isMeta: true });
+  const command = name => user(`<command-name>/${name}</command-name>\n<command-message>${name}</command-message>`);
+  const output = user('<local-command-stdout>Compacted </local-command-stdout>');
+  const boundary = { type: 'system', subtype: 'compact_boundary', uuid: randomUUID(), parentUuid: null, sessionId };
+  const summary = user('Synthetic summary of the earlier conversation.', { parentUuid: boundary.uuid,
+    isCompactSummary: true, isVisibleInTranscriptOnly: true });
+  const read = (items, options = {}) => completedClaudePrefix({ text: original.text + items.map(JSON.stringify).join('\n') + '\n', ...options });
+  const complete = [
+    [boundary, summary, caveat(), command('compact'), output, { type: 'attachment', sessionId }, { type: 'mode', mode: 'default' }],
+    // A pane or plugin command prints nothing, or reports through a system row.
+    [caveat(), command('claudex')],
+    [caveat(), command('reload-plugins'), { type: 'system', subtype: 'local_command', uuid: randomUUID(), sessionId }, caveat(), command('claudex')],
+  ];
+  for (const rows of complete) {
+    const result = read(rows);
+    assert.equal(result.incompleteTail, false);
+    assert.equal(result.text, completedClaudePrefix({ text: original.text }).text);
+    // Authenticated owned histories retain their stricter owner lifecycle path.
+    assert.equal(read(rows, { key }).incompleteTail, true);
+  }
+  const prompt = user('Authored follow-up question.');
+  for (const rows of [
+    [prompt],
+    [caveat(), command('claudex'), prompt],
+    // Without native's caveat the command expands into a model request.
+    [command('skill')],
+    [command('skill'), user('Expanded skill instructions.', { isMeta: true })],
+    [caveat()],
+    [caveat(), caveat(), command('claudex')],
+    [caveat(), { ...command('claudex'), promptId: 'another-prompt' }],
+    [output],
+    [summary, caveat(), command('compact')],
+    [caveat(), command('claudex'), { ...assistant, uuid: randomUUID(), message: { ...assistant.message, stop_reason: 'tool_use' } }],
+    [caveat(), command('claudex'), { type: 'system', subtype: 'api_error', uuid: randomUUID(), sessionId }],
+  ]) assert.equal(read(rows).incompleteTail, true);
+  // A later real reply moves the boundary and keeps the command records.
+  const answered = read([caveat(), command('claudex'), prompt, { ...assistant, uuid: randomUUID() }]);
+  assert.equal(answered.incompleteTail, false);
+  assert.ok(answered.text.includes('Authored follow-up question.'));
+});
+
 test('the exact native resumed no-query placeholder is not an authored assistant turn', () => {
   const a = turn('A'), b = turn('B');
   const placeholder = { role: 'assistant', content: [{ type: 'text', text: 'No response requested.' }] };

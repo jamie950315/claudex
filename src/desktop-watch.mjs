@@ -172,6 +172,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   const reusedConversations = new Set();
   let fullVerificationCount = 0;
   let blockedSourceDiagnostics = new Map();
+  // Sources whose working directory is confirmed absent on this Mac (a remote
+  // SSH session, a deleted project) have nothing to enroll and need no action.
+  let absentSourceDiagnostics = new Map();
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, folderMapProjection = null;
   let lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
@@ -225,7 +228,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     reusedVerificationCount: reusedConversations.size, fullVerificationCount,
     activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, rendererAdapters,
     synchronization: blocked || hookBlock ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
-    ...blockingStatus(), ...latestFields, blocked: blocked ?? hookBlock };
+    ...blockingStatus(), ...latestFields, blocked: blocked ?? hookBlock,
+    absentSourceCount: absentSourceDiagnostics.size, absentSources: [...absentSourceDiagnostics.values()].slice(0, 20) };
     const guardHealth = value => value && Object.fromEntries(Object.entries(value)
       .filter(([key]) => !['since', 'lastAttemptAt', 'retryAt', 'attempts'].includes(key)));
     const presentationHealth = value => value && { state: value.state, error: value.error, deferred: value.deferred };
@@ -549,8 +553,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             // resolve only its exact identities; unrelated events cannot erase
             // an unsupported source that was never rechecked.
             const nextBlockedSources = onlyKeys ? new Map(blockedSourceDiagnostics) : new Map();
-            if (onlyKeys) for (const [key, entry] of nextBlockedSources)
-              if (entry.nativeId && onlyKeys.has(`${entry.side}:${entry.nativeId.toLowerCase()}`)) nextBlockedSources.delete(key);
+            const nextAbsentSources = onlyKeys ? new Map(absentSourceDiagnostics) : new Map();
+            if (onlyKeys) for (const sources of [nextBlockedSources, nextAbsentSources]) for (const [key, entry] of sources)
+              if (entry.nativeId && onlyKeys.has(`${entry.side}:${entry.nativeId.toLowerCase()}`)) sources.delete(key);
             for (const source of candidates) {
               if (signal?.aborted) break;
               let nativeId = source.nativeId ?? source.id;
@@ -596,11 +601,13 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                   continue;
                 }
                 if (!isUnsupported(error)) throw error;
-                nextBlockedSources.set(`${source.side}:${source.path}`, { side: source.side, path: source.path,
+                const absent = error.code === 'CLAUDEX_NATIVE_CWD_UNAVAILABLE' && error.workingDirectoryReason === 'missing';
+                (absent ? nextAbsentSources : nextBlockedSources).set(`${source.side}:${source.path}`, { side: source.side, path: source.path,
                   ...(typeof nativeId === 'string' && nativeId ? { nativeId } : {}), reason: reason(error) });
               }
             }
             blockedSourceDiagnostics = nextBlockedSources;
+            absentSourceDiagnostics = nextAbsentSources;
             blockedSourceCount = blockedSourceDiagnostics.size;
             blockedSources.splice(0, blockedSources.length, ...[...blockedSourceDiagnostics.values()].slice(0, 20));
             state = await bridge.status();

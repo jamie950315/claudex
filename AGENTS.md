@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.29 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.30 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -71,6 +71,11 @@ fixtures use placeholder paths and IDs.
   Accept these as ancillary tails only with system provenance, exact queue evidence
   and a parent chain from the completed assistant. Preserve their original bytes
   and the canonical checkpoint; ordinary input and ambiguous tails still wait.
+  A tail of finished native local commands is ancillary too: each command record
+  directly follows native's own local-command caveat with the same prompt ID,
+  optionally with its printed output, and a compaction summary hangs from a
+  compact boundary in that tail. A command without the caveat expands into a
+  prompt and still waits, as does any authored prompt or assistant output.
 - During normal synchronization, automatically stop enrollment when the exact
   saved working directory is confirmed absent, including before a cached skip.
   Use the existing locked tracking transition after pending recovery; revoke
@@ -1036,7 +1041,12 @@ seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
 All-project discovery skips unsupported unenrolled histories and reports a
-bounded diagnostic list. Keep unsupported-source diagnostics across configuration
+bounded diagnostic list. An unenrolled source whose working directory is
+confirmed absent on this Mac (a Claude Desktop SSH session, a deleted project)
+has nothing to enroll: report it as bounded absentSources, never as a blocked
+source or a request for attention. A directory that merely cannot be resolved
+stays a blocked source. Tracked conversations keep their own missing-directory
+rules. Keep unsupported-source diagnostics across configuration
 and unrelated native events; only exact targeted reinspection or full discovery
 may replace their snapshot. Claude Desktop forks copy parent rows under the parent's
 session ID into a new file. Enroll one under its file identity only after the

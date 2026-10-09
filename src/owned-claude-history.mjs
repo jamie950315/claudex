@@ -166,6 +166,32 @@ function transcriptOnlyTaskTail(text, cutoff, tail) {
   return seen === tail.length && queued === null;
 }
 
+// A native local command (/compact, /model, a plugin pane, ...) runs in the app
+// and is never sent to the model. Native says so itself: it writes a caveat
+// record directly before the command. Those records, any output they print and
+// the summary a compaction leaves end a conversation without requesting a
+// reply. An authored prompt, a command without that caveat (it expands into a
+// prompt) or any assistant output after the boundary is still an unfinished turn.
+function localCommandTail(text, cutoff, tail) {
+  const wrapped = (row, tag) => typeof row.message?.content === 'string'
+    && row.message.content.startsWith(`<${tag}>`) && row.message.content.trimEnd().endsWith(`</${tag}>`);
+  const after = text.slice(cutoff).split('\n').filter(Boolean).map(JSON.parse).filter(row => !row.isSidechain);
+  const boundaries = new Set(after.filter(row => row.type === 'system' && row.subtype === 'compact_boundary').map(row => row.uuid));
+  if (after.some(row => row.type === 'system' && !['stop_hook_summary', 'compact_boundary', 'local_command'].includes(row.subtype))) return false;
+  let caveat = null, commands = 0, summaries = 0;
+  for (const row of tail) {
+    if (row.type !== 'user' || row.message?.role !== 'user') return false;
+    if (row.isCompactSummary === true) { if (caveat || !boundaries.has(row.parentUuid)) return false; summaries++; }
+    else if (row.isMeta === true) { if (caveat || !wrapped(row, 'local-command-caveat')) return false; caveat = row; }
+    else if (typeof row.message.content === 'string' && row.message.content.startsWith('<command-name>')) {
+      if (!caveat || caveat.promptId !== row.promptId) return false;
+      caveat = null; commands++;
+    } else if (wrapped(row, 'local-command-stdout') || wrapped(row, 'local-command-stderr')) { if (caveat || !commands) return false; }
+    else return false;
+  }
+  return !caveat && commands + summaries > 0;
+}
+
 function completedPrefix(options, decodePacket) {
   const { text, key } = options;
   let offset = 0, cutoff = 0;
@@ -198,10 +224,11 @@ function completedPrefix(options, decodePacket) {
       return { text, incompleteTail: false, validated: { ...validated, imageAnnotations } };
   }
   // A native system notification explicitly queued for transcript-only delivery
-  // does not request inference. Keep its bytes in the preserved original, while
-  // retaining the existing completed canonical checkpoint. A later real reply
-  // moves the boundary normally and is never discarded by this tail-only rule.
-  const ancillaryTail = !key && transcriptOnlyTaskTail(text, cutoff, tail);
+  // does not request inference, and neither do the records of a native local
+  // command. Keep their bytes in the preserved original, while retaining the
+  // existing completed canonical checkpoint. A later real reply moves the
+  // boundary normally and is never discarded by this tail-only rule.
+  const ancillaryTail = !key && (transcriptOnlyTaskTail(text, cutoff, tail) || localCommandTail(text, cutoff, tail));
   return { text: text.slice(0, cutoff), incompleteTail: tail.length > 0 && !ancillaryTail };
 }
 

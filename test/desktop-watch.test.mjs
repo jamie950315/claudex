@@ -926,21 +926,29 @@ test('an unavailable new native thread is reported while another source enrolls'
   assert.equal((await f.status()).error, null);
 });
 
-test('a deleted project blocks only the new source while other sources enroll', async () => {
+test('a source whose project is absent is recorded without requesting attention while other sources enroll', async () => {
   const f = await fixture();
   const track = f.bridge.track;
+  const unavailable = workingDirectoryReason => Object.assign(
+    new Error('Native codex working directory no longer exists; source enrollment is paused.'),
+    { code: 'CLAUDEX_NATIVE_CWD_UNAVAILABLE', workingDirectoryReason });
   f.bridge.track = async source => {
-    if (source.id === 'missing') throw Object.assign(new Error('Native codex working directory no longer exists; source enrollment is paused.'),
-      { code: 'CLAUDEX_NATIVE_CWD_UNAVAILABLE' });
+    if (source.id === 'missing') throw unavailable('missing');
+    if (source.id === 'unresolved') throw unavailable('unresolved');
     return track(source);
   };
   let status;
   await f.run({ maxPasses: 2, discover: async (_config, known) => [
-    { side: 'codex', id: 'missing', path: '/missing-project-source' }, { side: 'codex', id: 'good', path: '/good' },
+    { side: 'codex', id: 'missing', path: '/missing-project-source' }, { side: 'codex', id: 'unresolved', path: '/unresolved-project-source' },
+    { side: 'codex', id: 'good', path: '/good' },
   ].filter(source => !known.has(`${source.side}:${source.id}`)), sleep: async () => { status = await f.status(); } });
   assert.deepEqual(f.calls.track, ['/good']);
+  // A confirmed absent directory (remote session, deleted project) has nothing
+  // to enroll; a directory that merely cannot be resolved stays reported.
+  assert.equal(status.absentSourceCount, 1);
+  assert.equal(status.absentSources[0].path, '/missing-project-source');
   assert.equal(status.blockedSourceCount, 1);
-  assert.match(status.blockedSources[0].reason, /working directory no longer exists/);
+  assert.equal(status.blockedSources[0].path, '/unresolved-project-source');
   assert.equal((await f.status()).error, null);
 });
 
