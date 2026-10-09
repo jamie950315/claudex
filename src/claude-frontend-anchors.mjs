@@ -85,7 +85,7 @@ function bindingIndex(ast, { full = false, getters = nodes(ast, publicGetter) } 
   for (const statement of statements) for (const node of statement.type === 'FunctionDeclaration' ? [statement]
     : statement.type === 'VariableDeclaration' ? statement.declarations : []) {
     if (!id(node.id) || !full && !exportedLocals.has(id(node.id))) continue;
-    const api = ['LocalSessions', 'useEffect', 'useSyncExternalStore', 'useMemo'].some(p => member(node.init, p));
+    const api = ['LocalSessions', 'useEffect', 'useRef', 'useSyncExternalStore', 'useMemo'].some(p => member(node.init, p));
     const entry = full ? node : { type: node.type, id: node.id, start: node.start, end: node.end,
       ...(node.type === 'VariableDeclarator' ? { init: api ? apiExpression(node.init) : null } : {}) };
     const rows = locals.get(id(node.id)) ?? []; rows.push(entry); locals.set(id(node.id), rows);
@@ -607,12 +607,40 @@ export function ownerAnchors(source, graph) {
         && reader.body.body[0].type === 'ReturnStatement' ? id(reader.body.body[0].argument) : null);
       if (!ref || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')) continue;
       if (nodes(send.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
-        && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter });
+        && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter: id(getter.id),
+        selectionEnd: unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
+          && n.declarations.includes(getter)), 'Code getter declaration').end });
     }
-    const { ref, getter } = unique(identities, 'Code selection and native send identity');
-    return { component, ref, getter: id(getter.id), send,
-      selectionEnd: unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
-        && n.declarations.includes(getter)), 'Code getter declaration').end };
+    // Early September Code builds read a retained React ref after images are
+    // ready. Prove its public useRef import, exact selection seed and sole
+    // useEffect mirror. The ref cannot escape or have another reader/writer.
+    const retainedReads = scopeNodes(send, n => n.type === 'VariableDeclarator' && member(n.init, 'current') && id(n.init.object));
+    if (retainedReads.length) {
+      const useRef = importedAPI(source, graph, 'useRef', false, resolver).local;
+      if (callbacks.shadowed(useRef)) fail('Code ref lexical binding');
+      for (const read of retainedReads) {
+        const retainedRef = id(read.init.object), rows = callbacks.definitions(retainedRef);
+        if (rows.length !== 1 || rows[0].type !== 'VariableDeclarator') continue;
+        const declaration = rows[0], init = declaration.init, ref = id(init?.arguments?.[0]);
+        if (init?.type !== 'CallExpression' || id(init.callee) !== useRef || init.arguments.length !== 1
+          || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')
+          || nodes(component, n => id(n) === retainedRef).length !== 3) continue;
+        const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && n.arguments.length === 2
+          && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1 && id(n.arguments[1].elements[0]) === ref)
+          .filter(call => callbacks.resolve(call.arguments[0]).some(cb => {
+            const statement = cb.body.type === 'BlockStatement' && cb.body.body.length === 1 ? cb.body.body[0] : null;
+            const write = cb.body.type === 'BlockStatement' ? statement?.type === 'ExpressionStatement' && statement.expression : cb.body;
+            return !cb.async && !cb.params.length && write?.type === 'AssignmentExpression' && write.operator === '='
+              && member(write.left, 'current') && id(write.left.object) === retainedRef && id(write.right) === ref;
+          }));
+        if (mirrors.length !== 1) continue;
+        const mirror = mirrors[0], boundary = component.body.body.filter(n => n.type === 'ExpressionStatement'
+          && n.start <= mirror.start && n.end >= mirror.end);
+        if (boundary.length !== 1 || declaration.start >= mirror.start || mirror.end >= send.start) continue;
+        identities.push({ ref, retainedRef, selectionEnd: boundary[0].end });
+      }
+    }
+    return { component, send, ...unique(identities, 'Code selection and native send identity') };
   }
   const proven = [], refused = [];
   for (const candidate of candidates) {
@@ -661,6 +689,6 @@ export function transformAnchoredFolder(source, b, bootstrap) {
 export function transformAnchoredOwner(source, b, bootstrap) {
   return applyEdits(source, [...(b.variants ?? [b]).flatMap(v => [insert(v.selectionEnd,
     `;${b.effect}(()=>{void __cldxOwnerWake.signal(${v.ref}?.id,"selection",${v.ref}?.type)},[${v.ref}?.id,${v.ref}?.type]);`),
-  insert(v.send.body.start + 1, `{const ref=${v.getter}();void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`)]),
+  insert(v.send.body.start + 1, `{const ref=${v.retainedRef ? `${v.retainedRef}.current` : `${v.getter}()`};void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`)]),
   insert(source.length, bootstrap)]);
 }

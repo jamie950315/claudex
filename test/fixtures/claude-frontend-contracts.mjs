@@ -49,9 +49,9 @@ export function ownerPatchContract(source, original, b) {
     const send = only(nodes(f, n => ['ArrowFunctionExpression', 'FunctionExpression'].includes(n.type) && n.async && nodes(n, isSignal).includes(submit)), 'native send');
     const first = send.body.body.shift();
     assert.equal(first.type, 'BlockStatement', 'submit signals before native early refusals');
-    assert.deepEqual(astValue(first), astValue(syntax(`{const ref=${v.getter}();void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`).body[0]));
+    assert.deepEqual(astValue(first), astValue(syntax(`{const ref=${v.retainedRef ? `${v.retainedRef}.current` : `${v.getter}()`};void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`).body[0]));
     assert.deepEqual(squashDeclarations(f), squashDeclarations(functionsFor(orig, b.componentBinding)[i]), 'all native component AST retained');
-    contract.push({ ref: v.ref, getter: v.getter, effect: b.effect });
+    contract.push({ ref: v.ref, getter: v.getter, retainedRef: v.retainedRef, effect: b.effect });
   }
   const client = only(ast.body.filter(n => n.type === 'ImportDeclaration' && n.specifiers.some(s => s.local.name === '__cldxOwnerWakeClient')), 'attached client import');
   assert.equal(client.source.value, b.client.path); assert.equal(client.specifiers[0].imported.name, b.client.exported);

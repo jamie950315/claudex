@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.36 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.37 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1784,8 +1784,11 @@ identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
 The Code owner-wake adapter resolves the native session component structurally:
 initialSessionId/sessionType, submitMessage/getComposerSnapshot, the asynchronous
-send's waitForImagesReady and its retained current-reference getter. The same
-reference supplies selection and native send; signal submit before early refusals.
+send's waitForImagesReady and its retained current-reference getter. Early September
+builds retain a React ref: prove the public useRef import, exact selection seed,
+sole useEffect mirror and native current reader, with no escaped ref or extra
+reader/writer. The same reference supplies selection and native send; signal
+submit before early refusals.
 Require unique complete binding relationships, never select the shared Chat/Cowork
 view or a wrapper merely exposing a similar submit interface. Never await or retry
 native send. Resolve the exported exact-UUID lookup by its read-only getState,

@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.36**, with **Claude Mod 0.8.15** bundled.
+Current development build: **Claudex.app 1.2.37**, with **Claude Mod 0.8.15** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -245,7 +245,10 @@ candidate modules/components; the current-reference reader and native send must
 prove the same identity before one candidate is selected. The search follows
 callback aliases, block-return readers, function/arrow components, exact compiler
 memo return values (including variadic stores), and named re-exports through at
-most eight modules. Callback resolution stops at twelve steps. Competing proven
+most eight modules. Early September builds use a retained React ref instead:
+require its public `useRef` binding, exact selection seed, sole `useEffect`
+mirror and native send reader, without escaped refs or additional writes.
+Callback resolution stops at twelve steps. Competing proven
 targets, alias cycles, missing dependencies and unknown helper semantics refuse
 installation. Diagnostic `ownerWake.search` describes discovery, never activation.
 This adds no retained owners, keepalive, model work or memory-pool setting.

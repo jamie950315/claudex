@@ -28,6 +28,59 @@ function barrels(build) {
   sources.entry += `import"./${names.hooks}";import"./${names.clientForward}";`;
   return build;
 }
+function retainedRefBuild() {
+  const build = frontendBuild();
+  build.sources.react += 'var Ref=Ra.useRef;var refGetter={useRef:()=>Ref};export{Ref as RefHook};';
+  build.sources.ownerWake = build.sources.ownerWake
+    .replace('Effecta as effecta', 'Effecta as effecta,RefHook as useRefa')
+    .replace('readera=()=>refa;let currenta=eventa(readera),senda;',
+      'let retaineda=useRefa(refa);effecta(()=>{retaineda.current=refa},[refa]);let senda;')
+    .replace('selecteda=currenta()', 'selecteda=retaineda.current');
+  return build;
+}
+
+test('retained React refs require the exact native selection mirror and preserve current send reads', async t => {
+  const f = await fixture(t, retainedRefBuild()), graph = await discoverClaudeFrontend(f), matched = graph.adapters.ownerWake;
+  assert.equal(matched.status, 'matched', matched.reason);
+  assert.equal(matched.bindings.retainedRef, 'retaineda');
+  const source = buildClaudeOwnerWakeSource(matched.target.source, { root: f.root, bindings: matched.bindings,
+    runtimeSource: 'export function createClaudeOwnerWakeRuntime(){return{start(){},stop(){},signal(...args){capture(args)}}}' });
+  ownerPatchContract(source, matched.target.source, matched.bindings);
+  const effects = [], signals = [], retained = { current: null }, context = {
+    useRefa: ref => { if (!retained.current) retained.current = ref; return retained; },
+    eventa: callback => callback, effecta: callback => effects.push(callback),
+    __cldxOwnerWakeClient() {}, capture: args => signals.push(args), window: { addEventListener() {} }, console: { warn() {} },
+    images: { async waitForImagesReady() {} }, nativeSend: (text, options, ref) => ({ text, options, ref }) };
+  runInNewContext(source.replace(/import[^;]+;/g, '') + ';globalThis.viewa=viewa;', context);
+  const first = context.viewa({ initialSessionId: 'session_first', sessionType: 'bridge' }); effects.splice(0).forEach(cb => cb());
+  assert.equal(await first.dispatch('blocked', { blocked: true }), 'blocked');
+  context.viewa({ initialSessionId: 'session_next', sessionType: 'bridge' }); effects.splice(0).forEach(cb => cb());
+  const input = { original: true }, options = { native: true }, sent = await first.dispatch(input, options);
+  assert.equal(sent.text, input); assert.equal(sent.options, options); assert.equal(sent.ref.id, 'session_next');
+  assert.deepEqual(JSON.parse(JSON.stringify(signals)), [
+    ['session_first', 'selection', 'bridge'], ['session_first', 'submit', 'bridge'],
+    ['session_next', 'selection', 'bridge'], ['session_next', 'submit', 'bridge'],
+  ]);
+  assert.equal((await ensureClaudeRendererAdapters({ ...f, graph })).adapters.ownerWake.status, 'installed');
+});
+
+test('retained ref discovery refuses changed seeds, mirrors, readers, escaped refs and shadows', async t => {
+  for (const change of [
+    s => s.replace('useRefa(refa)', 'useRefa(other)'),
+    s => s.replace('retaineda.current=refa', 'retaineda.current=other'),
+    s => s.replace('[refa]', '[other]'),
+    s => s.replace('let senda;', 'retaineda.current=other;let senda;'),
+    s => s.replace('let senda;', 'escape(retaineda);let senda;'),
+    s => s.replace('selecteda=retaineda.current', 'selecteda=other.current'),
+    s => s.replace('function viewa(e){', 'function viewa(e){let useRefa=other;'),
+    s => s.replace('effecta(()=>{retaineda.current=refa}', 'effecta(()=>{dispatch();retaineda.current=refa}'),
+  ]) {
+    const build = retainedRefBuild(); build.sources.ownerWake = change(build.sources.ownerWake);
+    const f = await fixture(t, build), result = await ensureClaudeRendererAdapters(f);
+    assert.equal(result.adapters.ownerWake.status, 'skipped');
+    assert.deepEqual(await readFile(f.resources.ownerWake.path), f.resources.ownerWake.bytes);
+  }
+});
 
 test('semantic discovery survives compiler forms, callback aliases, export forwarding and neighbouring lookalikes', async t => {
   const build = barrels(frontendBuild());
