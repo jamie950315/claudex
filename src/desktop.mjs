@@ -36,6 +36,13 @@ async function readRecord(path, expected) {
   } finally { await file.close(); }
 }
 
+// Desktop writes a record before its CLI session exists (for example a Remote
+// Control spawn that never ran). With the exact filename identity and no CLI
+// identity at all, it maps to no native transcript. A present but invalid CLI
+// identity is still ambiguous.
+const unstarted = (record, uiId) => record.sessionId === `local_${uiId}`
+  && (record.cliSessionId === undefined || record.cliSessionId === null);
+
 /** Read-only ownership check. Desktop adoption is not a disposable CLI copy. */
 export async function desktopOwnsSession(root, nativeId) {
   if (!root) return false;
@@ -68,6 +75,7 @@ export async function desktopOwnsSession(root, nativeId) {
         const record = await readRecord(target, info);
         // New Desktop sessions have independent UI and CLI identities. Do not
         // mistake the local_<UI UUID> filename for the transcript UUID.
+        if (unstarted(record, match[1])) continue;
         if (record.sessionId !== `local_${match[1]}` || typeof record.cliSessionId !== 'string' || !UUID.test(record.cliSessionId))
           throw new Error('Ambiguous Desktop session registry identity; ownership cannot be established safely.');
         if (record.cliSessionId.toLowerCase() === nativeId.toLowerCase()) return true;
@@ -121,6 +129,7 @@ async function readMappings(root, nativeIds, metadataErrors) {
       const target = join(path, entry.name);
       if (match) {
         const info = await lstat(target, { bigint: true }), record = await readRecord(target, info);
+        if (unstarted(record, match[1])) continue;
         if (record.sessionId !== `local_${match[1]}` || typeof record.cliSessionId !== 'string' || !UUID.test(record.cliSessionId))
           throw new Error('Ambiguous Desktop session registry identity.');
         const id = record.cliSessionId.toLowerCase();

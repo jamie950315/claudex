@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { desktopOwnsSession } from '../src/desktop.mjs';
+import { desktopOwnsSession, readDesktopSessionMappings } from '../src/desktop.mjs';
 import { nativeDrivers } from '../src/native-drivers.mjs';
 
 test('desktop ownership includes archived native records', async () => {
@@ -49,6 +49,34 @@ test('desktop ownership refuses malformed, ambiguous and oversized registry reco
   }
   await writeFile(path, ' '.repeat(8 * 1024 * 1024 + 1));
   await assert.rejects(desktopOwnsSession(root, cliId), /bounded/);
+});
+
+test('registry records without any CLI identity are skipped, not ambiguous', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-desktop-guard-')));
+  const unstartedId = randomUUID(), desktopId = randomUUID(), cliId = randomUUID();
+  const record = { cwd: '/tmp', title: 'Native title', lastActivityAt: 100, isArchived: false };
+  await writeFile(join(root, `local_${unstartedId}.json`), JSON.stringify({ ...record, sessionId: `local_${unstartedId}` }), { mode: 0o600 });
+  await writeFile(join(root, `local_${desktopId}.json`),
+    JSON.stringify({ ...record, sessionId: `local_${desktopId}`, cliSessionId: cliId }), { mode: 0o600 });
+  for (const cliSessionId of [undefined, null]) {
+    await writeFile(join(root, `local_${unstartedId}.json`),
+      JSON.stringify({ ...record, sessionId: `local_${unstartedId}`, cliSessionId }), { mode: 0o600 });
+    assert.equal(await desktopOwnsSession(root, cliId), true);
+    assert.equal(await desktopOwnsSession(root, randomUUID()), false);
+    // The filename still protects that Desktop identity itself.
+    assert.equal(await desktopOwnsSession(root, unstartedId), true);
+    const mappings = await readDesktopSessionMappings(root, [cliId, unstartedId]);
+    assert.deepEqual([...mappings.keys()], [cliId]);
+    assert.equal(mappings.get(cliId).sessionId, `local_${desktopId}`);
+  }
+  for (const cliSessionId of ['', 'invalid', 7]) {
+    await writeFile(join(root, `local_${unstartedId}.json`),
+      JSON.stringify({ ...record, sessionId: `local_${unstartedId}`, cliSessionId }), { mode: 0o600 });
+    await assert.rejects(readDesktopSessionMappings(root, [cliId]), /Ambiguous/);
+    await assert.rejects(desktopOwnsSession(root, randomUUID()), /Ambiguous/);
+  }
+  await writeFile(join(root, `local_${unstartedId}.json`), JSON.stringify({ ...record, sessionId: `local_${randomUUID()}` }), { mode: 0o600 });
+  await assert.rejects(readDesktopSessionMappings(root, [cliId]), /Ambiguous/);
 });
 
 test('desktop ownership refuses non-regular and symlinked registry records', async () => {

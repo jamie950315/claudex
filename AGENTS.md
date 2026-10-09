@@ -1331,6 +1331,11 @@ is needed. A real Codex continuation recalled the original Claude response.
 The UI local_<UUID> may differ from registry.cliSessionId; ownership checks must
 use the bounded stable registry mapping, including archived entries, and retain
 conservative filename protection. Never assume the UI suffix is the native ID.
+Desktop writes a registry record before its CLI session exists (observed for a
+Remote Control spawn that never ran). A record with the exact filename identity
+and an absent or null cliSessionId maps to no native transcript and is skipped;
+its filename still protects that Desktop identity. A present but invalid CLI
+identity or a mismatched sessionId remains ambiguous and fails the whole lookup.
 Returning from Codex creates a separate managed Remote Control entry with the
 same logical title, without a `[Claudex]` prefix. The opt-in native Local handoff
 archives the verified Local predecessor so the ordinary same-title entry is the
