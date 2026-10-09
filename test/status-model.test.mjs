@@ -87,6 +87,20 @@ check(health(changed).state == "waiting" && !health(changed).attention && !healt
 check(health(changed).title == "Waiting for Desktop integration" && health(changed).detail.contains("No action is required"))
 changed["folderProjection"] = ["state": "error", "error": "Exact map conflict"]
 check(health(changed).attention && health(changed).detail == "Exact map conflict")
+var restart = ready; restart["claudeDesktopRestart"] = ["entry": "index-new.js", "requiredSince": now - 5000] as [String: Any]
+func restartHealth(_ launched: Double?) -> HealthReport {
+  classifyHealth(watcher: restart, service: nil, now: now, alive: alive, claudeLaunchedAt: { launched })
+}
+check(restartHealth(now - 60000).title == "Restart Claude to finish updating" && restartHealth(now - 60000).attention)
+check(restartHealth(now - 60000).notice == restartHealth(now - 60000).detail && restartHealth(now - 60000).state == "waiting")
+// Desktop started after the write, or not running at all: nothing to ask.
+check(restartHealth(now - 1000).state == "ready" && restartHealth(nil).state == "ready" && health(restart).state == "ready")
+restart["claudeDesktopRestart"] = ["entry": "index-new.js", "requiredSince": now - 5000, "notBefore": now + 30000] as [String: Any]
+check(restartHealth(now - 60000).state == "ready")
+restart["claudeDesktopRestart"] = ["entry": "index-new.js", "requiredSince": now - 5000, "notBefore": now - 1] as [String: Any]
+check(restartHealth(now - 60000).attention)
+restart["blockedConversationCount"] = 1
+check(restartHealth(now - 60000).state == "paused")
 changed["folderProjection"] = ["state": "waiting"]
 changed["blocked"] = ["reason": "Exact history conflict"]
 check(health(changed).attention && health(changed).detail == "Exact history conflict")

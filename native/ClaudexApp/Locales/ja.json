@@ -319,5 +319,7 @@
   "Checking Desktop integration": "デスクトップ連携を確認中",
   "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "確認中にフロントエンドのキャッシュが変更されました。Claudex が再確認しています。操作は不要です。",
   "Waiting for Desktop integration": "デスクトップ連携を待機中",
+  "Restart Claude to finish updating": "更新を完了するには Claude を再起動してください",
+  "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claudex の準備が整う前に Claude Desktop が新しいバージョンを読み込みました。Claude を終了して開き直すと、フォルダ配置、会話の起動、/claudex コマンドが復元されます。同期には影響しません。",
   "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex によるデスクトップ連携の再開と確認の完了を待っています。操作は不要です。"
 }

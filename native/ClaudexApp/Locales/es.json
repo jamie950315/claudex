@@ -319,5 +319,7 @@
   "Checking Desktop integration": "Comprobando la integración de escritorio",
   "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "La caché del frontend cambió durante la comprobación. Claudex está comprobándola de nuevo; no hace falta hacer nada.",
   "Waiting for Desktop integration": "Esperando la integración de escritorio",
+  "Restart Claude to finish updating": "Reinicia Claude para completar la actualización",
+  "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claude Desktop cargó una versión nueva antes de que Claudex pudiera prepararla. Cierra y vuelve a abrir Claude para restaurar la ubicación en carpetas, la reactivación de conversaciones y el comando /claudex. La sincronización no se ve afectada.",
   "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Se espera a que Claudex reanude la integración de escritorio y termine la comprobación. No hace falta hacer nada."
 }

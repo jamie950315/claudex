@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.3 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.4 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -2022,7 +2022,15 @@ since it started and Claudex is not stopped. It quits through the application
 never repeats for the same frontend entry or more than twice in ten minutes. A
 declined quit is final. Outside that window the user performs the restart and
 the resource stays restart-required; no other automatic reload or quit exists.
-rendererAdapters.relaunchAfterUpdate: false disables it. The production watcher
+rendererAdapters.relaunchAfterUpdate: false disables only the automatic restart.
+Whenever the user must restart instead, the decision is published as watcher
+claudeDesktopRestart {entry, requiredSince, reason, notBefore?}: requiredSince is
+the last write, and a still-incomplete adapter set is held back until Desktop is
+no longer newly started. No pass may follow a manual restart, so the reader ends
+the request: the status model asks only while the running Desktop was launched
+at or before requiredSince, shows "Restart Claude to finish updating" as an
+attention state below real synchronization problems and sends that text as the
+notification. A Desktop started after the last write is `current`. The production watcher
 supplies the controller; tests inject process data and never touch a real
 application. Composer drafts are not observable from outside the renderer.
 Unsupported structural/API changes remain explicit skipped adapters.

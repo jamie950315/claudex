@@ -552,9 +552,12 @@ the new frontend. It asks the application to quit, never signals it, and reopens
 it. It does not repeat for the same frontend, restarts at most twice in ten
 minutes and treats a declined quit as final; `claude-relaunch-status.json` shows
 the last decision. Otherwise the resource stays `restart-required` until you
-restart Claude yourself. A draft typed into the composer within those first
+restart Claude yourself; the app then shows "Restart Claude to finish
+updating" and sends a notification, which ends once Claude has been reopened.
+A draft typed into the composer within those first
 moments cannot be seen from outside and would be lost. Set
-`rendererAdapters.relaunchAfterUpdate` to `false` in `config.json` to disable it.
+`rendererAdapters.relaunchAfterUpdate` to `false` in `config.json` to disable the
+automatic restart; the request to restart is still shown.
 This search runs only during normal cache discovery/maintenance and does not
 change owner eviction, start model input or add periodic native history reads.
 

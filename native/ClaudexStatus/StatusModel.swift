@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import AppKit
 
 struct HealthIssue: Codable, Equatable {
     var target: String
@@ -20,6 +21,8 @@ struct HealthReport: Codable, Equatable {
     var autoRestart: Bool
     var operational = false
     var issues: [HealthIssue] = []
+    // A specific request shown as the notification instead of the generic notice.
+    var notice: String? = nil
     var issueKey: String { attention ? state + ":" + detail : "" }
 }
 
@@ -90,8 +93,14 @@ func processAlive(_ value: Any?) -> Bool {
     return kill(pid_t(number.int32Value), 0) == 0 || errno == EPERM
 }
 
+/// When the running Claude Desktop was launched, in milliseconds; nil when it is not running.
+func claudeDesktopLaunchedAt() -> Double? {
+    NSRunningApplication.runningApplications(withBundleIdentifier: "com.anthropic.claudefordesktop")
+        .compactMap { $0.launchDate }.max().map { $0.timeIntervalSince1970 * 1000 }
+}
+
 func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: Double,
-                    alive: (Any?) -> Bool = processAlive) -> HealthReport {
+                    alive: (Any?) -> Bool = processAlive, claudeLaunchedAt: () -> Double? = { nil }) -> HealthReport {
     let automatic = service?["autoRestart"] as? Bool == true
     let updated = statusTimestamp(watcher?["updatedAt"])
     func report(_ state: String, _ title: String, _ detail: String, _ attention: Bool = false,
@@ -163,6 +172,16 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
             return report("paused", "Desktop integration needs attention", component["error"] as? String ?? "Folder placement or archival could not be verified.", true)
         }
     }
+    // Claude Desktop loaded frontend files before they were prepared. The
+    // request ends by itself once Desktop has been started after that write.
+    if let restart = watcher["claudeDesktopRestart"] as? [String: Any], let since = restart["requiredSince"] as? NSNumber,
+       let launched = claudeLaunchedAt(), launched <= since.doubleValue,
+       now >= (restart["notBefore"] as? NSNumber)?.doubleValue ?? 0 {
+        var result = report("waiting", "Restart Claude to finish updating",
+                            "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.", true)
+        result.notice = result.detail
+        return result
+    }
     if let renderer = watcher["rendererAdapters"] as? [String: Any], renderer["state"] as? String == "checking" {
         return report("waiting", "Checking Desktop integration",
                       "The frontend cache changed during inspection. Claudex is checking it again; no action is required.")
@@ -195,8 +214,8 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
 }
 
 func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Double,
-                    alive: (Any?) -> Bool = processAlive) -> HealthReport {
-    var result = classifyHealthBase(watcher: watcher, service: service, now: now, alive: alive)
+                    alive: (Any?) -> Bool = processAlive, claudeLaunchedAt: () -> Double? = { nil }) -> HealthReport {
+    var result = classifyHealthBase(watcher: watcher, service: service, now: now, alive: alive, claudeLaunchedAt: claudeLaunchedAt)
     if result.state == "waiting", let watcher,
        watcher["running"] as? Bool == true, alive(watcher["pid"]),
        let updated = watcher["updatedAt"] as? NSNumber,
@@ -279,7 +298,7 @@ func loadHealth(_ root: String) -> HealthReport {
     do {
         return classifyHealth(watcher: try privateJSON(root, "watcher-status.json"),
                               service: try privateJSON(root, "service-status.json"),
-                              now: Date().timeIntervalSince1970 * 1000)
+                              now: Date().timeIntervalSince1970 * 1000, claudeLaunchedAt: claudeDesktopLaunchedAt)
     } catch StatusReadError.changing {
         return HealthReport(state: "waiting", title: "Checking status", detail: "The status file is being updated. Checking again shortly.",
                             symbol: "clock", attention: false, autoRestart: false)

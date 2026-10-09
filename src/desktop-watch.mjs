@@ -179,7 +179,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let latestFields = { waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] };
   let folderProjection = null, folderMapProjection = null;
   let lastFolderMaintenance = null, folderResource = null, folderResourceError = null;
-  let rendererAdapters = null;
+  let rendererAdapters = null, claudeDesktopRestart = null;
   const autoRenderers = config.rendererAdapters?.enabled !== false && (config.rendererAdapters?.enabled === true
     || config.folderProjection?.enabled === true && typeof config.folderProjection.cachePath === 'string'
       && dirname(config.folderProjection.cachePath) === claudeCacheDirectory());
@@ -229,7 +229,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
     currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
     reusedVerificationCount: reusedConversations.size, fullVerificationCount,
-    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, rendererAdapters,
+    activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, rendererAdapters, claudeDesktopRestart,
     synchronization: blocked || hookBlock ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
     ...blockingStatus(), ...latestFields, blocked: blocked ?? hookBlock,
     absentSourceCount: absentSourceDiagnostics.size, absentSources: [...absentSourceDiagnostics.values()].slice(0, 20) };
@@ -313,7 +313,14 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       if (autoRenderers) rendererMaintenance = await startRendererMaintenance({ root,
         folders: config.folderProjection?.enabled === true, signal,
         watchAppStop: events?.watchAppStop,
-        afterPass: config.rendererAdapters?.relaunchAfterUpdate === false ? undefined : claudeRelaunch?.consider,
+        afterPass: claudeRelaunch && (async summary => {
+          const decision = await claudeRelaunch.consider(summary, { automatic: config.rendererAdapters?.relaunchAfterUpdate !== false });
+          // Only a restart the user must make is published; the reader drops
+          // it once Desktop has been started after requiredSince.
+          claudeDesktopRestart = decision?.state === 'restart-required' && Number.isFinite(decision.requiredSince)
+            ? { entry: decision.entry, requiredSince: decision.requiredSince, reason: decision.reason,
+              ...(Number.isFinite(decision.notBefore) ? { notBefore: decision.notBefore } : {}) } : null;
+        }),
         onStatus: updateRendererStatus });
       await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });
       while (!signal?.aborted && passes++ < maxPasses) {

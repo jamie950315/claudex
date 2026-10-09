@@ -319,5 +319,7 @@
   "Checking Desktop integration": "正在檢查桌面整合",
   "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "檢查期間前端快取發生變動，Claudex 正在重新檢查；不需要您操作。",
   "Waiting for Desktop integration": "等待桌面整合",
+  "Restart Claude to finish updating": "請重新啟動 Claude 以完成更新",
+  "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claude Desktop 在 Claudex 準備好之前就載入了新版本。請結束並重新開啟 Claude，以恢復資料夾歸位、對話喚醒與 /claudex 指令。同步不受影響。",
   "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex 正在恢復桌面整合並等待檢查完成，不需要您操作。"
 }

@@ -77,9 +77,10 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
         if let event = gate.event(for: report, now: now) {
             if permission == .authorized || permission == .provisional {
                 let content = UNMutableNotificationContent()
-                content.title = L(event == "recovered" ? "Claudex synchronization restored" : "Claudex needs attention")
+                let request = event == "recovered" ? nil : report.notice
+                content.title = L(event == "recovered" ? "Claudex synchronization restored" : request != nil ? report.title : "Claudex needs attention")
                 content.body = L(event == "recovered" ? "The service is running without reported synchronization blocks."
-                    : "Synchronization or recovery needs attention. Open Claudex in the menu bar for details. Your histories are preserved.")
+                    : request ?? "Synchronization or recovery needs attention. Open Claudex in the menu bar for details. Your histories are preserved.")
                 // Generic notices never include transcript text, titles, paths, or credentials.
                 let sentIssue = gate.lastIssue, sentAt = gate.lastNoticeAt
                 center.add(UNNotificationRequest(identifier: "claudex-health", content: content, trigger: nil)) { error in

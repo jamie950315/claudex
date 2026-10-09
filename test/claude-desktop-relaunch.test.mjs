@@ -42,7 +42,8 @@ test('a newly started idle Desktop is restarted once after every adapter is writ
   // The lazy command chunk is not cached yet: three adapters are written, one is missing.
   const partial = { ...installed(true, ['folders', 'chatWake', 'ownerWake']), commands: { status: 'skipped' } };
   assert.equal((await f.relaunch.consider(pass('index-new.js', partial, 'degraded'))), null);
-  assert.equal((await f.relaunch.consider(pass('index-new.js', partial))).waiting, 'adapters still incomplete');
+  const waiting = await f.relaunch.consider(pass('index-new.js', partial));
+  assert.equal(waiting.reason, 'adapters still incomplete'); assert.equal(waiting.notBefore, NOW - 20_000 + 60_000);
   assert.equal(f.count('/usr/bin/osascript'), 0);
   // The late chunk arrives; earlier writes for this entry are remembered.
   const complete = installed(false);
@@ -53,6 +54,7 @@ test('a newly started idle Desktop is restarted once after every adapter is writ
   assert.equal((await f.record()).attempts.at(-1).outcome, 'relaunched');
   // The restarted Desktop loads the patched files; nothing is written, nothing repeats.
   assert.equal(await f.relaunch.consider(pass('index-new.js', installed(false))), null);
+  // A manual restart after a later write is recognized without another automatic one.
   assert.equal((await f.relaunch.consider(pass('index-new.js', installed(true)))).reason, 'already restarted for this frontend');
   assert.equal(f.count('/usr/bin/osascript'), 1);
 });
@@ -69,7 +71,7 @@ test('nothing is restarted when adapters were already installed or the pass is n
 test('work, age, identity and lifecycle each keep the resource restart-required without quitting', async t => {
   for (const [options, reason, state = 'restart-required'] of [
     [{ age: 61_000 }, 'Desktop is no longer newly started'],
-    [{ age: -5_000 }, 'Desktop is no longer newly started'],
+    [{ age: -5_000 }, undefined, 'current'],
     [{ extra: [[300, 100, '/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup --'], [301, 300, SESSION]] }, 'a Code session is running'],
     [{ entries: { a: { side: 'claude', kind: 'started', at: NOW - 5_000 } } }, 'Claude activity since start'],
     [{ bundleId: 'com.example.other' }, 'unrecognized Desktop application'],
@@ -80,7 +82,11 @@ test('work, age, identity and lifecycle each keep the resource restart-required 
     const f = await fixture(t, options), result = await f.relaunch.consider(pass('index-b.js', installed(true)));
     assert.equal(result.state, state, JSON.stringify(options)); assert.equal(result.reason, reason);
     assert.equal(f.count('/usr/bin/osascript'), 0); assert.equal(f.count('/usr/bin/open'), 0);
+    // A restart the user must make names the write it has to follow.
+    assert.equal(Number.isFinite(result.requiredSince), state === 'restart-required', JSON.stringify(options));
   }
+  const disabled = await fixture(t), manual = await disabled.relaunch.consider(pass('index-b.js', installed(true)), { automatic: false });
+  assert.equal(manual.reason, 'automatic restart is disabled'); assert.equal(disabled.count('/usr/bin/osascript'), 0);
   assert.equal((await (await fixture(t, { age: 58_000 })).relaunch.consider(pass('index-b.js', installed(true)))).state, 'relaunched');
   // A session elsewhere on the machine and a prompt from before this start are not this Desktop's work.
   const f = await fixture(t, { extra: [[400, 1, SESSION]], entries: { a: { side: 'claude', kind: 'started', at: NOW - 60_000 },

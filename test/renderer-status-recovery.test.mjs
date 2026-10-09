@@ -10,16 +10,17 @@ const refusal = 'Frontend cache discovery or maintenance refused; no native work
 const skipped = { state: 'skipped', reason: refusal };
 const ready = { state: 'ready', adapters: { folders: { status: 'matched', activation: 'load-not-verified' } } };
 
-async function idleWatcher(t, { initial = skipped, mapError = null, deferred = null } = {}) {
+async function idleWatcher(t, { initial = skipped, mapError = null, deferred = null, claudeRelaunch, relaunchAfterUpdate } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-renderer-status-')));
   const controller = new AbortController();
   const statuses = [];
   const calls = { status: 0, sync: 0, discover: 0, folders: 0, handoffs: 0, collect: 0, writes: 0 };
-  let clock = 1000, update, enteredWait, heartbeat, activeWrites = 0, overlappingWrites = false;
+  let clock = 1000, update, enteredWait, heartbeat, activeWrites = 0, overlappingWrites = false, pass;
   const waiting = new Promise(resolve => { enteredWait = resolve; });
   const state = { version: 2, pending: null, conversations: {}, records: [] };
   const work = runDesktopWatch({ root, signal: controller.signal,
-    config: { rendererAdapters: { enabled: true }, folderProjection: { enabled: true },
+    claudeRelaunch,
+    config: { rendererAdapters: { enabled: true, ...(relaunchAfterUpdate === undefined ? {} : { relaunchAfterUpdate }) }, folderProjection: { enabled: true },
       desktopLocalHandoff: { enabled: true } }, now: () => clock,
     heartbeatSleep: (ms, { signal }) => new Promise((resolve, reject) => {
       assert.equal(ms, 30_000, 'exercise the normal idle status heartbeat');
@@ -42,8 +43,8 @@ async function idleWatcher(t, { initial = skipped, mapError = null, deferred = n
     createHandoffPublisher: () => ({ async publish() {
       calls.handoffs++; return { actions: 0, anchors: 3, deferred: null };
     } }),
-    startRendererMaintenance: async ({ onStatus }) => {
-      update = onStatus; onStatus(structuredClone(initial));
+    startRendererMaintenance: async ({ onStatus, afterPass }) => {
+      update = onStatus; pass = afterPass; onStatus(structuredClone(initial));
       return { async close() {} };
     },
     events: { metrics: {}, async observe() {}, async acknowledge() {},
@@ -68,7 +69,7 @@ async function idleWatcher(t, { initial = skipped, mapError = null, deferred = n
   await waiting;
   const nativeCalls = () => Object.fromEntries(Object.entries(calls).filter(([key]) => key !== 'writes'));
   const before = nativeCalls();
-  return { statuses, calls, latest: () => statuses.filter(value => value.running).at(-1),
+  return { statuses, calls, latest: () => statuses.filter(value => value.running).at(-1), pass: value => pass(value),
     async change(value) {
       const writes = calls.writes;
       update(structuredClone(value));
@@ -146,4 +147,22 @@ test('the single transient recheck waits without hiding map errors or claiming a
     await f.change(ready);
     assert.equal(f.latest().folderProjection.state, options.mapError ? 'error' : options.deferred ? 'deferred' : 'ready');
   }
+});
+
+test('a restart the user must make is published with its write time and withdrawn by the next decision', async t => {
+  const seen = [], decisions = [
+    { state: 'restart-required', entry: 'index-new.js', reason: 'a Code session is running', requiredSince: 5000 },
+    { state: 'restart-required', entry: 'index-new.js', reason: 'adapters still incomplete', requiredSince: 6000, notBefore: 9000 },
+    { state: 'relaunched', entry: 'index-new.js' }, { state: 'restart-required', entry: 'index-new.js' }, null];
+  const watcher = await idleWatcher(t, { initial: ready, relaunchAfterUpdate: false,
+    claudeRelaunch: { consider: async (summary, options) => { seen.push(options); return decisions.shift(); } } });
+  for (const expected of [
+    { entry: 'index-new.js', requiredSince: 5000, reason: 'a Code session is running' },
+    { entry: 'index-new.js', requiredSince: 6000, reason: 'adapters still incomplete', notBefore: 9000 }, null, null, null]) {
+    await watcher.pass(ready); await watcher.change(ready);
+    assert.deepEqual(watcher.latest().claudeDesktopRestart, expected);
+  }
+  // The saved choice only disables the automatic restart; the request is still decided.
+  assert.deepEqual(seen[0], { automatic: false });
+  assert.equal((await idleWatcher(t, { initial: ready })).latest().claudeDesktopRestart, null);
 });
