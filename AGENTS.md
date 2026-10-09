@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.30 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.31 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1831,7 +1831,14 @@ Graphs are bounded to 2,048 cached modules and
 The independent chat-wake adapter uses the session-action module's unique native
 import binding and optional forkSession capability relationship (older branches
 repeat the same read),
-reopenClosed and amber_tributary_lantern_overview_toggle shortcut anchors. Folder
+reopenClosed and amber_tributary_lantern_overview_toggle shortcut anchors. The
+2026-10-08 build moved the shortcut and reopen handlers into other chunks: when
+no reachable module carries all three markers, the target is the single module
+that passes the structural proof (unique native import plus its optional
+forkSession capability read). Builds that still carry the markers keep the
+marker selection, because several of their modules pass that proof; two proven
+modules without markers stay ambiguous and skipped. There the target is the
+folder resource, so the shared combined recipe applies. Folder
 bootstrap no longer embeds another chat-wake consumer. Every adapter's entire
 transformed module must pass Acorn syntax validation before any cache publication.
 

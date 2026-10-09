@@ -4,7 +4,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FRONTEND_ASSET_ROOT, claudeCacheDirectory } from '../../src/claude-frontend-graph.mjs';
 
-export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shared = false, split = false } = {}) {
+export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shared = false, split = false, moved = false } = {}) {
   const names = { entry: `index-${tag}.js`, native: `native-${tag}.js`, react: `vendor-${tag}.js`, client: `mcp-${tag}.js`,
     folders: `sidebar-${tag}.js`, chatWake: `actions-${tag}.js`, ownerWake: `code-${tag}.js`, commands: `commands-${tag}.js` };
   const nativeImport = `import{Native${tag} as L${tag}}from"./${names.native}";`;
@@ -15,7 +15,14 @@ export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shar
     + `function key${tag}(e){if(e.isScratchWorkspace)return;let t=e.repoInfo;if(t)return e.type==="local"?e.cwd:e.type==="bridge"&&e.environmentId?e.environmentId+":"+t.name:t.name}`
     + `var empty${tag}=[];function group${tag}(rows${tag},t,n){let cache${tag}=memo${tag}(${memoSize}),sort${tag}=t===void 0?"recent":t,a=n===void 0?empty${tag}:n,{data:o}=data${tag}(),env${tag}=o?.environments,order${tag}=Array.isArray(a)?a:empty${tag},out${tag};`
     + `if(cache${tag}[0]!==env${tag}||cache${tag}[1]!==order${tag}||cache${tag}[2]!==rows${tag}||cache${tag}[3]!==sort${tag}){let map=new Map;for(let row${tag} of rows${tag}){let k${tag}=key${tag}(row${tag});if(!k${tag})continue;let running=row${tag}.sessionStatus==="running",stamp=new Date(row${tag}.timestamp).getTime(),repo=row${tag}.repoInfo;map.set(k${tag},{name:repo?.name??k${tag},hasActive:running,latestTimestamp:stamp})}out${tag}=[];for(let[k,e]of map)out${tag}.push({key:k,name:e.name,hasActiveSessions:e.hasActive,disambiguationText:null,latestTimestamp:e.latestTimestamp});cache${tag}[0]=env${tag},cache${tag}[1]=order${tag},cache${tag}[2]=rows${tag},cache${tag}[3]=sort${tag},cache${tag}[4]=out${tag}}else out${tag}=cache${tag}[4];return out${tag}}`;
-  const chatWake = nativeImport + `function actions${tag}(){let enabled=L${tag}?.forkSession!==void 0;shortcut("amber_tributary_lantern_overview_toggle");return enabled?"reopenClosed":null}`;
+  // moved: the 2026-10-08 layout, whose shortcut and reopen handlers live in
+  // other chunks than the session-action module. 'duplicate' adds a second
+  // module that passes the same structural proof.
+  const chatWake = nativeImport + (moved ? `function actions${tag}(){let enabled=L${tag}?.forkSession!==void 0;return enabled?1:null}`
+    : `function actions${tag}(){let enabled=L${tag}?.forkSession!==void 0;shortcut("amber_tributary_lantern_overview_toggle");return enabled?"reopenClosed":null}`);
+  const relocated = moved ? { shortcuts: `shortcut("amber_tributary_lantern_overview_toggle");`, reopen: `var reopen${tag}="reopenClosed";`,
+    ...(moved === 'duplicate' ? { duplicate: nativeImport + `function other${tag}(){return L${tag}?.forkSession!==void 0}` } : {}) } : {};
+  for (const kind of Object.keys(relocated)) names[kind] = `${kind}-${tag}.js`;
   let ownerWake = `import{Effect${tag} as effect${tag}}from"./${names.react}";import{Client${tag}}from"./${names.client}";`
     + `function view${tag}(e){let{initialSessionId:s,sessionType:type}=e;let ref${tag}=s?{id:s,type}:null,id${tag}=ref${tag}?.id??null,reader${tag};reader${tag}=()=>ref${tag};let current${tag}=event${tag}(reader${tag}),send${tag};send${tag}=async(text,options)=>{if(options?.blocked)return "blocked";await images.waitForImagesReady();let selected${tag}=current${tag}();return nativeSend(text,options,selected${tag})};let dispatch${tag}=event${tag}(send${tag});return{submitMessage:e=>void dispatch${tag}(e),getComposerSnapshot:()=>({}),dispatch:dispatch${tag}}}`;
   if (variants) {
@@ -35,7 +42,7 @@ export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shar
   }
   const entry = [...new Set(Object.values(names).filter(f => f !== names.entry))].map(f => `import"./${f}";`).join('') + 'document.getElementById("root");';
   const commands = nativeImport + `async function commands${tag}(cwd,session){return L${tag}?.getSupportedCommands?L${tag}.getSupportedCommands({cwd:session?void 0:cwd??void 0,sessionId:session??void 0}):[]}function selected${tag}(e){return e.trustedSelectedFolder}const cold${tag}="empty slash-command list (cold CLI bridge)";`;
-  const sources = { entry, native, react, client, folders, chatWake: shared ? folders : chatWake, ownerWake, commands, ...(split ? { consumer } : {}) };
+  const sources = { entry, native, react, client, folders, chatWake: shared ? folders : chatWake, ownerWake, commands, ...(split ? { consumer } : {}), ...relocated };
   return { names, sources, tag };
 }
 export function cacheBytes(url, source, fetchedAt) {

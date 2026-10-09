@@ -331,6 +331,33 @@ test('repeated capability reads retain one native binding; another native bindin
   assert.throws(()=>chatAnchors(target.source+`import{Nativea as otherNative}from"./${f.build.names.native}";let second=otherNative?.forkSession!==void 0;`,lookup),/missing or ambiguous/);
 });
 
+test('a session-action module without its former markers is selected by its unique structural proof',async t=>{
+  for (const shared of [false,true]) {
+    const f=await fixture(t,'a',{moved:true,shared}),graph=await discoverClaudeFrontend(f);
+    assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));
+    assert.equal(graph.adapters.chatWake.target.url,f.resources[shared?'folders':'chatWake'].url);
+    assert.equal(graph.adapters.chatWake.bindings.native,'La');
+    const result=await ensureClaudeRendererAdapters(f);
+    assert.ok(Object.values(result.adapters).every(a=>a.status==='installed'));
+    assert.equal((await sourceOf(f.resources.chatWake)).split('[Claudex chat wake] loaded').length,2);
+  }
+  // Two modules passing the proof are ambiguous; the other adapters still install.
+  const f=await fixture(t,'a',{moved:'duplicate'}),graph=await discoverClaudeFrontend(f);
+  assert.equal(graph.adapters.chatWake.status,'skipped');assert.match(graph.adapters.chatWake.reason,/chatWake target module missing or ambiguous/);
+  const result=await ensureClaudeRendererAdapters(f);
+  assert.equal(result.adapters.chatWake.status,'skipped');assert.equal(result.adapters.folders.status,'installed');
+  assert.deepEqual(await readFile(f.resources.chatWake.path),f.resources.chatWake.bytes);
+  // A build that still carries the markers keeps that selection even when
+  // another module passes the proof.
+  const marked=frontendBuild('a');marked.names.duplicate='duplicate-a.js';
+  marked.sources.duplicate=`import{Nativea as La}from"./${marked.names.native}";function othera(){return La?.forkSession!==void 0}`;
+  marked.sources.entry=`import"./${marked.names.duplicate}";`+marked.sources.entry;
+  const base=await realpath(await mkdtemp(join(tmpdir(),'claudex-frontend-')));t.after(()=>rm(base,{recursive:true,force:true}));
+  const root=join(base,'state'),home=join(base,'home');await mkdir(root,{mode:0o700});await mkdir(home,{mode:0o700});
+  const resources=await writeFrontend(home,marked),selected=await discoverClaudeFrontend({root,home});
+  assert.equal(selected.adapters.chatWake.target.url,resources.chatWake.url);
+});
+
 test('shared folder/chat resources have one atomic journal, recover, disable folders and restore',async t=>{
   const f=await fixture(t,'a',{variants:true,shared:true}),graph=await discoverClaudeFrontend(f);
   assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'));assert.equal(graph.adapters.folders.target.url,graph.adapters.chatWake.target.url);

@@ -259,12 +259,21 @@ try {
       const graph = await discoverClaudeFrontend(f);
       for (const adapter of adapters) {
         const target = graph.adapters[adapter].target, installed = inspectFolderCache(await readFile(target.path), { targetURL: target.url });
-        await nodeCheck(installed.source, target.name); patchContracts[adapter](installed.source, target.source, graph.adapters[adapter].bindings);
+        // A chat bootstrap sharing the folder resource follows the folder transform.
+        let baseline = target.source;
+        if (adapter === 'chatWake' && graph.adapters.folders.target.url === target.url) {
+          const candidate = await buildClaudeRendererCandidate({ ...f, adapter: 'folders', matched: graph.adapters.folders, original: modules.get(target.url).bytes });
+          baseline = inspectFolderCache(candidate, { targetURL: target.url }).source;
+        }
+        await nodeCheck(installed.source, target.name); patchContracts[adapter](installed.source, baseline, graph.adapters[adapter].bindings);
       }
       const again = await ensureClaudeRendererAdapters(f); assert.ok(Object.values(again.adapters).every(a => a.status === 'installed' && !a.changed));
       for (const adapter of adapters) {
         const target = graph.adapters[adapter].target;
-        await restoreClaudeRendererAdapter({ ...f, adapter, cachePath: target.path }); assert.deepEqual(await readFile(target.path), modules.get(target.url).bytes);
+        // Restoring the folder adapter restores a shared resource completely.
+        if (adapter !== 'chatWake' || graph.adapters.folders.target.url !== target.url)
+          await restoreClaudeRendererAdapter({ ...f, adapter, cachePath: target.path });
+        assert.deepEqual(await readFile(target.path), modules.get(target.url).bytes);
       }
       report.transitions.push({ from: basename(previous.entry.url), to: targetEntry, status: 'passed', entryPoint: 'startClaudeRendererMaintenance',
         actualFilesystemNotifications: true, adapters: statuses.at(-1).adapters, oldOriginalsAndReceipts: 'unchanged', idempotentReinstall: 'passed', restore: 'passed' });

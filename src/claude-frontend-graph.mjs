@@ -167,15 +167,25 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
   for (const module of modules.values()) if (!same(module.identity, await nativeCacheRead(() => lstat(module.path, { bigint: true })))) fail('graph changed during discovery');
   if (!same(entry.snapshot.info, await nativeCacheRead(() => lstat(entry.path, { bigint: true })))) fail('entry changed during discovery');
   const adapters = {};
-  for (const [adapter, probe, plausible] of [
+  for (const [adapter, probe, plausible, byProof] of [
     ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('isScratchWorkspace')],
-    ['chatWake', chatAnchors, s => s.includes('forkSession') && s.includes('amber_tributary_lantern_overview_toggle') && s.includes('reopenClosed')],
+    ['chatWake', chatAnchors, s => s.includes('forkSession') && s.includes('amber_tributary_lantern_overview_toggle') && s.includes('reopenClosed'),
+      // The 2026-10-08 build moved the shortcut and reopen handlers out of the
+      // session-action module. When no module carries all three markers, its
+      // identity is the structural proof alone: exactly one reachable module
+      // may pass it. Builds that still carry the markers keep that selection,
+      // because several of their modules pass the proof.
+      s => s.includes('forkSession')],
     ['ownerWake', ownerAnchors, s => s.includes('submitMessage') && s.includes('getComposerSnapshot') && s.includes('initialSessionId')],
     ['commands', commandCatalogAnchors, s => s.includes('empty slash-command list (cold CLI bridge)') && s.includes('trustedSelectedFolder') && s.includes('getSupportedCommands')],
   ]) {
     try {
-      const target = unique([...modules.values()].filter(m => plausible(m.source)), `${adapter} target module`);
-      const graph = { get: path => modules.get(new URL(path, target.url).href) };
+      const imports = module => ({ get: path => modules.get(new URL(path, module.url).href) });
+      const proven = module => { try { probe(module.source, imports(module)); return true; } catch { return false; } };
+      const marked = [...modules.values()].filter(m => plausible(m.source));
+      const target = unique(marked.length || !byProof ? marked
+        : [...modules.values()].filter(m => byProof(m.source) && proven(m)), `${adapter} target module`);
+      const graph = imports(target);
       const bindings = probe(target.source, graph);
       let consumer;
       if (adapter === 'folders' && bindings.pure) {
