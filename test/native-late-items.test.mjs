@@ -127,6 +127,107 @@ test('no late item leaves unrelated native lifecycle schemas to the normal API r
   assert.equal(await prove(source), null);
 });
 
+const laterId = '00000000-0000-4000-8000-000000000004';
+const laterTurn = () => [start(laterId, 300), context(laterId, 300)];
+const lateAt = (ms, mutate = () => {}) => { const row = completion(rawCommand(), turnId, ms); mutate(row); return row; };
+
+test('a command that finishes while a later turn runs is placed after the newest closed turn', async t => {
+  const source = await fixture(t, raw => {
+    raw.pop();
+    raw.push(frame('event_msg', { type: 'thread_settings_applied' }, 299000), frame('event_msg', { type: 'thread_settings_applied' }, 299500),
+      ...laterTurn(), frame('response_item', { type: 'message', role: 'user', content: [] }, 300300), lateAt(300500));
+  });
+  const proof = await prove(source);
+  assert.deepEqual(proof.placements.map(placement => placement.afterTurnId), [afterId]);
+  assert.equal(proof.withheld, undefined);
+  assert.equal(nativeHistoryEntries({ ...source.native, lateItemEvidence: proof }).at(-1).item.id, 'exec-synthetic');
+});
+
+test('observed native variants of one late completion are the same proof', async t => {
+  for (const mutate of [
+    raw => { raw.at(-1).timestamp = new Date(202014).toISOString(); },
+    raw => { delete raw.at(-1).payload.started_at_ms; },
+    raw => { raw[0].payload.dynamic_tools = []; raw[2].payload.cyber_access_program = null; raw.splice(3, 0, structuredClone(raw[2])); },
+    raw => { delete raw[1].payload.root_turn_id; raw[1].payload.turn_attribution = 'user'; raw[3].payload.root_turn_id = turnId; },
+    (raw, native) => { const item = raw.at(-1).payload.item; item.aggregated_output = item.stdout = item.formatted_output = '';
+      native.turns[0].items.at(-1).aggregatedOutput = null; },
+    (raw, native) => { raw.at(-1).payload.item.cwd = pathToFileURL('/tmp/other project').href; native.turns[0].items.at(-1).cwd = '/tmp/other project'; },
+  ]) {
+    const source = await fixture(t, mutate);
+    assert.deepEqual((await prove(source)).placements.map(placement => placement.afterTurnId), [afterId]);
+  }
+});
+
+test('interrupted and failed turns are closed boundaries with their exact native stop', async t => {
+  const aborted = (id, seconds) => frame('event_msg', { type: 'turn_aborted', turn_id: id, reason: 'interrupted',
+    started_at: seconds, completed_at: seconds + 1, duration_ms: 900 }, (seconds + 1) * 1000);
+  const interrupted = await fixture(t, (raw, native) => { raw[3] = aborted(turnId, 100); raw[6] = aborted(afterId, 200);
+    native.turns[0].status = native.turns[1].status = 'interrupted'; });
+  const proof = await prove(interrupted);
+  assert.equal(proof.placements.length, 1);
+  // The closed status of the boundary still precedes the late command.
+  assert.deepEqual(nativeHistoryEntries({ ...interrupted.native, lateItemEvidence: proof }).slice(-2).map(entry => entry.kind), ['closedTurnStatus', 'item']);
+  const failed = await fixture(t, (raw, native) => { raw[6].payload.error = { message: 'Synthetic failure.' };
+    raw[6].payload.last_agent_message = null; native.turns[1].status = 'failed'; native.turns[1].error = { message: 'Synthetic failure.' }; });
+  assert.equal((await prove(failed)).placements.length, 1);
+});
+
+test('a command arriving after a boundary that is not exported yet waits for that boundary', async t => {
+  const finalId = '00000000-0000-4000-8000-000000000005';
+  const compaction = { id: laterId, status: 'completed', error: null, itemsView: 'full', startedAt: 300, completedAt: 301,
+    items: [{ type: 'contextCompaction', id: 'compaction-synthetic' }] };
+  // A compaction-only turn has no context, reply or first-token time.
+  const control = () => { const row = stop(laterId, 300); delete row.payload.time_to_first_token_ms; row.payload.last_agent_message = null;
+    return [start(laterId, 300), row]; };
+  const trailing = await fixture(t, raw => { raw.pop(); raw.push(...control(), lateAt(302000)); });
+  const proof = await prove(trailing);
+  assert.deepEqual(proof.placements, []);
+  assert.deepEqual(proof.withheld.map(placement => placement.afterTurnId), [laterId]);
+  assert.deepEqual(nativeHistoryEntries({ ...trailing.native, lateItemEvidence: proof }).map(entry => entry.item.id),
+    ['user-one', 'agent-one', 'user-two', 'agent-two']);
+  const initial = snapshot(); initial.turns[0].items.pop();
+  const previous = convertNativeTurns(initial, { threadId, cwd }), checkpoint = { count: previous.messages.length, digest: fingerprint(previous) };
+  const exported = await exportNativeHistory({ client: client({ turns: [...trailing.native.turns, compaction] }), threadId, cwd,
+    completedPrefix: true, resolveLateItems: trailing.resolver, checkpoint });
+  assert.equal(exported.common.messages.length, 4);
+  assert.equal(fingerprint(exported.common), checkpoint.digest);
+  // Once a real reply follows, the boundary and then the command are exported.
+  const published = await fixture(t, (raw, native) => {
+    raw.pop(); raw.push(...control(), lateAt(302000), start(finalId, 400), context(finalId, 400), stop(finalId, 400));
+    native.turns.push(compaction, { id: finalId, status: 'completed', error: null, itemsView: 'full', startedAt: 400, completedAt: 401,
+      items: [user('user-three'), agent('agent-three')] });
+  });
+  const later = await prove(published);
+  assert.equal(later.withheld, undefined);
+  assert.deepEqual(nativeHistoryEntries({ ...published.native, lateItemEvidence: later }).map(entry => entry.item.id),
+    ['user-one', 'agent-one', 'user-two', 'agent-two', 'compaction-synthetic', 'exec-synthetic', 'user-three', 'agent-three']);
+  const continued = await exportNativeHistory({ client: client(published.native), threadId, cwd, completedPrefix: true,
+    resolveLateItems: published.resolver, checkpoint });
+  assert.equal(fingerprint(continued.common, checkpoint.count), checkpoint.digest);
+  assert.equal(continued.common.messages.length, 8);
+});
+
+test('a checkpoint that already holds earlier late commands in native order still authenticates', async t => {
+  const second = () => ({ ...rawCommand(), id: 'exec-second' });
+  const source = await fixture(t, (raw, native) => {
+    raw.push(...laterTurn(), stop(laterId, 300), completion(second(), afterId, 302000));
+    raw.at(-1).payload.started_at_ms = 200500;
+    native.turns[1].items.push({ ...apiCommand(), id: 'exec-second' });
+    native.turns.push({ id: laterId, status: 'completed', error: null, itemsView: 'full', startedAt: 300, completedAt: 301,
+      items: [user('user-three'), agent('agent-three')] });
+  });
+  // Saved while the first late command was already listed in its own turn and
+  // before the second one arrived.
+  const saved = structuredClone(source.native); saved.turns[1].items.pop();
+  const previous = convertNativeTurns(saved, { threadId, cwd }), checkpoint = { count: previous.messages.length, digest: fingerprint(previous) };
+  const exported = await exportNativeHistory({ client: client(source.native), threadId, cwd, completedPrefix: true,
+    resolveLateItems: source.resolver, checkpoint });
+  assert.equal(fingerprint(exported.common, checkpoint.count), checkpoint.digest);
+  assert.equal(exported.common.messages.length, checkpoint.count + 1);
+  assert.match(exported.common.messages.at(-1).content[0].text, /exec-second/);
+  assert.match(exported.common.messages[2].content[0].text, /exec-synthetic/);
+});
+
 const invalid = [
   ['actual command change', (_raw, native) => { native.turns[0].items.at(-1).command += ' changed'; }],
   ['actual output change', (_raw, native) => { native.turns[0].items.at(-1).aggregatedOutput += ' changed'; }],
@@ -144,17 +245,19 @@ const invalid = [
   ['wrong thread', raw => { raw.at(-1).payload.thread_id = afterId; }],
   ['unknown late parent', raw => { raw.at(-1).payload.turn_id = '00000000-0000-4000-8000-000000000099'; }],
   ['wrong header', raw => { raw[0].payload.id = afterId; }],
-  ['unknown header metadata', raw => { raw[0].payload.new_metadata = null; }],
   ['wrong parent API time', (_raw, native) => { native.turns[0].startedAt++; }],
   ['wrong native start second', raw => { raw[1].payload.started_at++; }],
   ['wrong context cwd', raw => { raw[2].payload.cwd = '/tmp/foreign'; }],
-  ['unknown context field', raw => { raw[2].payload.new_metadata = null; }],
-  ['repeated parent context', raw => { raw.splice(3, 0, structuredClone(raw[2])); }],
   ['wrong exact final reply', raw => { raw[3].payload.last_agent_message += ' changed'; }],
-  ['active turn arrival', raw => { const late = raw.pop(); raw.splice(6, 0, late); }],
   ['malformed start cannot prove idle', raw => { raw.splice(7, 0, frame('event_msg', { type: 'task_started', turn_id: null }, 201500)); }],
   ['ambiguous activity before arrival', raw => { raw.splice(7, 0, frame('response_item', { type: 'message', role: 'user', content: [] }, 201500)); }],
-  ['completed timestamp differs', raw => { raw.at(-1).payload.completed_at_ms++; }],
+  ['completion recorded after its row', raw => { raw.at(-1).payload.completed_at_ms++; }],
+  ['missing parent context', raw => { raw.splice(2, 1); }],
+  ['context of another turn identity', raw => { raw[2].payload.root_turn_id = afterId; }],
+  ['command outside a file path', raw => { raw.at(-1).payload.item.cwd = 'relative/project'; }],
+  ['command directory differs from the API', raw => { raw.at(-1).payload.item.cwd = pathToFileURL('/tmp/other project').href; }],
+  ['unrecognized activity before the running turn', raw => { raw.push(frame('response_item', { type: 'message' }, 250000), ...laterTurn(), raw.splice(7, 1)[0]); }],
+  ['failed stop without an API error', raw => { raw[6].payload.error = { message: 'Synthetic.' }; }],
   ['start after parent stop', raw => { raw.at(-1).payload.started_at_ms = 150000; }],
   ['prior same item', raw => { const prior = structuredClone(raw.at(-1)); prior.timestamp = new Date(100500).toISOString(); prior.payload.type = 'item_started'; raw.splice(3, 0, prior); }],
   ['duplicate late item', raw => { raw.push(structuredClone(raw.at(-1))); }],
@@ -174,7 +277,10 @@ test('source aliases, foreign permissions, bounds and ambiguous serialized frame
   await symlink(source.path, alias);
   await assert.rejects(createNativeLateItemResolver({ path: alias, threadId, cwd })(source.native, { threadId }), /regular file/);
   await rm(alias); await link(source.path, alias); await assert.rejects(prove(source), /single-link/); await rm(alias);
-  await chmod(source.path, 0o640); await assert.rejects(prove(source), /private/); await chmod(source.path, 0o600);
+  // Native writes rollouts readable by others; only write access is refused.
+  await chmod(source.path, 0o644); assert.equal((await prove(source)).placements.length, 1);
+  for (const mode of [0o660, 0o602]) { await chmod(source.path, mode); await assert.rejects(prove(source), /group or world write/); }
+  await chmod(source.path, 0o600);
   await assert.rejects(createNativeLateItemResolver({ path: source.path, threadId, cwd, maxBytes: 16 })(source.native, { threadId }), /bounded/);
   await writeFile(source.path, source.text.trimEnd()); await assert.rejects(prove(source), /incomplete final/);
   await writeFile(source.path, source.text.replace('"ordinal":7', '"ordinal":6')); await assert.rejects(prove(source), /ordinal chain/);

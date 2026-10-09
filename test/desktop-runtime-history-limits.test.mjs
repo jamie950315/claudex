@@ -85,9 +85,9 @@ test('normal full API history and a matching verified prefix never request late 
     continuation.items.splice(1, 0, { type: 'commandExecution', id: randomUUID(), source: 'unifiedExecStartup',
       status: 'failed', command: 'Historical command', aggregatedOutput: 'Historical output', exitCode: -1 });
     f.turns.push(continuation);
-    // This deliberately refuses the late resolver's strict private-file guard.
+    // This deliberately refuses the late resolver's source write-access guard.
     // No large fixture is needed: entering raw proof would fail immediately.
-    await chmod(f.record.path, 0o644);
+    await chmod(f.record.path, 0o660);
     const before = await readFile(f.record.path);
     const fresh = await f.runtime.inspect(f.record);
     assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 2);
@@ -107,11 +107,11 @@ test('a verified prefix mismatch invokes strict late proof and preserves native 
     const command = { type: 'commandExecution', id: randomUUID(), source: 'unifiedExecStartup',
       status: 'failed', command: 'Historical command', aggregatedOutput: 'Original output', exitCode: -1 };
     continuation.items.splice(1, 0, command); f.turns.push(continuation);
-    await chmod(f.record.path, 0o644);
+    await chmod(f.record.path, 0o660);
     const baseline = await f.runtime.inspect(f.record), before = await readFile(f.record.path);
     Object.assign(f.record, { verified: true, checkpoint: { count: baseline.common.messages.length, digest: baseline.digest } });
     command.aggregatedOutput = 'Changed historical output'; f.calls.length = 0;
-    await assert.rejects(f.runtime.inspect(f.record), /Native Codex late item: source must be a private, owned, single-link bounded regular file/);
+    await assert.rejects(f.runtime.inspect(f.record), /Native Codex late item: source must be an owned, single-link bounded regular file without group or world write access/);
     assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 3);
     assert.deepEqual(await readFile(f.record.path), before);
     assert.deepEqual(f.record.checkpoint, { count: baseline.common.messages.length, digest: baseline.digest });

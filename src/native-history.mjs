@@ -5,7 +5,7 @@ import { assertComplete, fingerprint } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { isNativeInitialGoalRequest } from './native-goal-request.mjs';
-import { nativeHistoryEntries, nativeImagePositions } from './native-history-order.mjs';
+import { nativeHistoryEntries, nativeImagePositions, lateItemRepresentations } from './native-history-order.mjs';
 
 export const NATIVE_HISTORY_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
@@ -359,10 +359,9 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
       && alternatives.every(value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)))
       goals.push(...alternatives.map(prefixHash => ({ ...first.initialGoal,
         request: { ...first.initialGoal.request, prefixHash } })));
-    const orders = first.lateItemEvidence ? ['legacy', 'arrival'] : ['arrival'];
     let matched = false;
-    outer: for (const nativeItemOrder of orders) for (const initialGoal of goals) {
-      const candidateSnapshot = { ...hydrated, nativeItemOrder, initialGoal };
+    outer: for (const representation of lateItemRepresentations(hydrated)) for (const initialGoal of goals) {
+      const candidateSnapshot = { ...hydrated, ...representation, initialGoal };
       const candidate = convertNativeTurns(candidateSnapshot, { threadId, cwd, timestamp: suppliedTimestamp });
       if (candidate.messages.length >= checkpoint.count && fingerprint(candidate, checkpoint.count) === checkpoint.digest) {
         common = candidate; selected = candidateSnapshot; matched = true; break outer;

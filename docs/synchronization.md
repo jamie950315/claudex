@@ -1193,9 +1193,29 @@ source-truncated output. The destination transcript visibly states that limit.
 A native command completion can arrive after its parent turn has completed.
 The API may insert that result into the old turn. Claudex retains the complete
 result as inert historical data at its verified arrival boundary. This ordering
-requires stable original rollout snapshots, exact raw/API item correspondence,
-matching turn lifecycles, and an idle arrival after a completed turn. It never
-moves or rewrites native turns. An existing checkpoint must authenticate the
+requires stable original rollout snapshots, exact raw/API item correspondence
+and matching turn lifecycles. The boundary is the newest turn already closed
+when the completion was written, whether Codex was idle or a later turn was
+running. A closed turn is a completed, failed or interrupted one, including a
+compaction-only turn. When that boundary is not exported yet (a trailing
+compaction-only turn), the command is held back with it and appears right
+after it later. A turn proven empty is never exported and is skipped. It never
+moves or rewrites native turns.
+
+The proof compares only what orders the command: turn and thread identities,
+lifecycle times, the working directory of each context, and the complete
+command item. It accepts the variants observed in native rollouts: files
+readable by other users, a completion recorded a few milliseconds before its
+row was written, a completion without a start time, an empty output the API
+reports as null, a command run in another directory, and metadata fields
+native adds to header and context rows. A checkpoint saved while earlier late
+commands were still listed in their own turn remains valid: the first arrivals
+stay there and only the later ones use their boundary. The whole saved
+checkpoint must match one of these representations.
+
+Not covered, and reported per conversation: a rollout continued from an
+earlier segment (`history_base`), overlapping turn lifecycles, a command whose
+API text was redacted, and late items that are not commands. An existing checkpoint must authenticate the
 entire portable prefix, including recovered images; an already authenticated
 API ordering remains preserved. Unknown item schemas, ambiguous lifecycles,
 changed sources and genuine prefix edits still block synchronization. The

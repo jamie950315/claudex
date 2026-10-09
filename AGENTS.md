@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.28 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.29 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -283,13 +283,24 @@ bounded polling harness, not a production fallback.
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
-- Late native command completions may be rendered at their proven idle arrival
-  boundary without changing native turn grouping. Require an exact stable raw/API
-  item match and lifecycle proof, then authenticate the entire existing portable
-  checkpoint before using that ordering. Keep image positions bound to exact
-  native item identities. Preserve an already authenticated API ordering; unknown
-  schemas, ambiguous arrivals and real history edits still block. Never drop a
-  late result, rebase a checkpoint or repair native transcripts to clear a block.
+- Late native command completions are rendered at their proven arrival boundary
+  without changing native turn grouping: the newest turn already closed when
+  the completion row was written, idle or while a later turn was running. Closed
+  means completed (also compaction-only, without a reply), failed with its
+  error, or interrupted. A boundary not exported yet withholds the command until
+  it is; a proven empty turn is skipped. Require an exact stable raw/API item
+  match and lifecycle proof, then authenticate the entire existing portable
+  checkpoint. The checkpoint selects the representation: all native, all at
+  their boundary, or the first arrivals native and the rest at their boundary.
+  Row position is the arrival evidence; a completion time may precede its row
+  but never follow it. Compare only fields the proof uses: unknown header or
+  context metadata is ignored, while lifecycle, completion and command fields
+  stay exact. Rollouts readable by others are accepted; group or world write
+  access is refused, as for the empty-turn reader. Keep image positions bound to
+  exact native item identities. Rollover segments, overlapping lifecycles,
+  redacted command text, non-command late items and real history edits still
+  block. Never drop a late result, rebase a checkpoint or repair native
+  transcripts to clear a block.
   Request this extra proof only after normal API export fails its whole verified
   checkpoint match. Exact normal matches and initial enrollment retain their
   existing export path; do not impose proof-reader bounds on ordinary histories.

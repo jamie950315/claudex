@@ -7,7 +7,7 @@ import { convertNativeTurns, readStableNativeHistory, NATIVE_HISTORY_LIMITS } fr
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { hasPortableInitialDelegation } from './codex-delegation.mjs';
 import { hasPortableInitialGoalRequest } from './native-goal-request.mjs';
-import { nativeImagePositions } from './native-history-order.mjs';
+import { nativeImagePositions, lateItemRepresentations } from './native-history-order.mjs';
 
 const RECEIPT_LABEL = '[Claudex import receipt — not an AI response]';
 
@@ -119,7 +119,7 @@ export function decodeOwnedCodexNativeHistory({ snapshot, conversationId, target
   // This view is used only for the continuation, never for decoding the packet.
   const display = convertNativeTurns(snapshot, { threadId: sessionId, cwd, timestamp, includeNotice: false });
   const first = snapshot.turns[0];
-  if (snapshot.lateItemEvidence?.placements.some(placement => placement.turnId === first.id))
+  if ([...snapshot.lateItemEvidence?.placements ?? [], ...snapshot.lateItemEvidence?.withheld ?? []].some(placement => placement.turnId === first.id))
     throw new Error('Owned Codex checkpoint bootstrap cannot contain a late native item.');
   if (first.items.length !== 2) throw new Error('Owned Codex checkpoint turn must contain exactly its packet and receipt.');
   const content = bootstrapContent(first.items[0]);
@@ -159,12 +159,15 @@ export async function exportOwnedCodexHistory({ client, limits, completedPrefix 
   let selected = snapshot, result = decodeOwnedCodexNativeHistory({ ...options, snapshot });
   if (native.lateItemEvidence && checkpoint && Number.isSafeInteger(checkpoint.count) && checkpoint.count > 0
     && /^[a-f0-9]{64}$/.test(checkpoint.digest ?? '')) {
-    const legacy = { ...snapshot, nativeItemOrder: 'legacy' };
-    const candidate = decodeOwnedCodexNativeHistory({ ...options, snapshot: legacy });
-    if (candidate.common.messages.length >= checkpoint.count && fingerprint(candidate.common, checkpoint.count) === checkpoint.digest) {
-      result = candidate; selected = legacy;
-    } else if (result.common.messages.length < checkpoint.count || fingerprint(result.common, checkpoint.count) !== checkpoint.digest)
-      throw new Error('Owned Codex late native item ordering does not match the verified canonical checkpoint; synchronization paused.');
+    let matched = false;
+    for (const representation of lateItemRepresentations(snapshot)) {
+      const candidateSnapshot = { ...snapshot, ...representation };
+      const candidate = decodeOwnedCodexNativeHistory({ ...options, snapshot: candidateSnapshot });
+      if (candidate.common.messages.length >= checkpoint.count && fingerprint(candidate.common, checkpoint.count) === checkpoint.digest) {
+        result = candidate; selected = candidateSnapshot; matched = true; break;
+      }
+    }
+    if (!matched) throw new Error('Owned Codex late native item ordering does not match the verified canonical checkpoint; synchronization paused.');
   }
   if (Buffer.byteLength(JSON.stringify(result.common)) > (limits?.maxBytes ?? NATIVE_HISTORY_LIMITS.maxBytes)) throw new Error('Owned Codex history exceeds the converted byte limit; no partial history was returned.');
   return { ...result, turnCount: snapshot.turnCount, itemCount: snapshot.itemCount, bytes: snapshot.bytes, pages: snapshot.pages,
