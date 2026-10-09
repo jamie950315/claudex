@@ -11,9 +11,10 @@ export function astValue(value) {
     .map(([k, v]) => [k, astValue(v)]));
 }
 const functionsFor = (ast, name) => {
-  const declared = ast.body.find(n => n.type === 'FunctionDeclaration' && n.id.name === name);
+  const body = ast.body.flatMap(n => n.type === 'ExportNamedDeclaration' && n.declaration ? [n.declaration] : [n]);
+  const declared = body.find(n => n.type === 'FunctionDeclaration' && n.id.name === name);
   if (declared) return [declared];
-  const d = ast.body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations).find(n => n.id.name === name);
+  const d = body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations).find(n => n.id.name === name);
   if (!d) return [];
   return d.init.type === 'ConditionalExpression' ? [d.init.consequent, d.init.alternate] : [d.init];
 };
@@ -45,7 +46,7 @@ export function ownerPatchContract(source, original, b) {
       && n.expression.type === 'CallExpression' && n.expression.callee.name === b.effect && nodes(n, isSignal).length), 'selection effect');
     assert.deepEqual(astValue(effect.expression.arguments[1]), expression(`[${v.ref}?.id,${v.ref}?.type]`));
     f.body.body.splice(f.body.body.indexOf(effect), 1);
-    const send = only(nodes(f, n => n.type === 'ArrowFunctionExpression' && n.async && nodes(n, isSignal).includes(submit)), 'native send');
+    const send = only(nodes(f, n => ['ArrowFunctionExpression', 'FunctionExpression'].includes(n.type) && n.async && nodes(n, isSignal).includes(submit)), 'native send');
     const first = send.body.body.shift();
     assert.equal(first.type, 'BlockStatement', 'submit signals before native early refusals');
     assert.deepEqual(astValue(first), astValue(syntax(`{const ref=${v.getter}();void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type);}`).body[0]));

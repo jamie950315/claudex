@@ -112,7 +112,8 @@ async function validateTarget(adapter, matched, f) {
   }
   return { status: 'passed', asset: basename(target.url), cacheFilename: target.name, originalSourceSHA256: target.sourceHash,
     targetCount: 1, anchors: 'resolved', nodeCheck: 'passed', vendorASTAndWiring: 'passed',
-    variants: bindings.variants?.length ?? 1, ...(consumer ? { consumer } : {}), ...(bindings.client ? { client: bindings.client } : { native: bindings.native }) };
+    variants: bindings.variants?.length ?? 1, ...(consumer ? { consumer } : {}), ...(bindings.search ? { search: bindings.search } : {}),
+    ...(bindings.client ? { client: bindings.client } : { native: bindings.native }) };
 }
 
 async function historicalPin(adapter, module) {

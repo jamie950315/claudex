@@ -85,7 +85,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
             ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : {}),
             entry: result.entry, missingChunks: result.missingChunks,
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
-              { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
+              { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation', 'search'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
                 ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) });
           retryInterruptedCache();
         } catch (error) {

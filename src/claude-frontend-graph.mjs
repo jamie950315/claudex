@@ -155,7 +155,7 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
     const original = await originalEntry(root, resource.name, { ...snapshot, path: resource.path }, url);
     const module = { ...resource, ...original, currentHash: snapshot.hash, identity: snapshot.info };
     modules.set(url, module);
-    for (const spec of assetImports(original.source)) {
+    for (const spec of assetImports(original.source, module)) {
       const target = new URL(spec, url).href;
       if (assetURL(target)) pending.push(target);
     }
@@ -183,10 +183,15 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
       const imports = module => ({ get: path => modules.get(new URL(path, module.url).href) });
       const proven = module => { try { probe(module.source, imports(module)); return true; } catch { return false; } };
       const marked = [...modules.values()].filter(m => plausible(m.source));
-      const target = unique(marked.length || !byProof ? marked
+      // Markers shortlist modules; they cannot decide between a real Code
+      // component and a neighbouring wrapper. For owner activation, require
+      // the complete identity/send/client proof on every competing candidate.
+      const selected = adapter === 'ownerWake' && marked.length > 1 ? marked.filter(proven) : marked;
+      const target = unique(marked.length || !byProof ? selected
         : [...modules.values()].filter(m => byProof(m.source) && proven(m)), `${adapter} target module`);
       const graph = imports(target);
       const bindings = probe(target.source, graph);
+      if (adapter === 'ownerWake') bindings.search.moduleCandidates = marked.length;
       let consumer;
       if (adapter === 'folders' && bindings.pure) {
         const consumers = [];

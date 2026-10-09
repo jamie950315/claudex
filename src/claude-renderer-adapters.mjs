@@ -118,6 +118,7 @@ export async function ensureClaudeRendererAdapter({ root, home = homedir(), adap
   return { ...result, cachePath: target.path, asset: basename(target.url), entry: graph.entry,
     changed, ...(consumerResult ? { consumer: { asset: basename(matched.consumer.target.url), changed: consumerResult.changed } } : {}),
     ...(shared ? { sharedResource: true, journalAdapter: 'folders' } : {}),
+    ...(adapter === 'ownerWake' ? { search: matched.bindings.search } : {}),
     activation: changed ? 'restart-required' : 'load-not-verified' };
 }
 export async function ensureClaudeRendererAdapters({ root, home = homedir(), folders = true, graph }, dependencies = {}) {

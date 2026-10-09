@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.35**, with **Claude Mod 0.8.15** bundled.
+Current development build: **Claudex.app 1.2.36**, with **Claude Mod 0.8.15** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -239,6 +239,23 @@ structural bindings, checks transformed module syntax and keeps an immutable
 original plus recovery journal for each cache filename. Earlier originals and
 receipts remain. Missing/ambiguous anchors or foreign cache changes skip that
 adapter explicitly in `renderer-adapters-status.json`; no older graph is guessed.
+
+Owner wake uses bounded semantic search within that graph. Markers only shortlist
+candidate modules/components; the current-reference reader and native send must
+prove the same identity before one candidate is selected. The search follows
+callback aliases, block-return readers, function/arrow components, exact compiler
+memo return values (including variadic stores), and named re-exports through at
+most eight modules. Callback resolution stops at twelve steps. Competing proven
+targets, alias cycles, missing dependencies and unknown helper semantics refuse
+installation. Diagnostic `ownerWake.search` describes discovery, never activation.
+This adds no retained owners, keepalive, model work or memory-pool setting.
+
+This improves adaptation to compiler and chunk-layout changes; it cannot certify
+arbitrary future native API or frontend semantics. Claude Code's Remote Control
+server mode is not an offline-open notification API for these SDK-owned sessions.
+Its documented server-session restoration window is about four hours, and its
+own execution owner must not replace Claudex's writer.
+See the [native Remote Control documentation](https://code.claude.com/docs/en/remote-control).
 
 Older builds can retain two implementations under one conditional binding; both
 must validate and are patched. When folders and chat actions share a cache entry,

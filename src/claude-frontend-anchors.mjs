@@ -36,16 +36,19 @@ const functions = ast => ast.body.filter(n => n.type === 'FunctionDeclaration');
 // Older real bundles retain compiler and non-compiler implementations under
 // one conditional binding. Both branches must validate; never choose a branch
 // from the host's feature flags or confuse two independent bindings with one.
-function functionBindings(ast) {
+function functionBindings(ast, { arrows = false } = {}) {
+  const callable = n => n?.type === 'FunctionExpression' || arrows && n?.type === 'ArrowFunctionExpression' && n.body.type === 'BlockStatement';
   return ast.body.flatMap(n => {
+    if (arrows && n.type === 'ExportNamedDeclaration') n = n.declaration;
+    if (!n) return [];
     if (n.type === 'FunctionDeclaration') return [{ name: id(n.id), variants: [n] }];
     if (n.type !== 'VariableDeclaration') return [];
     return n.declarations.flatMap(d => {
       if (!id(d.id)) return [];
-      if (d.init?.type === 'FunctionExpression') return [{ name: id(d.id), variants: [d.init] }];
+      if (callable(d.init)) return [{ name: id(d.id), variants: [d.init] }];
       const v = d.init;
-      return v?.type === 'ConditionalExpression' && v.consequent.type === 'FunctionExpression'
-        && v.alternate.type === 'FunctionExpression' ? [{ name: id(d.id), variants: [v.consequent, v.alternate] }] : [];
+      return v?.type === 'ConditionalExpression' && callable(v.consequent)
+        && callable(v.alternate) ? [{ name: id(d.id), variants: [v.consequent, v.alternate] }] : [];
     });
   });
 }
@@ -63,36 +66,136 @@ export function applyEdits(source, edits) {
 const insert = (at, text) => ({ start: at, end: at, text });
 const replace = (n, text) => ({ start: n.start, end: n.end, text });
 
-export function assetImports(source) {
+const dependencyIndexes = new WeakMap();
+const publicGetter = n => n.type === 'Property' && n.value.type === 'ArrowFunctionExpression'
+  && !n.value.params.length && id(n.value.body);
+const apiExpression = n => !n ? null : n.type === 'Identifier' ? { type: n.type, name: n.name }
+  : n.type === 'Literal' ? { type: n.type, value: n.value }
+    : n.type === 'ChainExpression' ? { type: n.type, expression: apiExpression(n.expression) }
+      : n.type === 'MemberExpression' ? { type: n.type, computed: n.computed, optional: n.optional,
+        object: apiExpression(n.object), property: apiExpression(n.property) } : { type: n.type };
+function bindingIndex(ast, { full = false, getters = nodes(ast, publicGetter) } = {}) {
+  const locals = new Map(), statements = ast.body.flatMap(n => n.type === 'ExportNamedDeclaration' && n.declaration ? [n.declaration] : [n]);
+  const exports = ast.body.filter(n => ['ExportNamedDeclaration', 'ExportAllDeclaration'].includes(n.type)).map(n => ({
+    type: n.type, source: n.source, specifiers: n.specifiers, exported: n.exported,
+    names: n.declaration?.type === 'VariableDeclaration' ? n.declaration.declarations.map(d => id(d.id)) : [id(n.declaration?.id)],
+  }));
+  const exportedLocals = new Set(exports.flatMap(n => [...n.names,
+    ...(n.type === 'ExportNamedDeclaration' && !n.source ? n.specifiers.map(s => id(s.local)) : [])]));
+  for (const statement of statements) for (const node of statement.type === 'FunctionDeclaration' ? [statement]
+    : statement.type === 'VariableDeclaration' ? statement.declarations : []) {
+    if (!id(node.id) || !full && !exportedLocals.has(id(node.id))) continue;
+    const api = ['LocalSessions', 'useEffect', 'useSyncExternalStore', 'useMemo'].some(p => member(node.init, p));
+    const entry = full ? node : { type: node.type, id: node.id, start: node.start, end: node.end,
+      ...(node.type === 'VariableDeclarator' ? { init: api ? apiExpression(node.init) : null } : {}) };
+    const rows = locals.get(id(node.id)) ?? []; rows.push(entry); locals.set(id(node.id), rows);
+  }
+  return { locals, getters, exports, imports: ast.body.filter(n => n.type === 'ImportDeclaration') };
+}
+
+export function assetImports(source, module) {
   const ast = syntax(source);
-  return [...new Set(nodes(ast, n => n.type === 'ImportDeclaration' || n.type === 'ExportNamedDeclaration' && n.source
-    || n.type === 'ExportAllDeclaration' || n.type === 'ImportExpression')
-    .map(n => n.source?.value).filter(v => typeof v === 'string'))];
+  const discovered = nodes(ast, n => n.type === 'ImportDeclaration' || n.type === 'ExportNamedDeclaration' && n.source
+    || n.type === 'ExportAllDeclaration' || n.type === 'ImportExpression' || module && publicGetter(n));
+  // Reuse the syntax pass already required for graph discovery, retaining only
+  // compact binding provenance. The weak key and exact source bind its lifetime
+  // to this immutable module snapshot; there is no cross-generation AST cache.
+  if (module && module.source === source) dependencyIndexes.set(module, { source,
+    index: bindingIndex(ast, { getters: discovered.filter(publicGetter) }) });
+  return [...new Set(discovered.map(n => n.source?.value).filter(v => typeof v === 'string'))];
 }
 function exportedName(ast, local) {
   return unique(nodes(ast, n => n.type === 'ExportSpecifier' && id(n.local) === local).map(n => id(n.exported)), 'exported binding');
 }
-function importedAPI(source, graph, property, native = false) {
-  const ast = syntax(source), matches = [];
-  for (const imp of ast.body.filter(n => n.type === 'ImportDeclaration')) {
-    const dependency = graph.get(imp.source.value);
-    if (!dependency) continue;
-    // Only the defining native API/React module is eligible, never arbitrary
-    // lookalikes or a transitive guess about a minified symbol.
-    if (!dependency.source.includes(native ? 'claude.web' : `.${property}`)) continue;
-    const depAST = syntax(dependency.source);
-    const publicGetters = native ? [] : nodes(depAST, n => prop(n, property)
-      && n.value.type === 'ArrowFunctionExpression' && !n.value.params.length && id(n.value.body));
-    if (!native && !publicGetters.length) continue;
-    const publicGetter = native ? null : unique(publicGetters, `React ${property} public binding`);
-    const definitions = nodes(depAST, n => n.type === 'VariableDeclarator' && id(n.id) && member(n.init, property)
-      && (native ? nativeObject(n.init)
-        : id(n.id) === id(publicGetter.value.body)));
-    if (!definitions.length) continue;
-    const definition = unique(definitions, property);
-    const exported = exportedName(depAST, id(definition.id));
-    for (const spec of imp.specifiers) if (spec.type === 'ImportSpecifier' && id(spec.imported) === exported)
-      matches.push({ local: id(spec.local), exported, path: imp.source.value });
+// Trace named exports rather than guessing a minified name or a chunk name.
+// This is a bounded static search; a cycle, missing chunk or ambiguous binding
+// supplies no proof. Nothing from the vendor modules is evaluated.
+function bindingResolver(source, graph) {
+  const root = { source, ast: syntax(source) }, indexes = new WeakMap(), definitions = new WeakMap();
+  // Dependency bodies can be enormous. Retain only import/export provenance,
+  // binding positions and the fields actually checked by importedAPI. Parse a
+  // helper's exact defining slice only when its body supplies semantic proof.
+  const indexOf = module => {
+    if (indexes.has(module)) return indexes.get(module);
+    const observed = dependencyIndexes.get(module);
+    const value = module === root ? bindingIndex(root.ast, { full: true })
+      : observed?.source === module.source ? observed.index : bindingIndex(syntax(module.source));
+    indexes.set(module, value); return value;
+  };
+  const definition = resolved => {
+    if (resolved.module === root) return resolved.node;
+    if (!definitions.has(resolved.node)) {
+      const raw = code(resolved.module.source, resolved.node);
+      const ast = syntax(resolved.node.type === 'VariableDeclarator' ? `let ${raw};` : raw);
+      definitions.set(resolved.node, resolved.node.type === 'VariableDeclarator' ? ast.body[0].declarations[0] : ast.body[0]);
+    }
+    return definitions.get(resolved.node);
+  };
+  const follow = (module, path) => module === root ? graph.get(path)
+    : module.url ? graph.get(new URL(path, module.url).href) : null;
+  function local(module, name, seen) {
+    const index = indexOf(module), rows = index.locals.get(name) ?? [];
+    if (rows.length > 1) fail('static local binding');
+    if (rows.length) return { module, getters: index.getters, local: name, node: rows[0] };
+    const imports = index.imports.flatMap(n =>
+      n.specifiers.filter(s => s.type === 'ImportSpecifier' && id(s.local) === name).map(s => ({ declaration: n, spec: s })));
+    if (imports.length !== 1) return null;
+    const dependency = follow(module, imports[0].declaration.source.value);
+    return dependency ? exported(dependency, id(imports[0].spec.imported), seen) : null;
+  }
+  function exported(module, name, seen = []) {
+    if (seen.length >= 8 || seen.some(([m, n]) => m === module && n === name)) return null;
+    seen = [...seen, [module, name]];
+    const matches = [];
+    for (const statement of indexOf(module).exports) {
+      if (statement.type === 'ExportNamedDeclaration') {
+        for (const spec of statement.specifiers) if (id(spec.exported) === name) {
+          const dependency = statement.source && follow(module, statement.source.value);
+          const resolved = statement.source ? dependency && exported(dependency, id(spec.local), seen) : local(module, id(spec.local), seen);
+          if (resolved) matches.push(resolved);
+        }
+        if (statement.names.includes(name)) {
+          const resolved = local(module, name, seen); if (resolved) matches.push(resolved);
+        }
+      } else if (statement.type === 'ExportAllDeclaration' && !statement.exported) {
+        const dependency = follow(module, statement.source.value), resolved = dependency && exported(dependency, name, seen);
+        if (resolved) matches.push(resolved);
+      }
+    }
+    const distinct = matches.filter((m, i) => matches.findIndex(n => m.module === n.module
+      && m.node.type === n.node.type && m.node.start === n.node.start && m.node.end === n.node.end) === i);
+    if (distinct.length > 1) fail('static exported binding');
+    return distinct[0] ?? null;
+  }
+  const imported = (declaration, spec) => {
+    const dependency = follow(root, declaration.source.value);
+    return dependency && spec.type === 'ImportSpecifier' ? exported(dependency, id(spec.imported)) : null;
+  };
+  function exportNames(module, seen = []) {
+    if (seen.length >= 8 || seen.includes(module)) return [];
+    seen = [...seen, module];
+    return [...new Set(indexOf(module).exports.flatMap(n => {
+      if (n.type === 'ExportNamedDeclaration') return [
+        ...n.specifiers.map(s => id(s.exported)),
+        ...n.names,
+      ].filter(Boolean);
+      const dependency = n.type === 'ExportAllDeclaration' && !n.exported && follow(module, n.source.value);
+      return dependency ? exportNames(dependency, seen) : [];
+    }))];
+  }
+  return { root, imported, exported, exportNames, definition, dependency: imp => follow(root, imp.source.value), local: name => local(root, name, []) };
+}
+function importedAPI(source, graph, property, native = false, resolver = bindingResolver(source, graph)) {
+  const matches = [];
+  for (const imp of resolver.root.ast.body.filter(n => n.type === 'ImportDeclaration')) for (const spec of imp.specifiers) {
+    const resolved = resolver.imported(imp, spec);
+    if (!resolved || resolved.node.type !== 'VariableDeclarator' || !member(resolved.node.init, property)) continue;
+    if (native) { if (!nativeObject(resolved.node.init)) continue; }
+    else {
+      const getters = resolved.getters.filter(n => prop(n, property));
+      if (!getters.length || id(unique(getters, `React ${property} public binding`).value.body) !== resolved.local) continue;
+    }
+    matches.push({ local: id(spec.local), exported: id(spec.imported), path: imp.source.value });
   }
   return unique(matches, `${property} import`);
 }
@@ -312,34 +415,151 @@ export function chatAnchors(source, graph) {
   return { native: native.local };
 }
 
-// Builds fetched from 2026-10-09 inline the compiler memo as helper calls:
-//   value = changed(cache, 1, ...deps) ? store(cache, 1, ...deps, callback) : cache[n]
-// Helpers differ in where the stored value sits among their dependencies and
-// store calls may nest, so the callback is the one function or nested store
-// call among a store call's arguments. Any other shape stays unrecognized.
-function memoized(value) {
-  if (value?.type !== 'ConditionalExpression') return value;
-  const slot = value.alternate, cache = id(slot?.object);
-  if (slot?.type !== 'MemberExpression' || !slot.computed || !cache || typeof slot.property?.value !== 'number') return value;
-  const store = node => node?.type === 'CallExpression' && id(node.callee) && node.arguments.length >= 3
-    && id(node.arguments[0]) === cache && typeof node.arguments[1].value === 'number';
-  let stored = value.consequent;
-  while (store(stored)) {
-    const values = stored.arguments.slice(2).filter(node => node.type === 'ArrowFunctionExpression' || store(node));
-    if (values.length !== 1) return value;
-    stored = values[0];
+const callbackFunction = node => ['ArrowFunctionExpression', 'FunctionExpression'].includes(node?.type);
+// Visit the component's lexical scope, never declarations in another callback.
+function scopeNodes(component, predicate) {
+  const result = [];
+  function walk(node) {
+    if (!node || typeof node.type !== 'string') return;
+    if (predicate(node)) result.push(node);
+    if (node !== component && /^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(node.type)) return;
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(walk);
+      else if (value && typeof value === 'object') walk(value);
+    }
   }
-  return stored?.type === 'ArrowFunctionExpression' ? stored : value;
+  walk(component); return result;
+}
+function callbackResolver(component, resolver) {
+  const bindings = scopeNodes(component, n => n.type === 'VariableDeclarator' || n.type === 'AssignmentExpression');
+  const definitions = name => bindings.filter(n => id(n.id ?? n.left) === name);
+  const patterns = [...component.params, ...scopeNodes(component, n => n.type === 'VariableDeclarator'
+    || n.type === 'FunctionDeclaration' || n.type === 'ClassDeclaration' || n.type === 'CatchClause').map(n => n.id ?? n.param)];
+  const shadowed = name => patterns.some(pattern => nodes(pattern, n => id(n) === name).length);
+  function inlineMemo(name, rows) {
+    const assignments = rows.filter(n => n.type === 'AssignmentExpression');
+    if (rows.length !== 3 || assignments.length !== 2 || rows.some(n => n.type === 'VariableDeclarator' && n.init)
+      || assignments.some(n => n.operator !== '=')) return null;
+    const conditions = scopeNodes(component, n => ['ConditionalExpression', 'IfStatement'].includes(n.type)
+      && assignments.every(a => n.start < a.start && n.end >= a.end));
+    if (conditions.length !== 1) return null;
+    const condition = conditions[0];
+    const expressions = branch => branch?.type === 'BlockStatement' ? branch.body.flatMap(expressions)
+      : branch?.type === 'ExpressionStatement' ? expressions(branch.expression)
+        : branch?.type === 'SequenceExpression' ? branch.expressions : branch ? [branch] : [];
+    const cacheSlot = n => n?.type === 'MemberExpression' && n.computed && id(n.object)
+      && Number.isInteger(n.property.value) && n.property.value >= 0 && n.property.value < 4096;
+    const consequent = expressions(condition.consequent), alternate = expressions(condition.alternate);
+    const reversed = consequent.length === 1 && cacheSlot(consequent[0]?.right);
+    const writes = reversed ? alternate : consequent, cached = reversed ? consequent : alternate;
+    const create = writes[0], store = writes.at(-1), slot = cached[0]?.right;
+    if (cached.length !== 1 || !assignments.includes(cached[0]) || !cacheSlot(slot)
+      || !assignments.includes(create) || !callbackFunction(create.right) || writes.length < 2
+      || !writes.slice(1).every(n => n.type === 'AssignmentExpression' && n.operator === '='
+        && cacheSlot(n.left) && id(n.left.object) === id(slot.object))
+      || code(resolver.root.source, store.left) !== code(resolver.root.source, slot) || id(store.right) !== name
+      || new Set(writes.slice(1).map(n => n.left.property.value)).size !== writes.length - 1) return null;
+    const dependencies = writes.slice(1, -1);
+    const tests = n => n.type === 'LogicalExpression' && n.operator === (reversed ? '&&' : '||') ? [...tests(n.left), ...tests(n.right)] : [n];
+    const compared = tests(condition.test);
+    if (dependencies.length) {
+      if (compared.length !== dependencies.length || compared.some((n, i) => n.type !== 'BinaryExpression' || n.operator !== (reversed ? '===' : '!==')
+        || code(resolver.root.source, n.left) !== code(resolver.root.source, dependencies[i].left)
+        || code(resolver.root.source, n.right) !== code(resolver.root.source, dependencies[i].right))) return null;
+    } else {
+      const test = condition.test, sentinel = test.right;
+      if (test.type !== 'BinaryExpression' || test.operator !== (reversed ? '!==' : '===') || code(resolver.root.source, test.left) !== code(resolver.root.source, slot)
+        || sentinel?.type !== 'CallExpression' || !member(sentinel.callee, 'for') || id(sentinel.callee.object) !== 'Symbol'
+        || sentinel.arguments.length !== 1 || sentinel.arguments[0].value !== 'react.memo_cache_sentinel') return null;
+    }
+    return create.right;
+  }
+  function helperArgument(call) {
+    if (shadowed(id(call.callee))) return null;
+    const resolved = resolver.local(id(call.callee));
+    let f = resolved && resolver.definition(resolved);
+    if (f?.type === 'VariableDeclarator') f = f.init;
+    if (!f || !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(f.type)
+      || f.async || f.generator || f.params.some((p, i) => !id(p) && !(i === f.params.length - 1 && p.type === 'RestElement' && id(p.argument)))) return null;
+    const returns = f.body.type === 'BlockStatement' ? nodes(f.body, n => n.type === 'ReturnStatement').map(n => n.argument) : [f.body];
+    if (returns.length !== 1 || nodes(f.body, n => callbackFunction(n) || n.type === 'FunctionDeclaration'
+      || n.type === 'CallExpression' || n.type === 'NewExpression' || n.type === 'AwaitExpression').length) return null;
+    const expression = returns[0], result = expression?.type === 'SequenceExpression' ? expression.expressions.at(-1) : expression;
+    const rest = f.params.at(-1)?.type === 'RestElement' ? id(f.params.at(-1).argument) : null;
+    let index = id(result) ? f.params.findIndex(p => id(p) === id(result)) : -1;
+    if (rest && result?.type === 'MemberExpression' && result.computed && id(result.object) === rest
+      && result.property.type === 'BinaryExpression' && result.property.operator === '-'
+      && member(result.property.left, 'length') && id(result.property.left.object) === rest && result.property.right.value === 1)
+      index = call.arguments.length - 1;
+    if (index < 0) return null;
+    // Only memo writes through the first parameter are permitted. Returning a
+    // callback argument is not proof if the helper also dispatches or rewrites it.
+    if (nodes(f.body, n => n.type === 'AssignmentExpression').some(n => n.operator !== '='
+      || n.left.type !== 'MemberExpression' || !n.left.computed || id(n.left.object) !== id(f.params[0]))) return null;
+    const updates = new Set();
+    if (f.body.type === 'BlockStatement') for (const statement of f.body.body) {
+      if (['ReturnStatement', 'ExpressionStatement', 'EmptyStatement'].includes(statement.type)) continue;
+      // The variadic native compiler helper stores rest[i] in cache[slot+i].
+      // Prove that exact finite loop, its local counter and its returned value;
+      // a loop over another object or arbitrary helper body is never evaluated.
+      if (!rest || statement.type !== 'ForStatement' || statement.init?.type !== 'VariableDeclaration'
+        || statement.init.declarations.length !== 1) return null;
+      const counter = statement.init.declarations[0], loop = id(counter.id), test = statement.test, update = statement.update;
+      const body = statement.body.type === 'BlockStatement' && statement.body.body.length === 1 ? statement.body.body[0] : statement.body;
+      const write = body?.type === 'ExpressionStatement' ? body.expression : null;
+      if (!loop || counter.init?.value !== 0 || test?.type !== 'BinaryExpression' || test.operator !== '<'
+        || id(test.left) !== loop || !member(test.right, 'length') || id(test.right.object) !== rest
+        || update?.type !== 'UpdateExpression' || update.operator !== '++' || id(update.argument) !== loop
+        || write?.type !== 'AssignmentExpression' || write.operator !== '=' || write.left.type !== 'MemberExpression'
+        || !write.left.computed || id(write.left.object) !== id(f.params[0])
+        || write.left.property.type !== 'BinaryExpression' || write.left.property.operator !== '+'
+        || id(write.left.property.left) !== id(f.params[1]) || id(write.left.property.right) !== loop
+        || write.right.type !== 'MemberExpression' || !write.right.computed || id(write.right.object) !== rest
+        || id(write.right.property) !== loop) return null;
+      updates.add(update);
+    }
+    if (nodes(f.body, n => n.type === 'UpdateExpression' && !updates.has(n)
+      || n.type === 'UnaryExpression' && n.operator === 'delete').length) return null;
+    return index;
+  }
+  function resolve(value, seen = [], cache = null) {
+    if (!value || seen.length >= 12 || seen.includes(value)) return [];
+    seen = [...seen, value];
+    if (callbackFunction(value)) return [value];
+    if (id(value)) {
+      const rows = definitions(id(value));
+      // The older compiler assigns a fresh callback or its exact cached slot.
+      // Validate both branches and every dependency store before accepting it.
+      const values = rows.map(n => n.init ?? n.right).filter(Boolean);
+      if (values.length === 2) {
+        const callback = inlineMemo(id(value), rows); return callback ? [callback] : [];
+      }
+      if (rows.some(n => n.type === 'AssignmentExpression' && n.operator !== '=') || values.length !== 1) return [];
+      return resolve(values[0], seen, cache);
+    }
+    if (value.type === 'SequenceExpression') return resolve(value.expressions.at(-1), seen, cache);
+    if (value.type === 'ConditionalExpression') {
+      const slot = value.alternate;
+      if (slot.type !== 'MemberExpression' || !slot.computed || !id(slot.object) || typeof slot.property.value !== 'number') return [];
+      return resolve(value.consequent, seen, id(slot.object));
+    }
+    if (value.type !== 'CallExpression' || !id(value.callee) || !cache || id(value.arguments[0]) !== cache
+      || typeof value.arguments[1]?.value !== 'number' || value.arguments.some(n => n.type === 'SpreadElement')) return [];
+    const index = helperArgument(value);
+    if (index === null) return [];
+    const returned = resolve(value.arguments[index], seen, cache);
+    const candidates = value.arguments.slice(2).filter(n => callbackFunction(n) || n.type === 'CallExpression').flatMap(n => resolve(n, seen, cache));
+    if (returned.length === 1 && !candidates.includes(returned[0])) candidates.push(returned[0]);
+    return candidates.length === 1 && returned.length === 1 && returned[0] === candidates[0] ? returned : [];
+  }
+  return { resolve, definitions, shadowed };
 }
 
-function attachedClientExport(module) {
-  const ast = syntax(module.source);
-  const lookups = functions(ast).filter(f => f.params.length === 1 && id(f.params[0])
-    && nodes(f, n => n.type === 'ForOfStatement' && n.right.type === 'CallExpression'
+function attachedClientLookup(lookup) {
+  if (lookup?.type !== 'FunctionDeclaration' || lookup.params.length !== 1 || !id(lookup.params[0])
+    || !nodes(lookup, n => n.type === 'ForOfStatement' && n.right.type === 'CallExpression'
       && member(n.right.callee, 'entries') && id(n.right.callee.object) === 'Object'
-      && member(n.right.arguments[0], 'localClients')).length);
-  if (!lookups.length) return null;
-  const lookup = unique(lookups, 'attached stdio client lookup');
+      && member(n.right.arguments[0], 'localClients')).length) return false;
   const loop = unique(nodes(lookup, n => n.type === 'ForOfStatement'), 'stdio client loop');
   const declaration = unique(nodes(loop.left, n => n.type === 'ObjectPattern'), 'stdio client record');
   const uuid = id(unique(declaration.properties.filter(n => prop(n, 'uuid')), 'stdio UUID').value);
@@ -353,62 +573,71 @@ function attachedClientExport(module) {
   // open, close or create any native transport.
   if (nodes(lookup, n => n.type === 'CallExpression').some(n => !member(n.callee, 'getState') && !member(n.callee, 'entries')))
     fail('stdio read-only lookup');
-  return exportedName(ast, id(lookup.id));
+  return true;
 }
 
 export function ownerAnchors(source, graph) {
-  const ast = syntax(source);
+  const resolver = bindingResolver(source, graph), ast = resolver.root.ast;
+  const effect = importedAPI(source, graph, 'useEffect', false, resolver).local;
   const plausible = f => nodes(f, n => prop(n, 'submitMessage')).length
     && nodes(f, n => prop(n, 'getComposerSnapshot')).length && nodes(f, n => prop(n, 'sessionType')).length
     && nodes(f, n => prop(n, 'initialSessionId')).length && hasMember(f, 'waitForImagesReady');
-  const binding = unique(functionBindings(ast).filter(b => b.variants.some(plausible)), 'Code session component binding');
-  if (!binding.variants.every(plausible)) fail('Code session component branches');
-  const variants = binding.variants.map(component => {
-    const selections = nodes(component, n => n.type === 'VariableDeclarator' && n.init?.type === 'LogicalExpression'
-      && n.init.operator === '??' && n.init.right.type === 'Literal' && n.init.right.value === null
-      && member(n.init.left, 'id') && id(unwrap(n.init.left).object));
+  const candidates = functionBindings(ast, { arrows: true }).filter(b => b.variants.some(plausible));
+  function proveComponent(component) {
+    const callbacks = callbackResolver(component, resolver);
+    if (callbacks.shadowed(effect)) fail('Code effect lexical binding');
+    const selections = scopeNodes(component, n => member(n, 'id') && id(unwrap(n).object));
     const submit = unique(nodes(component, n => prop(n, 'submitMessage')), 'Code imperative submit');
     const submitCall = unique(nodes(submit.value, n => n.type === 'CallExpression' && id(n.callee)), 'Code submit callback');
-    const wrapper = unique(nodes(component, n => n.type === 'VariableDeclarator' && id(n.id) === id(submitCall.callee)
+    const wrapper = unique(scopeNodes(component, n => n.type === 'VariableDeclarator' && id(n.id) === id(submitCall.callee)
       && n.init?.type === 'CallExpression' && id(n.init.callee)
       && n.init.arguments.length === 1), 'Code retained submit wrapper');
-    const callbacks = arg => {
-      if (arg?.type === 'ArrowFunctionExpression') return [arg];
-      if (!id(arg)) return [];
-      return nodes(component, n => n.type === 'AssignmentExpression' && id(n.left) === id(arg)
-        || n.type === 'VariableDeclarator' && id(n.id) === id(arg))
-        .map(n => memoized(n.right ?? n.init)).filter(n => n?.type === 'ArrowFunctionExpression');
-    };
-    const send = unique(callbacks(wrapper.init.arguments[0]), 'Code retained send callback');
+    const send = unique(callbacks.resolve(wrapper.init.arguments[0]), 'Code retained send callback');
     if (!send.async || send.body.type !== 'BlockStatement' || !hasMember(send, 'waitForImagesReady')) fail('Code async send');
-    const identities = [];
-    for (const selection of selections) {
-      const ref = id(unwrap(selection.init.left).object);
-      for (const getter of nodes(component, n => n.type === 'VariableDeclarator' && id(n.id)
-        && n.init?.type === 'CallExpression' && id(n.init.callee) === id(wrapper.init.callee) && n.init.arguments.length === 1
-        && (n.init.arguments[0].type === 'ArrowFunctionExpression' || id(n.init.arguments[0])))) {
-        const readers = callbacks(getter.init.arguments[0]).filter(cb => !cb.async && !cb.params.length && id(cb.body) === ref);
-        if (!readers.length) continue;
-        unique(readers, 'Code reference reader callback');
-        if (nodes(send.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
-          && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter });
-      }
+    const identities = [], selectedRefs = new Set(selections.map(n => id(unwrap(n).object)));
+    // Resolve each getter once. Trying every getter again for every .id reader
+    // multiplies parsing on large components without adding identity evidence.
+    for (const getter of scopeNodes(component, n => n.type === 'VariableDeclarator' && id(n.id)
+      && n.init?.type === 'CallExpression' && id(n.init.callee) === id(wrapper.init.callee) && n.init.arguments.length === 1
+      && (callbackFunction(n.init.arguments[0]) || id(n.init.arguments[0])))) {
+      const readers = callbacks.resolve(getter.init.arguments[0]).filter(cb => !cb.async && !cb.params.length);
+      if (!readers.length) continue;
+      const reader = unique(readers, 'Code reference reader callback');
+      const ref = id(reader.body) ?? (reader.body.type === 'BlockStatement' && reader.body.body.length === 1
+        && reader.body.body[0].type === 'ReturnStatement' ? id(reader.body.body[0].argument) : null);
+      if (!ref || !selectedRefs.has(ref) || !callbacks.definitions(ref).some(n => n.type === 'VariableDeclarator')) continue;
+      if (nodes(send.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
+        && id(n.init.callee) === id(getter.id) && !n.init.arguments.length).length === 1) identities.push({ ref, getter });
     }
     const { ref, getter } = unique(identities, 'Code selection and native send identity');
     return { component, ref, getter: id(getter.id), send,
       selectionEnd: unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
         && n.declarations.includes(getter)), 'Code getter declaration').end };
-  });
+  }
+  const proven = [], refused = [];
+  for (const candidate of candidates) {
+    try {
+      if (!candidate.variants.every(plausible)) fail('Code session component branches');
+      proven.push({ binding: candidate, variants: candidate.variants.map(proveComponent) });
+    } catch (error) { refused.push(error); }
+  }
+  if (!proven.length && candidates.length === 1) throw refused[0];
+  const { binding, variants } = unique(proven, 'Code session component binding');
   const lookupMatches = [];
   for (const imp of ast.body.filter(n => n.type === 'ImportDeclaration')) {
-    const module = graph.get(imp.source.value);
-    if (!module?.source.includes('localClients') || !module.source.includes('Object.entries')) continue;
-    const exported = attachedClientExport(module);
-    if (exported) lookupMatches.push({ path: imp.source.value, exported });
+    const dependency = resolver.dependency(imp);
+    if (!dependency) continue;
+    for (const exported of resolver.exportNames(dependency)) {
+      const resolved = resolver.exported(dependency, exported);
+      const body = resolved && code(resolved.module.source, resolved.node);
+      if (body?.includes('localClients') && body.includes('Object.entries')
+        && attachedClientLookup(resolver.definition(resolved))) lookupMatches.push({ path: imp.source.value, exported });
+    }
   }
   return { ...variants[0], variants, componentBinding: binding.name,
-    effect: importedAPI(source, graph, 'useEffect').local,
-    client: unique(lookupMatches, 'Code attached stdio lookup module') };
+    effect,
+    client: unique(lookupMatches, 'Code attached stdio lookup module'),
+    search: { method: 'bounded-semantic-bindings', componentCandidates: candidates.length, provenComponents: proven.length } };
 }
 
 export function transformAnchoredFolder(source, b, bootstrap) {

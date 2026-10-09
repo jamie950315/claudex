@@ -502,6 +502,22 @@ the current selection after a pane/session change.
 Requests are debounced for five seconds per identity and bounded to sixteen
 identities in a thirty-second window. There is no periodic owner keepalive.
 
+Discovery searches all shortlisted Code candidates and accepts exactly one
+complete semantic proof. It follows stable callback aliases in the component's
+own lexical scope, block-return readers and function/arrow forms. Compiler memo
+helpers are resolved to their real definitions: their only writes must be to
+the supplied memo cache, their finite variadic copy loops are checked exactly,
+and their return expression must identify the one callback. A callback merely
+appearing in an unknown call is insufficient. The selection reference and the
+native send's current getter must still match; every retained compiler branch
+must validate. Inline memo branches require the exact callback/result slot and
+matching dependency tests/stores, including reversed equality branches.
+Named imports/re-exports resolve to the actual defining native,
+React and attached-client binding, with an eight-module bound and cycle refusal.
+Callback resolution is bounded to twelve steps. Unknown forms remain skipped.
+This search runs only during normal cache discovery/maintenance and does not
+change owner eviction, start model input or add periodic native history reads.
+
 The identity-only `claudex_desktop_owner_wake` tool uses the already attached
 user-config stdio client from the native renderer registry. Discovery resolves
 the exact-UUID lookup by its validated source relationships, not a minified symbol

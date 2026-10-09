@@ -49,6 +49,7 @@ export function frontendBuild(tag = 'a', memoSize = 11, { variants = false, shar
     ownerWake = swap(ownerWake, `return nativeSend(text,options,selected${tag})};`,
       helpers === 'ambiguous' ? `return nativeSend(text,options,selected${tag})},()=>0),ref${tag}):M${tag}[10];`
         : `return nativeSend(text,options,selected${tag})},ref${tag}),ref${tag}):M${tag}[10];`);
+    ownerWake += `function store1(c,i,d,v){return c[i]=d,c[i+1]=v,v}function inner(c,i,v,d){return c[i]=d,c[i+1]=v,v}function outer(c,i,v,d){return c[i]=d,c[i+1]=v,v}`;
     if (split) {
       consumer = swap(consumer, `cache[0]!==rows||cache[1]!==env||cache[2]!==sort||cache[3]!==order?(out=group${tag}(rows,env,sort,order),cache[0]=rows,cache[1]=env,cache[2]=sort,cache[3]=order,cache[4]=out):out=cache[4];`,
         `out=changed4(cache,0,rows,env,sort,order)?store4(cache,0,rows,env,sort,order,group${tag}(rows,env,sort,order)):cache[4];`);

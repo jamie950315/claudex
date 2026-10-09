@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.35 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.36 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1803,6 +1803,22 @@ app-stop guards remain unchanged. Owner activation refreshes idle eviction witho
 Codex transport, sync, archival proof publication or queued-message replay. Native
 RC owns delivery. Promoted recovery reconnects the normal owner without a cached
 handle. Ignored hints have bounded diagnostics, no automatic wake retry.
+Owner discovery shortlists modules/components by role markers, then requires one
+complete identity/send/client proof. Follow callback aliases only in the component's
+lexical scope, function/arrow forms and block-return readers. Resolve compiler memo
+helpers to their real definitions and prove their exact cache writes, finite rest
+copy loop and returned callback; never choose a callback merely by its argument
+position. Inline memo branches must bind the fresh callback and cached value to
+the same result slot with complete matching dependency tests/stores, including
+reversed equality branches. Named re-export resolution is bounded to eight modules, callback values
+to twelve steps; cycles, missing chunks, multiple proven targets and unknown
+semantics remain refused. Keep all compiler branches and native source unchanged.
+The identity-only search diagnostic is not runtime activation proof. This changes
+no idle eviction, retained-owner count, UI, native input or model work.
+Reuse the graph's required syntax pass for compact exported-binding provenance,
+keyed by its exact module/source snapshot. Do not retain whole dependency ASTs
+or native initializer payloads. Parse the exact helper/lookup definition only
+when its body supplies proof; release the graph after normal installation.
 The publisher reads the ledger without the coordinator lock, so it normally
 sees another conversation's delivery in flight. It still publishes the durable
 hint (every other check applies); the watcher handles it under the lock after
@@ -1851,8 +1867,8 @@ bootstrap no longer embeds another chat-wake consumer.
 Builds fetched from 2026-10-09 read and write compiler memo slots through
 helper calls: changed(cache, i, ...deps) ? store(cache, i, ...deps, value) :
 cache[n], with helpers that differ in where the value sits and may nest. The
-owner-wake callbacks are the single function or nested store call among a store
-call's arguments; two candidates stay unrecognized. The folder consumer accepts
+owner-wake callbacks require the helper's proved returned value to be the sole
+callback candidate; two candidates stay unrecognized. The folder consumer accepts
 the helper form of its grouping and key memo guards, with the same four
 dependencies, store index and result slot; the extra version slot and guard
 edits are unchanged. Earlier slot-by-slot builds keep their exact checks. Every adapter's entire
