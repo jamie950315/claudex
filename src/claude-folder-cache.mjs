@@ -6,6 +6,10 @@ const { constants, crc32, zstdCompressSync, zstdDecompressSync } = zlib;
 
 const HEADER_MAGIC = 0xfcfb6d1ba7725c30n;
 const FOOTER_MAGIC = 0xf4fa6f45970d41d8n;
+// Bound the on-disk allocation and decompression independently. The observed
+// September frontend chunks exceed 2 MiB; neither bound is caller-configurable.
+export const MAX_CLAUDE_CACHE_BYTES = 4 * 1024 * 1024;
+export const MAX_CLAUDE_SOURCE_BYTES = 4 * 1024 * 1024;
 export const FOLDER_TARGET_URL = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/shared-19-DDVvTIwQ.js';
 export const FOLDER_CACHE_FILENAME = '9cebfb8fc5a9f22f_0';
 export const FOLDER_SOURCE_SHA256 = 'c036136315a82ada3fcca90ea62ed77c5696d49c97509b186364cf0ad9713784';
@@ -18,7 +22,7 @@ const fail = message => { throw new Error(`Claude folder resource: ${message}`);
 export function inspectFolderCache(bytes, { targetURL = FOLDER_TARGET_URL } = {}) {
   if (typeof crc32 !== 'function' || typeof zstdCompressSync !== 'function' || typeof zstdDecompressSync !== 'function')
     fail('this optional adapter requires Node with Zstandard and CRC32 support');
-  if (!Buffer.isBuffer(bytes) || bytes.length < 128 || bytes.length > 2 * 1024 * 1024)
+  if (!Buffer.isBuffer(bytes) || bytes.length < 128 || bytes.length > MAX_CLAUDE_CACHE_BYTES)
     fail('invalid cache entry size');
   if (bytes.readBigUInt64LE(0) !== HEADER_MAGIC || bytes.readUInt32LE(8) !== 5)
     fail('unsupported cache header');
@@ -38,35 +42,62 @@ export function inspectFolderCache(bytes, { targetURL = FOLDER_TARGET_URL } = {}
   if (crc32(body) !== bytes.readUInt32LE(eof1 + 12) || crc32(metadata) !== bytes.readUInt32LE(eof0 + 12)
       || !bytes.subarray(eof0 - 32, eof0).equals(createHash('sha256').update(key).digest()))
     fail('cache checksum mismatch');
-  const decoded = zstdDecompressSync(body, { maxOutputLength: 2 * 1024 * 1024 });
+  const decoded = zstdDecompressSync(body, { maxOutputLength: MAX_CLAUDE_SOURCE_BYTES });
   const source = decoded.toString('utf8');
   if (!Buffer.from(source).equals(decoded)) fail('source is not canonical UTF-8');
   return { start, eof1, body, metadata, decoded, source, sourceHash: sha256(decoded) };
 }
 
+function replaceLengthHeaders(metadata, oldSize, newSize) {
+  let result = Buffer.from(metadata);
+  for (const name of ['content-length', 'x-goog-stored-content-length']) {
+    const before = Buffer.from(`\0${name}:${oldSize}\0`), after = Buffer.from(`\0${name}:${newSize}\0`);
+    const offset = result.indexOf(before);
+    if (offset < 0 || result.indexOf(before, offset + 1) >= 0) fail('response length metadata changed');
+    result = Buffer.concat([result.subarray(0, offset), after, result.subarray(offset + before.length)]);
+  }
+  return result;
+}
+
+function replaceResponseLengths(metadata, oldSize, newSize) {
+  if (oldSize.length === newSize.length) return replaceLengthHeaders(metadata, oldSize, newSize);
+  // Observed HttpResponseInfo v3 pickle with extra flags 6: three base::Time
+  // values followed by a length-prefixed, four-byte-aligned raw header string.
+  // Its opaque SSL/network tail moves intact; no other schema is resized.
+  if (metadata.length < 44 || metadata.length % 4 !== 0
+    || metadata.readUInt32LE(0) !== metadata.length - 4
+    || metadata.readUInt32LE(4) !== 0x82476d03 || metadata.readUInt32LE(8) !== 6)
+    fail('compressed length changes unsupported HTTP metadata');
+  const size = metadata.readUInt32LE(36), end = 40 + size, tail = 40 + Math.ceil(size / 4) * 4;
+  const raw = metadata.subarray(40, end), status = raw.subarray(0, 13);
+  if (size < 16 || tail > metadata.length
+    || !(status.equals(Buffer.from('HTTP/1.1 200\0')) || status.equals(Buffer.from('HTTP/1.1 200 ')))
+    || !raw.subarray(-2).equals(Buffer.alloc(2))
+    || metadata.subarray(end, tail).some(byte => byte !== 0)) fail('unsupported HTTP header string');
+  const headers = replaceLengthHeaders(raw, oldSize, newSize);
+  const prefix = Buffer.from(metadata.subarray(0, 40));
+  const result = Buffer.concat([prefix, headers, Buffer.alloc((4 - headers.length % 4) % 4), metadata.subarray(tail)]);
+  result.writeUInt32LE(result.length - 4, 0); result.writeUInt32LE(headers.length, 36);
+  return result;
+}
+
 /** Rebuild the observed cache streams, retaining the key and all unrelated
- * metadata. The two length headers retain their serialized field widths.
+ * metadata. Digit-width changes require the proved HTTP pickle layout.
  */
 export function replaceFolderCacheSource(original, source, options = {}) {
   const entry = inspectFolderCache(original, options), encoded = Buffer.from(source);
-  if (encoded.length > 2 * 1024 * 1024) fail('patched source exceeds its bound');
+  if (encoded.length > MAX_CLAUDE_SOURCE_BYTES) fail('patched source exceeds its bound');
   const compressed = zstdCompressSync(encoded, { params: { [constants.ZSTD_c_compressionLevel]: 19 } });
-  if (!zstdDecompressSync(compressed, { maxOutputLength: 2 * 1024 * 1024 }).equals(encoded))
+  if (!zstdDecompressSync(compressed, { maxOutputLength: MAX_CLAUDE_SOURCE_BYTES }).equals(encoded))
     fail('compressed source did not roundtrip');
   const oldSize = String(entry.body.length), newSize = String(compressed.length);
-  if (oldSize.length !== newSize.length) fail('compressed length changes the metadata field width');
   const eof0 = original.length - 24;
-  const metadata = Buffer.from(original.subarray(entry.eof1 + 24, eof0 - 32));
-  for (const name of ['content-length', 'x-goog-stored-content-length']) {
-    const before = Buffer.from(`\0${name}:${oldSize}\0`), after = Buffer.from(`\0${name}:${newSize}\0`);
-    const offset = metadata.indexOf(before);
-    if (offset < 0 || metadata.indexOf(before, offset + 1) >= 0) fail('response length metadata changed');
-    after.copy(metadata, offset);
-  }
+  const metadata = replaceResponseLengths(original.subarray(entry.eof1 + 24, eof0 - 32), oldSize, newSize);
   const footer1 = Buffer.from(original.subarray(entry.eof1, entry.eof1 + 24));
   const footer0 = Buffer.from(original.subarray(eof0));
   footer1.writeUInt32LE(crc32(compressed), 12);
   footer0.writeUInt32LE(crc32(metadata), 12);
+  footer0.writeBigUInt64LE(BigInt(metadata.length), 16);
   const candidate = Buffer.concat([original.subarray(0, entry.start), compressed, footer1,
     metadata, original.subarray(eof0 - 32, eof0), footer0]);
   if (inspectFolderCache(candidate, options).source !== source) fail('candidate verification failed');

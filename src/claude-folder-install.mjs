@@ -4,9 +4,8 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { withLock } from './storage.mjs';
-import { buildDynamicFolderSource, FOLDER_SOURCE_SHA256, inspectFolderCache, replaceFolderCacheSource, sha256 } from './claude-folder-cache.mjs';
+import { buildDynamicFolderSource, FOLDER_SOURCE_SHA256, inspectFolderCache, replaceFolderCacheSource, sha256, MAX_CLAUDE_CACHE_BYTES } from './claude-folder-cache.mjs';
 
-const MAX_CACHE_BYTES = 2 * 1024 * 1024;
 const HEX = /^[a-f0-9]{64}$/;
 const STAGE = /^\.claudex-folder-[a-f0-9-]{36}\.tmp$/;
 const fail = message => { throw new Error(`Claude folder installation: ${message}`); };
@@ -39,7 +38,7 @@ async function syncDirectory(path) {
   try { await handle.sync(); } finally { await handle.close(); }
 }
 
-export async function snapshotClaudeCache(path, maximum = MAX_CACHE_BYTES) {
+export async function snapshotClaudeCache(path, maximum = MAX_CLAUDE_CACHE_BYTES) {
   await directory(dirname(path));
   const before = await lstat(path, { bigint: true });
   checkFile(before);

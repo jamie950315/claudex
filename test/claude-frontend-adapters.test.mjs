@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { mkdtemp, mkdir, realpath, rm, readFile, readdir, writeFile, utimes, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,7 +9,7 @@ import { EventEmitter } from 'node:events';
 import { frontendBuild, writeFrontend, cacheBytes } from './fixtures/claude-frontend.mjs';
 import { discoverClaudeFrontend } from '../src/claude-frontend-graph.mjs';
 import { syntax, nodes, folderAnchors, folderConsumerAnchors, chatAnchors, ownerAnchors } from '../src/claude-frontend-anchors.mjs';
-import { inspectFolderCache, buildDynamicFolderSource } from '../src/claude-folder-cache.mjs';
+import { inspectFolderCache, buildDynamicFolderSource, MAX_CLAUDE_CACHE_BYTES } from '../src/claude-folder-cache.mjs';
 import { buildClaudeChatWakeSource, ensureClaudeChatWakeCache } from '../src/claude-chat-wake-cache.mjs';
 import { buildClaudeOwnerWakeSource } from '../src/claude-owner-wake-cache.mjs';
 import { ensureClaudeRendererAdapters, ensureClaudeRendererAdapter, restoreClaudeRendererAdapter } from '../src/claude-renderer-adapters.mjs';
@@ -26,6 +27,24 @@ async function fixture(t, tag = 'a', options = {}) {
 }
 const sourceOf = async resource => inspectFolderCache(await readFile(resource.path),{targetURL:resource.url}).source;
 const withoutImports = source => { const imports=syntax(source).body.filter(n=>n.type==='ImportDeclaration');for(const n of imports.reverse())source=source.slice(0,n.start)+source.slice(n.end);return source; };
+
+test('large frontend caches use the same bound during discovery, installation, reinstallation and restore', async t => {
+  const f = await fixture(t), resource = f.resources.folders;
+  const source = f.build.sources.folders + '\n/*' + randomBytes(2 * 1024 * 1024 + 65536).toString('base64') + '*/';
+  const original = cacheBytes(resource.url, source, Date.now() - 10000);
+  assert.ok(original.length > 2 * 1024 * 1024 && original.length < MAX_CLAUDE_CACHE_BYTES);
+  await writeFile(resource.path, original);
+  const graph = await discoverClaudeFrontend(f);
+  assert.equal(graph.adapters.folders.status, 'matched');
+  const installed = await ensureClaudeRendererAdapter({ ...f, adapter: 'folders', graph });
+  assert.equal(installed.status, 'installed'); assert.equal(installed.changed, true);
+  assert.equal((await ensureClaudeRendererAdapter({ ...f, adapter: 'folders' })).changed, false);
+  await restoreClaudeFolderPresentationCache({ ...f, cachePath: resource.path });
+  assert.deepEqual(await readFile(resource.path), original);
+  await writeFile(resource.path, Buffer.alloc(MAX_CLAUDE_CACHE_BYTES + 1));
+  await assert.rejects(ensureClaudeRendererAdapter({ ...f, adapter: 'folders', graph }), /file size is outside its bound/);
+  assert.equal((await readFile(resource.path)).length, MAX_CLAUDE_CACHE_BYTES + 1);
+});
 
 test('split aggregation uses an unshadowed hook import and invalidates native memo on map changes', async t => {
   const f = await fixture(t, 'a', { split: true }), graph = await discoverClaudeFrontend(f);

@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.2.37**, with **Claude Mod 0.8.15** bundled.
+Current development build: **Claudex.app 1.2.38**, with **Claude Mod 0.8.15** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -239,6 +239,13 @@ structural bindings, checks transformed module syntax and keeps an immutable
 original plus recovery journal for each cache filename. Earlier originals and
 receipts remain. Missing/ambiguous anchors or foreign cache changes skip that
 adapter explicitly in `renderer-adapters-status.json`; no older graph is guessed.
+
+Each cache file and its decoded JavaScript are independently limited to 4 MiB,
+including patched output. The graph retains its 256 MiB cache-byte limit and
+2,048 cached-module/missing-import limits. HTTP length-header digit changes require
+the observed Chromium response pickle layout; update its string/payload lengths,
+four-byte padding and stream checksum while retaining timestamps and the opaque
+native tail. Unknown layouts remain refused. These bounds add no retained owners.
 
 Owner wake uses bounded semantic search within that graph. Markers only shortlist
 candidate modules/components; the current-reference reader and native send must

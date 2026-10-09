@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.37 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.38 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1855,6 +1855,14 @@ Each resource retains its own immutable original and recoverable journal; a
 partial pair is never ready. This is still restart-required, not live-load proof.
 Graphs are bounded to 2,048 cached modules and
 2,048 missing imports (observed older entries reach 1,171 cached modules).
+By user decision, each cache file and decoded/patched JavaScript source is
+bounded to 4 MiB, shared by the codec and installer snapshot reader. Retain the
+256 MiB graph cache-byte limit. HTTP length digit changes require the observed
+HttpResponseInfo v3 pickle flags (0x82476d03, extra flags 6), its length-prefixed
+raw header string and four-byte alignment. Update header/payload/footer lengths
+and checksums, preserving native timestamps and the entire opaque tail; unknown
+resize layouts remain refused. Historical source profiles use reconstructed
+containers, not evidence of historical renderer evaluation.
 The independent chat-wake adapter uses the session-action module's unique native
 import binding and optional forkSession capability relationship (older branches
 repeat the same read),
