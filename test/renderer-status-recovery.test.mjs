@@ -135,3 +135,15 @@ test('a folder-specific refusal remains visible while other renderer adapters ar
   await f.change(ready);
   assert.equal(f.latest().folderProjection.state, 'ready');
 });
+
+test('the single transient recheck waits without hiding map errors or claiming a deferred map ready', async t => {
+  for (const options of [{}, { mapError: 'Exact map conflict' }, { deferred: 'pending_transaction' }]) {
+    const f = await idleWatcher(t, { initial: ready, ...options }), before = f.latest().folderProjection;
+    await f.change({ state: 'checking', adapters: { folders: { status: 'skipped', reason: 'Cache changed' } } });
+    assert.equal(f.latest().folderProjection.state, options.mapError ? 'error' : options.deferred ? 'deferred' : 'waiting');
+    assert.equal(f.latest().folderProjection.error, options.mapError ?? undefined);
+    assert.equal(f.latest().folderProjection.updatedAt, before.updatedAt);
+    await f.change(ready);
+    assert.equal(f.latest().folderProjection.state, options.mapError ? 'error' : options.deferred ? 'deferred' : 'ready');
+  }
+});

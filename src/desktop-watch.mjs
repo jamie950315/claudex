@@ -191,12 +191,14 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       return;
     }
     folderProjection = { ...folderMapProjection, resource: folderResource,
-      ...(folderResourceError ? { state: 'error', error: folderResourceError } : {}) };
+      ...(folderResourceError ? { state: 'error', error: folderResourceError }
+        : rendererAdapters?.state === 'checking' && folderMapProjection.state === 'ready'
+          ? { state: 'waiting' } : {}) };
   };
   const updateRendererStatus = value => {
     rendererAdapters = value;
     folderResource = value?.adapters?.folders ?? null;
-    folderResourceError = folderResource?.status === 'skipped' ? folderResource.reason
+    folderResourceError = value?.state === 'checking' ? null : folderResource?.status === 'skipped' ? folderResource.reason
       : value?.state === 'skipped' ? value.reason : null;
     refreshFolderProjection();
   };

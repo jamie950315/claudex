@@ -416,6 +416,21 @@ test('actual runtime faults expose their exact reasons instead of generic setup 
   }
 });
 
+test('an immediate renderer recheck is a normal wait; a genuine folder-map error still blocks', async t => {
+  const { root, setup } = await fixture(t); await setup.setup();
+  const watcher = { pid: process.pid, running: true, updatedAt: Date.now(), foregroundCompletedAt: Date.now(),
+    synchronization: 'ready', rendererAdapters: { state: 'checking' }, folderProjection: { state: 'waiting' },
+    localHandoff: { state: 'ready' } };
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(watcher), { mode: 0o600 });
+  let report = await setup.inspect(), row = report.components.find(r => r.id === 'folders');
+  assert.equal(report.phase, 'waiting'); assert.equal(row.state, 'waiting');
+  assert.match(row.detail, /checking it again; no action is required/); assert.equal(row.action, 'diagnostics');
+  watcher.folderProjection = { state: 'error', error: 'Exact map conflict' };
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(watcher), { mode: 0o600 });
+  report = await setup.inspect(); row = report.components.find(r => r.id === 'folders');
+  assert.equal(report.phase, 'blocked'); assert.equal(row.state, 'blocked'); assert.equal(row.detail, 'Exact map conflict');
+});
+
 test('uncertain collaboration work offers confirmed resolution instead of retrying setup', async t => {
   const { setup } = await fixture(t);
   setup.collaborationStatus = async () => ({ blockedByUncertainWork: true });

@@ -20,6 +20,10 @@ function failureCode(error) {
   if (['Renderer maintenance stopped', 'Renderer maintenance held by app stop'].includes(error?.message)) return 'stopped';
   return 'validation-refused';
 }
+const transientCodes = new Set(['cache-entry-missing', 'cache-changed']);
+const diagnosticCodes = new Set([...transientCodes, 'recovery-evidence-missing', 'required-file-missing',
+  'access-denied', 'stopped', 'validation-refused']);
+const checkingReason = 'The frontend cache changed during inspection. Claudex is checking it again; no action is required.';
 
 /** One watcher-owned, serialized cache consumer. It never touches histories,
  * native owners, inference, archive proof lifetimes or service/app lifecycle.
@@ -33,8 +37,12 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   const files = new Set(); let anonymous = true, observations = new Map();
   let transientRetryUsed = false;
   let cacheRevalidationNeeded = false;
+  let lastFailure;
+  const rememberFailure = (phase, code) => {
+    lastFailure = { at: Date.now(), phase, code: diagnosticCodes.has(code) ? code : 'validation-refused' };
+  };
   const present = value => {
-    const summary = { updatedAt: Date.now(), ...value };
+    const summary = { updatedAt: Date.now(), ...value, ...(lastFailure ? { lastFailure: { ...lastFailure } } : {}) };
     publication = publication.then(async () => {
       try { await writeStatus(join(root, 'renderer-adapters-status.json'), summary); }
       catch { summary.state = 'skipped'; summary.reason = 'Renderer maintenance status could not be published'; }
@@ -50,7 +58,9 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
     if (!closed && !signal?.aborted && !dirty && !timer && !transientRetryUsed && cacheRevalidationNeeded) {
       transientRetryUsed = true;
       anonymous = true; dirty = true;
+      return true;
     }
+    return false;
   };
   const run = () => {
     if (pending || closed) return pending;
@@ -75,31 +85,36 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           // A drained publication may report the intentional shutdown fence as
           // a refusal. Do not overwrite the last health report after close.
           if (closed || signal?.aborted) break;
-          const refused = Object.values(result.adapters).some(a => a.status === 'skipped');
-          cacheRevalidationNeeded = Object.values(result.adapters).some(a =>
-            a.status === 'skipped' && ['cache-entry-missing', 'cache-changed'].includes(a.failure?.code));
+          const refusals = Object.values(result.adapters).filter(a => a.status === 'skipped');
+          const refused = refusals.length > 0;
+          cacheRevalidationNeeded = refusals.some(a => transientCodes.has(a.failure?.code));
           if (!refused) transientRetryUsed = false;
           if (refused) observations = new Map();
           else if (result.observations instanceof Map) observations = result.observations;
-          await present({ state: notificationsFailed ? 'skipped' : refused ? 'degraded' : 'ready',
-            ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : {}),
+          if (refused) rememberFailure(phase, (refusals.find(a => !transientCodes.has(a.failure?.code)) ?? refusals[0]).failure?.code);
+          else if (lastFailure && !lastFailure.recoveredAt) lastFailure.recoveredAt = Date.now();
+          const retryScheduled = retryInterruptedCache();
+          const checking = retryScheduled && refusals.every(a => transientCodes.has(a.failure?.code));
+          await present({ state: notificationsFailed ? 'skipped' : checking ? 'checking' : refused ? 'degraded' : 'ready',
+            ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : checking ? { reason: checkingReason } : {}),
             entry: result.entry, missingChunks: result.missingChunks,
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
               { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation', 'search'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
                 ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) });
-          retryInterruptedCache();
         } catch (error) {
           // A prior successful observation cannot prove a failed pass healthy.
           // The next JS hint must revalidate, including unchanged known assets.
           observations = new Map();
           const code = failureCode(error);
-          cacheRevalidationNeeded = ['cache-entry-missing', 'cache-changed'].includes(code);
-          if (!closed) await present({ state: 'skipped', reason: 'Frontend cache discovery or maintenance refused; no native work was restarted',
-            failure: { phase, code } });
+          cacheRevalidationNeeded = transientCodes.has(code);
+          rememberFailure(phase, code);
           // Chromium can evict an entry during the inventory walk, after its
           // last notification. Re-discover once in this pass; never replay a
           // native operation or poll persistent validation/permission failures.
-          retryInterruptedCache();
+          const checking = retryInterruptedCache() && !notificationsFailed;
+          if (!closed) await present({ state: checking ? 'checking' : 'skipped',
+            reason: checking ? checkingReason : `Frontend cache discovery or maintenance refused; no native work was restarted [${phase}/${code}]`,
+            failure: { phase, code } });
         }
       }
     })().finally(() => { pending = undefined; });

@@ -163,6 +163,10 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
             return report("paused", "Desktop integration needs attention", component["error"] as? String ?? "Folder placement or archival could not be verified.", true)
         }
     }
+    if let renderer = watcher["rendererAdapters"] as? [String: Any], renderer["state"] as? String == "checking" {
+        return report("waiting", "Checking Desktop integration",
+                      "The frontend cache changed during inspection. Claudex is checking it again; no action is required.")
+    }
     if let handoff = watcher["localHandoff"] as? [String: Any],
        handoff["state"] as? String == "waiting", handoff["deferred"] as? String == "history_changed" {
         return report("waiting", "Waiting for Desktop handoff",

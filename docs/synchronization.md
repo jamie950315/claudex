@@ -469,6 +469,14 @@ readiness from actual loaded-renderer reception. See
 [renderer maintenance](app.md#messages-to-existing-chats) for detailed recovery
 and shared-resource behavior.
 
+A cache eviction or changing snapshot may interrupt a pass while Claude writes
+its HTTP cache. The existing single immediate rediscovery is shown as a normal
+check requiring no user action; a second failure or permanent refusal remains
+explicit. This does not add retry timers or relax installation proofs. The
+renderer status retains the current maintenance process's most recent fixed
+failure phase/code/time and its recovery time, so successful discovery does not
+erase that diagnostic. No native error text, paths or cache keys are retained.
+
 The watcher publishes `folder-map.json` atomically, using only verified current
 owner IDs and canonical directories. The renderer uses Claude's existing guarded
 read-only file API; no local HTTP server, credential copy or extra native worker

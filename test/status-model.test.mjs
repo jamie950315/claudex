@@ -78,6 +78,15 @@ changed = ready; changed["waiting"] = "Shared Codex Desktop backend is not ready
 check(health(changed).title == "Waiting for Codex")
 changed = ready; changed["localHandoff"] = ["state": "error", "error": "Native history changed"]
 check(health(changed).attention)
+changed = ready; changed["rendererAdapters"] = ["state": "checking"]
+changed["folderProjection"] = ["state": "waiting"]
+check(health(changed).state == "waiting" && !health(changed).attention && !health(changed).operational)
+check(health(changed).title == "Checking Desktop integration" && health(changed).detail.contains("no action is required"))
+changed["folderProjection"] = ["state": "error", "error": "Exact map conflict"]
+check(health(changed).attention && health(changed).detail == "Exact map conflict")
+changed["folderProjection"] = ["state": "waiting"]
+changed["blocked"] = ["reason": "Exact history conflict"]
+check(health(changed).attention && health(changed).detail == "Exact history conflict")
 changed = ready; changed["localHandoff"] = ["state": "waiting", "deferred": "history_changed"]
 check(health(changed).state == "waiting" && !health(changed).attention)
 check(health(changed).title == "Waiting for Desktop handoff")

@@ -368,7 +368,74 @@ for(const persistent of [false,true]) test(`an evicted cache entry gets one full
     watchFactory:()=>{const e=new EventEmitter;e.close=()=>{};return e},writeStatus:async(_path,s)=>statuses.push(s)});
   t.after(()=>maintenance.close());
   assert.equal(calls,2);assert.equal(statuses.at(-1).state,persistent?'skipped':'ready');
+  assert.equal(statuses[0].state,'checking');
+  assert.equal(statuses.at(-1).lastFailure.code,'cache-entry-missing');
+  if(persistent){assert.equal(statuses.at(-1).lastFailure.recoveredAt,undefined);assert.match(statuses.at(-1).reason,/discovery-or-installation\/cache-entry-missing/)}
+  else{assert.ok(statuses.at(-1).lastFailure.recoveredAt>=statuses.at(-1).lastFailure.at);assert.equal(statuses.some(s=>['skipped','degraded'].includes(s.state)),false)}
   await new Promise(r=>setTimeout(r,30));assert.equal(calls,2);
+});
+
+test('partial transient publication checks once; permanent refusals are never presented as automatic recovery', async t => {
+  for (const permanent of [false, true]) {
+    const f = await fixture(t), statuses = []; let calls = 0;
+    const maintenance = await startClaudeRendererMaintenance({ ...f,
+      maintain: async () => {
+        calls++;
+        if (calls > 1 && !permanent) return { adapters: { folders: { status: 'installed' } } };
+        return { adapters: { folders: { status: 'skipped', failure: { code: 'cache-changed' } },
+          ...(permanent ? { ownerWake: { status: 'skipped', reason: 'Unsupported native binding' } } : {}) } };
+      },
+      watchFactory: () => { const e = new EventEmitter; e.close = () => {}; return e; },
+      writeStatus: async (_path, status) => statuses.push(status),
+    });
+    await maintenance.close();
+    assert.equal(calls, 2);
+    assert.equal(statuses[0].state, permanent ? 'degraded' : 'checking');
+    assert.equal(statuses.at(-1).state, permanent ? 'degraded' : 'ready');
+    assert.equal(statuses.at(-1).lastFailure.code, permanent ? 'validation-refused' : 'cache-changed');
+    assert.ok(!JSON.stringify(statuses.at(-1).lastFailure).includes(f.root));
+  }
+});
+
+test('a nontransient failure remains explicit without a retry and preserves its fixed diagnostic after recovery', async t => {
+  const f = await fixture(t), statuses = []; let calls = 0, notify;
+  const maintenance = await startClaudeRendererMaintenance({ ...f, settleMs: 0,
+    maintain: async () => {
+      if (++calls === 1) throw Object.assign(new Error('Private native path and message'), { code: 'EACCES' });
+      return { adapters: {} };
+    },
+    watchFactory: (_path, listener) => { notify = listener; const e = new EventEmitter; e.close = () => {}; return e; },
+    writeStatus: async (_path, status) => statuses.push(status),
+  });
+  t.after(() => maintenance.close());
+  assert.equal(calls, 1); assert.equal(statuses.at(-1).state, 'skipped');
+  assert.deepEqual(statuses.at(-1).failure, { phase: 'discovery-or-installation', code: 'access-denied' });
+  assert.ok(!JSON.stringify(statuses).includes('Private native path'));
+  notify('change', null);
+  for (let i = 0; i < 100 && statuses.at(-1).state !== 'ready'; i++) await new Promise(r => setTimeout(r, 10));
+  assert.equal(calls, 2); assert.equal(statuses.at(-1).state, 'ready');
+  assert.equal(statuses.at(-1).lastFailure.code, 'access-denied');
+  assert.ok(statuses.at(-1).lastFailure.recoveredAt >= statuses.at(-1).lastFailure.at);
+});
+
+test('lost cache notifications remain blocked during an otherwise transient recheck', async t => {
+  const f = await fixture(t), statuses = []; let watcher, calls = 0;
+  const maintenance = await startClaudeRendererMaintenance({ ...f,
+    maintain: async () => {
+      if (++calls === 1) {
+        watcher.emit('error', new Error('Native private watcher error'));
+        throw Object.assign(new Error('Cache changed'), { code: 'CLAUDEX_FRONTEND_CACHE_CHANGED' });
+      }
+      return { adapters: {} };
+    },
+    watchFactory: () => { watcher = new EventEmitter; watcher.close = () => {}; return watcher; },
+    writeStatus: async (_path, status) => statuses.push(status),
+  });
+  await maintenance.close();
+  assert.equal(calls, 2);
+  assert.ok(statuses.every(status => status.state === 'skipped'));
+  assert.equal(statuses.at(-1).reason, 'Frontend cache notifications unavailable');
+  assert.ok(!JSON.stringify(statuses).includes('Native private watcher error'));
 });
 
 test('graphical resume clears the startup hold and runs maintenance without a cache write or sync event',async t=>{

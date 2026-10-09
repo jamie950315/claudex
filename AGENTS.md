@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.39 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.40 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1925,7 +1925,12 @@ Failed or partially refused passes discard unchanged-asset suppression evidence;
 the next JavaScript cache hint revalidates through the normal guarded installer.
 Do not schedule polling or retry timers. A missing cache entry or changed graph
 during discovery permits one immediate full rediscovery in the same pass; a
-second failure stays explicit until another native event. Failure diagnostics expose fixed phase
+second failure stays explicit until another native event. While that one immediate
+rediscovery is scheduled, report checking, not ready or a request for user action.
+Mixed permanent refusals still degrade; genuine map/history errors keep priority.
+Retain one bounded lastFailure with fixed phase/code/times for the current maintenance
+process, including recoveredAt after a coherent pass; no native error text or paths.
+Failure diagnostics expose fixed phase
 and reason codes, never native error text, paths or cache keys.
 Classify missing native cache resources separately from missing known manifests or
 immutable originals; recovery-evidence loss never gets the cache-eviction retry.

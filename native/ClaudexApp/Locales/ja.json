@@ -315,5 +315,7 @@
   "Review the reported reason and next step. Open diagnostics for full details.": "表示された理由と次の手順を確認してください。詳細は診断で確認できます。",
   "When the saved working directory is confirmed missing, Claudex stops tracking automatically and preserves all histories. If still paused, open diagnostics for the safety hold. Do not retry setup or resend messages.": "保存された作業ディレクトリが存在しないと確認されると、Claudex は追跡を自動的に停止し、すべての履歴を保持します。停止状態が続く場合は、安全上の制約を診断で確認してください。セットアップの再試行やメッセージの再送信はしないでください。",
   "Check the saved working directory and open diagnostics for the exact reason. Histories are preserved; do not retry setup or resend messages.": "保存された作業ディレクトリを確認し、正確な理由を診断で確認してください。すべての履歴は保持されます。セットアップの再試行やメッセージの再送信はしないでください。",
-  "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex はこの会話の追跡を安全に停止できませんでした。すべての履歴は保持されています。停止を妨げている理由を診断で確認し、セットアップの再試行やメッセージの再送信はしないでください。"
+  "Claudex could not safely stop tracking this conversation. Histories are preserved. Open diagnostics for the blocking reason; do not retry setup or resend messages.": "Claudex はこの会話の追跡を安全に停止できませんでした。すべての履歴は保持されています。停止を妨げている理由を診断で確認し、セットアップの再試行やメッセージの再送信はしないでください。",
+  "Checking Desktop integration": "デスクトップ連携を確認中",
+  "The frontend cache changed during inspection. Claudex is checking it again; no action is required.": "確認中にフロントエンドのキャッシュが変更されました。Claudex が再確認しています。操作は不要です。"
 }
