@@ -100,3 +100,41 @@ test('a transcript-only task notice leaves an original idle and byte-for-byte pr
     assert.equal(await readFile(f.record.path, 'utf8'), expected);
   } finally { await f.runtime.close(); }
 });
+
+test('an owned history the user compacts interactively keeps its prefix under the retained-history proof', async () => {
+  const { claudeCompactionHistory } = await import('../src/compaction.mjs');
+  const sessionId = randomUUID(), cwd = '/tmp/synthetic-project', base = { sessionId, cwd };
+  const packet = { ...base, type: 'user', uuid: randomUUID(), parentUuid: null, promptSource: 'sdk', queueTranscriptOnly: true,
+    message: { role: 'user', content: 'Synthetic authenticated packet.' } };
+  const reply = { ...base, type: 'assistant', uuid: randomUUID(), parentUuid: packet.uuid,
+    message: { role: 'assistant', stop_reason: 'end_turn', content: [{ type: 'text', text: 'Synthetic reply.' }] } };
+  const build = (mutate = () => {}) => {
+    const boundary = { ...base, type: 'system', subtype: 'compact_boundary', uuid: randomUUID(), parentUuid: null,
+      logicalParentUuid: reply.uuid, compactMetadata: { trigger: 'manual' } };
+    // Desktop's own /compact writes a summary that was never queued input.
+    const summary = { ...base, type: 'user', uuid: randomUUID(), parentUuid: boundary.uuid, isCompactSummary: true,
+      isVisibleInTranscriptOnly: true, message: { role: 'user', content: 'Synthetic readable summary.' } };
+    boundary.compactMetadata.preservedSegment = { headUuid: reply.uuid, tailUuid: reply.uuid, anchorUuid: summary.uuid };
+    boundary.compactMetadata.preservedMessages = { uuids: [reply.uuid], allUuids: [reply.uuid], anchorUuid: summary.uuid };
+    const rows = [packet, reply, boundary, summary];
+    mutate({ boundary, summary, rows });
+    return rows;
+  };
+  // An owned history: its packet authenticator never accepts an assistant row.
+  const authenticate = () => false;
+  const read = rows => claudeCompactionHistory(rows.map(JSON.stringify).join('\n') + '\n', rows, authenticate);
+  const result = read(build());
+  assert.equal(result.metadata.retainedHistory, true);
+  assert.equal(result.metadata.preservedAuthenticatedPackets, 0);
+  assert.deepEqual(result.rows.slice(0, 2), [packet, reply]);
+  assert.match(result.rows[3].message.content, /^\[Imported native compaction summary; complete earlier verified history is retained\.\]/);
+  for (const [mutate, expected] of [
+    [({ summary }) => { summary.queueTranscriptOnly = false; }, /exact native history link/],
+    [({ summary }) => { delete summary.isVisibleInTranscriptOnly; }, /exact native history link/],
+    // A queued summary keeps the stricter owned rule: one authenticated packet.
+    [({ summary }) => { summary.queueTranscriptOnly = true; }, /preserved-segment/],
+    [({ boundary }) => { boundary.compactMetadata.preservedMessages.uuids = [randomUUID()]; }, /preserved-segment/],
+    [({ boundary }) => { boundary.compactMetadata.preservedSegment.anchorUuid = randomUUID(); }, /preserved-segment/],
+    [({ boundary }) => { boundary.logicalParentUuid = packet.uuid; }, /preserved-segment/],
+  ]) assert.throws(() => read(build(mutate)), expected);
+});

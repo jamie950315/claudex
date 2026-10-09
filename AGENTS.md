@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.34 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.35 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1310,8 +1310,12 @@ Native Claude originals (Desktop Local, CLI 2.1.284 /compact) keep their complet
 readable prefix, so a preserved segment there is accepted when its uuids exist
 exactly once before the boundary as a contiguous parent chain ending at the
 logical parent, anchored to the summary and ordered within allUuids (which may
-list unpersisted rows). Their interactive summary may omit queueTranscriptOnly;
-owned histories still require it. Nothing is replayed.
+list unpersisted rows). Their interactive summary may omit queueTranscriptOnly.
+An owned history the user compacts from Desktop writes the same interactive
+summary and keeps its complete prefix too, so it uses that same retained-prefix
+proof. A queued summary (queueTranscriptOnly true) in an owned history keeps
+the stricter single authenticated packet rule; an explicit false is refused.
+Nothing is replayed.
 The Local archival publisher skips an original left in its old project by a
 Codex project move (no same-project continuation); other cwd mismatches fail.
 Watcher status lists each blocked conversation once, even when several held
