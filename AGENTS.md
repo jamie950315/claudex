@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.2.27 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.2.28 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -251,7 +251,12 @@ Pending recovery, changed state, native events and deferred/failed publications
 still use normal publication. Known managed session registration and started events
 never start a sync. Resuming an original reconciles that conversation for offline
 completions. Hook definitions are merged with existing settings and require the
-native Codex trust review; never bypass or forge trust receipts. CLI hooks install
+native Codex trust review; never bypass or forge trust receipts. Another tool or a manual edit may
+put its handlers into an owned hook group. The exact owned handler still counts
+as configured inside a group that is otherwise identical (same matcher, no
+other fields); installation leaves that working group as written, removes only
+a superseded owned handler from it and never adopts an altered handler or a
+differently shaped group. CLI hooks install
 and hooks status configure/inspect them; graphical setup installs them too.
 Perform one startup/reconnection reconciliation, then sleep until an event.
 Map exact native IDs, including preserved originals, to affected logical work.
