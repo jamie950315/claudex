@@ -104,6 +104,42 @@ test('owner bindings are followed by declaration, so hidden writes and shadows r
   }
 });
 
+test('session reads compose and helper bodies are summarized rather than matched by shape', async t => {
+  const helper = 'function store1(c,i,d,v){return c[i]=d,c[i+1]=v,v}';
+  for (const [build, change, status] of [
+    // A getter whose reader returns the retained ref, and a send that reads it twice.
+    [retainedRefBuild, s => s.replace('let senda;', 'let currenta=eventa(()=>retaineda.current),senda;').replace('selecteda=retaineda.current', 'selecteda=currenta()'), 'matched'],
+    [retainedRefBuild, s => s.replace('let selecteda=retaineda.current;', 'let early=retaineda.current;let selecteda=retaineda.current;'), 'matched'],
+    [retainedRefBuild, s => s.replace('let senda;', 'later(()=>retaineda.current);let senda;'), 'matched'],
+    // A second mirror of another value, an update and a delete are rival writes.
+    [retainedRefBuild, s => s.replace('let senda;', 'effecta(()=>{retaineda.current=other},[other]);let senda;'), 'skipped'],
+    [retainedRefBuild, s => s.replace('let senda;', 'retaineda.current++;let senda;'), 'skipped'],
+    [retainedRefBuild, s => s.replace('let senda;', 'delete retaineda.current;let senda;'), 'skipped'],
+    [retainedRefBuild, s => s.replace('let senda;', 'retaineda["current"]=other;let senda;'), 'skipped'],
+    // Two reads of different selections do not identify one session.
+    [retainedRefBuild, s => s.replace('let senda;', 'let rivala=s?{id:s}:null,rid=rivala?.id,gota=eventa(()=>rivala),senda;').replace('let selecteda=retaineda.current;', 'let selecteda=retaineda.current;let alt=gota();'), 'skipped'],
+    // Helper bodies in other shapes that still return the stored value untouched.
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,d,v){let n=i;c[n]=d;n+=1;c[n]=v;return v}'), 'matched'],
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,...a){let n=0;while(n<a.length){c[i+n]=a[n];n++}return a[a.length-1]}'), 'matched'],
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'const store1=(c,i,d,v)=>(c[i]=d,c[i+1]=v,v);'), 'matched'],
+    // A helper that can rewrite, replace or leak the value is not an identity.
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,d,v){v=d;return v}'), 'skipped'],
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,d,v){d.last=v;return v}'), 'skipped'],
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,d,v){return i?v:d}'), 'skipped'],
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,d,v){if(i)return d;return v}'), 'skipped'],
+    [() => frontendBuild('a', 11, { helpers: true }), s => s.replace(helper, 'function store1(c,i,d,v){registry[i]=v;return v}'), 'skipped'],
+  ]) {
+    const made = build(), before = made.sources.ownerWake; made.sources.ownerWake = change(before);
+    assert.notEqual(made.sources.ownerWake, before, String(change));
+    const f = await fixture(t, made), matched = (await discoverClaudeFrontend(f)).adapters.ownerWake;
+    assert.equal(matched.status, status, `${change} ${matched.reason ?? ''}`);
+    if (status !== 'matched') continue;
+    const source = buildClaudeOwnerWakeSource(matched.target.source, { root: f.root, bindings: matched.bindings,
+      runtimeSource: 'export function createClaudeOwnerWakeRuntime(){return{start(){},stop(){},signal(){}}}' });
+    ownerPatchContract(source, matched.target.source, matched.bindings);
+  }
+});
+
 test('semantic discovery survives compiler forms, callback aliases, export forwarding and neighbouring lookalikes', async t => {
   const build = barrels(frontendBuild());
   const decoy = build.sources.ownerWake.replace('()=>refa', '()=>unrelated').replace('function viewa(e)', 'function decoy(e)');
@@ -194,16 +230,24 @@ test('inline compiler branches require the exact callback slot and complete depe
   const source = buildClaudeOwnerWakeSource(graph.adapters.ownerWake.target.source, { root: f.root, bindings: graph.adapters.ownerWake.bindings,
     runtimeSource: 'export function createClaudeOwnerWakeRuntime(){return{start(){},stop(){},signal(){}}}' });
   ownerPatchContract(source, graph.adapters.ownerWake.target.source, graph.adapters.ownerWake.bindings);
-  for (const change of [
-    s => s.replace('senda=Ma[3]', 'senda=Ma[4]'),
-    s => s.replace('Ma[2]=refa', 'Ma[2]=other'),
-    s => s.replace('Ma[3]=senda', 'Ma[3]=other'),
-    s => s.replace('Ma[2]=refa,', 'dispatch(),Ma[2]=refa,'),
+  // The cached slot must be the one this callback is stored in, by every
+  // write to it. Which dependencies invalidate the cache, and what else the
+  // fresh branch does, cannot change which function the binding holds.
+  for (const [change, status] of [
+    [s => s.replace('senda=Ma[3]', 'senda=Ma[4]'), 'skipped'],
+    [s => s.replace('Ma[3]=senda', 'Ma[3]=other'), 'skipped'],
+    [s => s.replace('Ma[3]=senda', 'Ma[3]=senda,Ma[3]=()=>other'), 'skipped'],
+    [s => s.replace('Ma[3]=senda', 'Ma[3]=senda,Ma[3]+=1'), 'skipped'],
+    [s => s.replace('let dispatcha=', 'later(()=>{Ma[3]=other});let dispatcha='), 'skipped'],
+    [s => s.replace('Ma[2]=refa', 'Ma[2]=other'), 'installed'],
+    [s => s.replace('Ma[2]=refa,', 'dispatch(),Ma[2]=refa,'), 'installed'],
+    [s => s.replace('Ma[2]!==refa?', 'changed1(Ma,2,refa)||flag?'), 'installed'],
   ]) {
-    const build = make(); build.sources.ownerWake = change(build.sources.ownerWake);
+    const build = make(), before = build.sources.ownerWake; build.sources.ownerWake = change(before);
+    assert.notEqual(build.sources.ownerWake, before);
     const isolated = await fixture(t, build), result = await ensureClaudeRendererAdapters(isolated);
-    assert.equal(result.adapters.ownerWake.status, 'skipped');
-    assert.deepEqual(await readFile(isolated.resources.ownerWake.path), isolated.resources.ownerWake.bytes);
+    assert.equal(result.adapters.ownerWake.status, status, String(change));
+    if (status === 'skipped') assert.deepEqual(await readFile(isolated.resources.ownerWake.path), isolated.resources.ownerWake.bytes);
   }
 });
 

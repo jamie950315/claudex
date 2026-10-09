@@ -51,10 +51,10 @@ export function ownerPatchContract(source, original, b) {
     const send = only(nodes(f, n => ['ArrowFunctionExpression', 'FunctionExpression'].includes(n.type) && n.async && nodes(n, isSignal).includes(submit)), 'native send');
     const first = send.body.body.shift();
     assert.equal(first.type, 'TryStatement', 'guarded submit signals before native early refusals');
-    assert.deepEqual(astValue(first), astValue(syntax(`try{const ref=${v.retainedRef ? `${v.retainedRef}.current` : `${v.getter}()`};void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type)}catch{}`).body[0]));
+    assert.deepEqual(astValue(first), astValue(syntax(`try{const ref=${v.read};void __cldxOwnerWake.signal(ref?.id,"submit",ref?.type)}catch{}`).body[0]));
     assert.deepEqual(astValue(effect.expression.arguments[0]), expression(`()=>{try{void __cldxOwnerWake.signal(${v.ref}?.id,"selection",${v.ref}?.type)}catch{}}`), 'guarded selection effect');
     assert.deepEqual(squashDeclarations(f), squashDeclarations(functionsFor(orig, b.componentBinding)[i]), 'all native component AST retained');
-    contract.push({ ref: v.ref, getter: v.getter, retainedRef: v.retainedRef, effect: b.effect });
+    contract.push({ ref: v.ref, read: v.read, effect: b.effect });
   }
   const binding = tree => tree.body.filter(n => n.type === 'VariableDeclaration').flatMap(n => n.declarations)
     .find(n => n.id.name === b.componentBinding);

@@ -28,6 +28,7 @@ async function fixture(t, tag = 'a', options = {}) {
 const sourceOf = async resource => inspectFolderCache(await readFile(resource.path),{targetURL:resource.url}).source;
 const withoutImports = source => { const imports=syntax(source).body.filter(n=>n.type==='ImportDeclaration');for(const n of imports.reverse())source=source.slice(0,n.start)+source.slice(n.end);return source; };
 
+const code=(source,node)=>source.slice(node.start,node.end);
 test('native API host-read prelude preserves all adapter bindings and normal installation', async t => {
   const f = await fixture(t), resource = f.resources.native;
   const source = f.build.sources.native.replace('globalThis["claude.web"]?.LocalSessions',
@@ -614,9 +615,11 @@ test('compiler memo helper calls are recognized for the send callback, its reade
   assert.equal(patched.split('||cache[11]!==__cldxVersion').length,4);
   assert.ok(patched.includes('(changed4(cache,0,rows,env,sort,order))||cache[11]!==__cldxVersion'));
   assert.ok(patched.includes('memoa(12)'));
-  // Two candidate values in one store call do not identify the callback.
-  const ambiguous=await fixture(t,'a',{helpers:'ambiguous'}),refused=await discoverClaudeFrontend(ambiguous);
-  assert.equal(refused.adapters.ownerWake.status,'skipped');assert.match(refused.adapters.ownerWake.reason,/Code retained send callback/);
+  // Two function arguments in one store call: the helper's own body decides
+  // which one it returns, not their positions. It returns the async send.
+  const second=await fixture(t,'a',{helpers:'ambiguous'}),chosen=(await discoverClaudeFrontend(second)).adapters.ownerWake;
+  assert.equal(chosen.status,'matched',chosen.reason);
+  assert.ok(chosen.bindings.send.async&&code(chosen.target.source,chosen.bindings.send).includes('nativeSend('));
 });
 
 test('an independent chat-wake installation moves to the shared journal once folders match the same resource',async t=>{

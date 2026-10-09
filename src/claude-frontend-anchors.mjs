@@ -520,6 +520,42 @@ function scopeNodes(component, predicate) {
   }
   walk(component); return result;
 }
+// What a module-level helper does with its arguments, decided from its body
+// alone: it returns one argument unchanged and writes only into its first
+// (the compiler's memo cache). Loops, branches and locals are free to vary;
+// calls, closures, free names and any other write are not.
+function identityHelper(f) {
+  if (f?.type === 'VariableDeclarator') f = f.init;
+  if (!f || !/^(?:FunctionDeclaration|FunctionExpression|ArrowFunctionExpression)$/.test(f.type) || f.async || f.generator) return null;
+  const rest = f.params.at(-1)?.type === 'RestElement' ? f.params.at(-1).argument : null;
+  const fixed = rest ? f.params.slice(0, -1) : f.params;
+  if (!fixed.every(id) || rest && !id(rest) || !fixed.length) return null;
+  const scopes = analyzeScopes(f), parameter = node => scopes.binding(node)?.declarations.some(d => d.kind === 'param');
+  const all = nodes(f.body, () => true);
+  if (all.some(n => /^(?:CallExpression|NewExpression|AwaitExpression|YieldExpression|TaggedTemplateExpression|ImportExpression|ThrowStatement|ClassExpression|ClassDeclaration|FunctionDeclaration|FunctionExpression|ArrowFunctionExpression|ThisExpression|MetaProperty|WithStatement)$/.test(n.type)
+    || n.type === 'UnaryExpression' && n.operator === 'delete' || id(n) && scopes.isFree(n) && scopes.use(n))) return null;
+  for (const n of all) {
+    const target = n.type === 'AssignmentExpression' ? n.left : n.type === 'UpdateExpression' ? n.argument
+      : /^For(?:In|Of)Statement$/.test(n.type) && n.left.type !== 'VariableDeclaration' ? n.left : null;
+    if (!target) continue;
+    if (id(target)) { if (parameter(target)) return null; }
+    else if (target.type !== 'MemberExpression' || !target.computed || !id(target.object)
+      || scopes.binding(target.object) !== scopes.binding(fixed[0])) return null;
+  }
+  const returned = f.body.type === 'BlockStatement' ? nodes(f.body, n => n.type === 'ReturnStatement').map(n => n.argument) : [f.body];
+  const results = new Set(returned.map(value => {
+    const result = value?.type === 'SequenceExpression' ? value.expressions.at(-1) : value;
+    if (id(result) && parameter(result) && !(rest && scopes.binding(result) === scopes.binding(rest)))
+      return fixed.findIndex(p => scopes.binding(p) === scopes.binding(result));
+    return rest && result?.type === 'MemberExpression' && result.computed && scopes.same(result.object, rest)
+      && result.property.type === 'BinaryExpression' && result.property.operator === '-'
+      && member(result.property.left, 'length') && scopes.same(result.property.left.object, rest)
+      && result.property.right.value === 1 ? 'last' : null;
+  }));
+  const result = results.size === 1 ? [...results][0] : null;
+  return result === null || result === -1 ? null : { returns: result };
+}
+
 function callbackResolver(component, resolver) {
   const scopes = analyzeScopes(component);
   // Identifiers written through a pattern, a loop head or an update have no
@@ -532,8 +568,8 @@ function callbackResolver(component, resolver) {
     else if (n?.type === 'AssignmentPattern') target(n.left);
     else if (n?.type === 'RestElement') target(n.argument);
   };
-  for (const n of nodes(component, n => /^(?:AssignmentExpression|ForInStatement|ForOfStatement|UpdateExpression)$/.test(n.type)))
-    target(n.type === 'UpdateExpression' ? n.argument : n.left);
+  const writes = nodes(component, n => /^(?:AssignmentExpression|ForInStatement|ForOfStatement|UpdateExpression)$/.test(n.type));
+  for (const n of writes) target(n.type === 'UpdateExpression' ? n.argument : n.left);
   // Every row that gives the denoted component binding a value: its simple
   // declarators and plain assignments, wherever they are written.
   const definitions = node => {
@@ -546,126 +582,73 @@ function callbackResolver(component, resolver) {
     for (const reference of binding.references) {
       if (!targets.has(reference)) continue;
       const use = scopes.use(reference);
-      if (use.parent.type !== 'AssignmentExpression' || use.key !== 'left') return [];
+      if (use.parent.type !== 'AssignmentExpression' || use.key !== 'left' || use.parent.operator !== '=') return [];
       rows.push(use.parent);
     }
     return rows.sort((a, b) => a.start - b.start);
   };
-  function inlineMemo(name, rows) {
-    const assignments = rows.filter(n => n.type === 'AssignmentExpression');
-    if (rows.length !== 3 || assignments.length !== 2 || rows.some(n => n.type === 'VariableDeclarator' && n.init)
-      || assignments.some(n => n.operator !== '=')) return null;
-    const conditions = scopeNodes(component, n => ['ConditionalExpression', 'IfStatement'].includes(n.type)
-      && assignments.every(a => n.start < a.start && n.end >= a.end));
-    if (conditions.length !== 1) return null;
-    const condition = conditions[0];
-    const expressions = branch => branch?.type === 'BlockStatement' ? branch.body.flatMap(expressions)
-      : branch?.type === 'ExpressionStatement' ? expressions(branch.expression)
-        : branch?.type === 'SequenceExpression' ? branch.expressions : branch ? [branch] : [];
-    const cacheSlot = n => n?.type === 'MemberExpression' && n.computed && id(n.object)
-      && Number.isInteger(n.property.value) && n.property.value >= 0 && n.property.value < 4096;
-    const consequent = expressions(condition.consequent), alternate = expressions(condition.alternate);
-    const reversed = consequent.length === 1 && cacheSlot(consequent[0]?.right);
-    const writes = reversed ? alternate : consequent, cached = reversed ? consequent : alternate;
-    const create = writes[0], store = writes.at(-1), slot = cached[0]?.right;
-    if (cached.length !== 1 || !assignments.includes(cached[0]) || !cacheSlot(slot)
-      || !assignments.includes(create) || !callbackFunction(create.right) || writes.length < 2
-      || !writes.slice(1).every(n => n.type === 'AssignmentExpression' && n.operator === '='
-        && cacheSlot(n.left) && id(n.left.object) === id(slot.object))
-      || code(resolver.root.source, store.left) !== code(resolver.root.source, slot) || !scopes.same(store.right, name)
-      || new Set(writes.slice(1).map(n => n.left.property.value)).size !== writes.length - 1) return null;
-    const dependencies = writes.slice(1, -1);
-    const tests = n => n.type === 'LogicalExpression' && n.operator === (reversed ? '&&' : '||') ? [...tests(n.left), ...tests(n.right)] : [n];
-    const compared = tests(condition.test);
-    if (dependencies.length) {
-      if (compared.length !== dependencies.length || compared.some((n, i) => n.type !== 'BinaryExpression' || n.operator !== (reversed ? '===' : '!==')
-        || code(resolver.root.source, n.left) !== code(resolver.root.source, dependencies[i].left)
-        || code(resolver.root.source, n.right) !== code(resolver.root.source, dependencies[i].right))) return null;
-    } else {
-      const test = condition.test, sentinel = test.right;
-      if (test.type !== 'BinaryExpression' || test.operator !== (reversed ? '!==' : '===') || code(resolver.root.source, test.left) !== code(resolver.root.source, slot)
-        || sentinel?.type !== 'CallExpression' || !member(sentinel.callee, 'for') || id(sentinel.callee.object) !== 'Symbol'
-        || sentinel.arguments.length !== 1 || sentinel.arguments[0].value !== 'react.memo_cache_sentinel') return null;
+  const slot = n => n?.type === 'MemberExpression' && n.computed && id(n.object)
+    && Number.isInteger(n.property.value) && n.property.value >= 0 && n.property.value < 4096;
+  const helpers = new Map();
+  function helper(call) {
+    if (!id(call.callee) || !scopes.isFree(call.callee) || call.arguments.some(n => n.type === 'SpreadElement')) return null;
+    const name = call.callee.name;
+    if (!helpers.has(name)) {
+      let summary = null;
+      try { const resolved = resolver.local(name); summary = resolved && identityHelper(resolver.definition(resolved)); } catch { summary = null; }
+      helpers.set(name, summary);
     }
-    return create.right;
+    return helpers.get(name);
   }
-  function helperArgument(call) {
-    if (!scopes.isFree(call.callee)) return null;
-    const resolved = resolver.local(id(call.callee));
-    let f = resolved && resolver.definition(resolved);
-    if (f?.type === 'VariableDeclarator') f = f.init;
-    if (!f || !['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(f.type)
-      || f.async || f.generator || f.params.some((p, i) => !id(p) && !(i === f.params.length - 1 && p.type === 'RestElement' && id(p.argument)))) return null;
-    const returns = f.body.type === 'BlockStatement' ? nodes(f.body, n => n.type === 'ReturnStatement').map(n => n.argument) : [f.body];
-    if (returns.length !== 1 || nodes(f.body, n => callbackFunction(n) || n.type === 'FunctionDeclaration'
-      || n.type === 'CallExpression' || n.type === 'NewExpression' || n.type === 'AwaitExpression').length) return null;
-    const expression = returns[0], result = expression?.type === 'SequenceExpression' ? expression.expressions.at(-1) : expression;
-    const rest = f.params.at(-1)?.type === 'RestElement' ? id(f.params.at(-1).argument) : null;
-    let index = id(result) ? f.params.findIndex(p => id(p) === id(result)) : -1;
-    if (rest && result?.type === 'MemberExpression' && result.computed && id(result.object) === rest
-      && result.property.type === 'BinaryExpression' && result.property.operator === '-'
-      && member(result.property.left, 'length') && id(result.property.left.object) === rest && result.property.right.value === 1)
-      index = call.arguments.length - 1;
-    if (index < 0) return null;
-    // Only memo writes through the first parameter are permitted. Returning a
-    // callback argument is not proof if the helper also dispatches or rewrites it.
-    if (nodes(f.body, n => n.type === 'AssignmentExpression').some(n => n.operator !== '='
-      || n.left.type !== 'MemberExpression' || !n.left.computed || id(n.left.object) !== id(f.params[0]))) return null;
-    const updates = new Set();
-    if (f.body.type === 'BlockStatement') for (const statement of f.body.body) {
-      if (['ReturnStatement', 'ExpressionStatement', 'EmptyStatement'].includes(statement.type)) continue;
-      // The variadic native compiler helper stores rest[i] in cache[slot+i].
-      // Prove that exact finite loop, its local counter and its returned value;
-      // a loop over another object or arbitrary helper body is never evaluated.
-      if (!rest || statement.type !== 'ForStatement' || statement.init?.type !== 'VariableDeclaration'
-        || statement.init.declarations.length !== 1) return null;
-      const counter = statement.init.declarations[0], loop = id(counter.id), test = statement.test, update = statement.update;
-      const body = statement.body.type === 'BlockStatement' && statement.body.body.length === 1 ? statement.body.body[0] : statement.body;
-      const write = body?.type === 'ExpressionStatement' ? body.expression : null;
-      if (!loop || counter.init?.value !== 0 || test?.type !== 'BinaryExpression' || test.operator !== '<'
-        || id(test.left) !== loop || !member(test.right, 'length') || id(test.right.object) !== rest
-        || update?.type !== 'UpdateExpression' || update.operator !== '++' || id(update.argument) !== loop
-        || write?.type !== 'AssignmentExpression' || write.operator !== '=' || write.left.type !== 'MemberExpression'
-        || !write.left.computed || id(write.left.object) !== id(f.params[0])
-        || write.left.property.type !== 'BinaryExpression' || write.left.property.operator !== '+'
-        || id(write.left.property.left) !== id(f.params[1]) || id(write.left.property.right) !== loop
-        || write.right.type !== 'MemberExpression' || !write.right.computed || id(write.right.object) !== rest
-        || id(write.right.property) !== loop) return null;
-      updates.add(update);
+  // Follow a value to every function it can be. The compiler's memo forms are
+  // transparent: a cached slot is the function its own store wrote, and an
+  // identity helper is the argument it returns. Anything else is unknown.
+  function flow(node, state) {
+    if (!node || state.unknown || ++state.steps > 96) { state.unknown = true; return; }
+    if (callbackFunction(node)) { state.functions.add(node); return; }
+    if (id(node)) {
+      const binding = scopes.binding(node);
+      if (!binding) { state.unknown = true; return; }
+      if (state.active.has(binding)) return;
+      const rows = definitions(node), values = rows.map(n => n.init ?? n.right).filter(Boolean);
+      if (!values.length || state.depth >= 12) { state.unknown = true; return; }
+      state.active.add(binding); state.depth++;
+      for (const value of values) flow(value, state);
+      state.depth--; state.active.delete(binding); return;
     }
-    if (nodes(f.body, n => n.type === 'UpdateExpression' && !updates.has(n)
-      || n.type === 'UnaryExpression' && n.operator === 'delete').length) return null;
-    return index;
+    if (node.type === 'SequenceExpression') return flow(node.expressions.at(-1), state);
+    if (node.type === 'ConditionalExpression') { flow(node.consequent, state); return flow(node.alternate, state); }
+    if (slot(node)) { state.slots.push(node); return; }
+    if (node.type === 'CallExpression') {
+      const summary = helper(node), cache = node.arguments[0], first = node.arguments[1];
+      if (!summary || !id(cache) || !Number.isInteger(first?.value)) { state.unknown = true; return; }
+      const index = summary.returns === 'last' ? node.arguments.length - 1 : summary.returns;
+      if (index < 2 || index >= node.arguments.length) { state.unknown = true; return; }
+      state.stores.push({ cache, first: first.value, last: first.value + node.arguments.length - 3 });
+      return flow(node.arguments[index], state);
+    }
+    state.unknown = true;
   }
-  function resolve(value, seen = [], cache = null) {
-    if (!value || seen.length >= 12 || seen.includes(value)) return [];
-    seen = [...seen, value];
-    if (callbackFunction(value)) return [value];
-    if (id(value)) {
-      const rows = definitions(value);
-      // The older compiler assigns a fresh callback or its exact cached slot.
-      // Validate both branches and every dependency store before accepting it.
-      const values = rows.map(n => n.init ?? n.right).filter(Boolean);
-      if (values.length === 2) {
-        const callback = inlineMemo(value, rows); return callback ? [callback] : [];
-      }
-      if (rows.some(n => n.type === 'AssignmentExpression' && n.operator !== '=') || values.length !== 1) return [];
-      return resolve(values[0], seen, cache);
+  const fresh = active => ({ functions: new Set(), slots: [], stores: [], active: new Set(active), steps: 0, depth: 0, unknown: false });
+  function resolve(value) {
+    const state = fresh([]); flow(value, state);
+    if (state.unknown || state.functions.size !== 1) return [];
+    const [callback] = state.functions, self = id(value) ? scopes.binding(value) : null;
+    // A cached slot proves nothing by itself. Its writes in this component
+    // must all store this callback, directly or through an identity helper.
+    for (const read of state.slots) {
+      const direct = writes.filter(n => n.type === 'AssignmentExpression' && slot(n.left)
+        && scopes.same(n.left.object, read.object) && n.left.property.value === read.property.value);
+      if (direct.some(n => {
+        if (n.operator !== '=') return true;
+        const stored = fresh(self ? [self] : []); flow(n.right, stored);
+        return stored.unknown || stored.slots.length || [...stored.functions].some(f => f !== callback)
+          || !stored.functions.size && !(self && scopes.binding(n.right) === self);
+      })) return [];
+      if (!direct.length && !state.stores.some(store => scopes.same(store.cache, read.object)
+        && store.first <= read.property.value && read.property.value <= store.last)) return [];
     }
-    if (value.type === 'SequenceExpression') return resolve(value.expressions.at(-1), seen, cache);
-    if (value.type === 'ConditionalExpression') {
-      const slot = value.alternate;
-      if (slot.type !== 'MemberExpression' || !slot.computed || !id(slot.object) || typeof slot.property.value !== 'number') return [];
-      return resolve(value.consequent, seen, slot.object);
-    }
-    if (value.type !== 'CallExpression' || !id(value.callee) || !cache || !scopes.same(value.arguments[0], cache)
-      || typeof value.arguments[1]?.value !== 'number' || value.arguments.some(n => n.type === 'SpreadElement')) return [];
-    const index = helperArgument(value);
-    if (index === null) return [];
-    const returned = resolve(value.arguments[index], seen, cache);
-    const candidates = value.arguments.slice(2).filter(n => callbackFunction(n) || n.type === 'CallExpression').flatMap(n => resolve(n, seen, cache));
-    if (returned.length === 1 && !candidates.includes(returned[0])) candidates.push(returned[0]);
-    return candidates.length === 1 && returned.length === 1 && returned[0] === candidates[0] ? returned : [];
+    return [callback];
   }
   return { resolve, definitions, scopes };
 }
@@ -711,8 +694,7 @@ export function ownerAnchors(source, graph) {
     // hook's module name and the session reference must denote these bindings.
     if (scopes.at(component, effect)) fail('Code effect lexical binding');
     const declared = node => callbacks.definitions(node).some(n => n.type === 'VariableDeclarator');
-    const topLevel = (node, before) => scopes.owns(component, scopes.binding(node))
-      && scopes.binding(node).declarations.every(d => d.node.end <= before);
+    const statementOf = node => component.body.body.find(n => n.start <= node.start && n.end >= node.end);
     const selections = scopeNodes(component, n => member(n, 'id') && id(unwrap(n).object));
     const submit = unique(nodes(component, n => prop(n, 'submitMessage')), 'Code imperative submit');
     const submitCall = unique(nodes(submit.value, n => n.type === 'CallExpression' && id(n.callee)), 'Code submit callback');
@@ -721,61 +703,80 @@ export function ownerAnchors(source, graph) {
       && n.init.arguments.length === 1), 'Code retained submit wrapper');
     const send = unique(callbacks.resolve(wrapper.init.arguments[0]), 'Code retained send callback');
     if (!send.async || send.body.type !== 'BlockStatement' || !hasMember(send, 'waitForImagesReady')) fail('Code async send');
-    const identities = [], selectedRefs = new Set(selections.map(n => scopes.key(unwrap(n).object)));
-    // Resolve each getter once. Trying every getter again for every .id reader
-    // multiplies parsing on large components without adding identity evidence.
-    for (const getter of scopeNodes(component, n => n.type === 'VariableDeclarator' && id(n.id)
-      && n.init?.type === 'CallExpression' && scopes.same(n.init.callee, wrapper.init.callee) && n.init.arguments.length === 1
-      && (callbackFunction(n.init.arguments[0]) || id(n.init.arguments[0])))) {
-      const readers = callbacks.resolve(getter.init.arguments[0]).filter(cb => !cb.async && !cb.params.length);
-      if (!readers.length) continue;
-      const reader = unique(readers, 'Code reference reader callback');
-      const ref = id(reader.body) ? reader.body : reader.body.type === 'BlockStatement' && reader.body.body.length === 1
-        && reader.body.body[0].type === 'ReturnStatement' && id(reader.body.body[0].argument) ? reader.body.body[0].argument : null;
-      if (!ref || !selectedRefs.has(scopes.key(ref)) || !declared(ref)) continue;
-      const selectionEnd = unique(component.body.body.filter(n => n.type === 'VariableDeclaration'
-        && n.declarations.includes(getter)), 'Code getter declaration').end;
-      // The send must call this getter, by a name it still denotes at its start.
-      const current = scopes.binding(getter.id);
-      if (!topLevel(ref, selectionEnd) || scopes.at(send, getter.id.name) !== current) continue;
-      if (nodes(send.body, n => n.type === 'VariableDeclarator' && n.init?.type === 'CallExpression'
-        && scopes.binding(n.init.callee) === current && !n.init.arguments.length).length === 1)
-        identities.push({ ref: ref.name, getter: getter.id.name, selectionEnd });
+    const selectedRefs = new Set(selections.map(n => scopes.key(unwrap(n).object)));
+    const selection = node => id(node) && selectedRefs.has(scopes.key(node)) && declared(node)
+      && scopes.owns(component, scopes.binding(node)) ? node : null;
+    // Early September Code builds keep the session in a React ref. It carries
+    // the current session only with the public useRef import, a selection
+    // seed, an effect that mirrors that selection into it, and no other use
+    // than reading .current: a bare use is an escape, another write a rival.
+    let useRef;
+    const retained = new Map();
+    function retainedRef(node) {
+      const binding = scopes.binding(node);
+      if (!binding) return null;
+      if (retained.has(binding)) return retained.get(binding);
+      retained.set(binding, null);
+      const rows = callbacks.definitions(node), declaration = rows[0], init = declaration?.init, seed = selection(init?.arguments?.[0]);
+      if (rows.length !== 1 || declaration.type !== 'VariableDeclarator' || init?.type !== 'CallExpression'
+        || init.arguments.length !== 1 || !seed || !scopes.isFree(init.callee)) return null;
+      try { useRef ??= importedAPI(source, graph, 'useRef', false, resolver).local; } catch { return null; }
+      if (id(init.callee) !== useRef) return null;
+      const members = binding.identifiers.filter(n => n !== declaration.id).map(n => scopes.use(n));
+      if (members.some(use => use?.parent.type !== 'MemberExpression' || use.key !== 'object' || !member(use.parent, 'current'))) return null;
+      const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && scopes.isFree(n.callee)
+        && n.arguments.length === 2 && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1
+        && scopes.same(n.arguments[1].elements[0], seed)).flatMap(call => callbacks.resolve(call.arguments[0]).flatMap(cb => {
+        const statement = cb.body.type === 'BlockStatement' && cb.body.body.length === 1 ? cb.body.body[0] : null;
+        const write = cb.body.type === 'BlockStatement' ? statement?.type === 'ExpressionStatement' && statement.expression : cb.body;
+        return !cb.async && !cb.params.length && write?.type === 'AssignmentExpression' && write.operator === '='
+          && member(write.left, 'current') && scopes.binding(write.left.object) === binding && scopes.same(write.right, seed)
+          ? [{ call, write: write.left }] : [];
+      }));
+      const written = nodes(component, n => n.type === 'AssignmentExpression' || n.type === 'UpdateExpression'
+        || n.type === 'UnaryExpression' && n.operator === 'delete').map(n => unwrap(n.left ?? n.argument))
+        .filter(n => n?.type === 'MemberExpression' && scopes.binding(n.object) === binding);
+      const boundaries = mirrors.map(m => statementOf(m.call)).filter(n => n?.type === 'ExpressionStatement' && n.start > declaration.end);
+      if (!boundaries.length || written.some(n => !mirrors.some(m => m.write === n))) return null;
+      const value = { seed, end: boundaries[0].end, name: binding.name };
+      retained.set(binding, value); return value;
     }
-    // Early September Code builds read a retained React ref after images are
-    // ready. Prove its public useRef import, exact selection seed and sole
-    // useEffect mirror. The ref cannot escape or have another reader/writer.
-    const retainedReads = scopeNodes(send, n => n.type === 'VariableDeclarator' && member(n.init, 'current') && id(n.init.object));
-    if (retainedReads.length) {
-      const useRef = importedAPI(source, graph, 'useRef', false, resolver).local;
-      for (const read of retainedReads) {
-        const retained = scopes.binding(read.init.object), rows = callbacks.definitions(read.init.object);
-        if (rows.length !== 1 || rows[0].type !== 'VariableDeclarator') continue;
-        const declaration = rows[0], init = declaration.init, ref = init?.arguments?.[0];
-        if (init?.type !== 'CallExpression' || id(init.callee) !== useRef || !scopes.isFree(init.callee) || init.arguments.length !== 1
-          || !id(ref) || !selectedRefs.has(scopes.key(ref)) || !declared(ref)) continue;
-        // The binding's three identifiers must be exactly the declaration, the
-        // mirror write and this send read; any other use is an escape.
-        const uses = retained.identifiers;
-        if (uses.length !== 3 || !uses.includes(declaration.id) || !uses.includes(read.init.object)) continue;
-        const mirrors = scopeNodes(component, n => n.type === 'CallExpression' && id(n.callee) === effect && scopes.isFree(n.callee)
-          && n.arguments.length === 2 && n.arguments[1].type === 'ArrayExpression' && n.arguments[1].elements.length === 1
-          && scopes.same(n.arguments[1].elements[0], ref))
-          .filter(call => callbacks.resolve(call.arguments[0]).some(cb => {
-            const statement = cb.body.type === 'BlockStatement' && cb.body.body.length === 1 ? cb.body.body[0] : null;
-            const write = cb.body.type === 'BlockStatement' ? statement?.type === 'ExpressionStatement' && statement.expression : cb.body;
-            return !cb.async && !cb.params.length && write?.type === 'AssignmentExpression' && write.operator === '='
-              && member(write.left, 'current') && uses.includes(write.left.object) && scopes.same(write.right, ref);
-          }));
-        if (mirrors.length !== 1) continue;
-        const mirror = mirrors[0], boundary = component.body.body.filter(n => n.type === 'ExpressionStatement'
-          && n.start <= mirror.start && n.end >= mirror.end);
-        if (boundary.length !== 1 || declaration.start >= mirror.start || mirror.end >= send.start
-          || !topLevel(ref, boundary[0].end) || scopes.at(send, retained.name) !== retained) continue;
-        identities.push({ ref: ref.name, retainedRef: retained.name, selectionEnd: boundary[0].end });
+    // The expression through which the send reads the session it will use:
+    // a retained ref's .current, or a call of a getter whose stored reader
+    // returns the selection or such a ref. Forms compose; each link is proved.
+    function sessionRead(node, depth = 0) {
+      node = unwrap(node);
+      if (!node || depth > 4) return null;
+      if (member(node, 'current') && !node.optional && id(node.object)) {
+        const ref = retainedRef(node.object);
+        return ref && { seed: ref.seed, end: ref.end, names: [node.object], retainedRef: depth ? undefined : ref.name };
       }
+      if (node.type !== 'CallExpression' || node.arguments.length || !id(node.callee)) return null;
+      const rows = callbacks.definitions(node.callee), getter = rows[0];
+      if (rows.length !== 1 || getter.type !== 'VariableDeclarator' || getter.init?.type !== 'CallExpression'
+        || !scopes.same(getter.init.callee, wrapper.init.callee) || getter.init.arguments.length !== 1) return null;
+      const readers = callbacks.resolve(getter.init.arguments[0]).filter(cb => !cb.async && !cb.params.length);
+      if (readers.length !== 1) return null;
+      const body = readers[0].body, value = body.type !== 'BlockStatement' ? body
+        : body.body.length === 1 && body.body[0].type === 'ReturnStatement' ? body.body[0].argument : null;
+      const statement = statementOf(getter), inner = selection(value) ? { seed: value, end: 0, names: [] } : sessionRead(value, depth + 1);
+      if (!inner || statement?.type !== 'VariableDeclaration') return null;
+      return { seed: inner.seed, end: Math.max(inner.end, statement.end), names: [node.callee, ...inner.names], getter: depth || inner.names.length ? undefined : getter.id.name };
     }
-    return { component, send, ...unique(identities, 'Code selection and native send identity') };
+    const identities = [];
+    for (const read of scopeNodes(send, n => n.type === 'VariableDeclarator' && n.init)) {
+      const proof = sessionRead(read.init), binding = proof && scopes.binding(proof.seed);
+      // The read is injected at the top of the send and the seed after `end`
+      // at the component's top level; both must denote the proved bindings there.
+      if (!proof || !binding.declarations.every(d => d.node.end <= proof.end)
+        || scopes.at(send, proof.names[0].name) !== scopes.binding(proof.names[0])) continue;
+      identities.push({ binding, ref: proof.seed.name, read: code(source, unwrap(read.init)), selectionEnd: proof.end,
+        ...(proof.getter ? { getter: proof.getter } : {}), ...(proof.retainedRef ? { retainedRef: proof.retainedRef } : {}) });
+    }
+    // Several reads of one selection agree; reads of different ones do not.
+    if (new Set(identities.map(n => n.binding)).size !== 1) fail('Code selection and native send identity');
+    const { binding: _, ...identity } = identities[0];
+    return { component, send, ...identity, selectionEnd: Math.max(...identities.map(n => n.selectionEnd)) };
   }
   const proven = [], refused = [];
   for (const candidate of candidates) {
@@ -828,6 +829,6 @@ export const ownerSubmitSignal = read => `try{const ref=${read};void __cldxOwner
 export function transformAnchoredOwner(source, b, bootstrap) {
   return applyEdits(source, [...(b.variants ?? [b]).flatMap(v => [insert(v.selectionEnd,
     `;${b.effect}(()=>${ownerSelectionSignal(v.ref)},[${v.ref}?.id,${v.ref}?.type]);`),
-  insert(v.send.body.start + 1, ownerSubmitSignal(v.retainedRef ? `${v.retainedRef}.current` : `${v.getter}()`))]),
+  insert(v.send.body.start + 1, ownerSubmitSignal(v.read))]),
   insert(source.length, bootstrap)]);
 }

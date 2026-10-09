@@ -1784,11 +1784,14 @@ identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
 The Code owner-wake adapter resolves the native session component structurally:
 initialSessionId/sessionType, submitMessage/getComposerSnapshot, the asynchronous
-send's waitForImagesReady and its retained current-reference getter. Early September
-builds retain a React ref: prove the public useRef import, exact selection seed,
-sole useEffect mirror and native current reader, with no escaped ref or extra
-reader/writer. The same reference supplies selection and native send; signal
-submit before early refusals.
+send's waitForImagesReady and the expression through which it reads the current
+session. That read is a getter call whose stored reader returns the selection, a
+retained React ref's .current, or a composition of both. A retained ref needs
+the public useRef import, a selection seed and an effect mirroring that
+selection; its only other uses may be .current reads. A bare use is an escape
+and any other write a rival; both refuse. Reads of different selections refuse.
+The same reference supplies selection and native send; signal submit before
+early refusals.
 Require unique complete binding relationships, never select the shared Chat/Cowork
 view or a wrapper merely exposing a similar submit interface. Never await or retry
 native send. Resolve the exported exact-UUID lookup by its read-only getState,
@@ -1807,15 +1810,38 @@ Codex transport, sync, archival proof publication or queued-message replay. Nati
 RC owns delivery. Promoted recovery reconnects the normal owner without a cached
 handle. Ignored hints have bounded diagnostics, no automatic wake retry.
 Owner discovery shortlists modules/components by role markers, then requires one
-complete identity/send/client proof. Follow callback aliases only in the component's
-lexical scope, function/arrow forms and block-return readers. Resolve compiler memo
-helpers to their real definitions and prove their exact cache writes, finite rest
-copy loop and returned callback; never choose a callback merely by its argument
-position. Inline memo branches must bind the fresh callback and cached value to
-the same result slot with complete matching dependency tests/stores, including
-reversed equality branches. Named re-export resolution is bounded to eight modules, callback values
-to twelve steps; cycles, missing chunks, multiple proven targets and unknown
-semantics remain refused. Keep all compiler branches and native source unchanged.
+complete identity/send/client proof. Bindings are resolved by declaration through
+src/claude-frontend-scope.mjs, never by comparing minified names: hoisted vars,
+catch/loop/pattern bindings and nested writes all count, properties and unrelated
+parameters do not. A name injected into vendor code is checked at the scope it is
+placed in. Callbacks are found by following values, not shapes: a binding is
+every function its declarators and plain assignments can give it, and exactly
+one must remain. Compiler memo forms are transparent. A cached slot counts only
+when every write to that slot in the component stores the same callback, directly
+or through an identity helper whose range covers it. A module helper is an
+identity when its own body returns one argument unchanged, writes only into its
+first argument and has no call, closure, free name or parameter write; loop and
+branch shapes are free. Which dependencies invalidate a cache, and what else a
+fresh branch does, cannot change which function a binding holds and are not
+compared. Never choose a callback by argument position. Named re-export
+resolution is bounded to eight modules, value flow to twelve bindings and 96
+steps; cycles, missing chunks, multiple proven targets and unknown semantics
+remain refused. Keep all compiler branches and native source unchanged.
+Everything injected into vendor code contains its own failures: signals and
+store calls catch, bootstraps fall back to inert objects. A wrong anchor or a
+broken runtime may lose a Claudex signal; it must never stop a native send, a
+render or a vendor module's evaluation. This containment is the reason the
+proofs may generalize, not a substitute for them.
+test/claude-frontend-mutations.test.mjs inserts one or two binding forms into
+synthetic components: every accepted mutant must behave exactly like its
+unpatched source and never signal a session the send did not use. Extend its
+names, forms and places when a new construct is recognized. Before changing
+recognition, also run dev/verify-claude-frontend-builds.mjs over the saved real
+build corpora and compare the patch each build receives with the previous
+resolver; an unexplained difference is a regression.
+The native LocalSessions switch report (reportSwitchInitiated) carries a session
+ID and type, but it is gated telemetry, absent from the August builds and has
+no counterpart for a Remote Control send. It is not a wake source.
 The identity-only search diagnostic is not runtime activation proof. This changes
 no idle eviction, retained-owner count, UI, native input or model work.
 Reuse the graph's required syntax pass for compact exported-binding provenance,
@@ -1888,16 +1914,14 @@ bootstrap no longer embeds another chat-wake consumer.
 The observed August owner component is wrapped by the uniquely imported public
 React.memo with exactly one component argument and no comparator. Only that
 wrapper exposes the component to the existing identity/send/client proofs;
-arbitrary helpers and imperative forwarding wrappers do not qualify. Ignore a
-same-name block-local let/const when counting retained ref uses, preserving the
-exact useRef seed, sole useEffect mirror and non-escape checks of the outer ref.
-The ref's three visible uses must be exactly its declaration, the mirror write
-and the send read; never accept a count that a shadowed read and an escape satisfy.
+arbitrary helpers and imperative forwarding wrappers do not qualify. A block-local
+binding that reuses the ref's minified name is another declaration and never one
+of the ref's uses.
 Builds fetched from 2026-10-09 read and write compiler memo slots through
 helper calls: changed(cache, i, ...deps) ? store(cache, i, ...deps, value) :
 cache[n], with helpers that differ in where the value sits and may nest. The
-owner-wake callbacks require the helper's proved returned value to be the sole
-callback candidate; two candidates stay unrecognized. The folder consumer accepts
+owner-wake callback is the argument the helper's summary returns, whatever other
+functions the call receives. The folder consumer accepts
 the helper form of its grouping and key memo guards, with the same four
 dependencies, store index and result slot; the extra version slot and guard
 edits are unchanged. Earlier slot-by-slot builds keep their exact checks. Every adapter's entire

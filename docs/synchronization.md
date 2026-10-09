@@ -514,15 +514,21 @@ Requests are debounced for five seconds per identity and bounded to sixteen
 identities in a thirty-second window. There is no periodic owner keepalive.
 
 Discovery searches all shortlisted Code candidates and accepts exactly one
-complete semantic proof. It follows stable callback aliases in the component's
-own lexical scope, block-return readers and function/arrow forms. Compiler memo
-helpers are resolved to their real definitions: their only writes must be to
-the supplied memo cache, their finite variadic copy loops are checked exactly,
-and their return expression must identify the one callback. A callback merely
-appearing in an unknown call is insufficient. The selection reference and the
-native send's current getter must still match; every retained compiler branch
-must validate. Inline memo branches require the exact callback/result slot and
-matching dependency tests/stores, including reversed equality branches.
+complete semantic proof. Identifiers are resolved to their declarations by a
+lexical scope analysis; a parameter, block binding, hoisted `var`, catch binding
+or nested write is recognized as such, and a property of the same name is not a
+use. A callback is the single function a binding's declarators and assignments
+can give it. Compiler memo forms are followed through: a cached slot counts only
+when every write to it stores that callback, and a helper only when its own body
+returns one argument unchanged, writes only into the memo cache it is given and
+contains no call, closure or free name. Which dependencies invalidate the cache
+is not compared, because it cannot change which function is stored. A callback
+merely appearing in an unknown call is insufficient. The selection reference and
+the session the native send reads must be the same declaration; every retained
+compiler branch must validate.
+The injected signals catch their own failures and the runtime bootstraps fall
+back to inert objects, so a wrong match loses a signal without affecting the
+native send, the render or the module's evaluation.
 Named imports/re-exports resolve to the actual defining native,
 React and attached-client binding, with an eight-module bound and cycle refusal.
 The observed LocalSessions initializer may retain one unused native host read
@@ -533,10 +539,10 @@ retain the same request/routing proof with enclosing lexical shadows refused.
 When August shortcut-help reads compete with the session action, require one
 exact native fork alias, null guard and awaited request. The observed owner
 component's public React.memo wrapper must retain a single argument and no
-comparator; its native identity/send/client proofs still apply. Same-name
-block-local let/const bindings are excluded from outer ref use counts, without
-exempting another outer ref reader, writer or escape.
-Callback resolution is bounded to twelve steps. Unknown forms remain skipped.
+comparator; its native identity/send/client proofs still apply. A retained ref
+may be read through `.current` any number of times; a bare use, an update, a
+delete or a write other than its selection mirror refuses it.
+Value flow is bounded to twelve bindings. Unknown forms remain skipped.
 This search runs only during normal cache discovery/maintenance and does not
 change owner eviction, start model input or add periodic native history reads.
 

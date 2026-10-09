@@ -249,15 +249,17 @@ native tail. Unknown layouts remain refused. These bounds add no retained owners
 
 Owner wake uses bounded semantic search within that graph. Markers only shortlist
 candidate modules/components; the current-reference reader and native send must
-prove the same identity before one candidate is selected. The search follows
-callback aliases, block-return readers, function/arrow components, exact compiler
-memo return values (including variadic stores), and named re-exports through at
-most eight modules. Early September builds use a retained React ref instead:
-require its public `useRef` binding, exact selection seed, sole `useEffect`
-mirror and native send reader, without escaped refs or additional writes.
-Callback resolution stops at twelve steps. Competing proven
-targets, alias cycles, missing dependencies and unknown helper semantics refuse
-installation. Diagnostic `ownerWake.search` describes discovery, never activation.
+prove the same identity before one candidate is selected. Identifiers are
+resolved to their declarations, so shadowing is decided by the language's scope
+rules rather than by name. Callbacks are found by following values through
+aliases, compiler memo slots and identity helpers, and named re-exports through
+at most eight modules. The session read may be a getter call, a retained React
+ref's `.current` (public `useRef` binding, selection seed, mirroring `useEffect`,
+no escape or rival write) or a composition of both. Value flow stops at twelve
+bindings. Competing proven targets, alias cycles, missing dependencies and
+unknown helper semantics refuse installation. Injected code contains its own
+failures, so a wrong match can lose a wake signal but cannot stop a native send
+or a vendor module from loading. Diagnostic `ownerWake.search` describes discovery, never activation.
 This adds no retained owners, keepalive, model work or memory-pool setting.
 
 This improves adaptation to compiler and chunk-layout changes; it cannot certify
