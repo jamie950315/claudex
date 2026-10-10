@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.12 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.13 packages Claude Mod 0.8.16. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -358,7 +358,13 @@ locally in `command.run`, preserving native origin and never delegating to a
 model. Its TTL override must not update shared remember/default preferences.
 Keep legacy `/claudex warm` persistence controls and Codex native hook controls distinct.
 Normal namespaced on/off/status replies use the shared pure cache-warm-display
-formatter: four localized text lines, never raw policy JSON. Keep its Mod file
+formatter: four localized text lines, plus a fifth with the used and chosen
+limits whenever a policy exists, never raw policy JSON. The same file's pure
+parseWarmLimits turns the user's `rounds=N`, `for=DURATION` or `until=HH:MM`
+into the existing maxRefreshes/maxMinutes bounds for both providers' `on`
+commands (Claude interval 4 or 55 minutes by TTL, Codex 25): a time limit
+alone allows the requests that fit, rounds alone may take up to a day, and a
+limit no request fits in, or one needing over 100 requests, is refused. Keep its Mod file
 in both packaging allowlists. Select only the exact session/cwd policy; respect
 local suspension and unavailable scheduling evidence. First cache-result timing
 comes from native actual-read observations in the complete current-generation

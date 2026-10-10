@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.3.0 and Claude Mod 0.8.15 provide bounded, per-conversation cache warming.
+Claudex 1.3.13 and Claude Mod 0.8.16 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.15 companion and
+Use the intended existing conversation with a freshly loaded 0.8.16 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -27,9 +27,29 @@ The session-only shortcut is:
 /claudex:warm on
 /claudex:warm on 5m
 /claudex:warm on 1h
+/claudex:warm on rounds=10
+/claudex:warm on 5m for=2h
+/claudex:warm on until=18:30
 /claudex:warm off
 /claudex:warm status
 ```
+
+Limits you choose, on Claude and on Codex:
+
+| Argument | Meaning |
+|---|---|
+| `rounds=N` | At most N warm requests (1-100). Alone, it may take up to 24 hours. |
+| `for=90m`, `for=3h`, `for=1h30m` | Stop after this long (up to 24 hours). |
+| `until=18:30` | Stop at the next occurrence of this local 24-hour time. |
+
+`for=` and `until=` exclude each other; either may be combined with `rounds=`,
+and whichever limit is reached first stops warming. A time limit alone allows as
+many requests as fit in it: one every 55 minutes at a 1h TTL, every 4 minutes at
+5m, every 25 minutes on Codex. A time shorter than one such interval, or one
+that would need more than 100 requests, is refused with the reason instead of
+being silently shortened. Without any of these the defaults stay 60 minutes and
+3 requests. The summary's last line shows the requests used, the limit and the
+end time.
 
 Choose one `on` form and send it once. It directly applies the session TTL and
 enables warming; no second confirmation or token is required. `ttl=5m` and

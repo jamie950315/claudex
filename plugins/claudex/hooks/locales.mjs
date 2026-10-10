@@ -16,6 +16,7 @@ const rows = {
     "Token: prefisso {prefix} · letture cache: {read}/{readLimit} (conteggiato/limite), output {output}/{outputLimit}"
   ],
   "First cache result: {time}": ["首次快取回應：{time}", "首次缓存响应：{time}", "初回のキャッシュ応答：{time}", "최초 캐시 응답: {time}", "Primera respuesta de caché: {time}", "Erste Cache-Antwort: {time}", "Première réponse du cache : {time}", "Prima risposta cache: {time}"],
+  "Limits: {used}/{max} warm requests · until {time}": ["上限：已暖機 {used}/{max} 次 · 到 {time} 為止", "上限：已预热 {used}/{max} 次 · 到 {time} 为止", "上限：キャッシュ維持 {used}/{max} 回 · {time} まで", "제한: 웜 요청 {used}/{max}회 · {time}까지", "Límites: {used}/{max} refrescos · hasta {time}", "Limits: {used}/{max} Warmhaltungen · bis {time}", "Limites : {used}/{max} maintiens · jusqu’à {time}", "Limiti: {used}/{max} aggiornamenti · fino a {time}"],
   "Next warm: {next}": ["下次暖機：{next}", "下次预热：{next}", "次回のキャッシュ維持：{next}", "다음 웜 요청: {next}", "Próximo refresco: {next}", "Nächste Warmhaltung: {next}", "Prochain maintien : {next}", "Prossimo aggiornamento: {next}"],
   "Not yet": ["尚未發生", "尚未发生", "まだなし", "아직 없음", "Todavía no", "Noch nicht", "Pas encore", "Non ancora"],
   "Waiting for a normal reply": ["等待一般回覆", "等待常规回复", "通常の応答待ち", "일반 응답 대기", "Esperando una respuesta normal", "Wartet auf normale Antwort", "En attente d’une réponse normale", "In attesa di una risposta normale"],

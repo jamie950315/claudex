@@ -114,6 +114,22 @@ test('namespaced shortcut applies TTL only to its session, never the shared reme
   assert.equal(f.submits, 0);
 });
 
+test('the shortcut turns rounds, a duration or a clock time into the confirmed bounds', async () => {
+  const origin = { kind: 'composer' };
+  for (const [words, expected] of [[['on', '5m', 'rounds=6'], { maxRefreshes: 6, maxMinutes: 1440 }],
+    [['on', 'for=3h'], { maxRefreshes: 3, maxMinutes: 180 }], [['on', '5m', 'for=40m'], { maxRefreshes: 10, maxMinutes: 40 }]]) {
+    const f = await fixture(), result = await f.client.sessionCommand(f.host, words, origin);
+    assert.equal(result.state, 'enabled');
+    const configured = f.calls.findLast(call => JSON.stringify(call).includes('maxRefreshes'));
+    assert.ok(JSON.stringify(configured).includes(`"maxRefreshes":${expected.maxRefreshes}`), JSON.stringify(configured));
+    assert.ok(JSON.stringify(configured).includes(`"maxMinutes":${expected.maxMinutes}`));
+  }
+  const f = await fixture();
+  for (const words of [['on', 'for=10m'], ['on', '5m', 'for=8h'], ['on', 'rounds=0'], ['on', 'for=1h', 'until=23:00'], ['off', 'rounds=2']])
+    await assert.rejects(f.client.sessionCommand(f.host, words, origin));
+  assert.equal(f.calls.length, 0);
+});
+
 test('bare session on enables directly with saved TTL or the one-hour default', async () => {
   for (const ttl of [undefined, '5m']) {
     const f = await fixture();

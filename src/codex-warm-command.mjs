@@ -5,12 +5,12 @@ import { callCollaboration } from './collaboration-transport.mjs';
 import { createCodexCacheNative } from './codex-cache-native.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { formatWarmSummary } from '../plugins/claudex/hooks/cache-warm-display.mjs';
+import { formatWarmSummary, parseWarmLimits, WARM_LIMIT_HELP } from '../plugins/claudex/hooks/cache-warm-display.mjs';
 import { createLocalization } from '../plugins/claudex/hooks/localization.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const PREFIX = '/claudex:warm';
-const HELP = 'Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits. Codex has no configurable 5m/1h TTL. The default refresh interval is 25 minutes.';
+const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}. Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
 const block = text => {
   return { decision: 'block', reason: text, systemMessage: text };
 };
@@ -24,11 +24,16 @@ async function systemTranslator() {
   return localization.t;
 }
 
-export function parseCodexWarmCommand(prompt) {
+export function parseCodexWarmCommand(prompt, now = Date.now()) {
   if (typeof prompt !== 'string' || !/^\/claudex:warm(?:\s|$)/u.test(prompt.trim())) return null;
   if (prompt.length > 1024 || /[\r\n\0]/u.test(prompt.trim())) throw new Error(HELP);
   const [, action = 'status', ...args] = prompt.trim().split(/\s+/u);
   if (['on', 'off', 'status'].includes(action) && !args.length) return { action };
+  if (action === 'on') {
+    // Codex refreshes every 25 minutes; the user's limits become its bounds.
+    const { rest, bounds } = parseWarmLimits(args, { intervalMinutes: 25, now });
+    if (!rest.length) return { action, bounds };
+  }
   if (action === 'confirm' && args.length === 2 && UUID.test(args[0]) && args[1] === 'accept-best-effort')
     return { action, confirmationId: args[0] };
   throw new Error(HELP);
@@ -71,6 +76,7 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
     // The explicit user on command is enrollment consent. Keep the broker's
     // one-use prepare/confirm transaction internal, with a fresh context fence.
     if (action === 'on' || action === 'confirm') params.bestEffort = true;
+    if (action === 'on') Object.assign(params, command.bounds);
     if (action === 'confirm') params.confirmationId = command.confirmationId;
     const method = `codex_cache_warm_${action === 'on' ? 'prepare' : action === 'status' ? 'list' : action}`;
     let result = await call(root, method, params);
@@ -79,7 +85,7 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
         throw new Error('The prepared settings did not match this chat; warming was not enabled.');
       if (await verify(context) !== true)
         throw new Error('Native command context changed before enabling warming.');
-      result = await call(root, 'codex_cache_warm_confirm', { ...params, confirmationId: result.confirmationId });
+      result = await call(root, 'codex_cache_warm_confirm', { sessionId: params.sessionId, cwd: params.cwd, bestEffort: true, confirmationId: result.confirmationId });
       if (result?.policy?.enabled !== true) throw new Error('Warming activation was not verified; inspect status.');
       result = { state: 'enabled', ...result };
     } else if (action === 'status') {

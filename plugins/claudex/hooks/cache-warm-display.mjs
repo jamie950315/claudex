@@ -1,4 +1,49 @@
-// Read-only presentation shared by native local commands. No scheduling or inference.
+// Read-only presentation and limit parsing shared by native local commands. No scheduling or inference.
+export const WARM_LIMIT_HELP = 'rounds=N (1-100), for=90m|3h|1h30m (up to 24h) or until=HH:MM (24-hour local time)';
+
+/** Turn the user's own limits into the existing maxMinutes/maxRefreshes bounds.
+ * rounds is a number of warm requests, for a duration and until the next local
+ * HH:MM. A time limit alone allows as many requests as fit in it; rounds alone
+ * may take up to a day. Returns the remaining words and any derived bounds. */
+export function parseWarmLimits(words, { intervalMinutes, now }) {
+  const rest = [], seen = new Map();
+  for (const word of words) {
+    const match = /^(rounds|for|until)=(.*)$/.exec(word);
+    if (!match) { rest.push(word); continue; }
+    if (seen.has(match[1])) throw new Error(`Use ${match[1]}= once. Limits: ${WARM_LIMIT_HELP}.`);
+    seen.set(match[1], match[2]);
+  }
+  if (!seen.size) return { rest, bounds: {} };
+  const invalid = () => new Error(`Limits: ${WARM_LIMIT_HELP}.`);
+  if (seen.has('for') && seen.has('until')) throw new Error('Use either for= or until=, not both.');
+  if (!Number.isSafeInteger(intervalMinutes) || intervalMinutes < 1 || !Number.isFinite(now)) throw invalid();
+  let rounds, minutes;
+  if (seen.has('rounds')) {
+    if (!/^[1-9][0-9]{0,2}$/.test(seen.get('rounds')) || (rounds = Number(seen.get('rounds'))) > 100) throw invalid();
+  }
+  if (seen.has('for')) {
+    const duration = /^(?:([0-9]{1,2})h)?(?:([0-9]{1,4})m)?$/.exec(seen.get('for'));
+    if (!duration || duration[1] === undefined && duration[2] === undefined) throw invalid();
+    minutes = Number(duration[1] ?? 0) * 60 + Number(duration[2] ?? 0);
+  } else if (seen.has('until')) {
+    const clock = /^([01]?[0-9]|2[0-3]):([0-5][0-9])$/.exec(seen.get('until'));
+    if (!clock) throw invalid();
+    const target = new Date(now); target.setHours(Number(clock[1]), Number(clock[2]), 0, 0);
+    // A time that has already passed today means the same time tomorrow.
+    if (target.getTime() <= now) target.setDate(target.getDate() + 1);
+    minutes = Math.ceil((target.getTime() - now) / 60000);
+  }
+  if (minutes !== undefined) {
+    if (minutes < 1 || minutes > 1440) throw invalid();
+    if (minutes < intervalMinutes)
+      throw new Error(`No warm request fits in ${minutes} min: the first one is due ${intervalMinutes} min after a reply.`);
+    const fitting = Math.floor(minutes / intervalMinutes);
+    if (rounds === undefined && fitting > 100)
+      throw new Error(`${minutes} min would take ${fitting} warm requests; the limit is 100 (${100 * intervalMinutes} min at this interval).`);
+    return { rest, bounds: { maxMinutes: minutes, maxRefreshes: rounds ?? fitting } };
+  }
+  return { rest, bounds: { maxMinutes: 1440, maxRefreshes: rounds } };
+}
 const number = value => Number.isSafeInteger(value) && value >= 0;
 const timestamp = value => Number.isFinite(value) && value > 0 && !Number.isNaN(new Date(value).getTime());
 const interpolate = (key, params = {}) => key.replace(/\{([A-Za-z][A-Za-z0-9]*)\}/g, (match, name) => params[name] ?? match);
@@ -87,5 +132,8 @@ export function formatWarmSummary(result = {}, { provider, sessionId, cwd, t = i
     next = reasons[effectiveReason] ? t(reasons[effectiveReason]) : t('Needs inspection');
     if (!reasons[effectiveReason] && /^[a-z][a-z0-9-]{0,63}$/.test(effectiveReason ?? '')) next += ` (${effectiveReason})`;
   } else next = time(policy?.nextAt);
-  return [heading, tokens, history, t('Next warm: {next}', { next })].join('\n');
+  // Shown only for a policy, so the user sees the limits they chose being used.
+  const limits = policy && number(policy.maxRefreshes) ? [t('Limits: {used}/{max} warm requests · until {time}', {
+    used: count(policy.totals?.refreshes), max: count(policy.maxRefreshes), time: time(policy.until) })] : [];
+  return [heading, tokens, history, t('Next warm: {next}', { next }), ...limits].join('\n');
 }

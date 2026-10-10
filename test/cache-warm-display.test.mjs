@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatWarmSummary, formatWarmTime } from '../plugins/claudex/hooks/cache-warm-display.mjs';
+import { formatWarmSummary, formatWarmTime, parseWarmLimits } from '../plugins/claudex/hooks/cache-warm-display.mjs';
 import { catalogs } from '../plugins/claudex/hooks/locales.mjs';
 import { translator } from '../plugins/claudex/hooks/localization.mjs';
 
@@ -35,6 +35,29 @@ test('scheduled summary separates cached prefix, budget accounting and actual ca
   assert.match(text, /First cache result: time-4500/);
   assert.match(text, /Next warm: time-9000$/);
   assert.doesNotMatch(text, /time-2000|time-3000|time-6500|time-10000/);
+});
+
+test('a policy with a round limit shows how much of the chosen limits is used', () => {
+  const text = show({ policy: policy({ maxRefreshes: 12, totals: { refreshes: 3, readTokens: 0, outputTokens: 0 } }) });
+  assert.equal(text.split('\n').length, 5);
+  assert.match(text, /Limits: 3\/12 warm requests · until time-10000$/);
+});
+
+test('rounds, a duration or a clock time become the existing bounds', () => {
+  const noon = new Date(2026, 0, 1, 12, 0).getTime(), parse = (words, intervalMinutes = 55) => parseWarmLimits(words, { intervalMinutes, now: noon });
+  assert.deepEqual(parse(['ttl=1h']), { rest: ['ttl=1h'], bounds: {} });
+  assert.deepEqual(parse(['rounds=5', 'ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 1440, maxRefreshes: 5 } });
+  assert.deepEqual(parse(['for=3h']).bounds, { maxMinutes: 180, maxRefreshes: 3 });
+  assert.deepEqual(parse(['for=1h30m']).bounds, { maxMinutes: 90, maxRefreshes: 1 });
+  assert.deepEqual(parse(['for=90m', 'rounds=9']).bounds, { maxMinutes: 90, maxRefreshes: 9 });
+  assert.deepEqual(parse(['until=18:30']).bounds, { maxMinutes: 390, maxRefreshes: 7 });
+  // A clock time already passed today is the same time tomorrow.
+  assert.deepEqual(parse(['until=11:00']).bounds, { maxMinutes: 1380, maxRefreshes: 25 });
+  assert.deepEqual(parse(['until=12:20'], 4).bounds, { maxMinutes: 20, maxRefreshes: 5 });
+  for (const words of [['rounds=0'], ['rounds=101'], ['rounds=2', 'rounds=3'], ['for='], ['for=25h'], ['for=0m'], ['for=1.5h'],
+    ['until=24:00'], ['until=9'], ['for=2h', 'until=15:00']]) assert.throws(() => parse(words), /Limits|once|either/);
+  assert.throws(() => parse(['for=30m']), /No warm request fits in 30 min/);
+  assert.throws(() => parse(['for=8h'], 4), /would take 120 warm requests; the limit is 100 \(400 min/);
 });
 
 test('Codex interval is not presented as a configurable native TTL', () => {

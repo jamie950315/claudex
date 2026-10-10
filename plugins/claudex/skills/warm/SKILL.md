@@ -1,7 +1,7 @@
 ---
 name: warm
 description: Control cache warming in this Claude Code session through the loaded Claudex Mod.
-argument-hint: on [5m|1h] | off | status
+argument-hint: on [5m|1h] [rounds=N] [for=3h|until=18:30] | off | status
 disable-model-invocation: true
 ---
 
@@ -20,6 +20,8 @@ Supported human commands:
 - `/claudex:warm on` enables warming with the saved startup TTL, or 1h, directly.
 - `/claudex:warm on 5m` or `/claudex:warm on 1h` selects this session's TTL.
   `ttl=5m` and `ttl=1h` are also accepted.
+- `rounds=N`, `for=90m|3h|1h30m` or `until=HH:MM` after `on` choose how many warm
+  requests, how long or until what local time; `for` and `until` exclude each other.
 - No second confirmation command is needed.
 - `/claudex:warm off` stops warming, leaving this session's native TTL unchanged.
 - `/claudex:warm status` (or no arguments) inspects without enabling anything.

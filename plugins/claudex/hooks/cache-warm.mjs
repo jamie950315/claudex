@@ -1,4 +1,6 @@
 // This client observes only native metadata. The broker owns policy and budgets.
+import { parseWarmLimits, WARM_LIMIT_HELP } from './cache-warm-display.mjs';
+
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const count = value => Number.isSafeInteger(value) && value >= 0;
 const token = () => `warm-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
@@ -211,11 +213,17 @@ export function createCacheWarmClient() {
     async sessionCommand(host, words, origin) {
       if (!words.length) words = ['status'];
       if (!['status', 'on', 'off', 'confirm'].includes(words[0]))
-        throw new Error('Use /claudex:warm on [5m|1h|ttl=5m|ttl=1h], off, status, or confirm TOKEN.');
+        throw new Error(`Use /claudex:warm on [5m|1h] [${WARM_LIMIT_HELP}], off, status, or confirm TOKEN.`);
       // This shortcut never changes the shared startup preference, including
       // remember-last. Preserve the native origin; do not manufacture a user.
       words = words.map((word, index) => index > 0 && words[0] === 'on' && ['5m', '1h'].includes(word) ? `ttl=${word}` : word);
       if (words[0] !== 'on') return this.command(host, words, origin, undefined, { sessionOnly: true });
+      // The user's own limits become the existing bounds. The refresh interval
+      // follows the TTL this command will apply: its own, else the saved one.
+      const ttlWord = words.find(word => word.startsWith('ttl='));
+      const ttl = ttlWord ? ttlWord.slice(4) : (await readPreference(host)).ttl ?? '1h';
+      const limited = parseWarmLimits(words.slice(1), { intervalMinutes: ttl === '5m' ? 4 : 55, now: await host.now() });
+      words = ['on', ...limited.rest, ...Object.entries(limited.bounds).map(([key, value]) => `${key}=${value}`)];
       // The explicit session command is the user's opt-in. Reuse the internal
       // one-use configuration transaction without a second composer submission.
       const context = await host.context();
