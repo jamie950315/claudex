@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.21 packages Claude Mod 0.8.22. Keep application and Mod versions
+Claudex.app 1.3.22 packages Claude Mod 0.8.22. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -311,12 +311,18 @@ bounded polling harness, not a production fallback.
   existing export path; do not impose proof-reader bounds on ordinary histories.
 - Native completed turns with no full API items require independent stable
   rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
-  exact lifecycle IDs/times and no response, tool or token activity; fresh native
-  typed bootstrap context is allowed only by its strict role/kind/frame schema.
-  Also accept the observed pre-context environment-only world-state delta and
-  the exact Desktop resume agents_md/environments/permissions delta bound to
-  its typed native context and cwd. Unknown delta fields and real
-  message/tool/token records remain refused. Paired app-origin untrusted_input
+  exact lifecycle IDs/times and no response, tool or token activity. By user
+  decision the proof lists what makes a turn nonempty, not every context form
+  a release may add: a developer-role context message of any kind, a
+  world_state record with any state fields (one, before the turn context) and
+  thread_settings_applied or thread_goal_updated events are runtime context
+  and state, inside the turn or after it. Still exact: the record shapes,
+  the message metadata bound to the turn and its time, and the user role,
+  where only the four runtime kinds with their frames and order are context
+  and every other kind is authored input. Assistant, tool, reasoning and
+  token records are refused wherever they appear. Before changing this, run
+  the proof over real rollouts in both directions: every empty turn accepted
+  and no turn with activity accepted. Paired app-origin untrusted_input
   ingress before the next native task_started requires its exact envelope,
   pair, next independent context and millisecond ordering; it never exempts
   activity within an empty candidate.

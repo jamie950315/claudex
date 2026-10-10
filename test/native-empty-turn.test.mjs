@@ -85,7 +85,7 @@ test('proves one exact empty lifecycle without inventing a hook or changing nati
   assert.deepEqual(await readFile(source.path), original);
 });
 
-test('loaded-chat environment-only world-state deltas are context, never a general delta exemption', async t => {
+test('native world state is context whatever its fields, in its exact record form', async t => {
   const source = await fixture(t, source => {
     source.splice(2, 0, { type: 'world_state', payload: { full: false, state: { environments: [] } } });
   });
@@ -94,9 +94,18 @@ test('loaded-chat environment-only world-state deltas are context, never a gener
   source.source[2].payload.state.environments = [{ id: 'synthetic-local' }];
   await writeFile(source.path, encode(source.source));
   assert.notEqual((await run(source)).evidenceDigest, proof.evidenceDigest);
-  source.source[2].payload.state.user_message = 'Not native environment context';
-  await writeFile(source.path, encode(source.source));
-  await assert.rejects(run(source), /unrecognized native world state/);
+  // Fields differ by release and by what changed; none of them is a message.
+  for (const state of [{ host_skills: [] }, { agents_md: null, collaboration_mode: 'default', model: 'synthetic', personality: 'pragmatic' },
+    { model_catalog: [], tools: [] }]) {
+    source.source[2].payload.state = state;
+    await writeFile(source.path, encode(source.source));
+    assert.deepEqual((await run(source)).turnIds, [turnId]);
+  }
+  for (const mutate of [payload => { payload.output = 'Not native state'; }, payload => { payload.full = 'yes'; }, payload => { payload.state = []; }]) {
+    const changed = structuredClone(source.source); mutate(changed[2].payload);
+    await writeFile(source.path, encode(changed));
+    await assert.rejects(run(source), /unrecognized native world state/);
+  }
 });
 
 test('loaded-chat resume context delta proves the exact empty segment and preserves all native bytes', async t => {
@@ -110,20 +119,6 @@ test('loaded-chat resume context delta proves the exact empty segment and preser
 });
 
 const resumeMutations = [
-  ['unknown state field', source => { source[5].payload.state.user_message = 'An ordinary request.'; }],
-  ['foreign instruction directory', source => { source[5].payload.state.agents_md.directory = '/tmp/another-project'; }],
-  ['extra instruction field', source => { source[5].payload.state.agents_md.output = 'Authored output.'; }],
-  ['changed instruction text', source => { source[5].payload.state.agents_md.text += ' Unbound context.'; }],
-  ['missing typed permissions', source => { source.splice(3, 1); }],
-  ['foreign environment cwd', source => { source[5].payload.state.environments.environments.local.cwd = '/tmp/another-project'; }],
-  ['additional environment', source => { source[5].payload.state.environments.environments.remote = { cwd }; }],
-  ['unknown environment field', source => { source[5].payload.state.environments.command = 'Run a tool.'; }],
-  ['unknown local field', source => { source[5].payload.state.environments.environments.local.output = 'Tool output.'; }],
-  ['unknown environment state', source => { source[5].payload.state.environments.environments.local.status = 'running'; }],
-  ['invalid native shell', source => { source[5].payload.state.environments.environments.local.shell = null; }],
-  ['unbound filesystem', source => { source[5].payload.state.environments.filesystem = '<filesystem>Unbound permissions.</filesystem>'; }],
-  ['unknown permission field', source => { source[5].payload.state.permissions.approved_command_prefixes = []; }],
-  ['invalid permission hash', source => { source[5].payload.state.permissions.instructions = 'Run arbitrary work.'; }],
   ['world after context', source => { [source[5], source[6]] = [source[6], source[5]]; }],
   ['ordinary user input', source => { source.splice(6, 0, contextMessage(4, 'user', [['user.text', 'Do real work.']])); }],
   ['token usage', source => { source.splice(6, 0, { type: 'token_usage_record', payload: { thread_id: threadId, turn_id: turnId, usage: {} } }); }],
@@ -161,24 +156,23 @@ const contextMutations = [
   ['metadata late time', source => { source[2].payload.internal_chat_message_metadata_passthrough.create_time = 101; }],
   ['metadata invalid time', source => { source[2].payload.internal_chat_message_metadata_passthrough.create_time = null; }],
   ['metadata block count', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds.pop(); }],
-  ['unknown kind', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'unknown.instructions'; }],
+  ['authored user kind', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'user.text'; }],
+  ['unknown user kind', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'goal.internal_context'; }],
+  ['duplicate user kind', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[1] = 'agents_md.instructions'; }],
+  ['unframed user content', source => { source[3].payload.content[0].text = 'Run an ordinary task.'; }],
+  ['broken user content closing', source => { source[3].payload.content[1].text += ' Authored content.'; }],
+  ['user bootstrap after context', source => { const row = source.splice(3, 1)[0]; source.splice(5, 0, row); }],
+  ['user additional before context', source => { const row = source.splice(7, 1)[0]; source.splice(2, 0, row); }],
+  ['malformed kind', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'Not A Kind'; }],
   ['inherited kind name', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'constructor'; }],
-  ['duplicate kind', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds[1] = 'generic.developer_instructions'; }],
   ['output content', source => { source[2].payload.content[0].type = 'output_text'; }],
   ['extra content field', source => { source[2].payload.content[0].output = 'Hidden output.'; }],
-  ['unframed content', source => { source[2].payload.content[0].text = 'Run an ordinary task.'; }],
-  ['broken content closing', source => { source[2].payload.content[2].text += ' Authored content.'; }],
   ['invalid message ID', source => { source[2].payload.id = 'msg_unproven'; }],
   ['duplicate message ID', source => { source[3].payload.id = source[2].payload.id; }],
   ['extra message field', source => { source[2].payload.output = 'Unrecognized.'; }],
-  ['world partial', source => { source[4].payload.full = false; }],
   ['world extra payload', source => { source[4].payload.output = 'Unrecognized.'; }],
-  ['world missing field', source => { delete source[4].payload.state.model; }],
-  ['world semantic field', source => { source[4].payload.state.assistant_message = 'Unrecognized.'; }],
   ['world duplicate', source => { source.splice(5, 0, structuredClone(source[4])); }],
   ['world after context', source => { [source[4], source[5]] = [source[5], source[4]]; }],
-  ['bootstrap after context', source => { const row = source.splice(2, 1)[0]; source.splice(5, 0, row); }],
-  ['additional before context', source => { const row = source.splice(6, 1)[0]; source.splice(2, 0, row); }],
   ['nonnull Page', source => { source[7].payload.content[0].text = '<external_codex_apps_open_page>{"page_id":"real-page"}</external_codex_apps_open_page>'; }],
   ['null Page suffix', source => { source[7].payload.content[0].text += 'Do work.'; }],
   ['context after completion', source => { const row = source.splice(6, 1)[0]; source.push(row); }],
@@ -334,9 +328,7 @@ const mutations = [
   ['hook event', source => { source.splice(3, 0, { type: 'event_msg', payload: { type: 'hook_completed' } }); }],
   ['tool evidence', source => { source.push({ type: 'event_msg', payload: { type: 'exec_command_end' } }); }],
   ['untagged late output', source => { source.push({ type: 'response_item', payload: { type: 'message', role: 'assistant' } }); }],
-  ['settings inside turn', source => { source.splice(2, 0, settings()); }],
   ['settings wrong thread', source => { const row = settings(); row.payload.thread_id = nextId; source.push(row); }],
-  ['settings missing thread', source => { const row = settings(); delete row.payload.thread_id; source.push(row); }],
   ['settings same-turn reference', source => { const row = settings(); row.payload.turn_id = turnId; source.push(row); }],
 ];
 for (const [name, mutate] of mutations) test(`refuses ambiguous empty proof: ${name}`, async t => {
@@ -442,4 +434,28 @@ test('the 0.162 start attribution is accepted from any trigger, for a turn of th
     source => { source[3].payload.root_turn_id = turnId; },
     source => { for (const index of [1, 2, 3]) source[index].payload.root_turn_id = turnId; source[1].payload.turn_attribution.root_turn_id = turnId; },
   ]) await assert.rejects(run(await fixture(t, source => { agent(source); mutate(source); })), /Native Codex empty turn/);
+});
+
+test('runtime context and state changes of any kind leave an empty turn empty', async t => {
+  const goal = more => ({ type: 'event_msg', payload: { type: 'thread_goal_updated', threadId, goal: { threadId, status: 'paused', objective: 'Synthetic.' }, ...more } });
+  for (const mutate of [
+    // Developer-role context is written by the runtime, whatever its kind, frame or position.
+    source => { source.splice(2, 0, contextMessage(1, 'developer', [['plugins.usage_instructions', '<plugins_instructions>Synthetic.</plugins_instructions>'],
+      ['model_switch.instructions', 'Unframed synthetic context.'], ['model_switch.instructions', 'Repeated.']])); },
+    source => { source.splice(3, 0, contextMessage(1, 'developer', [['apps.instructions', '<apps_instructions>Synthetic.</apps_instructions>']])); },
+    source => { source.splice(2, 0, contextMessage(1, 'user', [['plugins.recommendations', '<recommended_plugins>Synthetic.</recommended_plugins>']])); },
+    // Settings and goal state change without model activity, inside the turn or after it.
+    source => { source.splice(2, 0, settings()); },
+    source => { source.splice(2, 0, goal({ turnId })); source.splice(4, 0, goal({})); },
+    source => { const row = settings(); delete row.payload.thread_id; source.push(row, goal({})); },
+    source => { source.push({ type: 'world_state', payload: { full: false, state: { host_skills: [] } } }); },
+  ]) assert.deepEqual((await run(await fixture(t, mutate))).turnIds, [turnId]);
+  for (const mutate of [
+    source => { const row = settings(); row.payload.thread_id = nextId; source.push(row); },
+    source => { source.push(goal({ turnId })); },
+    source => { source.splice(2, 0, goal({ threadId: nextId })); },
+    source => { source.splice(2, 0, { type: 'event_msg', payload: { type: 'token_count', info: {} } }); },
+    source => { source.push({ type: 'event_msg', payload: { type: 'token_count', info: {} } }); },
+    source => { source.splice(2, 0, contextMessage(1, 'assistant', [['generic.developer_instructions', 'Synthetic.']])); },
+  ]) await assert.rejects(run(await fixture(t, mutate)), /Native Codex empty turn/);
 });

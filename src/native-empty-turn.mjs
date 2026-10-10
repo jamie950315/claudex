@@ -6,23 +6,14 @@ const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
 const START_FIELDS = ['type', 'turn_id', 'root_turn_id', 'started_at', 'model_context_window', 'collaboration_mode_kind'];
 const COMPLETE_FIELDS = ['type', 'turn_id', 'last_agent_message', 'started_at', 'completed_at', 'duration_ms'];
-const WORLD_FIELDS = ['agents_md', 'apps_instructions', 'collaboration_mode', 'context_window_guidance', 'environments',
-  'environments_instructions', 'git_attribution', 'host_skills', 'managed_developer_instructions', 'model',
-  'multi_agent_mode', 'multi_agent_usage_hint', 'permissions', 'persistent_mode', 'plugins_instructions', 'realtime', 'skills'];
-const CONTEXT_KINDS = {
-  'generic.developer_instructions': ['developer', '<app-context>', null],
-  'memories.instructions': ['developer', '## Memory\n', null],
-  'host_skills.instructions': ['developer', '<skills_instructions>', '</skills_instructions>'],
-  'permissions.instructions': ['developer', '<permissions instructions>', '</permissions instructions>'],
-  'collaboration_mode.instructions': ['developer', '<collaboration_mode>', '</collaboration_mode>'],
-  'plugins.recommendations': ['developer', '<recommended_plugins>', '</recommended_plugins>'],
-  'multi_agent.role_instructions': ['developer', '<multi_agent_role>', '</multi_agent_role>'],
-  'multi_agent.mode_instructions': ['developer', '<multi_agent_mode>', '</multi_agent_mode>'],
-  'additional_content.codex_apps_client_time_context': ['developer', '<codex_apps_client_time_context>', '</codex_apps_client_time_context>'],
-  'additional_content.codex_apps_open_page_instructions': ['developer', '<codex_apps_open_page_instructions>', '</codex_apps_open_page_instructions>'],
-  'agents_md.instructions': ['user', '# AGENTS.md instructions for ', '</INSTRUCTIONS>'],
-  'environments.environment_context': ['user', '<environment_context>', '</environment_context>'],
-  'additional_content.codex_apps_open_page': ['user', '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>', null],
+// Context the runtime injects in the user role. These exact kinds are not
+// authored input; every other user-role kind (user.text, user.image, a goal
+// or hook prompt, a selected skill, a subagent notification) is.
+const USER_CONTEXT_KINDS = {
+  'agents_md.instructions': ['# AGENTS.md instructions for ', '</INSTRUCTIONS>'],
+  'environments.environment_context': ['<environment_context>', '</environment_context>'],
+  'plugins.recommendations': ['<recommended_plugins>', '</recommended_plugins>'],
+  'additional_content.codex_apps_open_page': ['<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>', null],
 };
 // Codex 0.162 repeats the start identity in a turn_attribution record and the
 // root turn in the completion. The trigger only names where the turn was
@@ -42,6 +33,7 @@ const startFields = started => Object.keys(started).every(key => START_FIELDS.in
         : UUID.test(started.turn_attribution.parent_turn_id) && started.turn_attribution.parent_turn_id !== started.turn_id
           && started.root_turn_id !== started.turn_id && typeof started.turn_attribution.initiating_agent_path === 'string'
           && /^\/root(?:\/[A-Za-z0-9_.-]{1,128}){0,16}$/.test(started.turn_attribution.initiating_agent_path)));
+const STATE_EVENTS = ['thread_settings_applied', 'thread_goal_updated'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names) => object(value) && Object.keys(value).length === names.length
   && Object.keys(value).every(key => names.includes(key));
@@ -49,24 +41,6 @@ const time = value => typeof value === 'number' && Number.isFinite(value) && val
 const fail = message => { throw new Error(`Native Codex empty turn: ${message}`); };
 const candidate = turn => object(turn) && turn.status === 'completed' && turn.error === null
   && turn.itemsView === 'full' && Array.isArray(turn.items) && turn.items.length === 0;
-
-function resumeContextDelta(state, cwd, seenKinds) {
-  if (!keys(state, ['agents_md', 'environments', 'permissions'])) return false;
-  const agents = state.agents_md, environments = state.environments, permissions = state.permissions;
-  if (!keys(agents, ['directory', 'text']) || agents.directory !== cwd
-    || typeof agents.text !== 'string' || !agents.text.length
-    || !keys(environments, ['environments', 'filesystem']) || !keys(environments.environments, ['local'])
-    || !keys(environments.environments.local, ['cwd', 'status', 'shell'])
-    || environments.environments.local.cwd !== cwd || environments.environments.local.status !== 'available'
-    || typeof environments.environments.local.shell !== 'string' || !environments.environments.local.shell.trim()
-    || typeof environments.filesystem !== 'string' || !environments.filesystem.startsWith('<filesystem>')
-    || !environments.filesystem.endsWith('</filesystem>')
-    || !keys(permissions, ['instructions']) || typeof permissions.instructions !== 'string'
-    || !/^[a-f0-9]{40}$/.test(permissions.instructions)) return false;
-  return seenKinds.get('agents_md.instructions') === `# AGENTS.md instructions for ${cwd}\n\n<INSTRUCTIONS>\nThese AGENTS.md instructions replace all previously provided AGENTS.md instructions.\n\n${agents.text}\n</INSTRUCTIONS>`
-    && seenKinds.has('permissions.instructions')
-    && seenKinds.get('environments.environment_context')?.includes(environments.filesystem) === true;
-}
 
 function nativeContextMessage(payload, turn, afterContext, seenMessages, seenKinds) {
   if (!keys(payload, ['type', 'id', 'role', 'content', 'internal_chat_message_metadata_passthrough'])
@@ -81,12 +55,17 @@ function nativeContextMessage(payload, turn, afterContext, seenMessages, seenKin
     fail('empty turn context metadata differs from its native boundary.');
   payload.content.forEach((block, index) => {
     const kind = meta.content_item_kinds[index];
-    const rule = typeof kind === 'string' && Object.hasOwn(CONTEXT_KINDS, kind) ? CONTEXT_KINDS[kind] : null;
-    if (!rule || rule[0] !== payload.role || seenKinds.has(kind)
-      || kind.startsWith('additional_content.') !== afterContext
-      || !keys(block, ['type', 'text']) || block.type !== 'input_text' || typeof block.text !== 'string'
-      || !block.text.startsWith(rule[1]) || (rule[2] && !block.text.endsWith(rule[2]))
-      || (kind === 'additional_content.codex_apps_open_page' && block.text !== rule[1]))
+    if (typeof kind !== 'string' || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/.test(kind) || kind.length > 128
+      || !keys(block, ['type', 'text']) || block.type !== 'input_text' || typeof block.text !== 'string')
+      fail('empty turn contains semantic or unrecognized native context content.');
+    // By user decision the developer role is runtime context whatever its
+    // kind: the runtime writes it, the user never does, and new kinds arrive
+    // with every release (twenty were seen that an exact list did not know).
+    if (payload.role === 'developer') return;
+    const rule = payload.role === 'user' && Object.hasOwn(USER_CONTEXT_KINDS, kind) ? USER_CONTEXT_KINDS[kind] : null;
+    if (!rule || seenKinds.has(kind) || kind.startsWith('additional_content.') !== afterContext
+      || !block.text.startsWith(rule[0]) || (rule[1] && !block.text.endsWith(rule[1]))
+      || (kind === 'additional_content.codex_apps_open_page' && block.text !== rule[0]))
       fail('empty turn contains semantic or unrecognized native context content.');
     seenKinds.set(kind, block.text);
   });
@@ -250,21 +229,19 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
             fail('empty turn context differs from the API.');
           context = row;
         } else if (row?.type === 'world_state') {
-          const full = row.payload?.full === true && keys(row.payload.state, WORLD_FIELDS);
-          // A loaded Desktop chat can refresh just its native environments
-          // before the next prompt is blocked. This observed delta is context,
-          // not a user/model message; unknown delta fields remain refused.
-          const environmentDelta = row.payload?.full === false && keys(row.payload.state, ['environments']);
-          // Desktop resume may replace project instructions, permissions and
-          // its local environment together. Match the observed nested schema
-          // and the preceding typed context rather than accepting arbitrary deltas.
-          const resumeDelta = row.payload?.full === false && resumeContextDelta(row.payload.state, cwd, seenKinds);
-          if (context || world || !keys(row.payload, ['full', 'state']) || !full && !environmentDelta && !resumeDelta)
+          // Native state (instructions, skills, model, permissions,
+          // environments) is context, never a message. Its fields differ by
+          // release and by what changed, so by user decision they are not
+          // listed: only one in five observed snapshots matched an exact list.
+          if (context || world || !keys(row.payload, ['full', 'state']) || typeof row.payload.full !== 'boolean'
+            || !object(row.payload.state))
             fail('empty turn has unrecognized native world state.');
           world = true;
         } else if (row?.type === 'response_item') {
           if (world && !context) fail('empty turn context ordering is ambiguous.');
           nativeContextMessage(row.payload, turn, context !== null, seenMessages, seenKinds);
+        } else if (row?.type === 'event_msg' && STATE_EVENTS.includes(row.payload?.type)) {
+          // Settings and goal state change without any model activity.
         } else fail('empty turn has semantic or unrecognized native records.');
       }
       if (!context || !completed
@@ -291,8 +268,10 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
           // segment is excluded from portable dialogue by this resolver.
           exactRow(index); exactRow(++index); ingress.forEach(exactRow); continue;
         }
-        if (row?.type !== 'event_msg' || row.payload?.type !== 'thread_settings_applied'
-          || row.payload.thread_id !== threadId || references(row, selectedIds))
+        const state = row?.type === 'event_msg' && STATE_EVENTS.includes(row.payload?.type)
+          || row?.type === 'world_state' && keys(row.payload, ['full', 'state']) && object(row.payload.state);
+        if (!state || [row.payload.thread_id, row.payload.threadId].some(id => id != null && id !== threadId)
+          || references(row, selectedIds))
           fail('empty turn has semantic or ambiguous trailing records.');
         exactRow(index);
       }
