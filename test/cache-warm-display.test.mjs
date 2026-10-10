@@ -43,21 +43,30 @@ test('a policy with a round limit shows how much of the chosen limits is used', 
   assert.match(text, /Limits: 3\/12 warm requests · until time-10000$/);
 });
 
-test('rounds, a duration or a clock time become the existing bounds', () => {
-  const noon = new Date(2026, 0, 1, 12, 0).getTime(), parse = (words, intervalMinutes = 55) => parseWarmLimits(words, { intervalMinutes, now: noon });
+test('one of rounds, a duration or a clock time becomes the existing bounds', () => {
+  const noon = new Date(2026, 0, 30, 12, 0).getTime(), parse = (words, intervalMinutes = 55) => parseWarmLimits(words, { intervalMinutes, now: noon });
   assert.deepEqual(parse(['ttl=1h']), { rest: ['ttl=1h'], bounds: {} });
-  assert.deepEqual(parse(['rounds=5', 'ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 1440, maxRefreshes: 5 } });
+  assert.deepEqual(parse(['rounds=5', 'ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 10080, maxRefreshes: 5 } });
+  assert.deepEqual(parse(['rounds=500'], 4).bounds, { maxMinutes: 10080, maxRefreshes: 500 });
   assert.deepEqual(parse(['for=3h']).bounds, { maxMinutes: 180, maxRefreshes: 3 });
   assert.deepEqual(parse(['for=1h30m']).bounds, { maxMinutes: 90, maxRefreshes: 1 });
-  assert.deepEqual(parse(['for=90m', 'rounds=9']).bounds, { maxMinutes: 90, maxRefreshes: 9 });
+  assert.deepEqual(parse(['for=168h']).bounds, { maxMinutes: 10080, maxRefreshes: 183 });
   assert.deepEqual(parse(['until=18:30']).bounds, { maxMinutes: 390, maxRefreshes: 7 });
   // A clock time already passed today is the same time tomorrow.
   assert.deepEqual(parse(['until=11:00']).bounds, { maxMinutes: 1380, maxRefreshes: 25 });
   assert.deepEqual(parse(['until=12:20'], 4).bounds, { maxMinutes: 20, maxRefreshes: 5 });
-  for (const words of [['rounds=0'], ['rounds=101'], ['rounds=2', 'rounds=3'], ['for='], ['for=25h'], ['for=0m'], ['for=1.5h'],
-    ['until=24:00'], ['until=9'], ['for=2h', 'until=15:00']]) assert.throws(() => parse(words), /Limits|once|either/);
+  // A day of the month: later this month, else the next month that has that day.
+  assert.deepEqual(parse(['until=31:18:30']).bounds, { maxMinutes: 1830, maxRefreshes: 33 });
+  assert.deepEqual(parse(['until=2:09:00']).bounds, { maxMinutes: 4140, maxRefreshes: 75 });
+  assert.throws(() => parse(['until=20:09:00']), /more than 168 hours away/);
+  assert.throws(() => parseWarmLimits(['until=31:09:00'], { intervalMinutes: 55, now: new Date(2026, 0, 31, 12, 0).getTime() }), /more than 168 hours away/);
+  for (const words of [['rounds=0'], ['rounds=501'], ['rounds=1000'], ['for='], ['for=169h'], ['for=0m'], ['for=1.5h'],
+    ['until=24:00'], ['until=9'], ['until=32:10:00'], ['until=0:10:00']]) assert.throws(() => parse(words), /Limits/);
+  for (const words of [['rounds=2', 'rounds=3'], ['for=2h', 'until=15:00'], ['rounds=3', 'for=2h'], ['until=15:00', 'rounds=3']])
+    assert.throws(() => parse(words), /Choose only one limit/);
   assert.throws(() => parse(['for=30m']), /No warm request fits in 30 min/);
-  assert.throws(() => parse(['for=8h'], 4), /would take 120 warm requests; the limit is 100 \(400 min/);
+  assert.throws(() => parse(['rounds=200']), /200 warm requests cannot fit in 168 hours at one every 55 min; the most is 183/);
+  assert.throws(() => parse(['for=40h'], 4), /would take 600 warm requests; the limit is 500 \(2000 min/);
 });
 
 test('Codex interval is not presented as a configurable native TTL', () => {

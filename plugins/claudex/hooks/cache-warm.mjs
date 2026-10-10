@@ -58,7 +58,7 @@ export function parseCacheWarmBounds(words = []) {
     if (!match || seen.has(match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new Error('Use unique maxMinutes, maxRefreshes, maxOutputTokens positive integer bounds.');
     seen.add(match[1]); result[match[1]] = Number(match[2]);
   }
-  if (result.maxMinutes > 1440 || result.maxRefreshes > 100 || result.maxOutputTokens > 100000)
+  if (result.maxMinutes > 10080 || result.maxRefreshes > 500 || result.maxOutputTokens > 100000)
     throw new Error('Cache warming bounds exceed the supported limits.');
   return result;
 }

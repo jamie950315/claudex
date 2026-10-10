@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.13 packages Claude Mod 0.8.16. Keep application and Mod versions
+Claudex.app 1.3.14 packages Claude Mod 0.8.17. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -360,11 +360,20 @@ Keep legacy `/claudex warm` persistence controls and Codex native hook controls 
 Normal namespaced on/off/status replies use the shared pure cache-warm-display
 formatter: four localized text lines, plus a fifth with the used and chosen
 limits whenever a policy exists, never raw policy JSON. The same file's pure
-parseWarmLimits turns the user's `rounds=N`, `for=DURATION` or `until=HH:MM`
-into the existing maxRefreshes/maxMinutes bounds for both providers' `on`
-commands (Claude interval 4 or 55 minutes by TTL, Codex 25): a time limit
-alone allows the requests that fit, rounds alone may take up to a day, and a
-limit no request fits in, or one needing over 100 requests, is refused. Keep its Mod file
+parseWarmLimits turns the user's one chosen limit into the existing
+maxRefreshes/maxMinutes bounds for both providers' `on` commands (Claude
+interval 4 or 55 minutes by TTL, Codex 25). By user decision exactly one of
+`rounds=N` (at most 500), `for=DURATION` (at most 168 hours) or
+`until=HH:MM|DD:HH:MM` (the next occurrence, within 168 hours) is accepted,
+never a combination. A time limit allows the requests that fit in it; rounds
+must fit in 168 hours. A limit no request fits in, or one needing more than
+500 requests, is refused with its reason instead of being shortened. The
+broker bounds are maxRefreshes 1..500 and maxMinutes 1..10080. The attempt
+ledger keeps its 2048-record, 2 MiB size: a new enrollment drops that
+conversation's settled attempts (rejected, revoked, verified, failed) of
+earlier enrollments and, once the ledger is half full, those of other
+conversations whose enrollment is stopped and past its end. Uncertain and
+unfinished attempts are never dropped; a ledger still full refuses. Keep its Mod file
 in both packaging allowlists. Select only the exact session/cwd policy; respect
 local suspension and unavailable scheduling evidence. First cache-result timing
 comes from native actual-read observations in the complete current-generation

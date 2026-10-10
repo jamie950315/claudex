@@ -169,22 +169,48 @@ test('expired preflight is consumed without authorizing a late turn', async t =>
   assert.equal((await f.manager.list()).attempts[0].state, 'revoked');
 });
 
-test('bounded ledgers preserve history and refuse new allocation', async t => {
+test('a full ledger refuses new allocation; a new enrollment drops only its own settled earlier attempts', async t => {
   const f = await fixture(t); await f.seed();
   const { attempt } = await f.claim();
   await f.receipt(attempt.id, 'rejected');
   const path = join(f.root, 'cache-warm.json'), state = JSON.parse(await readFile(path, 'utf8'));
-  state.attempts = Array.from({ length: 2048 }, (_, i) => ({ ...state.attempts[0], id: `attempt-${i}` }));
-  // Old generations occupy durable capacity but cannot spend a new opt-in budget.
+  const other = { ...state.policies[0], sessionId: 'other-session', enabled: false }, base = state.attempts[0];
+  const others = count => Array.from({ length: count }, (_, i) => ({ ...base, sessionId: other.sessionId, id: `other-${i}` }));
+  const load = async attempts => {
+    await writeFile(path, JSON.stringify({ ...state, attempts }), { mode: 0o600 });
+    const m = await new CacheWarmManager({ root: f.root, now: f.now }).initialize();
+    await m.observe({ ...identity, sequence: 1, epoch: 0, phase: 'idle', sample: f.sample() });
+    return m;
+  };
+  state.policies[0].generation = 2; state.policies.push(other);
+  // An uncertain outcome is evidence, not a settled record: it survives a new enrollment.
+  let m = await load([{ ...base, id: 'own-uncertain', state: 'uncertain' }, { ...base, id: 'own-failed', state: 'failed' }]);
+  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'uncertain-kept' });
+  assert.deepEqual((await m.list()).attempts.map(a => a.id), ['own-uncertain']);
   state.policies[0].generation = 2;
-  await writeFile(path, JSON.stringify(state), { mode: 0o600 });
-  const m = await new CacheWarmManager({ root: f.root, now: f.now }).initialize();
-  await m.observe({ ...identity, sequence: 1, epoch: 0, phase: 'idle', sample: f.sample() });
-  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'new-capacity-test' });
-  f.tick(239000);
-  await assert.rejects(m.claim({ ...identity, epoch: 0 }), { code: 'CACHE_WARM_CAPACITY' });
-  const listing = await m.list();
+  // A still-authorized conversation's records occupy capacity and are never dropped here.
+  other.enabled = true; other.until = f.now() + 3600000;
+  m = await load([...others(2046), { ...base, id: 'own-rejected' }, { ...base, id: 'own-verified', state: 'verified' }]);
+  let listing = await m.list();
   assert.equal(listing.attemptCount, 2048); assert.equal(listing.attempts.length, 64); assert.equal(listing.attemptsTruncated, true);
+  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'new-capacity-test' });
+  assert.equal((await m.list()).attemptCount, 2046);
+  f.tick(239000);
+  assert.equal((await m.claim({ ...identity, epoch: 0 })).claimed, true);
+  // A ledger full of records that may not be dropped refuses rather than making room.
+  state.policies[0] = JSON.parse(await readFile(path, 'utf8')).policies[0];
+  m = await load(others(2048)); f.tick(239000);
+  await assert.rejects(m.claim({ ...identity, epoch: 0 }), { code: 'CACHE_WARM_CAPACITY' });
+  // A crowded ledger also gives up a stopped, ended conversation's settled records.
+  other.enabled = false; other.until = f.now() - 1; state.policies[0].enabled = false;
+  m = await load([...others(1500), { ...base, sessionId: other.sessionId, id: 'other-uncertain', state: 'uncertain' }]);
+  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'crowded-test' });
+  assert.deepEqual((await m.list()).attempts.map(a => a.id), ['other-uncertain']);
+  // A ledger that is not crowded keeps them for their status totals.
+  state.policies[0].enabled = false;
+  m = await load(others(10));
+  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'roomy-test' });
+  assert.equal((await m.list()).attemptCount, 10);
 });
 
 test('duration and admission output budgets prevent a native authorization', async t => {

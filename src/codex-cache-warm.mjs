@@ -18,7 +18,7 @@ function bounds(p) {
     throw new Error('Invalid Codex cache-warm maxReadTokens.');
   const value = { refreshMinutes: p.refreshMinutes ?? 25, maxMinutes: p.maxMinutes ?? 60,
     maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: null, maxOutputTokens: p.maxOutputTokens ?? 256 };
-  for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 1440, maxRefreshes: 100, maxOutputTokens: 1000000 }))
+  for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 10080, maxRefreshes: 500, maxOutputTokens: 1000000 }))
     if (!Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > max) throw new Error(`Invalid Codex cache-warm ${key}.`);
   return value;
 }

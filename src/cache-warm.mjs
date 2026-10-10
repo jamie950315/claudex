@@ -4,6 +4,8 @@ import { privateDir, privateJSON, writeReceipt } from './claude-mod-storage.mjs'
 
 export const CACHE_WARM_PROMPT = 'Cache-retention maintenance only. Reply with exactly OK. Do not call tools, continue previous work, or make any changes.';
 const MAX_POLICIES = 64, MAX_ATTEMPTS = 2048, MAX_BYTES = 2 * 1024 * 1024;
+// Outcomes that need no further evidence; an earlier enrollment's may be dropped.
+const SETTLED = new Set(['rejected', 'revoked', 'verified', 'failed']);
 const OUTPUT_RESERVATION = 128;
 const READ_OVERHEAD = 256;
 const live = new Set(['reserved', 'dispatching', 'submitted']);
@@ -55,8 +57,8 @@ function validate(state, provider) {
     identity(p);
     requireValue(p.provider === provider && !ids.has(p.sessionId) && integer(p.generation, 1)
       && typeof p.enabled === 'boolean' && integer(p.until) && integer(p.updatedAt)
-      && integer(p.maxRefreshes, 1, 100) && (p.maxReadTokens === null || integer(p.maxReadTokens, 1, 100000000))
-      && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 1440)
+      && integer(p.maxRefreshes, 1, 500) && (p.maxReadTokens === null || integer(p.maxReadTokens, 1, 100000000))
+      && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 10080)
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
       && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
       && (provider === 'codex'
@@ -214,7 +216,7 @@ export class CacheWarmManager {
     // Retain the legacy receipt payload default for exact requestId replay.
     // This field is validated for older clients, but is never an active limit.
     const { maxMinutes = 60, maxRefreshes = 3, maxReadTokens = 250000, maxOutputTokens = 256 } = input;
-    requireValue(integer(maxMinutes, 1, 1440) && integer(maxRefreshes, 1, 100)
+    requireValue(integer(maxMinutes, 1, 10080) && integer(maxRefreshes, 1, 500)
       && (maxReadTokens === null || integer(maxReadTokens, 1, 100000000)) && integer(maxOutputTokens, 1, 1000000));
     const stopped = input.enabled ? await this.stopped() : false;
     return this.transaction(async () => {
@@ -246,6 +248,18 @@ export class CacheWarmManager {
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
       // Disabling revokes authorization without erasing this enrollment's
       // bounds/accounting. Only a newly confirmed enable starts a new budget.
+      // A new enrollment starts its own accounting. Settled attempts of this
+      // conversation's earlier enrollments are dropped so long runs do not use
+      // up the ledger; uncertain and unfinished ones stay as evidence.
+      // Once the ledger is half full, so are those of other conversations whose
+      // enrollment is both stopped and past its end time.
+      if (input.enabled) {
+        const crowded = this.state.attempts.length > MAX_ATTEMPTS / 2;
+        const finished = new Set(crowded ? this.state.policies.filter(other => other.sessionId !== input.sessionId
+          && !other.enabled && other.until <= this.now()).map(other => other.sessionId) : []);
+        this.state.attempts = this.state.attempts.filter(a => !SETTLED.has(a.state)
+          || (a.sessionId === input.sessionId ? a.generation >= value.generation : !finished.has(a.sessionId)));
+      }
       if (p && !input.enabled) Object.assign(p, { enabled: false, updatedAt: this.now(), reason: 'disabled' });
       else if (p) Object.assign(p, value); else { p = value; this.state.policies.push(p); }
       if (input.requestId) this.state.requests.push({ requestId: input.requestId, sessionId: p.sessionId, generation: p.generation, payload });
