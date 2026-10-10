@@ -210,7 +210,7 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
     if (typeof onEvent !== 'function') fail('event callback required');
     const connection = await client();
     let listening = false, closed = false, invalidated = false, buffered = [];
-    let securitySettings = null, confirmedSettings = null, fullSettings = null, earlySettings = [];
+    let securitySettings = null, confirmedSettings = null, fullSettings = null, earlySettings = [], unreported = false;
     const emit = value => {
       if (!value || closed || invalidated) return;
       if (!listening && buffered.length >= 128) value = { type: 'invalidated', reason: 'event-buffer-overflow' };
@@ -219,6 +219,9 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
       else buffered.push(value);
     };
     const compareSettings = hashes => {
+      // Once a runtime has shown that it reports settings only when they
+      // change, every snapshot after the rejoin baseline is such a change.
+      if (unreported) { emit({ type: 'invalidated', reason: 'settings-changed' }); return; }
       if (hashes.security !== securitySettings || hashes.model !== confirmedSettings.model || hashes.cwd !== confirmedSettings.cwd
         || hashes.collaborationModel !== confirmedSettings.model
         || confirmedSettings.effort !== null && hashes.effort !== confirmedSettings.effort
@@ -245,7 +248,7 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
     connection.on('disconnected', disconnected);
     const close = async () => {
       if (closed) return;
-      closed = true; buffered = []; earlySettings = []; securitySettings = null; confirmedSettings = null; fullSettings = null;
+      closed = true; buffered = []; earlySettings = []; securitySettings = null; confirmedSettings = null; fullSettings = null; unreported = false;
       connection.off('notification', observe); connection.off('disconnected', disconnected);
       await connection.close();
     };
@@ -284,7 +287,14 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         initialTurn = { id: turn.id, startedAt, status: turn.status };
       }
       return { state: checked, initialTurn,
-        get settingsReady() { return !closed && !invalidated && fullSettings !== null; },
+        get settingsReady() { return !closed && !invalidated && (fullSettings !== null || unreported); },
+        /** A model turn observed from its start without any settings snapshot
+         * proves a runtime that reports settings only on change (0.162). The
+         * rejoin response then stays the baseline until the next snapshot. */
+        acceptUnreportedSettings() {
+          if (closed || invalidated) fail('observer unavailable');
+          if (fullSettings === null) unreported = true;
+        },
         listen() {
           if (closed || listening) return;
           listening = true;
@@ -293,14 +303,14 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         },
         async inspect() {
           if (closed || invalidated) fail('observer unavailable');
-          if (fullSettings === null) fail('native-settings-unobserved');
+          if (fullSettings === null && !unreported) fail('native-settings-unobserved');
           const result = await read(connection, expected, nativeVersion);
           if (closed || invalidated) fail('observer unavailable');
           return result;
         },
         async preflight() {
           if (closed || invalidated) fail('observer unavailable');
-          if (fullSettings === null) fail('native-settings-unobserved');
+          if (fullSettings === null && !unreported) fail('native-settings-unobserved');
           const handle = await owner(expected);
           if (closed || invalidated || handle.ownerClientId !== state.ownerClientId) { handle.close?.(); fail('native owner changed or observer unavailable'); }
           return handle;

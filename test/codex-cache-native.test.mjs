@@ -296,6 +296,22 @@ test('no observed settings snapshot can be mistaken for a dispatch-ready prompt 
   const owner = await handle.preflight(); owner.close(); await handle.close();
 });
 
+test('an accepted unreported baseline is dispatch-ready and its next snapshot is a change', async () => {
+  const f = fixture(); const handle = await f.native.connect(target, event => f.events.push(event)); handle.listen();
+  handle.acceptUnreportedSettings();
+  assert.equal(handle.settingsReady, true);
+  const owner = await handle.preflight(); owner.close(); await handle.inspect();
+  f.emit('thread/settings/updated', { threadSettings: structuredClone(settings) });
+  assert.deepEqual(f.events, [{ type: 'invalidated', reason: 'settings-changed' }]);
+  assert.equal(handle.settingsReady, false);
+  // A runtime that did report a snapshot keeps its full-fingerprint comparison.
+  const reported = fixture(), second = await reported.native.connect(target, event => reported.events.push(event)); second.listen();
+  reported.emit('thread/settings/updated', { threadSettings: structuredClone(settings) });
+  second.acceptUnreportedSettings();
+  reported.emit('thread/settings/updated', { threadSettings: structuredClone(settings) });
+  assert.deepEqual(reported.events, []); await handle.close(); await second.close();
+});
+
 test('first snapshot may resolve default instructions and effort; later instruction changes still invalidate', async () => {
   const resolved = { ...structuredClone(settings), effort: 'high', summary: 'detailed', personality: 'none',
     collaborationMode: { mode: 'default', settings: { model: settings.model, reasoning_effort: 'high', developer_instructions: 'PRIVATE_RESOLVED_DEFAULT_INSTRUCTIONS' } } };

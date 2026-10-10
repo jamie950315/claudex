@@ -161,18 +161,22 @@ export class CodexCacheWarmer {
       this.cancel(b);
       if (b.attempt && b.warmTurnId !== e.turnId) return this.fail(b, 'competing-native-turn', true);
       b.epoch++; b.phase = 'busy'; b.samples = []; b.toolSeen = false;
-      b.turn = { id: e.turnId, startedAt: e.startedAt };
+      b.turn = { id: e.turnId, startedAt: e.startedAt, observedStart: true, usage: false };
       await this.observe(b); return;
     }
     if (e.type === 'tool') {
       if (b.attempt && b.warmTurnId === e.turnId) { b.toolSeen = true; await this.fail(b, 'native-tool-activity', false); }
       return;
     }
-    if (e.type === 'usage') { this.sample(b, e); return; }
+    if (e.type === 'usage') { if (b.turn?.id === e.turnId) b.turn.usage = true; this.sample(b, e); return; }
     if (e.type !== 'complete') return;
     if (!b.turn || b.turn.id !== e.turnId) return this.fail(b, 'native-completion-identity-changed', true);
     b.completion?.cancel(); b.completion = null;
     const own = Boolean(b.attempt);
+    // Only a whole model turn seen from its start shows that the runtime does
+    // not report unchanged settings; the enrollment turn itself proves nothing.
+    if (!own && b.handle.settingsReady !== true && b.turn.observedStart && b.turn.usage)
+      b.handle.acceptUnreportedSettings?.();
     if (!own && b.handle.settingsReady !== true) {
       // Mid-turn enrollment can observe usage before the next settings snapshot.
       // Keep waiting; do not advertise an executable timer with no prompt baseline.

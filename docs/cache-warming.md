@@ -385,6 +385,11 @@ An already-running turn is not killed and completed tool actions are not undone.
   snapshot. Until then it remains `awaiting-native-settings`, without arming a
   refresh timer. Unchanged native settings notifications do not disable warming;
   actual changes after the first validated snapshot still do.
+  Codex 0.162 sends that notification only when settings change. There, the
+  first ordinary model turn observed from its start establishes the settings
+  Codex returned on rejoin as the baseline, so two ordinary turns can be needed
+  after enabling before a refresh is scheduled; any later settings
+  notification stops warming.
 Model/effort metadata describes configured values, not independently verified
 execution-model evidence.
 

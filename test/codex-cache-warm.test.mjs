@@ -12,7 +12,7 @@ const warm = { ...initial, totalTokens: 1306, inputTokens: 1300, cachedInputToke
 const add = (a, b) => Object.fromEntries(Object.keys(a).map(key => [key, a[key] + b[key]]));
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-warm-'))); await chmod(root, 0o700);
-  let now = 1000000, listener, connected = false, stopped = false, calls = 0, dispatches = 0, hook, preflightHook, stopHook, settingsReady = true;
+  let now = 1000000, listener, connected = false, stopped = false, calls = 0, dispatches = 0, hook, preflightHook, stopHook, settingsReady = true, acceptsUnreported = false;
   let total = initial;
   const state = { sessionId: ID, cwd: '/fixture', model: 'fixture-model', effort: 'medium',
     fingerprint: 'fixture-fingerprint', ownerClientId: OWNER, phase: 'busy', nativeVersion: '0.160.0' };
@@ -23,6 +23,7 @@ async function fixture(t) {
       calls++; connected = true; listener = onEvent;
       return { state: { ...state }, initialTurn: { id: 'seed', startedAt: now, status: 'inProgress' },
         get settingsReady() { return settingsReady; },
+        acceptUnreportedSettings() { if (acceptsUnreported) settingsReady = true; },
         listen() {}, async close() { connected = false; },
         async inspect() { return { ...state }; },
         async preflight() {
@@ -55,7 +56,7 @@ async function fixture(t) {
   return { service, root, state, timers, emit, usage, seed, enable, fire,
     get now() { return now; }, get connected() { return connected; }, get calls() { return calls; }, get dispatches() { return dispatches; },
     set hook(value) { hook = value; }, set preflightHook(value) { preflightHook = value; }, set stopped(value) { stopped = value; },
-    set stopHook(value) { stopHook = value; }, set settingsReady(value) { settingsReady = value; } };
+    set stopHook(value) { stopHook = value; }, set settingsReady(value) { settingsReady = value; }, set acceptsUnreported(value) { acceptsUnreported = value; } };
 }
 
 test('Codex status is default-off and confirmation requires exact actor and explicit risk consent', async t => {
@@ -123,6 +124,23 @@ test('a baseline-only first normal turn waits for fresh usage instead of fabrica
   await f.usage('normal-next', next); f.state.phase = 'idle';
   await f.emit({ type: 'complete', turnId: 'normal-next', status: 'completed', completedAt: f.now });
   assert.ok((await f.service.list()).policies[0].nextAt > f.now);
+});
+
+test('a model turn seen from its start without a settings snapshot makes the rejoin baseline usable', async t => {
+  const f = await fixture(t); f.settingsReady = false; f.acceptsUnreported = true;
+  await f.enable(); await f.seed();
+  // The enrollment turn was not observed from its start and proves nothing.
+  let p = (await f.service.list()).policies[0];
+  assert.equal(p.nextAt, null); assert.equal(p.nativeReason, 'awaiting-native-settings');
+  // Nor does a turn without native usage, such as a prompt a hook blocked.
+  await f.emit({ type: 'start', turnId: 'blocked', startedAt: f.now });
+  await f.emit({ type: 'complete', turnId: 'blocked', status: 'completed', completedAt: f.now });
+  assert.equal((await f.service.list()).policies[0].nativeReason, 'awaiting-native-settings');
+  await f.emit({ type: 'start', turnId: 'unreported', startedAt: f.now });
+  await f.usage('unreported', next);
+  await f.emit({ type: 'complete', turnId: 'unreported', status: 'completed', completedAt: f.now });
+  p = (await f.service.list()).policies[0]; assert.ok(p.nextAt > f.now);
+  assert.equal(f.dispatches, 0);
 });
 
 test('mid-turn enrollment waits for a native settings snapshot instead of arming an unusable timer', async t => {

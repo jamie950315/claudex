@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.11 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.12 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -438,7 +438,12 @@ settings-snapshot semantics: idle resume fields are not an already-observed
 prompt baseline. Validate the independent permission/provider/plugin hash from
 resume, then bind the first native snapshot to confirmed model/cwd and any known
 effort. Native default instructions may resolve on that first ordinary turn;
-no snapshot means no dispatch. Identical subsequent snapshots are not changes;
+no snapshot means no dispatch. Codex 0.162 reports settings only when they
+change (observed: none on two unchanged turns, one on an effort change before
+its turn). A model turn observed from its start, with native usage and no
+snapshot, therefore makes the rejoin response the baseline, and the next
+snapshot is a change that revokes warming. The enrollment turn and turns
+without usage never establish this. Identical subsequent snapshots are not changes;
 later full-fingerprint changes still revoke warming. Keep instruction text out
 of diagnostics and retained state by hashing it. Preserve native
 second-precision starts and equal-time distinct socket deltas; exact returned
