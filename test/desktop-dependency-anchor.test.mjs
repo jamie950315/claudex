@@ -150,6 +150,40 @@ test('sorted projection header keys require the exact original whole-file hash',
   }
 });
 
+test('a provider label rewritten in the header is not a changed anchor', async t => {
+  const { runtime, record, state } = await fixture(t);
+  const header = provider => JSON.stringify({ ordinal: 0, payload: { cwd: record.cwd, id: record.nativeId, model_provider: provider,
+    originator: 'claudex' }, timestamp: '2026-09-27T00:00:00Z', type: 'session_meta' });
+  const tail = JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete' } }) + '\n';
+  const write = async text => { await writeFile(record.path, text); state.data.bytes = Buffer.byteLength(text) + 20; };
+  await write(header('openai') + '\n' + tail);
+  const saved = { ...record, ...await runtime.adapters.codex.prepareDependencyAnchor(record), status: 'dependency-anchor' };
+  assert.match(saved.dependencyAnchor.raw.labelFree.hash, /^[a-f0-9]{64}$/);
+  assert.deepEqual(await runtime.adapters.codex.assertDependencyAnchor(saved), { bytes: saved.bytes });
+  await write(header('codex_local_access') + '\n' + tail);
+  assert.deepEqual(await runtime.adapters.codex.assertDependencyAnchor(saved), { bytes: saved.bytes + 12 });
+  // Storage beyond the label, any other header value, the body and a hidden
+  // duplicate key are still changes.
+  state.data.bytes += 1;
+  await assert.rejects(runtime.adapters.codex.assertDependencyAnchor(saved), /aggregate storage changed/);
+  for (const changed of [header('codex_local_access').replace('2026-09-27', '2026-09-28') + '\n' + tail,
+    header('codex_local_access') + '\n' + tail.replace('task_complete', 'task_inactive'),
+    header('codex_local_access').replace('"originator"', `"id":"${record.nativeId}","originator"`) + '\n' + tail]) {
+    await write(changed);
+    await assert.rejects(runtime.adapters.codex.assertDependencyAnchor(saved), /saved transcript bytes changed/);
+  }
+  // An anchor saved before this identity existed keeps its exact proof and is
+  // offered the identity only while those exact bytes are still there.
+  const legacy = structuredClone(saved); delete legacy.dependencyAnchor.raw.labelFree;
+  await write(header('codex_local_access') + '\n' + tail);
+  await assert.rejects(runtime.adapters.codex.assertDependencyAnchor(legacy), /saved transcript bytes changed/);
+  await write(header('openai') + '\n' + tail);
+  assert.deepEqual(await runtime.adapters.codex.assertDependencyAnchor(legacy),
+    { bytes: saved.bytes, labelFree: saved.dependencyAnchor.raw.labelFree });
+  await assert.rejects(runtime.adapters.codex.assertDependencyAnchor({ ...saved, dependencyAnchor: { ...saved.dependencyAnchor,
+    raw: { ...saved.dependencyAnchor.raw, labelFree: { hash: 'x', bytes: 1 } } } }), /saved proof is malformed/);
+});
+
 test('a dependency or parent change during preflight blocks anchoring', async t => {
   const { runtime, record, state } = await fixture(t);
   let lists = 0;

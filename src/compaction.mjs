@@ -109,7 +109,7 @@ export function claudeCompactionHistory(text, rows, authenticatePreservedPacket)
   const boundaries = rows.flatMap((row, index) => !row.isSidechain && row.type === 'system'
     && row.subtype === 'compact_boundary' ? [index] : []);
   if (!boundaries.length) return null;
-  const summaries = new Map();
+  const summaries = new Map(), exact = new Set();
   let preservedAuthenticatedPackets = 0;
   for (let ordinal = 0; ordinal < boundaries.length; ordinal++) {
     const index = boundaries[ordinal];
@@ -125,6 +125,7 @@ export function claudeCompactionHistory(text, rows, authenticatePreservedPacket)
     // A queued summary in an owned history is Claudex's own context reset; an
     // interactive /compact, in a native original or an owned conversation, is not.
     const interactive = summary.queueTranscriptOnly !== true;
+    if (!interactive) exact.add(boundary);
     // Claudex's own reset is a write it must be able to prove exactly.
     if (!interactive && typeof authenticatePreservedPacket === 'function'
       && (boundary.parentUuid !== null || summary.type !== 'user' || summary.parentUuid !== boundary.uuid
@@ -173,8 +174,14 @@ export function claudeCompactionHistory(text, rows, authenticatePreservedPacket)
     if (!row.uuid) continue;
     if (typeof row.uuid !== 'string' || known.has(row.uuid)) throw new Error('Owned Claude compaction history has ambiguous native record identities.');
     if (row.parentUuid != null && !known.has(row.parentUuid)) throw new Error('Owned Claude compaction history has a missing or forward native parent.');
+    // Earlier history is missing when nothing precedes the boundary, or when
+    // the row it names is in the file but is not the last one. A named row
+    // native never wrote to the file (observed after a completed turn, Claude
+    // Code 2.1.295 /compact) is its own bookkeeping: every row it kept is
+    // still before the boundary. Claudex's own reset names its exact row.
     if (row.type === 'system' && row.subtype === 'compact_boundary'
-      && (!previous || row.logicalParentUuid !== previous.uuid || row.sessionId !== previous.sessionId || row.cwd !== previous.cwd))
+      && (!previous || row.sessionId !== previous.sessionId || row.cwd !== previous.cwd
+        || row.logicalParentUuid !== previous.uuid && (exact.has(row) || known.has(row.logicalParentUuid))))
       throw new Error('Owned Claude compaction does not continue its complete persisted prefix.');
     known.set(row.uuid, row);
     previous = row;

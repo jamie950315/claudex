@@ -163,4 +163,10 @@ test('a native original retains a /compact preserved segment that only reference
   // A boundary that does not follow the last row of the file means earlier history is missing.
   const broken = build(); broken[4].logicalParentUuid = 'q1';
   assert.throws(() => decodeClaude(jsonl(broken), { preserveCompactionHistory: true }), /complete persisted prefix/);
+  // A named row native never wrote to the file is its bookkeeping; a boundary
+  // with nothing before it has lost the earlier history.
+  const unwritten = build(); unwritten[4].logicalParentUuid = 'never-persisted';
+  assert.deepEqual(decodeClaude(jsonl(unwritten), { preserveCompactionHistory: true }).messages.map(message => message.content),
+    result.messages.map(message => message.content));
+  assert.throws(() => decodeClaude(jsonl(unwritten.slice(4)), { preserveCompactionHistory: true }), /complete persisted prefix/);
 });

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.24 packages Claude Mod 0.8.22. Keep application and Mod versions
+Claudex.app 1.3.26 packages Claude Mod 0.8.22. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1338,6 +1338,17 @@ Native sorting of a Claudex projection's first JSON header may be recognized onl
 by reconstructing its original serialization and matching the saved whole-file
 SHA256, with every subsequent byte unchanged. Preserve actual raw proofs and
 native files; never rebaseline an anchor from canonical message equality alone.
+By user decision the provider label of a rollout header is not history: a
+provider switch (observed: Cockpit Tools rewriting model_provider in every
+rollout's first line) must not pause an anchored conversation. The anchor
+proof also saves a label-free identity (raw.labelFree: the whole-file hash and
+size with that one field removed from a sorted header). When the exact bytes
+differ, the anchor still holds if that identity matches and the aggregate
+storage moved by exactly the header's size difference. Any other header
+value, any body byte and a header that does not round-trip exactly (a hidden
+duplicate key) remain changes. An anchor saved before this identity existed
+gains it only at the start of its conversation's own sync, while its exact
+bytes are still proven; until then it keeps the exact proof alone.
 Native initial-goal exports likewise retain legacy prefix-hash serialization only
 when the observed native/key-sorted header forms reproduce the entire saved
 canonical checkpoint. Keep all post-header bytes and context/turn checks intact;
@@ -1392,10 +1403,14 @@ replacement histories, and general Claude preserved-segment chains remain blocke
 Native Claude originals (Desktop Local, CLI /compact) and owned histories the
 user compacts from Desktop keep every earlier row in the file. By the
 tolerance rule the retained-history reader checks only what would be a real
-problem: the boundary names the row it follows and that row is the last one
-before it (otherwise earlier history is missing), the summary is readable and
-belongs to the same session and directory, and no identity repeats with
-different content. How native flags the summary, links it, or describes the
+problem: something precedes the boundary in the same session and directory,
+and a row the boundary names that is in the file is the last one before it
+(otherwise earlier history is missing), the summary is readable and belongs
+to the same session and directory, and no identity repeats with different
+content. Claude Code 2.1.295 /compact after a completed turn was observed
+naming a row it never wrote to the file; every row it kept still precedes the
+boundary, so that is not missing history. How native flags the summary,
+links it, or describes the
 segment it preserved (preservedSegment, preservedMessages, in any shape) is its
 own bookkeeping and is not compared.
 Claude Code 2.1.295 /compact was observed appending, before its new boundary,

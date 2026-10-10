@@ -257,6 +257,31 @@ test('superseded-original reads are bounded and drain a failed batch before stop
   } finally { gate.resolve(); await drained; }
 });
 
+test('a sync saves the label-free identity an older anchor is offered, and collection does not', async () => {
+  const f = await fixture();
+  await f.bridge.sync(f.conversationId);
+  const old = await f.current('codex');
+  f.files.get(old.path).dependent = true;
+  enableDependencyAnchors(f);
+  await f.advance('claude', 1);
+  await f.bridge.sync(f.conversationId);
+  const anchor = async () => (await f.bridge.status()).records.find(r => r.id === old.id);
+  assert.equal((await anchor()).status, 'dependency-anchor');
+  const labelFree = { hash: 'a'.repeat(64), bytes: 10 }, verify = f.bridge.adapters.codex.assertDependencyAnchor;
+  f.bridge.adapters.codex.assertDependencyAnchor = async record => {
+    await verify(record);
+    return { bytes: record.bytes, ...(record.dependencyAnchor.raw?.labelFree ? {} : { labelFree }) };
+  };
+  await f.bridge.collect();
+  assert.equal((await anchor()).dependencyAnchor.raw, undefined);
+  await f.bridge.sync(f.conversationId);
+  assert.deepEqual((await anchor()).dependencyAnchor.raw, { labelFree });
+  const state = await f.bridge.status();
+  assert.equal(state.audit.filter(entry => entry.event === 'dependency-anchor-proof-extended').length, 1);
+  await f.bridge.sync(f.conversationId);
+  assert.equal((await f.bridge.status()).audit.filter(entry => entry.event === 'dependency-anchor-proof-extended').length, 1);
+});
+
 test('dependent old snapshots complete promoted recovery without replay, retirement or future collection', async () => {
   const f = await fixture();
   await f.bridge.sync(f.conversationId);

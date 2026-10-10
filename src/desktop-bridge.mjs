@@ -269,11 +269,18 @@ export class DesktopBridge {
     return frozen;
   }
 
-  async assertOriginalsUnchanged(state, conversationId, frozen = new Set(), hold) {
+  async assertOriginalsUnchanged(state, conversationId, frozen = new Set(), hold, { extendProofs = false } = {}) {
     const included = record => conversationId ? record.conversationId === conversationId : !frozen.has(record.conversationId);
     for (const record of state.records.filter(record => record.status === 'dependency-anchor' && included(record))) {
-      try { if (included(record)) await this.assertDependencyAnchor(record); }
-      catch (error) { error.conversationId ??= record.conversationId; if (!hold?.(error, record.conversationId)) throw error; }
+      try {
+        if (!included(record)) continue;
+        const labelFree = (await this.assertDependencyAnchor(record))?.labelFree;
+        // Only the start of a sync saves this: the ledger is as loaded there.
+        if (extendProofs && labelFree && !state.pending) {
+          record.dependencyAnchor = { ...record.dependencyAnchor, raw: { ...record.dependencyAnchor.raw, labelFree } };
+          await this.save(state, { event: 'dependency-anchor-proof-extended', conversationId: record.conversationId, nativeId: record.nativeId });
+        }
+      } catch (error) { error.conversationId ??= record.conversationId; if (!hold?.(error, record.conversationId)) throw error; }
     }
     await readBatches(state.records.filter(record => !record.managed && record.status === 'original' && included(record)), async record => {
       try {
@@ -294,7 +301,7 @@ export class DesktopBridge {
     if (record.side !== 'codex' || !record.managed || !record.verified || record.kind !== 'snapshot'
       || record.status !== 'dependency-anchor' || !this.adapters.codex.assertDependencyAnchor)
       throw anchorGuard('Dependency anchor cannot be verified; histories were preserved.');
-    await this.adapters.codex.assertDependencyAnchor(record);
+    return this.adapters.codex.assertDependencyAnchor(record);
   }
 
   dependencyAnchorCandidate(record, proof) {
@@ -422,7 +429,7 @@ export class DesktopBridge {
       if (!conversation) throw new Error('Unknown desktop bridge conversation.');
       if (!isDesktopTracked(conversation)) return { changed: false, conversationId: id, tracking: 'stopped' };
       await this.reconcileOriginalRelocations(state, id);
-      await this.assertOriginalsUnchanged(state, id);
+      await this.assertOriginalsUnchanged(state, id, undefined, undefined, { extendProofs: true });
       const records = ['codex', 'claude'].map(side => this.current(state, id, side)).filter(Boolean);
       const read = () => readBatches(records, async record => {
         const data = await this.inspect(record);

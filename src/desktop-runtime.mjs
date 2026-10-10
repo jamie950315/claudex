@@ -56,6 +56,25 @@ function originalProjectionHeader(bytes) {
   return JSON.stringify({ timestamp: row.timestamp, type: row.type, payload, ordinal: row.ordinal });
 }
 
+// By user decision the provider label of a rollout header is not history: a
+// provider switch rewrites model_provider in every rollout's first line. The
+// header without that one field, in sorted form, identifies the same file
+// under any label. A header that does not round-trip exactly (a hidden
+// duplicate key) gets no such identity and keeps the exact byte proof.
+function labelFreeHeader(bytes) {
+  const text = bytes.toString('utf8');
+  let row;
+  try { row = JSON.parse(text); } catch { return null; }
+  const plain = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+  const sort = value => Array.isArray(value) ? value.map(sort) : plain(value)
+    ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sort(value[key])])) : value;
+  if (!plain(row) || row.type !== 'session_meta' || !plain(row.payload)
+    || JSON.stringify(row) !== text && JSON.stringify(sort(row)) !== text) return null;
+  const { model_provider: label, ...payload } = row.payload;
+  if (label !== undefined && typeof label !== 'string') return null;
+  return Buffer.from(JSON.stringify(sort({ ...row, payload })));
+}
+
 function importedClaudeOriginal(record) {
   if (record.importPacket !== true) return false;
   if (record.side !== 'claude' || record.kind !== 'original' || record.managed !== false || record.packetVersion !== 2
@@ -947,13 +966,13 @@ export class DesktopRuntime {
       if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n
           || before.size > 64n * 1024n * 1024n) throw dependencyAnchorGuard('Dependency anchor transcript is not a bounded owned regular file.');
       const digest = createHash('sha256'), chunks = [];
-      let originalDigest = null;
+      let originalDigest = null, labelDigest = null, labelBytes = 0;
       let length = 0, headerLength = 0, endedHeader = false, lastByte = null;
       for await (const chunk of file.createReadStream({ autoClose: false })) {
         length += chunk.length;
         if (length > before.size) throw dependencyAnchorGuard('Dependency anchor transcript grew during verification.');
         digest.update(chunk); lastByte = chunk.at(-1);
-        if (endedHeader) originalDigest?.update(chunk);
+        if (endedHeader) { originalDigest?.update(chunk); labelDigest?.update(chunk); }
         else {
           const newline = chunk.indexOf(10), part = newline < 0 ? chunk : chunk.subarray(0, newline);
           headerLength += part.length;
@@ -962,6 +981,11 @@ export class DesktopRuntime {
           if (endedHeader) {
             const original = originalProjectionHeader(Buffer.concat(chunks));
             if (original !== null) originalDigest = createHash('sha256').update(original).update('\n').update(chunk.subarray(newline + 1));
+            const labelFree = labelFreeHeader(Buffer.concat(chunks));
+            if (labelFree !== null) {
+              labelBytes = labelFree.length - headerLength;
+              labelDigest = createHash('sha256').update(labelFree).update('\n').update(chunk.subarray(newline + 1));
+            }
           }
         }
       }
@@ -974,7 +998,8 @@ export class DesktopRuntime {
       if (row.type !== 'session_meta' || row.payload?.id !== record.nativeId || row.payload?.cwd !== record.cwd)
         throw dependencyAnchorGuard('Dependency anchor transcript identity or working directory changed.');
       return { path, hash: digest.digest('hex'), bytes: Number(before.size),
-        ...(originalDigest ? { originalSerializationHash: originalDigest.digest('hex') } : {}) };
+        ...(originalDigest ? { originalSerializationHash: originalDigest.digest('hex') } : {}),
+        ...(labelDigest ? { labelFree: { hash: labelDigest.digest('hex'), bytes: Number(before.size) + labelBytes } } : {}) };
     } finally { await file.close(); }
   }
   async dependencyAnchorSnapshot(record) {
@@ -1048,12 +1073,22 @@ export class DesktopRuntime {
           throw dependencyAnchorGuard('Dependency anchor saved dependency identities are malformed.');
         previous = edge.id;
       }
-      const proof = await this.dependencyAnchorSnapshot(record);
-      if (anchor.raw.path !== proof.raw.path || anchor.raw.bytes !== proof.raw.bytes
-          || anchor.raw.hash !== proof.raw.hash && anchor.raw.hash !== proof.raw.originalSerializationHash)
+      const saved = anchor.raw.labelFree;
+      if (saved !== undefined && (!/^[a-f0-9]{64}$/.test(saved?.hash ?? '') || !Number.isSafeInteger(saved.bytes) || saved.bytes < 1))
+        throw dependencyAnchorGuard('Dependency anchor saved proof is malformed.');
+      const proof = await this.dependencyAnchorSnapshot(record), current = proof.raw.labelFree;
+      const exact = anchor.raw.bytes === proof.raw.bytes
+        && (anchor.raw.hash === proof.raw.hash || anchor.raw.hash === proof.raw.originalSerializationHash);
+      // Only the provider label of the header may differ from the saved bytes.
+      const relabeled = !exact && saved !== undefined && current !== undefined
+        && saved.hash === current.hash && saved.bytes === current.bytes;
+      if (anchor.raw.path !== proof.raw.path || !exact && !relabeled)
         throw dependencyAnchorGuard('Dependency anchor saved transcript bytes changed.');
-      if (proof.bytes !== record.bytes) throw dependencyAnchorGuard('Dependency anchor aggregate storage changed.');
-      return { bytes: proof.bytes };
+      if (proof.bytes - record.bytes !== (relabeled ? proof.raw.bytes - anchor.raw.bytes : 0))
+        throw dependencyAnchorGuard('Dependency anchor aggregate storage changed.');
+      // An anchor saved before this identity existed gains it while its exact
+      // bytes are still proven; the caller decides when that may be saved.
+      return { bytes: proof.bytes, ...(exact && saved === undefined && current !== undefined ? { labelFree: current } : {}) };
     } catch (error) {
       throw error;
     }

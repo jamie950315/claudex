@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.3.24 and Claude Mod 0.8.22 provide bounded, per-conversation cache warming.
+Claudex 1.3.26 and Claude Mod 0.8.22 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
