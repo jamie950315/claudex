@@ -68,7 +68,7 @@ test('cache panel edits preview without mutation, confirms once and retains edit
   await f.controller.cacheRefresh(f.api);
   f.controller.cacheEdit(f.api, 'ttl', '5m'); f.controller.cacheEdit(f.api, 'mode', 'default');
   await f.controller.cacheRefresh(f.api);
-  assert.deepEqual(f.controller.state.cacheForm, { ttl: '5m', mode: 'default' });
+  assert.deepEqual(f.controller.state.cacheForm, { ttl: '5m', mode: 'default', limit: 'for=4h' });
   await f.controller.cachePrepare(f.api, 'preference');
   assert.deepEqual(seen.at(-1), ['preference', 'default', 'ttl=5m']);
   assert.ok(!seen.some(words => words[0] === 'confirm'));
@@ -78,6 +78,11 @@ test('cache panel edits preview without mutation, confirms once and retains edit
   await f.controller.cachePrepare(f.api, 'ttl');
   await f.controller.cacheDiscard(f.api);
   assert.deepEqual(seen.at(-1), ['discard']);
+  // The default limit uses the same preview path; only offered choices are editable.
+  f.controller.cacheEdit(f.api, 'limit', 'rounds=10'); f.controller.cacheEdit(f.api, 'limit', 'for=999h');
+  assert.equal(f.controller.state.cacheForm.limit, 'rounds=10');
+  await f.controller.cachePrepare(f.api, 'limit');
+  assert.deepEqual(seen.at(-1), ['limit', 'rounds=10']);
 });
 
 test('cache confirmation does not dispatch into a changed controller context', async () => {

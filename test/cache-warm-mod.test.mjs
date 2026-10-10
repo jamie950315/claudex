@@ -4,14 +4,14 @@ import { mkdtemp, realpath, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CacheWarmManager } from '../src/cache-warm.mjs';
-import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText, assertNativeCacheTtlChange, cacheTtlPreference } from '../plugins/claudex/hooks/cache-warm.mjs';
+import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText, assertNativeCacheTtlChange, cacheTtlPreference, defaultWarmLimit } from '../plugins/claudex/hooks/cache-warm.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const PROMPT = 'Cache-retention measurement only. Reply with exactly OK. Do not call tools.';
 const usage = { model: 'claude-sonnet-5-5', input_tokens: 2, cache_read_input_tokens: 6000, cache_creation_input_tokens: 20, output_tokens: 4 };
 async function fixture() {
   let now = 1000, context = { sessionId: ID, cwd: '/fixture' }, fingerprint = 'sonnet-medium-5m';
-  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h', preference;
+  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h', preference, warmLimit;
   const lastChoices = new Map();
   const timers = [], calls = [], client = createCacheWarmClient();
   const hooks = {};
@@ -21,6 +21,8 @@ async function fixture() {
     readCacheTtl: async () => ({ value: nativeTtl, environmentValue: nativeTtl, scope: 'current-process', force5m: false, policyLocked: false }),
     readTtlPreference: async () => preference,
     writeTtlPreference: async value => { preference = structuredClone(value); },
+    readWarmLimit: async () => warmLimit,
+    writeWarmLimit: async value => { warmLimit = structuredClone(value); },
     readLastTtlChoice: async revision => lastChoices.get(revision),
     writeLastTtlChoice: async value => { lastChoices.set(value.revision, structuredClone(value)); },
     checkCacheTtl: async desired => { const state = await host.readCacheTtl(); assertNativeCacheTtlChange(state, desired); return state; },
@@ -129,6 +131,36 @@ test('the shortcut turns rounds, a duration or a clock time into the confirmed b
   for (const words of [['on', 'for=10m'], ['on', '5m', 'for=40h'], ['on', 'rounds=0'], ['on', 'for=1h', 'until=23:00'], ['on', 'rounds=2', 'for=3h'], ['on', 'rounds=200'], ['off', 'rounds=2']])
     await assert.rejects(f.client.sessionCommand(f.host, words, origin));
   assert.equal(f.calls.length, 0);
+});
+
+test('a saved default limit replaces four hours for commands without one, through preview and confirm', async () => {
+  const f = await fixture(), origin = { kind: 'composer' };
+  const bounds = () => JSON.stringify(f.calls.findLast(call => JSON.stringify(call).includes('maxRefreshes')));
+  assert.equal((await f.client.command(f.host, ['status'], origin)).defaultLimit, 'for=4h');
+  const preview = await f.client.command(f.host, ['limit', 'rounds=7'], origin);
+  assert.equal(preview.state, 'confirmation-required'); assert.equal(preview.defaultLimit, 'rounds=7'); assert.equal(preview.previousDefaultLimit, 'for=4h');
+  // A preview writes nothing and enables nothing.
+  const configured = () => f.calls.filter(call => JSON.stringify(call).includes('"configure"')).length;
+  assert.equal(await f.host.readWarmLimit(), undefined); assert.equal(configured(), 0);
+  const saved = await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin);
+  assert.equal(saved.state, 'limit-saved'); assert.deepEqual(await f.host.readWarmLimit(), { version: 1, limit: 'rounds=7' });
+  assert.equal(f.client.snapshot().enabled, false); assert.equal(configured(), 0);
+  await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin), /expired|changed/);
+  await f.client.sessionCommand(f.host, ['on'], origin);
+  assert.ok(bounds().includes('"maxRefreshes":7') && bounds().includes('"maxMinutes":10080'), bounds());
+  // An explicit limit still wins over the saved default.
+  await f.client.sessionCommand(f.host, ['on', 'for=2h'], origin);
+  assert.ok(bounds().includes('"maxRefreshes":2') && bounds().includes('"maxMinutes":120'), bounds());
+  for (const word of ['until=11:18:30', 'for=200h', 'rounds=0', 'ttl=1h', 'for=1m'])
+    await assert.rejects(f.client.command(f.host, ['limit', word], origin), /limit|Limits|fits/i);
+  await assert.rejects(f.client.command(f.host, ['limit', 'for=8h'], { kind: 'plugin' }), /explicit native user/);
+  // Valid for one TTL is enough to save; the other TTL refuses it when warming is enabled.
+  assert.equal(defaultWarmLimit('rounds=300'), 'rounds=300'); assert.equal(defaultWarmLimit({ version: 1, limit: 'until=18:30' }), 'until=18:30');
+  assert.throws(() => defaultWarmLimit({ version: 2, limit: 'for=4h' }), /Default warming limit/);
+  const strict = await fixture();
+  const next = await strict.client.command(strict.host, ['limit', 'rounds=300'], origin);
+  await strict.client.command(strict.host, ['confirm', next.confirm.split(' ').at(-1)], origin);
+  await assert.rejects(strict.client.sessionCommand(strict.host, ['on', '1h'], origin), /300 warm requests cannot fit/);
 });
 
 test('bare session on enables directly with saved TTL or the one-hour default', async () => {

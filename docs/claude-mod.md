@@ -5,7 +5,8 @@
 Claudex.app 1.3.0 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
-Version 0.8.18 makes `/claudex:warm on` without a limit warm for four hours.
+Version 0.8.18 makes `/claudex:warm on` without a limit warm for four hours and
+lets the Cache settings tab or `/claudex warm limit` change that default.
 Version 0.8.17 lets `/claudex:warm on` take one limit chosen by the user
 (`rounds=N`, `for=DURATION` or `until=HH:MM|DD:HH:MM`) and shows the used and
 chosen limits in its summary; 0.8.16 was its first, combinable form; see the [cache-warming guide](cache-warming.md). Mod delivery is unchanged.

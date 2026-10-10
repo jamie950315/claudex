@@ -1,4 +1,4 @@
-import { textChunks, taskInventoryCount } from './controller.mjs';
+import { textChunks, taskInventoryCount, WARM_LIMIT_PRESETS } from './controller.mjs';
 import { localizedUsage } from './localization.mjs';
 
 // Presentation state belongs to the exact controller context, never a receipt.
@@ -127,6 +127,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       field(t('Current native TTL'), cache?.nativeCache?.value),
       field(t('Saved startup mode'), modes[cache?.ttlPreference?.mode] ?? t('Unknown')),
       ...(cache?.ttlPreference?.ttl ? [field(t('Saved TTL'), cache.ttlPreference.ttl)] : []),
+      field(t('Default warming limit'), cache?.defaultLimit),
       field(t('Cache warming'), cache ? cache.local?.enabled ? t('Enabled') : t('Disabled') : t('Unknown')),
       ...(cache?.local?.ttlRestore?.state === 'failed' ? [text(cache.local.ttlRestore.error)] : []),
       button('cache-refresh', t('Refresh status'), () => controller.cacheRefresh(host())),
@@ -145,6 +146,14 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       text(t('Changing these settings stops local warming; it never enables model work. One-hour cache writes may cost more.')),
       muted(t('Global Claude settings, subagent TTL and other running sessions are unchanged.')),
     ]));
+    body.push(section(t('Default warming limit'), [
+      // A limit saved by command may not be one of the offered choices.
+      Select({ key: 'cache-limit', label: t('Default warming limit'), value: state.cacheForm.limit,
+        options: [...new Set([...WARM_LIMIT_PRESETS, state.cacheForm.limit])].map(value => ({ value, label: value })),
+        onSelect: value => { if (controller.state === state) controller.cacheEdit(host(), 'limit', value); } }),
+      muted(t('Used when /claudex:warm on is given no limit. It changes neither a running warm-up nor Codex.')),
+      button('cache-preview-limit', t('Preview default limit'), () => controller.cachePrepare(host(), 'limit')),
+    ]));
     if (state.cachePending) body.push(section(t('Review cache change'), [
       field(t('Session ID'), state.cachePending.sessionId), field(t('Directory'), state.cachePending.cwd),
       // Always retain the complete confirmation, including scope and effects.
@@ -153,7 +162,8 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
         button('cache-discard', t('Discard preview'), () => controller.cacheDiscard(host()))]),
     ]));
     if (state.cacheResult) body.push(section(t('Cache change result'), [
-      text(state.cacheResult.state === 'disabled' ? t('Disabled') : t('Settings updated. Warming remains off.')), details('cache-result', state.cacheResult),
+      text(state.cacheResult.state === 'disabled' ? t('Disabled') : state.cacheResult.state === 'limit-saved'
+        ? t('Default limit saved. Warming is unchanged.') : t('Settings updated. Warming remains off.')), details('cache-result', state.cacheResult),
     ]));
     body.push(button('cache-off', t('Stop cache warming'), () => controller.cacheOff(host())));
   } else if (state.tab === 'tasks') {

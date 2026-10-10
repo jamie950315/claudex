@@ -2,7 +2,7 @@ import { createController, configurationDiagnostic } from './controller.mjs';
 import { createNativeWakePump, createSessionObserver } from './delivery.mjs';
 import { createLocalization, LANGUAGE_PREFERENCE_KEY } from './localization.mjs';
 import { renderPanel } from './panel.mjs';
-import { createCacheWarmClient, cacheWarmTtl, assertNativeCacheTtlChange, CACHE_TTL_PREFERENCE_KEY, CACHE_TTL_LAST_KEY } from './cache-warm.mjs';
+import { createCacheWarmClient, cacheWarmTtl, assertNativeCacheTtlChange, CACHE_TTL_PREFERENCE_KEY, CACHE_TTL_LAST_KEY, CACHE_WARM_LIMIT_KEY } from './cache-warm.mjs';
 import { formatWarmSummary } from './cache-warm-display.mjs';
 const PANE = 'claudex';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -65,6 +65,8 @@ function api($, options, observer = null) {
     readCacheTtl: () => nativeCacheTtlState($),
     readTtlPreference: () => $.store.get(CACHE_TTL_PREFERENCE_KEY),
     writeTtlPreference: value => $.store.set(CACHE_TTL_PREFERENCE_KEY, value),
+    readWarmLimit: () => $.store.get(CACHE_WARM_LIMIT_KEY),
+    writeWarmLimit: value => $.store.set(CACHE_WARM_LIMIT_KEY, value),
     readLastTtlChoice: revision => $.store.get(`${CACHE_TTL_LAST_KEY}:${revision}`),
     writeLastTtlChoice: value => $.store.set(`${CACHE_TTL_LAST_KEY}:${value.revision}`, value),
     checkCacheTtl: async value => { const state = await nativeCacheTtlState($); assertNativeCacheTtlChange(state, value); return state; },

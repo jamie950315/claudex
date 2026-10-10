@@ -59,8 +59,11 @@ function blank(context = null, epoch = 0) {
     usage: null, version: null, doctor: null, configuration: null, tasks: null, chats: null, chatQuery: '', chatCursor: null,
     taskOffset: 0, selectedTask: null, detail: null, workGeneration: null, children: {}, events: null, reports: null, artifact: null, pending: null, lastReceipt: null,
     wakes: [], wakeTarget: null, wakePreview: null, form: '', cacheStatus: null, cachePending: null, cacheResult: null,
-    cacheForm: { ttl: '1h', mode: 'session' }, cacheDirty: false };
+    cacheForm: { ttl: '1h', mode: 'session', limit: 'for=4h' }, cacheDirty: false };
 }
+// Choices offered in the pane; the limit command accepts any valid value.
+export const WARM_LIMIT_PRESETS = Object.freeze(['for=1h', 'for=2h', 'for=4h', 'for=8h', 'for=12h', 'for=24h', 'for=72h', 'for=168h',
+  'rounds=3', 'rounds=5', 'rounds=10', 'rounds=20', 'rounds=50', 'rounds=100']);
 export function createController({ nativeWake = false } = {}) {
   let state = blank();
   const changed = api => { api.redraw(); };
@@ -106,19 +109,21 @@ export function createController({ nativeWake = false } = {}) {
         if (!await stillBound(api, ticket)) return;
         state.cacheStatus = result; state.cacheResult = null; state.tab = 'cache';
         if (!state.cacheDirty && !state.cachePending) state.cacheForm = {
-          ttl: result.ttlPreference?.ttl ?? result.nativeCache?.value ?? '1h', mode: result.ttlPreference?.mode ?? 'session' };
+          ttl: result.ttlPreference?.ttl ?? result.nativeCache?.value ?? '1h', mode: result.ttlPreference?.mode ?? 'session',
+          limit: result.defaultLimit ?? 'for=4h' };
       });
     },
     cacheEdit(api, key, value) {
-      if (state.busy || (key === 'ttl' ? !['1h', '5m'].includes(value) : key !== 'mode' || !['session', 'remember', 'default'].includes(value))) return;
+      if (state.busy || (key === 'ttl' ? !['1h', '5m'].includes(value) : key === 'limit' ? !WARM_LIMIT_PRESETS.includes(value)
+        : key !== 'mode' || !['session', 'remember', 'default'].includes(value))) return;
       state.cacheForm[key] = value; state.cacheDirty = true; state.cachePending = null; state.cacheResult = null; changed(api);
     },
     async cachePrepare(api, kind) {
-      if (!['ttl', 'preference'].includes(kind)) return;
+      if (!['ttl', 'preference', 'limit'].includes(kind)) return;
       return run(api, async ticket => {
-        const { ttl, mode } = state.cacheForm;
+        const { ttl, mode, limit } = state.cacheForm;
         state.cachePending = null; state.cacheResult = null;
-        const words = kind === 'ttl' ? ['ttl', ttl] : ['preference', mode, ...(mode === 'session' ? [] : [`ttl=${ttl}`])];
+        const words = kind === 'limit' ? ['limit', limit] : kind === 'ttl' ? ['ttl', ttl] : ['preference', mode, ...(mode === 'session' ? [] : [`ttl=${ttl}`])];
         const result = await api.cacheCommand(words, ticket.context);
         if (!await stillBound(api, ticket)) return;
         if (result.state !== 'confirmation-required' || !/^\/claudex warm confirm warm-[a-zA-Z0-9-]+$/.test(result.confirm ?? '')

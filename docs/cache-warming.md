@@ -54,7 +54,17 @@ these, `/claudex:warm on` warms for four hours, exactly as `for=4h`: up to 4
 requests at a 1h TTL, 60 at 5m and 9 on Codex. A five-minute TTL therefore
 uses far more plan quota than the other two; choose a limit to change that.
 The advanced `/claudex warm on` and the CLI keep their own defaults of 60
-minutes and 3 requests. The summary's last line
+minutes and 3 requests.
+
+On Claude that default can be changed. The Mod pane's Cache settings tab has a
+**Default warming limit** choice (1 to 168 hours, or 3 to 100 requests) with
+the same preview and confirmation as the other settings, and
+`/claudex warm limit for=6h` (then the shown `confirm` command) saves any
+`rounds=`, `for=` or `until=HH:MM` value. It is stored in the plugin's own
+store for sessions sharing it, applies only when `/claudex:warm on` is given
+no limit, and changes neither the TTL nor a warm-up already running. A saved
+limit that does not fit the session's TTL is refused when warming is enabled.
+Codex cannot read that store and keeps four hours. The summary's last line
 shows the requests used, the limit and the end time.
 
 Choose one `on` form and send it once. It directly applies the session TTL and

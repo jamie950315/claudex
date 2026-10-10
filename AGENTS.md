@@ -368,7 +368,14 @@ interval 4 or 55 minutes by TTL, Codex 25). By user decision exactly one of
 never a combination. By user decision an `on` command without a limit warms
 for four hours, exactly as `for=4h` (4 requests at a 1h TTL, 60 at 5m, 9 on
 Codex); the advanced `/claudex warm on` and CLI keep their 60-minute,
-3-request defaults. A time limit allows the requests that fit in it; rounds
+3-request defaults. The Claude side of that default is a confirmed
+plugin-store setting (`cache-warm-default-limit`, `{version, limit}`): the Mod
+Cache tab offers fixed choices and `/claudex warm limit WORD` accepts any
+`rounds=`, `for=` or `until=HH:MM` valid for at least one TTL, never a day of
+the month. It uses the same preview/confirm path, writes nothing on
+selection, and changes neither the TTL, a running policy nor Codex, whose
+default stays four hours. Whether the saved limit fits the session's interval
+is decided, and refused explicitly, when warming is enabled. A time limit allows the requests that fit in it; rounds
 must fit in 168 hours. A limit no request fits in, or one needing more than
 500 requests, is refused with its reason instead of being shortened. The
 broker bounds are maxRefreshes 1..500 and maxMinutes 1..10080. The attempt

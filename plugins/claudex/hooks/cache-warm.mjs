@@ -7,6 +7,24 @@ const token = () => `warm-${Date.now()}-${Math.random().toString(36).slice(2, 14
 const defaults = Object.freeze({ ttl: '1h', maxMinutes: 60, maxRefreshes: 3, maxReadTokens: null, maxOutputTokens: 256 });
 export const CACHE_TTL_PREFERENCE_KEY = 'cache-ttl-preference';
 export const CACHE_TTL_LAST_KEY = 'cache-ttl-last-choice';
+export const CACHE_WARM_LIMIT_KEY = 'cache-warm-default-limit';
+export const DEFAULT_WARM_LIMIT = 'for=4h';
+
+/** The limit /claudex:warm on uses when it is given none. Whether it fits the
+ * refresh interval is decided when warming is enabled; here it must be valid
+ * for at least one TTL and may not name a day of the month. */
+export function defaultWarmLimit(value, now = Date.now()) {
+  if (value === undefined || value === null) return DEFAULT_WARM_LIMIT;
+  const limit = typeof value === 'string' ? value : value?.limit;
+  if (typeof value === 'object' && (value.version !== 1 || Object.keys(value).length !== 2) || typeof limit !== 'string'
+    || limit.length > 32 || /^until=[^:]*:[^:]*:/.test(limit)) throw new Error(`Default warming limit must be ${WARM_LIMIT_HELP}, without a day of the month.`);
+  let failure;
+  for (const intervalMinutes of [55, 4]) {
+    try { if (!parseWarmLimits([limit], { intervalMinutes, now }).rest.length) return limit; }
+    catch (error) { failure = error; }
+  }
+  throw failure ?? new Error(`Default warming limit must be ${WARM_LIMIT_HELP}.`);
+}
 
 export function cacheTtlPreference(value) {
   if (value === undefined || value === null) return { version: 1, mode: 'session' };
@@ -83,6 +101,8 @@ export function createCacheWarmClient() {
       throw new Error('Saved last TTL choice is invalid; no native setting was changed.');
     return last?.revision === preference.revision ? { ...preference, ttl: last.ttl } : preference;
   }
+  // Hosts without the store entry keep the built-in default.
+  const readLimit = async host => defaultWarmLimit(await host.readWarmLimit?.(), await host.now());
   async function savePreference(host, preference) {
     await host.writeTtlPreference(preference);
     if (!preferenceEqual(await readPreference(host), preference)) throw new Error('Cache TTL preference readback failed; the saved preference may have changed.');
@@ -222,7 +242,9 @@ export function createCacheWarmClient() {
       // follows the TTL this command will apply: its own, else the saved one.
       const ttlWord = words.find(word => word.startsWith('ttl='));
       const ttl = ttlWord ? ttlWord.slice(4) : (await readPreference(host)).ttl ?? '1h';
-      const limited = parseWarmLimits(words.slice(1), { intervalMinutes: ttl === '5m' ? 4 : 55, now: await host.now() });
+      const given = words.slice(1);
+      if (!given.some(word => /^(rounds|for|until)=/.test(word))) given.push(await readLimit(host));
+      const limited = parseWarmLimits(given, { intervalMinutes: ttl === '5m' ? 4 : 55, now: await host.now() });
       words = ['on', ...limited.rest, ...Object.entries(limited.bounds).map(([key, value]) => `${key}=${value}`)];
       // The explicit session command is the user's opt-in. Reuse the internal
       // one-use configuration transaction without a second composer submission.
@@ -246,7 +268,7 @@ export function createCacheWarmClient() {
       if (!b) throw new Error('Native session context is unavailable.');
       if (expectedContext && !same(b.context, expectedContext)) throw new Error('Native panel context changed; reopen the cache settings.');
       if ((words[0] === 'status' || words[0] === 'preference') && words.length === 1) return { local: this.snapshot(),
-        ttlPreference: await readPreference(host),
+        ttlPreference: await readPreference(host), defaultLimit: await readLimit(host),
         nativeCache: await host.readCacheTtl(), ...await call(b, 'list') };
       // Never let model/plugin-authored commands opt another session into inference.
       if (!['composer', 'bridge', 'sdk', 'claudex-panel'].includes(origin?.kind)) throw new Error('Cache warming requires an explicit native user command.');
@@ -254,6 +276,14 @@ export function createCacheWarmClient() {
       if (words[0] === 'off' && words.length === 1) {
         cancel(b); b.epoch++; b.pending = null; b.enabled = false; confirmation = null;
         return call(b, 'configure', { enabled: false, instanceId: b.instanceId, requestId: token() });
+      }
+      if (words[0] === 'limit' && words.length === 2) {
+        const limit = defaultWarmLimit(words[1], await host.now()), previous = await readLimit(host);
+        confirmation = { id: token(), b, epoch: b.epoch, expiresAt: await host.now() + 120000, limit, limitOnly: true, sessionOnly };
+        return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
+          defaultLimit: limit, previousDefaultLimit: previous,
+          effects: 'Save the limit that /claudex:warm on uses when it is given none, for sessions sharing this native plugin store. It changes neither the native TTL, a running warm-up nor Codex, and never enables model work.',
+          expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
       }
       if (words[0] === 'on' || words[0] === 'preference' || words[0] === 'ttl') {
         const preferenceBefore = await readPreference(host);
@@ -300,6 +330,12 @@ export function createCacheWarmClient() {
         const prepared = confirmation; confirmation = null;
         if (!prepared || prepared.id !== words[1] || prepared.b !== b || prepared.epoch !== b.epoch || prepared.sessionOnly !== sessionOnly)
           throw new Error('Cache warming confirmation expired or its native context changed.');
+        if (prepared.limitOnly) {
+          if (await host.now() >= prepared.expiresAt || !await safeContext(b, prepared.epoch)) throw new Error('Cache warming confirmation expired or its native context changed.');
+          await host.writeWarmLimit({ version: 1, limit: prepared.limit });
+          if (await readLimit(host) !== prepared.limit) throw new Error('Default warming limit readback failed; the saved limit may have changed.');
+          return { state: 'limit-saved', defaultLimit: prepared.limit, local: this.snapshot() };
+        }
         if (b.phase !== 'idle' || b.pending || b.dispatch || b.checking || b.configuring || b.restoring || b.turn?.attemptId)
           throw new Error('Wait for the current native turn before changing the native cache TTL.');
         // Own the configuration boundary before any awaited native reads. Even a
@@ -370,7 +406,7 @@ export function createCacheWarmClient() {
         } finally { b.configuring = false; }
         await observe(b, b.sample); return { ...reply, nativeCacheSync: nativeSync, local: this.snapshot() };
       }
-      throw new Error('Use /claudex warm status|ttl 1h|5m|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxOutputTokens=N]|confirm TOKEN|off.');
+      throw new Error('Use /claudex warm status|ttl 1h|5m|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|limit rounds=N|for=4h|until=HH:MM|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxOutputTokens=N]|confirm TOKEN|off.');
     },
     async prompt(e) {
       const b = binding; if (!b) return null;
