@@ -10,6 +10,7 @@ import { ChatMailbox } from './chat-mailbox.mjs';
 import { CacheWarmManager } from './cache-warm.mjs';
 import { CodexCacheWarmer } from './codex-cache-warm.mjs';
 import { defaultWarmLimit, DEFAULT_WARM_LIMIT } from '../plugins/claudex/hooks/cache-warm-display.mjs';
+import { cacheTtlPreference } from '../plugins/claudex/hooks/cache-warm.mjs';
 import { readAppStopState } from './app-stop-state.mjs';
 import { dispatchModWake, modSessionObservation, modDeliveryDiagnosis } from './mod-wake-broker.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
@@ -227,6 +228,7 @@ export class CollaborationHub extends EventEmitter {
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
     if (Object.hasOwn(this.state, 'defaultWarmLimit') && typeof this.state.defaultWarmLimit !== 'string')
       throw new Error('Malformed default warming limit.');
+    if (Object.hasOwn(this.state, 'cacheTtlPreference')) cacheTtlPreference(this.state.cacheTtlPreference);
     if (this.state.nativeWakeRoute !== undefined && !['mod', 'mod-self', 'renderer'].includes(this.state.nativeWakeRoute))
       throw new Error('Malformed Claude native wake route.');
     if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
@@ -447,14 +449,30 @@ export class CollaborationHub extends EventEmitter {
       // The limit an on command uses when it is given none: one saved choice
       // for Claude, Codex and the app. Saving it changes no enrollment.
       if (action === 'settings') {
-        if (Object.keys(params).some(key => !['sessionId', 'cwd', 'defaultLimit'].includes(key))) throw new Error('Unsupported cache-warm fields.');
-        const update = Object.hasOwn(params, 'defaultLimit'), selected = update ? defaultWarmLimit(params.defaultLimit) : null;
-        if (update && typeof params.defaultLimit !== 'string') throw new Error('defaultLimit must be a limit word.');
-        if (update && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
+        const writes = ['defaultLimit', 'ttlPreference', 'ttlLastChoice'].filter(key => Object.hasOwn(params, key));
+        if (Object.keys(params).some(key => !['sessionId', 'cwd', 'defaultLimit', 'ttlPreference', 'ttlLastChoice'].includes(key))) throw new Error('Unsupported cache-warm fields.');
+        if (writes.includes('defaultLimit') && typeof params.defaultLimit !== 'string') throw new Error('Default warming limit must be a limit word.');
+        const limit = writes.includes('defaultLimit') ? defaultWarmLimit(params.defaultLimit) : null;
+        // The startup TTL preference is used by Claude Code only; it is kept
+        // here so the app can show and change it without a loaded session.
+        if (writes.includes('ttlPreference') && (params.ttlPreference === null || typeof params.ttlPreference !== 'object')) throw new Error('Saved cache TTL preference is invalid; no native setting was changed.');
+        const preference = writes.includes('ttlPreference') ? cacheTtlPreference(params.ttlPreference) : null;
+        const last = params.ttlLastChoice;
+        if (writes.includes('ttlLastChoice') && (!last || typeof last !== 'object' || Array.isArray(last) || Object.keys(last).sort().join(',') !== 'revision,ttl'
+          || typeof last.revision !== 'string' || !['1h', '5m'].includes(last.ttl))) throw new Error('Last TTL choice is invalid.');
+        if (writes.length && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
         return this.mutate(state => {
           if (this.actor(envelope, state).task) throw new Error('Only an external controller or its native Mod may manage cache warming.');
-          if (update) state.defaultWarmLimit = selected;
-          return { defaultLimit: state.defaultWarmLimit ?? DEFAULT_WARM_LIMIT, saved: state.defaultWarmLimit !== undefined };
+          if (limit !== null) state.defaultWarmLimit = limit;
+          if (preference) { state.cacheTtlPreference = preference; if (state.cacheTtlLastChoice?.revision !== preference.revision) delete state.cacheTtlLastChoice; }
+          if (writes.includes('ttlLastChoice')) {
+            // A remembered choice belongs to the saved preference revision only.
+            if (state.cacheTtlPreference?.mode !== 'remember' || state.cacheTtlPreference.revision !== last.revision)
+              throw new Error('Last TTL choice does not belong to the saved preference.');
+            state.cacheTtlLastChoice = { revision: last.revision, ttl: last.ttl };
+          }
+          return { defaultLimit: state.defaultWarmLimit ?? DEFAULT_WARM_LIMIT, saved: state.defaultWarmLimit !== undefined,
+            ttlPreference: copy(state.cacheTtlPreference ?? null), ttlLastChoice: copy(state.cacheTtlLastChoice ?? null) };
         });
       }
       const allowed = {

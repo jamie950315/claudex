@@ -37,7 +37,7 @@ async function applyNativeCacheTtl($, desired, expectedValue, beforeWrite) {
 }
 
 function api($, options, observer = null) {
-  return {
+  const host = {
     worker: async () => await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1',
     context: async () => ({ sessionId: await $.session.id(), cwd: await $.session.cwd() }),
     usage: () => $.session.usage(), version: () => $.session.version(),
@@ -63,10 +63,18 @@ function api($, options, observer = null) {
     readPrompt: () => $.prompt.read(),
     submitPrompt: args => $.prompt.submit(args),
     readCacheTtl: () => nativeCacheTtlState($),
-    readTtlPreference: () => $.store.get(CACHE_TTL_PREFERENCE_KEY),
-    writeTtlPreference: value => $.store.set(CACHE_TTL_PREFERENCE_KEY, value),
-    readLastTtlChoice: revision => $.store.get(`${CACHE_TTL_LAST_KEY}:${revision}`),
-    writeLastTtlChoice: value => $.store.set(`${CACHE_TTL_LAST_KEY}:${value.revision}`, value),
+    // The startup TTL preference lives in the Claudex broker so the app can
+    // show and change it. A preference an earlier Mod left in the plugin
+    // store is still read until one is saved in Claudex; nothing writes there.
+    readTtlPreference: async () => (await host.cacheSettings()).ttlPreference ?? $.store.get(CACHE_TTL_PREFERENCE_KEY),
+    writeTtlPreference: value => host.cacheSettings({ ttlPreference: value }),
+    readLastTtlChoice: async revision => {
+      const saved = await host.cacheSettings();
+      if (!saved.ttlPreference) return $.store.get(`${CACHE_TTL_LAST_KEY}:${revision}`);
+      return saved.ttlLastChoice?.revision === revision ? saved.ttlLastChoice : undefined;
+    },
+    writeLastTtlChoice: async value => (await host.cacheSettings()).ttlPreference
+      ? host.cacheSettings({ ttlLastChoice: value }) : $.store.set(`${CACHE_TTL_LAST_KEY}:${value.revision}`, value),
     checkCacheTtl: async value => { const state = await nativeCacheTtlState($); assertNativeCacheTtlChange(state, value); return state; },
     applyCacheTtl: (value, expectedValue, beforeWrite) => applyNativeCacheTtl($, value, expectedValue, beforeWrite),
     cacheConfiguration: async preference => {
@@ -99,6 +107,10 @@ function api($, options, observer = null) {
       return decoded.result;
     },
   };
+  // One broker record holds the shared cache settings; a read sends no field.
+  host.cacheSettings = async (params = {}) => await host.bridge({ version: 1, op: 'cache-warm', action: 'settings',
+    context: await host.context(), params }) ?? {};
+  return host;
 }
 
 export function register(on, options = {}) {

@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.3.17 and Claude Mod 0.8.19 provide bounded, per-conversation cache warming.
+Claudex 1.3.18 and Claude Mod 0.8.20 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.19 companion and
+Use the intended existing conversation with a freshly loaded 0.8.20 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -61,6 +61,9 @@ Claude and Codex alike. Three places edit it:
 
 - Claudex.app: **Cache settings…** (main window footer or the menu bar menu)
   opens a window with a **Default warming limit** choice and a Save button.
+  The same window has the **Startup cache TTL** preference (Claude Code only:
+  this process only, remember last TTL, or a fixed 1h/5m) and lists the
+  conversations being kept warm in both apps, each with a Stop button.
 - The Mod pane's Cache settings tab has the same choice (1 to 168 hours, or 3
   to 100 requests) with the preview and confirmation of its other settings.
 - `/claudex warm limit for=6h` in Claude (then the shown `confirm` command)

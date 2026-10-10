@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.17 packages Claude Mod 0.8.19. Keep application and Mod versions
+Claudex.app 1.3.18 packages Claude Mod 0.8.20. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -377,7 +377,18 @@ tab offers fixed choices and `/claudex warm limit WORD` accepts any `rounds=`,
 through the same preview/confirm path; the Codex hook reads the setting when
 its `on` command has no limit; the app's Cache settings window (its own
 window, opened by the footer button or the menu) saves a fixed choice with
-Save and writes nothing on open, reload or selection. Saving changes neither
+Save and writes nothing on open, reload or selection. By user decision that
+window also carries Claude-Code-only settings, labeled as such: the startup
+TTL preference now lives in the same broker record (`cacheTtlPreference`,
+`cacheTtlLastChoice`, one remembered choice bound to its preference revision).
+The Mod host reads and writes it through `cache_warm_settings`; a preference
+an earlier Mod left in the plugin store is only read until one is saved in
+Claudex, and nothing writes the store again. The app builds a remember
+revision itself; the session TTL of a running process still changes only
+inside that session. The window lists enrollments that are enabled and not
+past their end, by exact session and directory, and its Stop uses the
+controller's existing off/disable request for exactly that one. It never
+enables warming, and read-only modes can look but not save or stop. Saving changes neither
 the TTL nor a running policy and enrolls nothing. Whether the saved limit fits
 a session's interval is decided, and refused explicitly, when warming is
 enabled; an unreachable broker fails the `on` command instead of guessing. A time limit allows the requests that fit in it; rounds

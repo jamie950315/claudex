@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { access, lstat, mkdir, open } from 'node:fs/promises';
 import { homedir, userInfo, tmpdir } from 'node:os';
@@ -122,7 +123,7 @@ export class AppSetup {
 
   async collaborationRequest(method, params = {}) {
     const reads = ['list', 'models', 'mod_wake_status', 'cache_warm_settings', 'cache_warm_list', 'codex_cache_warm_list'];
-    if (this.readOnly && (!reads.includes(method) || method === 'cache_warm_settings' && params.defaultLimit !== undefined
+    if (this.readOnly && (!reads.includes(method) || method === 'cache_warm_settings' && Object.keys(params).length > 0
       || method === 'models' && (params.defaultModels !== undefined || params.defaultEfforts !== undefined || params.defaultPermission !== undefined)))
       this.requireWritable();
     const root = join(this.root, 'collaboration');
@@ -190,17 +191,54 @@ export class AppSetup {
     });
   }
 
-  /** The limit a warming on command uses when it is given none, shared by
-   * Claude and Codex. Saving it changes no enrollment and starts no model work.
-   * The enrolled counts are a best-effort summary of the two status lists. */
-  async warmSettings(defaultLimit) {
-    if (defaultLimit !== undefined) this.requireWritable();
-    const settings = await this.collaborationRequest('cache_warm_settings', defaultLimit === undefined ? {} : { defaultLimit });
-    const enrolled = async method => {
-      try { return (await this.collaborationRequest(method)).policies.filter(policy => policy.enabled === true).length; }
-      catch { return null; }
-    };
-    return { ...settings, active: { claude: await enrolled('cache_warm_list'), codex: await enrolled('codex_cache_warm_list') } };
+  /** The cache settings the app window shows: the shared default limit, the
+   * Claude Code startup TTL preference and the enrollments still running.
+   * Saving changes no enrollment and starts no model work. The list is a
+   * bounded, content-free summary of the two status lists. */
+  async warmSettings({ defaultLimit, ttlMode, ttl } = {}) {
+    const params = {};
+    if (defaultLimit !== undefined) params.defaultLimit = defaultLimit;
+    if (ttlMode !== undefined) {
+      if (!['session', 'remember', 'default'].includes(ttlMode) || (ttlMode === 'session' ? ttl !== undefined : !['1h', '5m'].includes(ttl)))
+        throw new Error('Choose session, or remember or default with a 1h or 5m TTL.');
+      params.ttlPreference = { version: 1, mode: ttlMode, ...(ttlMode === 'session' ? {} : { ttl }),
+        ...(ttlMode === 'remember' ? { revision: `warm-${randomUUID()}` } : {}) };
+    } else if (ttl !== undefined) throw new Error('A TTL needs its startup mode.');
+    if (Object.keys(params).length) this.requireWritable();
+    const settings = await this.collaborationRequest('cache_warm_settings', params);
+    const preference = settings.ttlPreference, last = settings.ttlLastChoice;
+    // What the next Claude Code session restores: a remembered choice wins over the TTL it was saved with.
+    const startupTtl = !preference || preference.mode === 'session' ? null
+      : preference.mode === 'remember' && last?.revision === preference.revision ? last.ttl : preference.ttl;
+    return { defaultLimit: settings.defaultLimit, saved: settings.saved,
+      ttlMode: preference?.mode ?? null, startupTtl, ...await this.warmEnrollments() };
+  }
+
+  async warmEnrollments() {
+    const now = Date.now(), warming = [];
+    const active = {};
+    for (const [provider, method] of [['claude', 'cache_warm_list'], ['codex', 'codex_cache_warm_list']]) {
+      try {
+        const running = (await this.collaborationRequest(method)).policies
+          .filter(policy => policy.enabled === true && Number.isSafeInteger(policy.until) && policy.until > now);
+        active[provider] = running.length;
+        for (const policy of running.slice(0, 32)) warming.push({ provider, sessionId: policy.sessionId, cwd: policy.cwd,
+          ttl: provider === 'claude' ? policy.ttlPreference ?? null : null, used: policy.totals?.refreshes ?? 0,
+          max: policy.maxRefreshes ?? null, until: policy.until, nextAt: Number.isSafeInteger(policy.nextAt) ? policy.nextAt : null });
+      } catch { active[provider] = null; }
+    }
+    return { active, warming };
+  }
+
+  /** Stop one running enrollment by its exact native identity. Nothing is
+   * enabled, replayed or deleted; the conversation itself is untouched. */
+  async warmStop({ provider, sessionId, cwd } = {}) {
+    this.requireWritable();
+    if (!['claude', 'codex'].includes(provider) || typeof sessionId !== 'string' || typeof cwd !== 'string')
+      throw new Error('Stopping needs the provider, session and directory of one enrollment.');
+    if (provider === 'codex') await this.collaborationRequest('codex_cache_warm_off', { sessionId, cwd });
+    else await this.collaborationRequest('cache_warm_configure', { provider, sessionId, cwd, enabled: false, requestId: `app-cache-warm:${randomUUID()}` });
+    return this.warmSettings();
   }
 
   /** The user's confirmation in the app is the operator attestation for work the

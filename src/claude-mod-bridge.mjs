@@ -114,7 +114,7 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       if (recovered.remaining) return { state: 'receipt-recovery', messages: [] };
     }
     const cacheFinishing = request.op === 'cache-warm' && (request.action === 'list' || request.action === 'receipt'
-      || request.action === 'settings' && request.params.defaultLimit === undefined
+      || request.action === 'settings' && !['defaultLimit', 'ttlPreference', 'ttlLastChoice'].some(key => request.params[key] !== undefined)
       || request.action === 'configure' && request.params.enabled === false
       || request.action === 'observe' && request.params.phase === 'ended');
     if (request.op !== 'wake-receipt' && !(request.op === 'wake-observe' && request.observation.lifecycle === 'ended') && !cacheFinishing) await active();

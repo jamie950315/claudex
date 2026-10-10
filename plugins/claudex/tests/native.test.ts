@@ -19,6 +19,7 @@ const BAND = {
     scroll: { offset: 0, bodyRows: 3 }, view: {} },
 } as const
 function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en', settings?: (event: any) => any, store: Record<string, unknown> = {}) {
+  const saved: Record<string, unknown> = { ttlPreference: null, ttlLastChoice: null }
   const environment: Record<string, string | undefined> = worker ? { CLAUDEX_COLLABORATION_WORKER: '1' } : {}
   on('env.get', (_: any, e: any) => ({ value: environment[e.name] }))
   on('env.set', (_: any, e: any) => {
@@ -42,7 +43,15 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
   on('process.run', async (_: any, e: any) => {
     if (e.argv[0] === '/usr/bin/defaults') return { value: { exitCode: 0, stdout: '("zh-Hant-TW", "en-TW")', stderr: '' } }
     const request = JSON.parse(e.init.stdin)
-    const result = bridge ? await bridge(request, e) : request.op === 'doctor' ? { root: '/fixture/state', stopped: false }
+    // The broker's shared cache settings, kept across calls like the real record.
+    if (request.op === 'cache-warm' && request.action === 'settings' && Object.keys(request.params).some(key => ['ttlPreference', 'ttlLastChoice'].includes(key))) {
+      if (request.params.ttlPreference) { saved.ttlPreference = request.params.ttlPreference; saved.ttlLastChoice = null }
+      if (request.params.ttlLastChoice) saved.ttlLastChoice = request.params.ttlLastChoice
+    }
+    const reply = bridge ? await bridge(request, e) : undefined
+    if (request.op === 'cache-warm' && request.action === 'settings')
+      return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, result: { defaultLimit: 'for=4h', saved: false, ...reply, ...saved } }), stderr: '' } }
+    const result = bridge ? reply : request.op === 'doctor' ? { root: '/fixture/state', stopped: false }
       : request.method === 'list' ? { tasks: [], limits: {} } : {}
     return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, result }), stderr: '' } }
   })
@@ -383,15 +392,16 @@ test('cache warming status stays read-only and plugin-origin commands cannot opt
   seen.length = 0
   const status = await $.command.run({ command: 'claudex', args: 'warm status' })
   expect(JSON.parse(status.text).local.enabled).toBe(false)
-  // Status reads the shared default limit and the policy list; it writes nothing.
-  expect(seen.map(item => item.action)).toEqual(['settings', 'list'])
-  expect(seen[0].params.defaultLimit).toBeUndefined()
+  // Status reads the shared settings record and the policy list; it writes nothing.
+  expect(seen.filter(item => item.action !== 'settings').map(item => item.action)).toEqual(['list'])
+  expect(seen.filter(item => item.action === 'settings').every(item => Object.keys(item.params).every(key => ['sessionId', 'cwd'].includes(key)))).toBe(true)
   expect(seen[0].op).toBe('cache-warm')
   expect(seen[0].context).toEqual({ sessionId: ID, cwd: '/fixture' })
+  const count = seen.length
   const enable = await $.command.run({ command: 'claudex', args: 'warm on' })
   expect(enable.text).toMatch(/explicit native user command/)
   // The refused command contacted nothing.
-  expect(seen.length).toBe(2)
+  expect(seen.length).toBe(count)
 })
 
 test('namespaced warm command answers locally and preserves native user-origin requirements', async ($, on) => {
@@ -410,13 +420,14 @@ test('namespaced warm command answers locally and preserves native user-origin r
   expect(status.text).toMatch(/6,010/)
   expect(status.text).toMatch(/Unlimited/)
   expect(status.text).toMatch(/UTC[+-]/)
-  // Status reads the shared default limit and the policy list; it writes nothing.
-  expect(seen.map(item => item.action)).toEqual(['settings', 'list'])
-  expect(seen[0].params.defaultLimit).toBeUndefined()
+  // Status reads the shared settings record and the policy list; it writes nothing.
+  expect(seen.filter(item => item.action !== 'settings').map(item => item.action)).toEqual(['list'])
+  expect(seen.filter(item => item.action === 'settings').every(item => Object.keys(item.params).every(key => ['sessionId', 'cwd'].includes(key)))).toBe(true)
+  const count = seen.length
   const enable = await $.command.run({ command: 'claudex:warm', args: 'on 5m' })
   expect(enable.text).toMatch(/explicit native user command/)
   // The refused command contacted nothing.
-  expect(seen.length).toBe(2)
+  expect(seen.length).toBe(count)
 })
 
 test('saved TTL preference is applied through native startup APIs without enabling warming', async ($, on) => {
@@ -424,7 +435,9 @@ test('saved TTL preference is applied through native startup APIs without enabli
   stubs(on, false, request => { seen.push(request); return { policies: [] } }, 'en', undefined,
     { [CACHE_TTL_PREFERENCE_KEY]: { version: 1, mode: 'default', ttl: '5m' } })
   await $.session.start({ cwd: '/fixture', surface: 'terminal', isInteractive: true })
-  expect(seen.filter(item => item.op === 'cache-warm').length).toBe(0)
+  // Startup only reads the shared settings record: no enrollment, no write.
+  expect(seen.filter(item => item.op === 'cache-warm' && item.action !== 'settings').length).toBe(0)
+  expect(seen.every(item => Object.keys(item.params ?? {}).every(key => ['sessionId', 'cwd'].includes(key)))).toBe(true)
   const status = JSON.parse((await $.command.run({ command: 'claudex', args: 'warm status' })).text)
   if (status.local.ttlRestore.state !== 'applied') throw new Error(JSON.stringify(status.local.ttlRestore))
   expect(status.nativeCache.value).toBe('5m')

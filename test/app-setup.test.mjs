@@ -105,6 +105,48 @@ test('model preferences use authenticated broker requests without running setup'
   await assert.rejects(setup.models(), /Broker offline/);
 });
 
+test('cache settings read the shared record, list only running enrollments and stop one by exact identity', async t => {
+  const { root, setup, events } = await fixture(t);
+  await mkdir(join(root, 'collaboration'), { mode: 0o700 });
+  await writeFile(join(root, 'collaboration', 'controller-key'), 'a'.repeat(64) + '\n', { mode: 0o600 });
+  const requests = [], later = Date.now() + 3600000;
+  let preference = null;
+  setup.collaborationCall = async request => {
+    requests.push(request);
+    if (request.method === 'cache_warm_settings') {
+      preference = request.params.ttlPreference ?? preference;
+      return { defaultLimit: request.params.defaultLimit ?? 'for=4h', saved: false, ttlPreference: preference,
+        ttlLastChoice: preference?.mode === 'remember' ? { revision: preference.revision, ttl: '5m' } : null };
+    }
+    if (request.method === 'cache_warm_list') return { policies: [
+      { sessionId: 's1', cwd: '/p/one', enabled: true, until: later, ttlPreference: '1h', maxRefreshes: 4, totals: { refreshes: 1 }, nextAt: later - 1000 },
+      { sessionId: 's2', cwd: '/p/two', enabled: true, until: Date.now() - 1000, maxRefreshes: 3, totals: { refreshes: 2 } },
+      { sessionId: 's3', cwd: '/p/three', enabled: false, until: later, maxRefreshes: 3 }] };
+    if (request.method === 'codex_cache_warm_list') throw new Error('Codex backend offline');
+    return { policy: { enabled: false } };
+  };
+  const read = await setup.warmSettings();
+  assert.deepEqual({ ...read, warming: read.warming.length }, { defaultLimit: 'for=4h', saved: false, ttlMode: null, startupTtl: null,
+    active: { claude: 1, codex: null }, warming: 1 });
+  assert.deepEqual(read.warming[0], { provider: 'claude', sessionId: 's1', cwd: '/p/one', ttl: '1h', used: 1, max: 4, until: later, nextAt: later - 1000 });
+  const fixed = await setup.warmSettings({ defaultLimit: 'rounds=5', ttlMode: 'default', ttl: '5m' });
+  assert.deepEqual([fixed.defaultLimit, fixed.ttlMode, fixed.startupTtl], ['rounds=5', 'default', '5m']);
+  // A remembered choice wins over the TTL the preference was saved with.
+  const remembered = await setup.warmSettings({ ttlMode: 'remember', ttl: '1h' });
+  assert.deepEqual([remembered.ttlMode, remembered.startupTtl], ['remember', '5m']);
+  assert.match(preference.revision, /^warm-[a-zA-Z0-9-]{1,80}$/);
+  assert.equal((await setup.warmSettings({ ttlMode: 'session' })).startupTtl, null);
+  for (const bad of [{ ttlMode: 'default' }, { ttlMode: 'session', ttl: '1h' }, { ttl: '1h' }, { ttlMode: 'always', ttl: '1h' }])
+    await assert.rejects(setup.warmSettings(bad), /session|TTL/);
+  await setup.warmStop({ provider: 'claude', sessionId: 's1', cwd: '/p/one' });
+  const stop = requests.find(request => request.method === 'cache_warm_configure');
+  assert.deepEqual({ ...stop.params, requestId: typeof stop.params.requestId }, { provider: 'claude', sessionId: 's1', cwd: '/p/one', enabled: false, requestId: 'string' });
+  await setup.warmStop({ provider: 'codex', sessionId: 'c1', cwd: '/p/one' });
+  assert.deepEqual(requests.find(request => request.method === 'codex_cache_warm_off').params, { sessionId: 'c1', cwd: '/p/one' });
+  await assert.rejects(setup.warmStop({ provider: 'other', sessionId: 's1', cwd: '/p' }), /Stopping needs/);
+  assert.deepEqual(events, []);
+});
+
 test('background startup integrates the display without installing providers or services', async t => {
   const { setup, events } = await fixture(t);
   await setup.startup();

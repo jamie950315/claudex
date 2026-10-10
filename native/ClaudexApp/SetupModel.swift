@@ -172,19 +172,36 @@ struct ModelSettings: Decodable {
     }
 }
 
-/// The limit a warming on command uses when it is given none. One setting in
-/// the Claudex broker, shared by Claude, Codex and this window.
+/// The cache settings the app window shows, all saved in the Claudex broker:
+/// the default warming limit (Claude Code and Codex), the startup TTL
+/// preference (Claude Code only) and the enrollments that are still running.
 struct WarmSettings: Decodable {
     struct Active: Decodable {
         let claude: Int?
         let codex: Int?
     }
+    struct Enrollment: Decodable {
+        let provider: String
+        let sessionId: String
+        let cwd: String
+        let ttl: String?
+        let used: Int
+        let max: Int?
+        let until: Double
+        let nextAt: Double?
+    }
     let defaultLimit: String
     let saved: Bool
+    /// nil while no preference has been saved in Claudex.
+    let ttlMode: String?
+    let startupTtl: String?
     let active: Active?
+    let warming: [Enrollment]?
 
     static let presets = ["for=1h", "for=2h", "for=4h", "for=8h", "for=12h", "for=24h", "for=72h", "for=168h",
                           "rounds=3", "rounds=5", "rounds=10", "rounds=20", "rounds=50", "rounds=100"]
+    static let ttlModes = ["session", "remember", "default"]
+    static let ttls = ["1h", "5m"]
 
     static func valid(_ limit: String) -> Bool {
         limit.utf8.count <= 32 && limit.range(of: "^(rounds|for|until)=[0-9a-z:]+$", options: .regularExpression) != nil
@@ -193,7 +210,13 @@ struct WarmSettings: Decodable {
     static func parse(_ data: Data) throws -> WarmSettings {
         let settings = try JSONDecoder().decode(WarmSettings.self, from: data)
         guard valid(settings.defaultLimit),
-              [settings.active?.claude, settings.active?.codex].allSatisfy({ $0 == nil || (0...4096).contains($0!) }) else { throw SetupParseError.invalid }
+              settings.ttlMode == nil || ttlModes.contains(settings.ttlMode!),
+              settings.startupTtl == nil || ttls.contains(settings.startupTtl!),
+              [settings.active?.claude, settings.active?.codex].allSatisfy({ $0 == nil || (0...4096).contains($0!) }),
+              (settings.warming ?? []).count <= 64,
+              (settings.warming ?? []).allSatisfy({ ["claude", "codex"].contains($0.provider) && !$0.sessionId.isEmpty
+                  && $0.sessionId.utf8.count <= 100 && $0.cwd.hasPrefix("/") && $0.cwd.utf8.count <= 4096
+                  && ($0.ttl == nil || ttls.contains($0.ttl!)) && $0.used >= 0 && ($0.max ?? 0) >= 0 }) else { throw SetupParseError.invalid }
         return settings
     }
 }
@@ -284,9 +307,13 @@ final class SetupRunner {
         }
     }
 
-    func warmSettings(defaultLimit: String? = nil, completion: @escaping (Result<WarmSettings, SetupProcessError>) -> Void) {
+    func warmSettings(defaultLimit: String? = nil, ttlMode: String? = nil, ttl: String? = nil,
+                      stop: WarmSettings.Enrollment? = nil, completion: @escaping (Result<WarmSettings, SetupProcessError>) -> Void) {
         var arguments = ["warm-settings"]
+        if let stop { arguments = ["warm-stop", "--provider", stop.provider, "--session", stop.sessionId, "--cwd", stop.cwd] }
         if let defaultLimit { arguments += ["--default-limit", defaultLimit] }
+        if let ttlMode { arguments += ["--ttl-mode", ttlMode] }
+        if let ttl { arguments += ["--ttl", ttl] }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<WarmSettings, SetupProcessError> in
                 do { return .success(try WarmSettings.parse(data)) }
@@ -378,7 +405,7 @@ final class SetupRunner {
         group.wait()
         if tooLarge { return .failure(.excessiveOutput) }
         guard process.terminationStatus == 0 else {
-            if ["models", "warm-settings", "stop", "stop-status", "resolve-uncertain"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
+            if ["models", "warm-settings", "warm-stop", "stop", "stop-status", "resolve-uncertain"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
                let detail = response["error"] as? String, !detail.isEmpty, detail.count <= 2_000 {
                 return .failure(.engineMessage(detail))
             }
