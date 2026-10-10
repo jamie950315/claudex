@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.22 packages Claude Mod 0.8.22. Keep application and Mod versions
+Claudex.app 1.3.23 packages Claude Mod 0.8.22. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -84,6 +84,23 @@ fixtures use placeholder paths and IDs.
   Directory restoration requires explicit resume-tracking. Permission errors,
   existing aliases and history conflicts remain visible under their normal guards.
 - Fail explicitly on conflicts, partial history, or unsupported lifecycle states.
+- Native format tolerance, by user decision: the native apps change with every
+  release, and a conversation must not pause only because a reader does not
+  recognize something. A reader of native data names the conditions that are
+  a real problem and accepts the rest; it never lists the forms it knows and
+  refuses the others. Real problems are: content that cannot be carried over
+  (an external asset, an opaque summary, a lossy conversion), a contradiction
+  with what the native API reports or with a saved checkpoint, an identity or
+  ownership that does not match, evidence of activity where none is claimed,
+  an unstable or unsafe file, and any uncertain write. Not problems: an
+  unknown record or event type, an extra or missing optional field, a new
+  label, kind, trigger or state, a different order of context. Unknown content
+  is kept whole as inert labeled data rather than dropped or refused. Compare
+  the fields a proof uses and ignore the others. This governs reading only:
+  writes, retirement, archival, ownership, checkpoints and the frontend
+  patches (which change vendor code) keep their exact proofs. When a reader
+  is loosened, run it over real local histories in both directions and record
+  the counts; a refusal found in real use is first checked against this rule.
 - Read transcript snapshots through a no-follow file descriptor and compare its
   nanosecond file identity with the named file before and after reading. Size and
   modification time alone do not prove stability after a replacement or rewrite.
@@ -298,10 +315,11 @@ bounded polling harness, not a production fallback.
   checkpoint. The checkpoint selects the representation: all native, all at
   their boundary, or the first arrivals native and the rest at their boundary.
   Row position is the arrival evidence; a completion time may precede its row
-  but never follow it. Compare only fields the proof uses: unknown header or
-  context metadata is ignored, while lifecycle, completion and command fields
-  stay exact. Rollouts readable by others are accepted; group or world write
-  access is refused, as for the empty-turn reader. Keep image positions bound to
+  but never follow it. Compare only fields the proof uses: unknown fields of
+  any record are ignored, a time the rollout did not record is not a
+  contradiction, and the projected command must still equal the API item.
+  Rollouts readable by others are accepted; group or world write access is
+  refused, as for the empty-turn reader. Keep image positions bound to
   exact native item identities. Rollover segments, overlapping lifecycles,
   redacted command text, non-command late items and real history edits still
   block. Never drop a late result, rebase a checkpoint or repair native
@@ -311,30 +329,18 @@ bounded polling harness, not a production fallback.
   existing export path; do not impose proof-reader bounds on ordinary histories.
 - Native completed turns with no full API items require independent stable
   rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
-  exact lifecycle IDs/times and no response, tool or token activity. By user
-  decision the proof lists what makes a turn nonempty, not every context form
-  a release may add: a developer-role context message of any kind, a
-  world_state record with any state fields (one, before the turn context) and
-  thread_settings_applied or thread_goal_updated events are runtime context
-  and state, inside the turn or after it. Still exact: the record shapes,
-  the message metadata bound to the turn and its time, and the user role,
-  where only the four runtime kinds with their frames and order are context
-  and every other kind is authored input. Assistant, tool, reasoning and
-  token records are refused wherever they appear. Before changing this, run
-  the proof over real rollouts in both directions: every empty turn accepted
-  and no turn with activity accepted. Paired app-origin untrusted_input
-  ingress before the next native task_started requires its exact envelope,
-  pair, next independent context and millisecond ordering; it never exempts
-  activity within an empty candidate.
-  Codex 0.162 adds a turn_attribution record to the start and root_turn_id to
-  the completion. By user decision the trigger (composer, queue, remote_ios,
-  goal, null, ...) is not checked beyond its token form: it names where a
-  turn was submitted, never its content. Two exact forms are accepted: a turn
-  of the user's own (its own root, no parent turn or agent) and the observed
-  agent-initiated one (a parent turn, an agent path under /root and another
-  root turn, which its context and completion must repeat). Mixed forms and
-  unknown attribution fields stay refused. Agent-initiated turns were only
-  seen in subagent threads, which are not synchronized, and never empty.
+  the turn's identities and times and find no activity. By the tolerance rule
+  under Development the proof names what activity is and accepts everything
+  else: a reply, reasoning, a tool call or output, a token or usage record, an
+  item completion, a compaction, authored input (a user-role kind beginning
+  `user.`, or unlabeled user text that is not a runtime frame), a completion
+  with a message or an error, and any record anywhere in the file that names
+  the turn outside its segment. Unknown records, events, state fields,
+  context kinds, triggers and extra fields are context. Identity stays
+  exact where it is recorded: turn, root, thread and cwd, and a time the
+  rollout records must equal the API's. Before changing this, run the proof
+  over real rollouts in both directions: every empty turn accepted and no
+  turn with activity accepted.
   Compare raw proof across both history reads. Empty controls never close a
   pending request, fabricate a reply, alter checkpoints or authorize history writes.
   An all-control new chat still waits for its first real completed dialogue.

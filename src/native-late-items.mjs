@@ -8,16 +8,13 @@ import { nativeItemDigest } from './native-history-order.mjs';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
 const START_REQUIRED = ['type', 'turn_id', 'started_at', 'model_context_window', 'collaboration_mode_kind'];
-const START_FIELDS = [...START_REQUIRED, 'root_turn_id', 'turn_attribution'];
 const STOP_REQUIRED = ['type', 'turn_id', 'started_at', 'completed_at', 'duration_ms', 'last_agent_message'];
-const STOP_FIELDS = [...STOP_REQUIRED, 'root_turn_id', 'time_to_first_token_ms', 'error'];
 const ABORT_FIELDS = ['type', 'turn_id', 'reason', 'started_at', 'completed_at', 'duration_ms'];
-const ITEM_FIELDS = ['type', 'id', 'command', 'cwd', 'process_id', 'source', 'status', 'parsed_cmd',
-  'aggregated_output', 'stdout', 'stderr', 'formatted_output', 'exit_code', 'duration'];
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names) => object(value) && Object.keys(value).sort().join(',') === [...names].sort().join(',');
-const only = (value, names) => object(value) && Object.keys(value).every(key => names.includes(key));
-const has = (value, required, allowed) => only(value, allowed) && required.every(key => Object.hasOwn(value, key));
+// By user decision a proof names the fields it uses; a field a release adds
+// is ignored, never a reason to refuse.
+const needs = (value, required) => object(value) && required.every(key => Object.hasOwn(value, key));
 const identity = info => Object.fromEntries(IDENTITY.map(key => [key, String(info[key])]));
 const integer = value => Number.isSafeInteger(value) && value >= 0;
 const time = row => {
@@ -60,21 +57,24 @@ function commandDirectory(value) {
 
 function projectCommand(item) {
   const cwd = commandDirectory(item?.cwd);
-  if (cwd === null || !keys(item, ITEM_FIELDS) || item.type !== 'CommandExecution' || typeof item.id !== 'string' || !item.id
-    || item.source !== 'unified_exec_startup' || !['completed', 'failed'].includes(item.status)
+  if (cwd === null || !object(item) || item.type !== 'CommandExecution' || typeof item.id !== 'string' || !item.id
+    || typeof item.source !== 'string' || !/^[a-z]+(?:_[a-z]+)*$/.test(item.source) || !['completed', 'failed'].includes(item.status)
     || !Array.isArray(item.command) || !item.command.length || !item.command.every(value => typeof value === 'string')
     || typeof item.process_id !== 'string' || !/^\d+$/.test(item.process_id)
     || !Number.isSafeInteger(item.exit_code) || !keys(item.duration, ['secs', 'nanos'])
     || !integer(item.duration.secs) || !integer(item.duration.nanos) || item.duration.nanos >= 1e9
     || !Number.isSafeInteger(item.duration.secs * 1000 + Math.floor(item.duration.nanos / 1e6))
-    || typeof item.aggregated_output !== 'string' || item.stdout !== item.aggregated_output
-    || item.stderr !== '' || item.formatted_output !== item.aggregated_output
+    // Output a second field would add, or separate error output, is not
+    // representable in the single API field; absent copies are not a loss.
+    || typeof item.aggregated_output !== 'string' || item.stdout !== undefined && item.stdout !== item.aggregated_output
+    || item.stderr !== undefined && item.stderr !== ''
+    || item.formatted_output !== undefined && item.formatted_output !== item.aggregated_output
     || !Array.isArray(item.parsed_cmd) || !item.parsed_cmd.length
     || item.parsed_cmd.some(action => !keys(action, ['type', 'cmd']) || action.type !== 'unknown' || typeof action.cmd !== 'string'))
     fail('late command has an unsupported or lossy native schema.');
   return { type: 'commandExecution', id: item.id, pluginId: null, scriptPath: null,
     command: item.command.map(nativeQuote).join(' '), cwd, processId: item.process_id,
-    source: 'unifiedExecStartup', status: item.status,
+    source: item.source.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()), status: item.status,
     commandActions: item.parsed_cmd.map(action => ({ type: 'unknown', command: action.cmd })),
     aggregatedOutput: item.aggregated_output, exitCode: item.exit_code,
     durationMs: item.duration.secs * 1000 + Math.floor(item.duration.nanos / 1e6) };
@@ -111,8 +111,8 @@ async function readSource(path, maxBytes) {
 }
 
 function exactFrame(row, line) {
-  if (!keys(row, ['timestamp', 'ordinal', 'type', 'payload']) || !Number.isFinite(time(row))
-    || JSON.stringify(row) !== line) fail('native proof frame has unknown fields or ambiguous serialization.');
+  if (!needs(row, ['timestamp', 'ordinal', 'type', 'payload']) || !Number.isFinite(time(row))
+    || JSON.stringify(row) !== line) fail('native proof frame is incomplete or has ambiguous serialization.');
 }
 
 // A closed native turn is completed (with or without a final reply: a
@@ -128,14 +128,16 @@ function boundaryProof(state, api, source, cwd, { ranCommand = false } = {}) {
     fail('late command lacks a unique closed native boundary.');
   const { start, stop } = state;
   for (const row of [start, stop, ...state.contexts]) exactFrame(row, source.lines[row.ordinal]);
-  if (!has(start.payload, START_REQUIRED, START_FIELDS)
-    || !(status === 'interrupted' ? keys(stop.payload, ABORT_FIELDS) : has(stop.payload, STOP_REQUIRED, STOP_FIELDS))
+  if (!needs(start.payload, START_REQUIRED)
+    || !needs(stop.payload, status === 'interrupted' ? ['type', 'turn_id', 'reason'] : STOP_REQUIRED)
     || start.payload.turn_id !== api.id || ![start.payload, stop.payload, ...state.contexts.map(context => context.payload)]
       .every(payload => object(payload) && (payload.root_turn_id === undefined || payload.root_turn_id === api.id))
-    || start.payload.started_at !== api.startedAt
-    || stop.payload.started_at !== api.startedAt || stop.payload.completed_at !== api.completedAt
+    // A time the runtime did not record is not a contradiction; the record
+    // timestamps below still bind both ends to the API.
+    || [start.payload.started_at, stop.payload.started_at].some(value => value !== undefined && value !== api.startedAt)
+    || stop.payload.completed_at !== undefined && stop.payload.completed_at !== api.completedAt
     || Math.floor(time(start) / 1000) !== api.startedAt || Math.floor(time(stop) / 1000) !== api.completedAt
-    || !integer(stop.payload.duration_ms) || stop.payload.time_to_first_token_ms !== undefined && !integer(stop.payload.time_to_first_token_ms)
+    || stop.payload.duration_ms !== undefined && !integer(stop.payload.duration_ms) || stop.payload.time_to_first_token_ms !== undefined && !integer(stop.payload.time_to_first_token_ms)
     || state.contexts.some(context => context.payload.cwd !== cwd || context.ordinal <= start.ordinal || context.ordinal >= stop.ordinal
       || time(context) < time(start) || time(context) > time(stop))) fail('native boundary or context differs from the full API.');
   if (status !== 'completed') return;
@@ -217,7 +219,7 @@ export function createNativeLateItemResolver({ path, threadId, cwd, maxBytes = 4
         || activeAtArrival !== null && (!running || running.stop && running.stop.ordinal <= row.ordinal
           || activeAtArrival === payload.turn_id || running.start.ordinal <= newest.stop.ordinal || running.start.ordinal >= row.ordinal)
         // Earlier native versions record no start time for the command.
-        || !has(payload, ['type', 'thread_id', 'turn_id', 'item', 'completed_at_ms'], ['type', 'thread_id', 'turn_id', 'item', 'started_at_ms', 'completed_at_ms'])
+        || !needs(payload, ['type', 'thread_id', 'turn_id', 'item', 'completed_at_ms'])
         || payload.thread_id !== threadId || !integer(payload.completed_at_ms)
         || payload.started_at_ms !== undefined && (!integer(payload.started_at_ms)
           || payload.started_at_ms < time(state.start) || payload.started_at_ms > time(state.stop))

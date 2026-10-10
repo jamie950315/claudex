@@ -1,6 +1,6 @@
 # Claude Mod integration validation
 
-The current source target is Claude Mod 0.8.22 in Claudex.app 1.3.22. The version-scoped
+The current source target is Claude Mod 0.8.22 in Claudex.app 1.3.23. The version-scoped
 cache-warm acceptance below used isolated staged sessions and did not update the installed
 app, global preferences or existing conversations. Version-scoped installation
 checkpoints remain historical evidence, not claims about the current installation.

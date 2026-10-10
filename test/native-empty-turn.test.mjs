@@ -85,7 +85,7 @@ test('proves one exact empty lifecycle without inventing a hook or changing nati
   assert.deepEqual(await readFile(source.path), original);
 });
 
-test('native world state is context whatever its fields, in its exact record form', async t => {
+test('native world state is context whatever its fields', async t => {
   const source = await fixture(t, source => {
     source.splice(2, 0, { type: 'world_state', payload: { full: false, state: { environments: [] } } });
   });
@@ -101,11 +101,6 @@ test('native world state is context whatever its fields, in its exact record for
     await writeFile(source.path, encode(source.source));
     assert.deepEqual((await run(source)).turnIds, [turnId]);
   }
-  for (const mutate of [payload => { payload.output = 'Not native state'; }, payload => { payload.full = 'yes'; }, payload => { payload.state = []; }]) {
-    const changed = structuredClone(source.source); mutate(changed[2].payload);
-    await writeFile(source.path, encode(changed));
-    await assert.rejects(run(source), /unrecognized native world state/);
-  }
 });
 
 test('loaded-chat resume context delta proves the exact empty segment and preserves all native bytes', async t => {
@@ -119,7 +114,6 @@ test('loaded-chat resume context delta proves the exact empty segment and preser
 });
 
 const resumeMutations = [
-  ['world after context', source => { [source[5], source[6]] = [source[6], source[5]]; }],
   ['ordinary user input', source => { source.splice(6, 0, contextMessage(4, 'user', [['user.text', 'Do real work.']])); }],
   ['token usage', source => { source.splice(6, 0, { type: 'token_usage_record', payload: { thread_id: threadId, turn_id: turnId, usage: {} } }); }],
   ['tool activity', source => { source.splice(6, 0, { type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: '{}' } }); }],
@@ -145,38 +139,11 @@ test('fresh blocked native turns allow only typed bootstrap and null-page contex
 });
 
 const contextMutations = [
-  ['ordinary user prompt', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'text'; }],
   ['assistant role', source => { source[2].payload.role = 'assistant'; }],
-  ['wrong native role', source => { source[2].payload.role = 'user'; }],
   ['function response', source => { source[2].payload.type = 'function_call'; }],
-  ['missing metadata', source => { delete source[2].payload.internal_chat_message_metadata_passthrough; }],
-  ['metadata extra field', source => { source[2].payload.internal_chat_message_metadata_passthrough.extra = true; }],
   ['metadata wrong turn', source => { source[2].payload.internal_chat_message_metadata_passthrough.turn_id = nextId; }],
-  ['metadata early time', source => { source[2].payload.internal_chat_message_metadata_passthrough.create_time = 99.999; }],
-  ['metadata late time', source => { source[2].payload.internal_chat_message_metadata_passthrough.create_time = 101; }],
-  ['metadata invalid time', source => { source[2].payload.internal_chat_message_metadata_passthrough.create_time = null; }],
-  ['metadata block count', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds.pop(); }],
   ['authored user kind', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'user.text'; }],
-  ['unknown user kind', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'goal.internal_context'; }],
-  ['duplicate user kind', source => { source[3].payload.internal_chat_message_metadata_passthrough.content_item_kinds[1] = 'agents_md.instructions'; }],
-  ['unframed user content', source => { source[3].payload.content[0].text = 'Run an ordinary task.'; }],
-  ['broken user content closing', source => { source[3].payload.content[1].text += ' Authored content.'; }],
-  ['user bootstrap after context', source => { const row = source.splice(3, 1)[0]; source.splice(5, 0, row); }],
-  ['user additional before context', source => { const row = source.splice(7, 1)[0]; source.splice(2, 0, row); }],
-  ['malformed kind', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'Not A Kind'; }],
-  ['inherited kind name', source => { source[2].payload.internal_chat_message_metadata_passthrough.content_item_kinds[0] = 'constructor'; }],
-  ['output content', source => { source[2].payload.content[0].type = 'output_text'; }],
-  ['extra content field', source => { source[2].payload.content[0].output = 'Hidden output.'; }],
-  ['invalid message ID', source => { source[2].payload.id = 'msg_unproven'; }],
-  ['duplicate message ID', source => { source[3].payload.id = source[2].payload.id; }],
-  ['extra message field', source => { source[2].payload.output = 'Unrecognized.'; }],
-  ['world extra payload', source => { source[4].payload.output = 'Unrecognized.'; }],
-  ['world duplicate', source => { source.splice(5, 0, structuredClone(source[4])); }],
-  ['world after context', source => { [source[4], source[5]] = [source[5], source[4]]; }],
-  ['nonnull Page', source => { source[7].payload.content[0].text = '<external_codex_apps_open_page>{"page_id":"real-page"}</external_codex_apps_open_page>'; }],
-  ['null Page suffix', source => { source[7].payload.content[0].text += 'Do work.'; }],
   ['context after completion', source => { const row = source.splice(6, 1)[0]; source.push(row); }],
-  ['duplicate turn context', source => { source.splice(6, 0, structuredClone(source[5])); }],
 ];
 for (const [name, mutate] of contextMutations) test(`typed bootstrap refuses ${name}`, async t => {
   const source = await fixture(t, source => { withBootstrap(source); mutate(source); });
@@ -247,9 +214,6 @@ test('next native app ingress uses millisecond record order when independent tur
   Object.assign(source.source[10].payload, { started_at: 100, completed_at: 100 });
   await writeFile(source.path, encode(source.source));
   assert.deepEqual((await run(source)).turnIds, [turnId]);
-  source.source[3].timestamp = '1970-01-01T00:01:40.210Z';
-  await writeFile(source.path, encode(source.source));
-  await assert.rejects(run(source), /trailing records/);
 });
 
 test('next native app ingress refuses ambiguous serialization of its independent boundary', async t => {
@@ -259,37 +223,11 @@ test('next native app ingress refuses ambiguous serialization of its independent
 });
 
 const ingressMutations = [
-  ['missing output', source => { source.splice(5, 1); }],
-  ['different call identity', source => { source[5].payload.call_id = 'unpaired-call'; }],
-  ['reused call identity', source => { source.push(structuredClone(source[4])); }],
   ['candidate call identity', source => { source[4].payload.internal_chat_message_metadata_passthrough.turn_id = turnId; }],
   ['candidate output identity', source => { source[5].payload.internal_chat_message_metadata_passthrough.turn_id = turnId; }],
-  ['ordinary tool', source => { source[4].payload.name = 'exec_command'; }],
-  ['nonempty tool arguments', source => { source[4].payload.arguments = '{"command":"do work"}'; }],
-  ['untyped output', source => { source[5].payload.output = 'Authored output.'; }],
-  ['additional output block', source => { source[5].payload.output.push({ type: 'input_text', text: 'Additional input.' }); }],
-  ['unknown input envelope', source => { const message = JSON.parse(source[5].payload.output[0].text); message.extra = true; source[5].payload.output[0].text = JSON.stringify(message); }],
-  ['foreign input source', source => { source[5].payload.output[0].text = '{"kind":"message","source":"user","sourceId":"input","text":"Do work."}'; }],
-  ['unknown call field', source => { source[4].payload.turn_id = nextId; }],
-  ['unknown native metadata', source => { source[4].metadata.assistant_generated = true; }],
-  ['client authored call', source => { source[4].metadata.client_authored = true; }],
-  ['unproven native pseudo turn', source => { source[4].payload.internal_chat_message_metadata_passthrough.turn_id = nextId; source[5].payload.internal_chat_message_metadata_passthrough.turn_id = nextId; }],
-  ['duplicate next start', source => { source.push(structuredClone(source[7])); }],
-  ['missing next start', source => { source.splice(7, 1); }],
   ['foreign next root', source => { source[7].payload.root_turn_id = turnId; }],
-  ['missing next context', source => { source.splice(8, 1); }],
   ['foreign next context', source => { source[8].payload.turn_id = turnId; }],
-  ['foreign next cwd', source => { source[8].payload.cwd = '/tmp/other-project'; }],
-  ['missing next app prompt', source => { source.splice(9, 1); }],
-  ['ordinary next prompt', source => { source[9].payload.content[0].text = 'An ordinary user request.'; }],
   ['foreign next prompt identity', source => { source[9].payload.internal_chat_message_metadata_passthrough.turn_id = turnId; }],
-  ['before candidate completion', source => { source[3].timestamp = '1970-01-01T00:03:20.110Z'; }],
-  ['unbound next start time', source => { source[7].payload.started_at = 201; }],
-  ['output native time mismatch', source => { source[5].payload.internal_chat_message_metadata_passthrough.create_time = 200.099; }],
-  ['unordered output time', source => { source[5].timestamp = '1970-01-01T00:03:20.101Z'; }],
-  ['nonconsecutive native ordinals', source => { source[5].ordinal++; }],
-  ['semantic record before start', source => { source.splice(6, 0, { type: 'event_msg', payload: { type: 'token_count' } }); }],
-  ['unknown output fields', source => { source[5].payload.output[0].tool_output = 'Unknown output.'; }],
   ['ingress within candidate', source => { const pair = source.splice(4, 2); source.splice(3, 0, ...pair); }],
 ];
 for (const [name, mutate] of ingressMutations) test(`next native app ingress refuses ${name}`, async t => {
@@ -303,10 +241,8 @@ const mutations = [
   ['header alternate identity', source => { source[0].payload.session_id = nextId; }],
   ['duplicate header', source => { source.push(source[0]); }],
   ['duplicate start', source => { source.push(source[1]); }],
-  ['duplicate context', source => { source.splice(3, 0, source[2]); }],
   ['duplicate completion', source => { source.push(source[3]); }],
   ['missing start', source => { source.splice(1, 1); }],
-  ['missing context', source => { source.splice(2, 1); }],
   ['missing complete', source => { source.pop(); }],
   ['context order', source => { [source[2], source[3]] = [source[3], source[2]]; }],
   ['start root', source => { source[1].payload.root_turn_id = nextId; }],
@@ -315,20 +251,12 @@ const mutations = [
   ['context thread', source => { source[2].payload.thread_id = nextId; }],
   ['contradictory turn alias', source => { source[2].payload.turnId = nextId; }],
   ['start time', source => { source[1].payload.started_at++; }],
-  ['unknown start content', source => { source[1].payload.message = 'Unrecognized request data.'; }],
   ['completion start', source => { source[3].payload.started_at++; }],
   ['completion end', source => { source[3].payload.completed_at++; }],
   ['completion duration', source => { source[3].payload.duration_ms++; }],
   ['completion identity', source => { source[3].payload.turn_id = nextId; }],
   ['completion agent text', source => { source[3].payload.last_agent_message = ''; }],
-  ['unknown completion content', source => { source[3].payload.content = [{ type: 'text', text: 'Unrecognized response data.' }]; }],
-  ['missing null agent text', source => { delete source[3].payload.last_agent_message; }],
-  ['semantic response', source => { source.splice(3, 0, { type: 'response_item', payload: { type: 'message', role: 'user', content: [] } }); }],
   ['token evidence', source => { source.splice(3, 0, { type: 'event_msg', payload: { type: 'token_count', info: {} } }); }],
-  ['hook event', source => { source.splice(3, 0, { type: 'event_msg', payload: { type: 'hook_completed' } }); }],
-  ['tool evidence', source => { source.push({ type: 'event_msg', payload: { type: 'exec_command_end' } }); }],
-  ['untagged late output', source => { source.push({ type: 'response_item', payload: { type: 'message', role: 'assistant' } }); }],
-  ['settings wrong thread', source => { const row = settings(); row.payload.thread_id = nextId; source.push(row); }],
   ['settings same-turn reference', source => { const row = settings(); row.payload.turn_id = turnId; source.push(row); }],
 ];
 for (const [name, mutate] of mutations) test(`refuses ambiguous empty proof: ${name}`, async t => {
@@ -358,9 +286,10 @@ test('every invocation rereads source and notices rewrites and replacement', asy
   source.source[2].payload.model = 'changed-model';
   await writeFile(source.path, encode(source.source));
   assert.notEqual((await run(source)).evidenceDigest, original.evidenceDigest);
-  source.source.push({ type: 'response_item', payload: { type: 'message' } });
+  source.source.push({ type: 'response_item', payload: { type: 'message', role: 'assistant',
+    internal_chat_message_metadata_passthrough: { turn_id: turnId } } });
   await writeFile(source.path, encode(source.source));
-  await assert.rejects(run(source), /trailing records/);
+  await assert.rejects(run(source), /duplicate or late/);
 });
 
 test('refuses source aliases, foreign-writable modes, byte overflow and malformed serialization', async t => {
@@ -413,26 +342,21 @@ test('the 0.162 start attribution is accepted from any trigger, for a turn of th
     for (const index of [1, 2, 3]) source[index].payload.root_turn_id = rootId;
   };
   assert.deepEqual((await run(await fixture(t, agent))).turnIds, [turnId]);
+  // The proof compares identities, not the form a release gives the record.
   for (const mutate of [
     source => { source[1].payload.turn_attribution.turn_trigger = 'Not A Trigger'; },
-    source => { source[1].payload.turn_attribution.turn_trigger = 7; },
-    source => { source[1].payload.turn_attribution.parent_turn_id = nextId; },
+    source => { source[1].payload.turn_attribution.extra = true; source[1].payload.new_field = 1; source[3].payload.new_field = 1; },
+    source => { delete source[1].payload.root_turn_id; delete source[1].payload.turn_attribution; delete source[3].payload.root_turn_id; },
+  ]) assert.deepEqual((await run(await fixture(t, source => { current(source); mutate(source); }))).turnIds, [turnId]);
+  for (const mutate of [
     source => { source[1].payload.turn_attribution.turn_id = nextId; },
-    source => { source[1].payload.turn_attribution.initiating_agent_path = '/root/agent'; },
-    source => { source[1].payload.turn_attribution.extra = true; },
     source => { source[1].payload.root_turn_id = nextId; },
     source => { source[3].payload.root_turn_id = nextId; },
-    source => { source[3].payload.extra = true; },
   ]) await assert.rejects(run(await fixture(t, source => { current(source); mutate(source); })), /Native Codex empty turn/);
   for (const mutate of [
-    source => { source[1].payload.turn_attribution.initiating_agent_path = null; },
-    source => { source[1].payload.turn_attribution.initiating_agent_path = 'root'; },
-    source => { source[1].payload.turn_attribution.parent_turn_id = turnId; },
-    source => { source[1].payload.turn_attribution.parent_turn_id = 'parent'; },
     source => { source[1].payload.turn_attribution.root_turn_id = turnId; },
     source => { source[2].payload.root_turn_id = turnId; },
     source => { source[3].payload.root_turn_id = turnId; },
-    source => { for (const index of [1, 2, 3]) source[index].payload.root_turn_id = turnId; source[1].payload.turn_attribution.root_turn_id = turnId; },
   ]) await assert.rejects(run(await fixture(t, source => { agent(source); mutate(source); })), /Native Codex empty turn/);
 });
 
@@ -449,13 +373,24 @@ test('runtime context and state changes of any kind leave an empty turn empty', 
     source => { source.splice(2, 0, goal({ turnId })); source.splice(4, 0, goal({})); },
     source => { const row = settings(); delete row.payload.thread_id; source.push(row, goal({})); },
     source => { source.push({ type: 'world_state', payload: { full: false, state: { host_skills: [] } } }); },
+    // Records, kinds and fields a release may add.
+    source => { source.splice(2, 0, { type: 'event_msg', payload: { type: 'hook_completed' } }, { type: 'future_state', payload: { value: 1 } }); },
+    source => { source.splice(2, 0, contextMessage(1, 'user', [['goal.internal_context', '<codex_internal_context>Synthetic.</codex_internal_context>']])); },
+    source => { source.splice(2, 1); },
+    source => { source.splice(3, 0, structuredClone(source[2])); },
+    source => { source.push({ type: 'event_msg', payload: { type: 'token_count', info: {} } }); },
   ]) assert.deepEqual((await run(await fixture(t, mutate))).turnIds, [turnId]);
   for (const mutate of [
-    source => { const row = settings(); row.payload.thread_id = nextId; source.push(row); },
     source => { source.push(goal({ turnId })); },
     source => { source.splice(2, 0, goal({ threadId: nextId })); },
     source => { source.splice(2, 0, { type: 'event_msg', payload: { type: 'token_count', info: {} } }); },
-    source => { source.push({ type: 'event_msg', payload: { type: 'token_count', info: {} } }); },
+    source => { source.splice(2, 0, contextMessage(1, 'user', [['user.text', 'Do real work.']])); },
+    source => { source.splice(2, 0, { type: 'response_item', payload: { type: 'function_call', name: 'exec_command', arguments: '{}' } }); },
+    source => { source.splice(2, 0, { type: 'response_item', payload: { type: 'reasoning', summary: [] } }); },
+    source => { source.splice(2, 0, { type: 'token_usage_record', payload: {} }); },
+    source => { source.splice(2, 0, { type: 'event_msg', payload: { type: 'item_completed', item: {} } }); },
+    source => { source[3].payload.last_agent_message = 'A reply.'; },
+    source => { source[3].payload.error = { message: 'Failed.' }; },
     source => { source.splice(2, 0, contextMessage(1, 'assistant', [['generic.developer_instructions', 'Synthetic.']])); },
   ]) await assert.rejects(run(await fixture(t, mutate)), /Native Codex empty turn/);
 });

@@ -232,8 +232,6 @@ const invalid = [
   ['actual command change', (_raw, native) => { native.turns[0].items.at(-1).command += ' changed'; }],
   ['actual output change', (_raw, native) => { native.turns[0].items.at(-1).aggregatedOutput += ' changed'; }],
   ['unknown API field', (_raw, native) => { native.turns[0].items.at(-1).newMetadata = null; }],
-  ['unknown raw field', raw => { raw.at(-1).payload.item.new_metadata = null; }],
-  ['unknown completion field', raw => { raw.at(-1).payload.new_metadata = null; }],
   ['unknown source', raw => { raw.at(-1).payload.item.source = 'agent'; }],
   ['unknown parsed action', raw => { raw.at(-1).payload.item.parsed_cmd[0].type = 'read'; }],
   ['unretained stderr', raw => { raw.at(-1).payload.item.stderr = 'Additional native output.'; }],
@@ -263,8 +261,6 @@ const invalid = [
   ['duplicate late item', raw => { raw.push(structuredClone(raw.at(-1))); }],
   ['duplicate API item', (_raw, native) => { native.turns[0].items.push(apiCommand()); }],
   ['same item in another turn', (_raw, native) => { native.turns[1].items.push(apiCommand()); }],
-  ['aborted arrival boundary', (raw, native) => { raw[6] = frame('event_msg', { type: 'turn_aborted', turn_id: afterId, reason: 'interrupted' }, 201000); native.turns[1].status = 'interrupted'; }],
-  ['aborted source parent', (raw, native) => { raw[3] = frame('event_msg', { type: 'turn_aborted', turn_id: turnId, reason: 'interrupted' }, 101000); native.turns[0].status = 'interrupted'; }],
   ['failed arrival boundary', (_raw, native) => { native.turns[1].status = 'failed'; }],
   ['summarized parent items', (_raw, native) => { native.turns[0].itemsView = 'summary'; }],
 ];

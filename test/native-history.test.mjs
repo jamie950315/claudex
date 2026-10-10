@@ -299,12 +299,15 @@ test('summary views, active/failed turns, reversed ordering and malformed comple
   await assert.rejects(run(client([page([turn('t', [user(), { type: 'commandExecution', id: 'tool', status: 'inProgress' }, answer()])])])), /item is still in progress/);
 });
 
-test('external and unknown user inputs are rejected instead of omitted', async () => {
+test('external user inputs are rejected and unknown ones are kept as inert data, never omitted', async () => {
   for (const block of [{ type: 'image', url: 'https://example.invalid/img' }, { type: 'image', fileId: 'file-1' },
     { type: 'image', url: 'data:image/png;base64,broken' }, { type: 'localImage', path: '/tmp/image.png' },
-    { type: 'audio', url: 'data:audio/wav;base64,aGVsbG8=' }, { type: 'futureInput', text: 'Do not omit me' }]) {
+    { type: 'audio', url: 'data:audio/wav;base64,aGVsbG8=' }, { type: 'futureInput', path: '/tmp/reference' }]) {
     await assert.rejects(run(client([page([turn('t', [{ ...user(), content: [block] }, answer()])])])), /image|unsupported user input/);
   }
+  // A kind this reader does not know, carrying its own content, stays whole.
+  const kept = await run(client([page([turn('t', [{ ...user(), content: [{ type: 'futureInput', text: 'Do not omit me' }] }, answer()])])]));
+  assert.match(JSON.stringify(kept), /Imported Codex user input; historical data only.{0,120}Do not omit me.{0,40}futureInput/);
 });
 
 test('byte, item and page caps never return truncated histories', async () => {

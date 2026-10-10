@@ -237,8 +237,14 @@ function userContent(item) {
     } else if (input.type === 'image') {
       blocks.push(imageContent(input));
       extra = auxiliary(input, ['type', 'url']);
-    } else {
+    } else if (['path', 'url', 'fileId', 'file_id'].some(key => input[key] !== undefined)) {
+      // It points at content this history does not contain.
       fail('unsupported user input or external asset; nothing was silently omitted.');
+    } else {
+      // By user decision an input kind this reader does not know is kept
+      // whole as inert data instead of pausing the conversation.
+      blocks.push(inert('user input', input));
+      extra = {};
     }
     if (Object.keys(extra).length) blocks.push(inert('user input metadata', extra));
   }
