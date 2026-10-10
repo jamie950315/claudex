@@ -404,22 +404,42 @@ test('invalid source configuration is rejected and empty candidate sets do not r
   assert.deepEqual(await resolve([], { threadId }), { turnIds: [], sourceIdentity: null, evidenceDigest: null });
 });
 
-test('the 0.162 start attribution and completion root are accepted only in their exact composer form', async t => {
+test('the 0.162 start attribution is accepted from any trigger, for a turn of the user and for an agent-initiated one', async t => {
   const attribution = () => ({ turn_id: turnId, turn_trigger: 'composer', parent_turn_id: null, initiating_agent_path: null, root_turn_id: turnId });
   const current = source => { source[1].payload.turn_attribution = attribution(); source[3].payload.root_turn_id = turnId; };
   assert.deepEqual((await run(await fixture(t, current))).turnIds, [turnId]);
-  // Observed for a prompt sent from the iOS remote and blocked locally.
-  assert.deepEqual((await run(await fixture(t, source => {
-    current(source); source[1].payload.turn_attribution.turn_trigger = 'remote_ios';
-  }))).turnIds, [turnId]);
+  // The trigger names where the turn was submitted; it is not content.
+  for (const trigger of ['remote_ios', 'queue', 'edit_user_message', 'send_user_message_async_question', 'goal', null])
+    assert.deepEqual((await run(await fixture(t, source => {
+      current(source); source[1].payload.turn_attribution.turn_trigger = trigger;
+    }))).turnIds, [turnId]);
+  // Observed in subagent threads: a parent turn, an agent path and another root.
+  const rootId = '00000000-0000-4000-8000-000000000009';
+  const agent = source => {
+    current(source);
+    Object.assign(source[1].payload.turn_attribution, { parent_turn_id: rootId, initiating_agent_path: '/root/worker_one', root_turn_id: rootId });
+    for (const index of [1, 2, 3]) source[index].payload.root_turn_id = rootId;
+  };
+  assert.deepEqual((await run(await fixture(t, agent))).turnIds, [turnId]);
   for (const mutate of [
-    source => { source[1].payload.turn_attribution.turn_trigger = 'agent'; },
-    source => { source[1].payload.turn_attribution.turn_trigger = 'queue'; },
+    source => { source[1].payload.turn_attribution.turn_trigger = 'Not A Trigger'; },
+    source => { source[1].payload.turn_attribution.turn_trigger = 7; },
     source => { source[1].payload.turn_attribution.parent_turn_id = nextId; },
     source => { source[1].payload.turn_attribution.turn_id = nextId; },
     source => { source[1].payload.turn_attribution.initiating_agent_path = '/root/agent'; },
     source => { source[1].payload.turn_attribution.extra = true; },
+    source => { source[1].payload.root_turn_id = nextId; },
     source => { source[3].payload.root_turn_id = nextId; },
     source => { source[3].payload.extra = true; },
   ]) await assert.rejects(run(await fixture(t, source => { current(source); mutate(source); })), /Native Codex empty turn/);
+  for (const mutate of [
+    source => { source[1].payload.turn_attribution.initiating_agent_path = null; },
+    source => { source[1].payload.turn_attribution.initiating_agent_path = 'root'; },
+    source => { source[1].payload.turn_attribution.parent_turn_id = turnId; },
+    source => { source[1].payload.turn_attribution.parent_turn_id = 'parent'; },
+    source => { source[1].payload.turn_attribution.root_turn_id = turnId; },
+    source => { source[2].payload.root_turn_id = turnId; },
+    source => { source[3].payload.root_turn_id = turnId; },
+    source => { for (const index of [1, 2, 3]) source[index].payload.root_turn_id = turnId; source[1].payload.turn_attribution.root_turn_id = turnId; },
+  ]) await assert.rejects(run(await fixture(t, source => { agent(source); mutate(source); })), /Native Codex empty turn/);
 });

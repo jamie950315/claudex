@@ -25,16 +25,23 @@ const CONTEXT_KINDS = {
   'additional_content.codex_apps_open_page': ['user', '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>', null],
 };
 // Codex 0.162 repeats the start identity in a turn_attribution record and the
-// root turn in the completion. The trigger names where the user submitted it:
-// the Desktop composer or, as observed, the iOS remote. Any other trigger and
-// every agent-initiated start stay refused.
-const USER_TRIGGERS = ['composer', 'remote_ios'];
+// root turn in the completion. The trigger only names where the turn was
+// submitted (composer, queue, edit_user_message, remote_ios, goal, null, ...)
+// and proves nothing about its content, so any is accepted. A turn of the
+// user's own is its own root with no parent or agent. The observed
+// agent-initiated form, seen only in subagent threads, names a parent turn, an
+// agent path under /root and another turn as its root. Mixed forms are refused.
 const startFields = started => Object.keys(started).every(key => START_FIELDS.includes(key) || key === 'turn_attribution')
-  && (started.turn_attribution === undefined
-    || keys(started.turn_attribution, ['turn_id', 'turn_trigger', 'parent_turn_id', 'initiating_agent_path', 'root_turn_id'])
+  && UUID.test(started.root_turn_id ?? '')
+  && (started.turn_attribution === undefined ? started.root_turn_id === started.turn_id
+    : keys(started.turn_attribution, ['turn_id', 'turn_trigger', 'parent_turn_id', 'initiating_agent_path', 'root_turn_id'])
       && started.turn_attribution.turn_id === started.turn_id && started.turn_attribution.root_turn_id === started.root_turn_id
-      && USER_TRIGGERS.includes(started.turn_attribution.turn_trigger) && started.turn_attribution.parent_turn_id === null
-      && started.turn_attribution.initiating_agent_path === null);
+      && (started.turn_attribution.turn_trigger === null || /^[a-z][a-z0-9_]{0,63}$/.test(started.turn_attribution.turn_trigger))
+      && (started.turn_attribution.parent_turn_id === null
+        ? started.turn_attribution.initiating_agent_path === null && started.root_turn_id === started.turn_id
+        : UUID.test(started.turn_attribution.parent_turn_id) && started.turn_attribution.parent_turn_id !== started.turn_id
+          && started.root_turn_id !== started.turn_id && typeof started.turn_attribution.initiating_agent_path === 'string'
+          && /^\/root(?:\/[A-Za-z0-9_.-]{1,128}){0,16}$/.test(started.turn_attribution.initiating_agent_path)));
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names) => object(value) && Object.keys(value).length === names.length
   && Object.keys(value).every(key => names.includes(key));
@@ -225,8 +232,8 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
       const end = rows.findIndex((row, index) => index > start && row?.type === 'event_msg' && row.payload?.type === 'task_started');
       const stop = end < 0 ? rows.length : end;
       const started = rows[start].payload;
-      if (!startFields(started)
-        || started.root_turn_id !== turn.id || started.started_at !== turn.startedAt)
+      const root = started.root_turn_id;
+      if (!startFields(started) || selectedIds.has(root) && root !== turn.id || started.started_at !== turn.startedAt)
         fail('empty turn start differs from the API.');
       // Fresh native chats may persist typed bootstrap/context messages even
       // when the user submission is locally blocked. They are not dialogue.
@@ -239,7 +246,7 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
           completed = row; completionIndex = index; break;
         }
         if (row?.type === 'turn_context') {
-          if (context || row.payload?.turn_id !== turn.id || row.payload.root_turn_id !== turn.id || row.payload.cwd !== cwd)
+          if (context || row.payload?.turn_id !== turn.id || row.payload.root_turn_id !== root || row.payload.cwd !== cwd)
             fail('empty turn context differs from the API.');
           context = row;
         } else if (row?.type === 'world_state') {
@@ -271,8 +278,9 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
         const payload = rows[index].payload;
         for (const field of ['thread_id', 'threadId'])
           if (payload[field] != null && payload[field] !== threadId) fail('empty turn has contradictory thread identity.');
-        for (const field of ['turnId', 'root_turn_id', 'rootTurnId'])
-          if (payload[field] != null && payload[field] !== turn.id) fail('empty turn has contradictory turn identity.');
+        if (payload.turnId != null && payload.turnId !== turn.id) fail('empty turn has contradictory turn identity.');
+        for (const field of ['root_turn_id', 'rootTurnId'])
+          if (payload[field] != null && payload[field] !== root) fail('empty turn has contradictory turn identity.');
         allowed.add(index);
       }
       for (let index = completionIndex + 1; index < stop; index++) {

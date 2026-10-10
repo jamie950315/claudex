@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.20 packages Claude Mod 0.8.22. Keep application and Mod versions
+Claudex.app 1.3.21 packages Claude Mod 0.8.22. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -321,9 +321,14 @@ bounded polling harness, not a production fallback.
   pair, next independent context and millisecond ordering; it never exempts
   activity within an empty candidate.
   Codex 0.162 adds a turn_attribution record to the start and root_turn_id to
-  the completion: accept only the exact form naming the same turn, with no
-  parent turn or initiating agent, whose trigger is a user submission: the
-  composer or the observed iOS remote (remote_ios). Other triggers stay refused.
+  the completion. By user decision the trigger (composer, queue, remote_ios,
+  goal, null, ...) is not checked beyond its token form: it names where a
+  turn was submitted, never its content. Two exact forms are accepted: a turn
+  of the user's own (its own root, no parent turn or agent) and the observed
+  agent-initiated one (a parent turn, an agent path under /root and another
+  root turn, which its context and completion must repeat). Mixed forms and
+  unknown attribution fields stay refused. Agent-initiated turns were only
+  seen in subagent threads, which are not synchronized, and never empty.
   Compare raw proof across both history reads. Empty controls never close a
   pending request, fabricate a reply, alter checkpoints or authorize history writes.
   An all-control new chat still waits for its first real completed dialogue.
