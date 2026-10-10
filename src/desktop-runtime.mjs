@@ -611,8 +611,9 @@ export class DesktopRuntime {
             if (!verifiedCheckpoint || data.common.messages.length < record.checkpoint.count
                 || fingerprint(data.common, record.checkpoint.count) !== record.checkpoint.digest)
               failImageEvidence('Retained native image evidence does not match its verified canonical checkpoint.');
-            if (imageEvidence.retainedRequests.some(request => request.messageIndex + offset < 0
-                || request.messageIndex + offset >= record.checkpoint.count))
+            const outside = imageEvidence.retainedRequests.filter(request => request.messageIndex + offset >= record.checkpoint.count);
+            if (imageEvidence.retainedRequests.some(request => request.messageIndex + offset < 0)
+                || outside.length && !await imageEvidence.inherits(outside))
               failImageEvidence('Retained native image evidence cannot supply a new message outside its verified checkpoint.');
             const positions = new Map(imageEvidence.localImageRollouts.flatMap(entry => entry.requests)
               .map(request => [JSON.stringify([request.turnId, request.itemId]), request.messageIndex + offset]));

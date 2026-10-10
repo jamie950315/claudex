@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.8 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.9 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1504,6 +1504,11 @@ required when the exact requested images are already completely proven by the
 authoritative/retained sources and the saved canonical checkpoint still matches;
 an origin still needed for any image remains mandatory. Image-free reads do not
 probe obsolete paths. Existing conflicting evidence is never ignored.
+A rollover can leave turns written after the last checkpoint in the previous
+rollout, which is read as the saved path. Such an image belongs to a new
+message only when the current rollout's declared history_base link to that
+exact file proves the same bytes within its ordinal and byte prefix; otherwise
+retained evidence still cannot supply a message outside its checkpoint.
 An image turn may close with its exact turn_aborted (reason interrupted) event
 instead of task_complete; the API reports it as an interrupted closed turn.
 Require exact translated completed-item

@@ -500,7 +500,7 @@ test('retained image recovery requires the saved canonical prefix, identity and 
   const outside = await rolloverFixture(t, { owned: true });
   await outside.rollover();
   const checkpoint = { count: outside.canonical.messages.length, digest: fingerprint(outside.canonical) };
-  await assert.rejects(outside.runtime.inspect({ ...outside.record, checkpoint }), /outside its verified checkpoint/);
+  await assert.rejects(outside.runtime.inspect({ ...outside.record, checkpoint }), /outside its verified checkpoint|invalid history_base reference/);
 
   const identity = await rolloverFixture(t);
   const second = await identity.rollover(), data = await identity.runtime.inspect(identity.record);
@@ -665,4 +665,30 @@ test('inherited history refuses mismatched offsets, ordinals, owners and ambiguo
   late.forkMeta.forked_from_ordinal_exclusive = 1;
   await late.save();
   await assert.rejects(late.resolve(), /lacks complete/);
+});
+
+test('a turn left in the previous rollout after the checkpoint is new only through the declared history_base prefix', async t => {
+  const f = await inheritedFixture(t), request = [{ turnId: f.turnId, item: f.item }];
+  const evidence = async () => {
+    let value;
+    await createCodexLocalImageResolver({ path: f.segmentPath, threadId: f.parentId, retainedPath: f.rootPath,
+      locateRollout: createCodexRolloutLocator(f.codexHome), onResolved: found => { value = found; } })(request,
+      { maxBytes: 1 << 20, threadId: f.parentId });
+    return value;
+  };
+  const rolled = await evidence();
+  // The previous path is read as retained evidence, which alone cannot supply a new message.
+  assert.equal(rolled.retainedRequests.length, 1);
+  assert.equal(await rolled.inherits(rolled.retainedRequests), true);
+  assert.equal(await rolled.inherits([]), false);
+  // A prefix ending before the image turn does not include it.
+  f.segment[0].payload.history_base = { thread_id: f.parentId, end_ordinal_exclusive: 1,
+    end_byte_offset: Buffer.byteLength(JSON.stringify(f.root[0]) + '\n') };
+  await f.save();
+  const before = await evidence();
+  assert.equal(await before.inherits(before.retainedRequests), false);
+  // Without a declared base the previous rollout stays retained evidence only.
+  delete f.segment[0].payload.history_base; await f.save();
+  const undeclared = await evidence();
+  assert.equal(await undeclared.inherits(undeclared.retainedRequests), false);
 });

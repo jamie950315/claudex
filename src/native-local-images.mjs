@@ -471,7 +471,27 @@ export function createCodexLocalImageResolver({ path, threadId, retainedRollouts
       // current rollout itself references, not retained earlier evidence.
       retainedRequests: requests.filter(request => origins.get(requestKey(request)) !== path
         && !links?.has(origins.get(requestKey(request)))),
-      nativeMessageCount: options.nativeMessageCount });
+      nativeMessageCount: options.nativeMessageCount,
+      // A rollover leaves turns written after the last checkpoint in the
+      // previous rollout. They are new messages only when the current
+      // rollout's own history_base prefix of that file proves the same images.
+      async inherits(outside) {
+        if (!locateRollout || !outside.length) return false;
+        const known = await inherited(), groups = new Map();
+        for (const value of outside) {
+          const key = requestKey({ turnId: value.turnId, item: { id: value.itemId ?? value.item?.id } });
+          const sourcePath = origins.get(key), link = known.get(sourcePath);
+          if (!link || !knownRequests.has(key)) return false;
+          groups.set(sourcePath, [...groups.get(sourcePath) ?? [], key]);
+        }
+        for (const [sourcePath, selected] of groups) {
+          const link = known.get(sourcePath);
+          const images = await createSingleRolloutImageResolver({ path: sourcePath, threadId, sourceThreadId: link.threadId,
+            prefix: link.prefix, maxBytes, maxRowBytes, io, allowAbsent: true })(selected.map(key => knownRequests.get(key)), options);
+          if (selected.some(key => !images.has(key) || !isDeepStrictEqual(images.get(key), found.get(key)))) return false;
+        }
+        return true;
+      } });
     return found;
   };
 }
