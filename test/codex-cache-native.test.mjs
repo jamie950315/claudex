@@ -58,6 +58,15 @@ test('inspection is metadata-only and owner handles are closed without dispatch'
   assert.equal(f.closes(), 1); assert.equal(f.ownerCloses(), 1);
 });
 
+test('runtimes after the first reviewed version are accepted by structure, earlier ones refused', async () => {
+  for (const userAgent of ['Codex Desktop/0.162.0-alpha.17.2 (Mac OS 27.0.1; arm64) unknown (claudex; 1.0.3)', 'codex/0.160.1', 'codex/1.0.0']) {
+    const f = fixture({ userAgent });
+    assert.equal((await f.native.inspect(target)).nativeVersion, userAgent.match(/\/(\S+)/)[1]);
+  }
+  for (const userAgent of ['codex/0.159.9', 'codex/0.160.0-alpha.1', 'codex/unknown'])
+    await assert.rejects(fixture({ userAgent }).native.inspect(target), /unsupported native version/);
+});
+
 test('loaded, exact cwd, persistent primary and version guards reject before any resume', async () => {
   for (const options of [{ loaded: false }, { thread: { cwd: '/tmp/other' } }, { thread: { ephemeral: true } },
     { thread: { parentThreadId: 'parent' } }, { thread: { forkedFromId: 'ancestor' } }, { thread: { source: 'subAgent' } },

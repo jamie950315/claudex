@@ -209,7 +209,7 @@ and separately read `nativeCache`. No automatic retry or rollback is performed.
 ## Codex Desktop experimental best-effort
 
 Codex warming is separately opt-in through a native chat command or the CLI,
-not the Claude Mod pane. It requires native runtime `0.160.0` and an already-loaded,
+not the Claude Mod pane. It requires native runtime `0.160.0` or later and an already-loaded,
 persistent primary Desktop conversation. Forks, subagents, unloaded threads and
 threads with an active goal are refused (`active-goal-unsupported`). The adapter
 uses the existing native owner; it does not start a second owner, fork, invoke

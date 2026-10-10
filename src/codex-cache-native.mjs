@@ -97,7 +97,10 @@ function version(result) {
   // This is an independent cache-observer compatibility gate, not the sync allowlist.
   const match = typeof result?.userAgent === 'string'
     ? /(?:^|[\s/])([0-9]+\.[0-9]+\.[0-9]+(?:[-+][^\s;)]+)?)(?=$|[\s;)])/.exec(result.userAgent) : null;
-  if (match?.[1] !== '0.160.0') fail('unsupported native version');
+  // 0.160.0 is the first reviewed schema. Later runtimes are accepted by the
+  // exact settings, metadata and usage validation below, not by their number.
+  const [major, minor, patch] = (match?.[1] ?? '').split(/[-+]/)[0].split('.').map(Number);
+  if (!match || match[1] !== '0.160.0' && !(major > 0 || minor > 160 || minor === 160 && patch > 0)) fail('unsupported native version');
   return match[1];
 }
 

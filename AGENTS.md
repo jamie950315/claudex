@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.9 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.10 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -415,8 +415,10 @@ model/effort or resumes expired work. See docs/cache-warming.md for operation an
 native activation limits. The older developer probe remains separate evidence.
 
 Codex Desktop warming is a separate experimental best-effort opt-in through the
-CLI or a separately trusted UserPromptSubmit command hook. Only native 0.160.0 loaded
-persistent primary threads qualify; reject forks, subagents and active goals.
+CLI or a separately trusted UserPromptSubmit command hook. Only loaded persistent
+primary threads on native 0.160.0 or later qualify (0.160.0 is the first reviewed
+schema; a later runtime is accepted by the exact settings, metadata and usage
+validation, never by its number alone); reject forks, subagents and active goals.
 This does not expand the synchronization allowlist. Dispatch once through the
 same native owner without navigation, new owners, API keys or model/effort
 overrides. Composer draft visibility and per-turn no-tools enforcement are
