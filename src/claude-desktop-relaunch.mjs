@@ -12,8 +12,8 @@ export const CLAUDE_DESKTOP_BUNDLE_ID = 'com.anthropic.claudefordesktop';
 /** A Claude Desktop start that fetches a new frontend evaluates it before the
  * cache watcher can patch it, so the adapters stay unloaded until the next
  * start. By user decision that next start is made automatically, once, while
- * the application has only just been opened: nothing has been sent, no Code
- * session process exists and the process is younger than `windowMs`. Outside
+ * the application has only just been opened: nothing has been sent and the
+ * process is younger than `windowMs`. Outside
  * that window the resource stays restart-required and nothing is restarted;
  * that decision carries the time of the last write, so a reader can tell the
  * user to restart and stop saying so once Desktop has been started after it.
@@ -71,15 +71,9 @@ export function createClaudeDesktopRelaunch({ root, run = execute, now = () => D
     if (attempts.some(attempt => attempt.entry === entry)) return manual('already restarted for this frontend');
     if (attempts.filter(attempt => attempt.at >= now() - 600_000).length >= 2) return manual('restart limit reached');
     if (now() - startedAt > windowMs) return manual('Desktop is no longer newly started');
-    // Any Code session process under this Desktop, or any prompt submitted
-    // since it started, is work that a restart could interrupt.
-    const family = new Set([main.pid]);
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const item of processes) if (family.has(item.ppid) && !family.has(item.pid)) { family.add(item.pid); grew = true; }
-    }
-    if (processes.some(item => item.pid !== main.pid && family.has(item.pid) && item.command.includes('/claude-code/')))
-      return manual('a Code session is running');
+    // A prompt submitted since it started is work a restart could interrupt.
+    // A Code session process is not: Desktop starts one for the session it
+    // reopens, before the user has done anything.
     const inbox = await readJSON(join(root, 'sync-events', 'inbox.json'), { entries: {} });
     if (Object.values(inbox.entries ?? {}).some(event => event.side === 'claude' && event.kind === 'started' && event.at >= startedAt))
       return manual('Claude activity since start');

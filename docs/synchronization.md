@@ -546,7 +546,7 @@ Value flow is bounded to twelve bindings. Unknown forms remain skipped.
 A Claude Desktop start that fetches a new frontend evaluates it before the
 watcher can patch it, so its adapters load only at the following start. Claudex
 makes that following start automatically, once, while Desktop has just been
-opened: it is at most one minute old, has no Code session process, no prompt
+opened: it is at most one minute old, no prompt
 has been submitted since it started and every enabled adapter is installed for
 the new frontend. It asks the application to quit, never signals it, and reopens
 it. It does not repeat for the same frontend, restarts at most twice in ten

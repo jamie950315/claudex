@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.4 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.5 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -2016,8 +2016,9 @@ reception. By user decision src/claude-desktop-relaunch.mjs makes that restart
 once, automatically, only while Claude Desktop has just been opened: every
 enabled adapter is installed for the entry and at least one was written since
 the watcher started, the single verified Desktop process is at most one minute
-old, no Code session process exists beneath it, no Claude prompt was submitted
-since it started and Claudex is not stopped. It quits through the application
+old, no Claude prompt was submitted since it started and Claudex is not stopped.
+A Code session process beneath it is not work: Desktop starts one for the
+session it reopens (observed eight seconds after launch, before any input). It quits through the application
 (never a signal), reopens it, records the attempt in claude-relaunch.json and
 never repeats for the same frontend entry or more than twice in ten minutes. A
 declined quit is final. Outside that window the user performs the restart and

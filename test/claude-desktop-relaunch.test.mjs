@@ -72,7 +72,6 @@ test('work, age, identity and lifecycle each keep the resource restart-required 
   for (const [options, reason, state = 'restart-required'] of [
     [{ age: 61_000 }, 'Desktop is no longer newly started'],
     [{ age: -5_000 }, undefined, 'current'],
-    [{ extra: [[300, 100, '/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup --'], [301, 300, SESSION]] }, 'a Code session is running'],
     [{ entries: { a: { side: 'claude', kind: 'started', at: NOW - 5_000 } } }, 'Claude activity since start'],
     [{ bundleId: 'com.example.other' }, 'unrecognized Desktop application'],
     [{ mains: 2 }, 'multiple Desktop processes'],
@@ -88,8 +87,10 @@ test('work, age, identity and lifecycle each keep the resource restart-required 
   const disabled = await fixture(t), manual = await disabled.relaunch.consider(pass('index-b.js', installed(true)), { automatic: false });
   assert.equal(manual.reason, 'automatic restart is disabled'); assert.equal(disabled.count('/usr/bin/osascript'), 0);
   assert.equal((await (await fixture(t, { age: 58_000 })).relaunch.consider(pass('index-b.js', installed(true)))).state, 'relaunched');
-  // A session elsewhere on the machine and a prompt from before this start are not this Desktop's work.
-  const f = await fixture(t, { extra: [[400, 1, SESSION]], entries: { a: { side: 'claude', kind: 'started', at: NOW - 60_000 },
+  // Desktop starts a Code session process for the session it reopens; that process, a session
+  // elsewhere on the machine and a prompt from before this start are not work to protect.
+  const f = await fixture(t, { extra: [[300, 100, '/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup --'], [301, 300, SESSION],
+    [400, 1, SESSION]], entries: { a: { side: 'claude', kind: 'started', at: NOW - 60_000 },
     b: { side: 'codex', kind: 'started', at: NOW } } });
   assert.equal((await f.relaunch.consider(pass('index-b.js', installed(true)))).state, 'relaunched');
 });
