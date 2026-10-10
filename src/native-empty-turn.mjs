@@ -24,6 +24,14 @@ const CONTEXT_KINDS = {
   'environments.environment_context': ['user', '<environment_context>', '</environment_context>'],
   'additional_content.codex_apps_open_page': ['user', '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>', null],
 };
+// Codex 0.162 repeats the start identity in a turn_attribution record and the
+// root turn in the completion. Only the observed composer form is accepted.
+const startFields = started => Object.keys(started).every(key => START_FIELDS.includes(key) || key === 'turn_attribution')
+  && (started.turn_attribution === undefined
+    || keys(started.turn_attribution, ['turn_id', 'turn_trigger', 'parent_turn_id', 'initiating_agent_path', 'root_turn_id'])
+      && started.turn_attribution.turn_id === started.turn_id && started.turn_attribution.root_turn_id === started.root_turn_id
+      && started.turn_attribution.turn_trigger === 'composer' && started.turn_attribution.parent_turn_id === null
+      && started.turn_attribution.initiating_agent_path === null);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names) => object(value) && Object.keys(value).length === names.length
   && Object.keys(value).every(key => names.includes(key));
@@ -125,7 +133,7 @@ function nextAppIngress(rows, index, stop, completed, cwd, selectedIds) {
   if (!Number.isFinite(callTime) || recordTime(outputRow) !== callTime || Math.floor(outputMeta.create_time * 1000) !== callTime
     || !Number.isFinite(recordTime(completed)) || Math.floor(recordTime(completed) / 1000) !== completed.payload.completed_at
     || recordTime(completed) >= callTime || !Number.isFinite(startTime) || callTime >= startTime || !object(start)
-    || startRow.type !== 'event_msg' || start.type !== 'task_started' || Object.keys(start).some(key => !START_FIELDS.includes(key))
+    || startRow.type !== 'event_msg' || start.type !== 'task_started' || !startFields(start)
     || !UUID.test(start.turn_id ?? '') || selectedIds.has(start.turn_id) || start.root_turn_id !== start.turn_id
     || !Number.isSafeInteger(start.started_at) || Math.floor(callTime / 1000) !== start.started_at
     || Math.floor(startTime / 1000) !== start.started_at
@@ -214,7 +222,7 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
       const end = rows.findIndex((row, index) => index > start && row?.type === 'event_msg' && row.payload?.type === 'task_started');
       const stop = end < 0 ? rows.length : end;
       const started = rows[start].payload;
-      if (Object.keys(started).some(key => !START_FIELDS.includes(key))
+      if (!startFields(started)
         || started.root_turn_id !== turn.id || started.started_at !== turn.startedAt)
         fail('empty turn start differs from the API.');
       // Fresh native chats may persist typed bootstrap/context messages even
@@ -250,8 +258,7 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
         } else fail('empty turn has semantic or unrecognized native records.');
       }
       if (!context || !completed
-        || Object.keys(completed.payload).length !== COMPLETE_FIELDS.length
-        || Object.keys(completed.payload).some(key => !COMPLETE_FIELDS.includes(key))
+        || !keys(completed.payload, [...COMPLETE_FIELDS, ...(Object.hasOwn(completed.payload, 'root_turn_id') ? ['root_turn_id'] : [])])
         || completed.payload.turn_id !== turn.id || completed.payload.last_agent_message !== null
         || completed.payload.started_at !== turn.startedAt || completed.payload.completed_at !== turn.completedAt
         || completed.payload.duration_ms !== turn.durationMs)

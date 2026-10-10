@@ -403,3 +403,18 @@ test('invalid source configuration is rejected and empty candidate sets do not r
   const resolve = createNativeEmptyTurnResolver({ path: '/missing/rollout', threadId, cwd });
   assert.deepEqual(await resolve([], { threadId }), { turnIds: [], sourceIdentity: null, evidenceDigest: null });
 });
+
+test('the 0.162 start attribution and completion root are accepted only in their exact composer form', async t => {
+  const attribution = () => ({ turn_id: turnId, turn_trigger: 'composer', parent_turn_id: null, initiating_agent_path: null, root_turn_id: turnId });
+  const current = source => { source[1].payload.turn_attribution = attribution(); source[3].payload.root_turn_id = turnId; };
+  assert.deepEqual((await run(await fixture(t, current))).turnIds, [turnId]);
+  for (const mutate of [
+    source => { source[1].payload.turn_attribution.turn_trigger = 'agent'; },
+    source => { source[1].payload.turn_attribution.parent_turn_id = nextId; },
+    source => { source[1].payload.turn_attribution.turn_id = nextId; },
+    source => { source[1].payload.turn_attribution.initiating_agent_path = '/root/agent'; },
+    source => { source[1].payload.turn_attribution.extra = true; },
+    source => { source[3].payload.root_turn_id = nextId; },
+    source => { source[3].payload.extra = true; },
+  ]) await assert.rejects(run(await fixture(t, source => { current(source); mutate(source); })), /Native Codex empty turn/);
+});

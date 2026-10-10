@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.10 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.11 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -320,6 +320,9 @@ bounded polling harness, not a production fallback.
   ingress before the next native task_started requires its exact envelope,
   pair, next independent context and millisecond ordering; it never exempts
   activity within an empty candidate.
+  Codex 0.162 adds a turn_attribution record to the start and root_turn_id to
+  the completion: accept only the exact composer form naming the same turn,
+  with no parent turn or initiating agent.
   Compare raw proof across both history reads. Empty controls never close a
   pending request, fabricate a reply, alter checkpoints or authorize history writes.
   An all-control new chat still waits for its first real completed dialogue.
