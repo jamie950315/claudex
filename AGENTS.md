@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.6 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.7 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -2040,7 +2040,12 @@ no longer newly started. No pass may follow a manual restart, so the reader ends
 the request: the status model asks only while the running Desktop was launched
 at or before requiredSince, shows "Restart Claude to finish updating" as an
 attention state below real synchronization problems and sends that text as the
-notification. A Desktop started after the last write is `current`. The production watcher
+notification. A Desktop started after the last write is `current`. When the
+controller reports `relaunched` or `current`, maintenance republishes the pass
+with those adapters as load-not-verified. A Desktop restart changes no frontend
+file, so unrelated cache writes ask the controller again (at most every ten
+seconds, only while a restart-required label is published); this inspects no
+cache entry and never reports another write. The production watcher
 supplies the controller; tests inject process data and never touch a real
 application. Composer drafts are not observable from outside the renderer.
 Unsupported structural/API changes remain explicit skipped adapters.

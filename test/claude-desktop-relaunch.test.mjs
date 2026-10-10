@@ -152,3 +152,37 @@ test('a restart request survives a watcher restart and ends once Desktop was sta
   assert.equal(await (await fixture(t, { age: 61_000, root: other.root })).relaunch.consider(pass('index-s.js', installed(false))), null);
   assert.equal((await other.record()).pending, undefined);
 });
+
+test('restart-required labels end when the consumer reports that Desktop loaded the written files', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-claude-relaunch-')));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(join(root, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data'), { recursive: true, mode: 0o700 });
+  const required = Object.fromEntries(Object.entries(installed(true)).map(([name, adapter]) => [name, { ...adapter, activation: 'restart-required' }]));
+  const labels = status => Object.values(status.adapters).map(adapter => `${adapter.changed}/${adapter.activation}`);
+  for (const immediate of [true, false]) {
+    const seen = [], statuses = []; let notify, calls = 0, loaded = immediate;
+    const maintenance = await startClaudeRendererMaintenance({ root, home: root, settleMs: 0, refreshMs: 0, stopState: async () => null,
+      watchFactory: (_path, listener) => { notify = listener; return { on() {}, close() {} }; },
+      maintain: async () => { calls++; return { entry: { asset: 'index-new.js' }, missingChunks: 0, adapters: structuredClone(required) }; },
+      onStatus: value => statuses.push(value),
+      afterPass: summary => { seen.push(summary); return { loaded }; } });
+    if (immediate) {
+      // The automatic restart was made within the pass.
+      assert.deepEqual(labels(statuses.at(-1)), Array(4).fill('false/load-not-verified')); assert.equal(statuses.length, 2);
+    } else {
+      assert.deepEqual(labels(statuses.at(-1)), Array(4).fill('true/restart-required'));
+      // The user restarts Desktop: no frontend file changes, only unrelated cache writes arrive.
+      notify('change', '0000000000000000_0'); await new Promise(resolve => setTimeout(resolve, 20));
+      assert.deepEqual(labels(statuses.at(-1)), Array(4).fill('true/restart-required'));
+      assert.equal(seen.at(-1).adapters.commands.changed, false, 'a refresh never reports another write');
+      loaded = true;
+      notify('change', '0000000000000000_0'); await new Promise(resolve => setTimeout(resolve, 20));
+      assert.deepEqual(labels(statuses.at(-1)), Array(4).fill('false/load-not-verified')); assert.equal(statuses.at(-1).state, 'ready');
+      const count = seen.length;
+      notify('change', '0000000000000000_0'); await new Promise(resolve => setTimeout(resolve, 20));
+      assert.equal(seen.length, count, 'settled labels ask nothing further');
+    }
+    assert.equal(calls, 1, 'no cache inspection is added');
+    await maintenance.close();
+  }
+});

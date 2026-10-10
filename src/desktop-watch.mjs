@@ -320,6 +320,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           claudeDesktopRestart = decision?.state === 'restart-required' && Number.isFinite(decision.requiredSince)
             ? { entry: decision.entry, requiredSince: decision.requiredSince, reason: decision.reason,
               ...(Number.isFinite(decision.notBefore) ? { notBefore: decision.notBefore } : {}) } : null;
+          return { loaded: ['relaunched', 'current'].includes(decision?.state) };
         }),
         onStatus: updateRendererStatus });
       await status({ waiting: null, waitingContexts: [], blockedSourceCount: 0, blockedSources: [] });

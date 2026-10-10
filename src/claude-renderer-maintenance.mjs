@@ -32,7 +32,7 @@ const heldReason = 'Desktop integration is waiting for Claudex to resume and fin
  */
 export async function startClaudeRendererMaintenance({ root, home = homedir(), folders = true, signal, onStatus = () => {},
   settleMs = 1000, watchFactory = watch, watchAppStop, maintain = ensureClaudeRendererAdapters, stopState = readAppStopState,
-  writeStatus = writeDiagnosticJSON, afterPass, settlingMs = 60_000 } = {}) {
+  writeStatus = writeDiagnosticJSON, afterPass, settlingMs = 60_000, refreshMs = 10_000 } = {}) {
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 60_000) throw new Error('Invalid renderer maintenance settle interval');
   let closed = false, dirty = false, pending, timer, watcher, stopWatcher, closing, notificationsFailed = false, publication = Promise.resolve();
   const files = new Set(); let anonymous = true, observations = new Map();
@@ -65,6 +65,20 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
     });
     return publication.then(() => summary);
   };
+  // An optional consumer of coherent passes (the one-time Desktop restart
+  // after a frontend update). Its failure is not a cache failure. When it
+  // reports that Desktop has since loaded the written files, the published
+  // restart-required labels are replaced; nothing in the cache is touched.
+  let lastCoherent = null, refreshedAt = 0;
+  const awaitingRestart = summary => Object.values(summary?.adapters ?? {}).some(adapter => adapter.activation === 'restart-required');
+  const consume = async summary => {
+    if (!afterPass || closed || signal?.aborted) return;
+    const outcome = await (async () => afterPass(summary))().catch(() => null);
+    if (outcome?.loaded !== true || !awaitingRestart(summary) || closed) return;
+    const { updatedAt: _updatedAt, lastFailure: _lastFailure, ...rest } = summary;
+    lastCoherent = await present({ ...rest, adapters: Object.fromEntries(Object.entries(summary.adapters).map(([name, adapter]) => [name,
+      adapter.activation === 'restart-required' ? { ...adapter, changed: false, activation: 'load-not-verified' } : adapter])) });
+  };
   const checkHold = async () => {
     if (closed || signal?.aborted) throw new Error('Renderer maintenance stopped');
     if ((await stopState(root))?.stopped) throw new Error('Renderer maintenance held by app stop');
@@ -94,7 +108,15 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           if (!changed) for (const filename of names) {
             if (await changedClaudeFrontendHint({ home, filename, observations })) { changed = true; break; }
           }
-          if (!changed) continue;
+          if (!changed) {
+            // No pass follows a Desktop restart that changes no frontend file.
+            // Its other cache writes let the consumer notice that restart.
+            if (awaitingRestart(lastCoherent) && Date.now() - refreshedAt >= refreshMs) {
+              refreshedAt = Date.now();
+              await consume({ ...lastCoherent, adapters: Object.fromEntries(Object.entries(lastCoherent.adapters).map(([name, adapter]) => [name, { ...adapter, changed: false }])) });
+            }
+            continue;
+          }
           phase = 'discovery-or-installation';
           const result = await maintain({ root, home, folders }, { beforeReplace: checkHold, beforePublish: checkHold });
           // A drained publication may report the intentional shutdown fence as
@@ -118,13 +140,12 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           const checking = transient && (settling({ state: 'degraded', ...details }) || retryScheduled);
           const summary = await present({ state: notificationsFailed ? 'skipped' : checking ? 'checking' : refused ? 'degraded' : 'ready',
             ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : checking ? { reason: checkingReason } : {}), ...details });
-          // An optional consumer of coherent passes (the one-time Desktop
-          // restart after a frontend update). Its failure is not a cache failure.
-          if (afterPass && !closed && !signal?.aborted) await (async () => afterPass(summary))().catch(() => {});
+          lastCoherent = summary.state === 'ready' ? summary : null;
+          await consume(summary);
         } catch (error) {
           // A prior successful observation cannot prove a failed pass healthy.
           // The next JS hint must revalidate, including unchanged known assets.
-          observations = new Map();
+          observations = new Map(); lastCoherent = null;
           const code = failureCode(error);
           const held = error.message === 'Renderer maintenance held by app stop';
           cacheRevalidationNeeded = transientCodes.has(code);
