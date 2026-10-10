@@ -355,7 +355,7 @@
   "Warming stopped for that conversation.": "Mantenimento interrotto per quella conversazione.",
   "Cache settings saved. Running warm-ups are unchanged.": "Impostazioni cache salvate. I mantenimenti in corso restano invariati.",
   "When you send a message": "Quando invii un messaggio",
-  "Keep warming and restart the timer": "Continua il mantenimento e riavvia il timer",
+  "Keep warming and start the limit over": "Continua il mantenimento e ricomincia il limite",
   "Stop warming": "Interrompi il mantenimento",
-  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "Cosa succede a una conversazione mantenuta attiva quando le invii un tuo messaggio. Continua: la prossima richiesta parte dalla tua risposta e il limite resta invariato. Interrompi: il mantenimento termina con quel messaggio. Vale anche per i mantenimenti già in corso."
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the limit you chose starts over from the reply, so a four-hour limit runs four more hours and a number of requests is counted again; a limit given as a clock time keeps that time. A limit that has already run out is not started again. Stop: warming ends with that message. It applies to warm-ups already running too.": "Cosa succede a una conversazione mantenuta attiva quando le invii un tuo messaggio. Continua: il limite scelto ricomincia dalla risposta; un limite di quattro ore dura altre quattro ore e il numero di richieste viene contato di nuovo; un limite indicato come orario mantiene quell’orario. Un limite già esaurito non ricomincia. Interrompi: il mantenimento termina con quel messaggio. Vale anche per i mantenimenti già in corso."
 }

@@ -59,6 +59,7 @@ function validate(state, provider) {
       && typeof p.enabled === 'boolean' && integer(p.until) && integer(p.updatedAt)
       && integer(p.maxRefreshes, 1, 500) && (p.maxReadTokens === null || integer(p.maxReadTokens, 1, 100000000))
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 10080)
+      && (p.fixedEnd === undefined || p.fixedEnd === true) && (p.restartedAt === undefined || integer(p.restartedAt))
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
       && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
       && (provider === 'codex'
@@ -146,7 +147,9 @@ export class CacheWarmManager {
     return b && b.cwd === input.cwd && b.instanceId === input.instanceId ? b : null;
   }
   totals(p) {
-    const rows = this.attempts(p.sessionId, p.generation);
+    // A message of the user's own restarts the limit: only attempts made
+    // since then count against it.
+    const rows = this.attempts(p.sessionId, p.generation).filter(a => a.createdAt >= (p.restartedAt ?? 0));
     return { refreshes: rows.length,
       readTokens: rows.reduce((sum, a) => sum + (a.actual?.cacheReadTokens ?? (['rejected', 'revoked'].includes(a.state) ? 0 : a.reservedReadTokens)), 0),
       outputTokens: rows.reduce((sum, a) => sum + (a.actual?.outputTokens ?? (['rejected', 'revoked'].includes(a.state) ? 0 : a.reservedOutputTokens)), 0) };
@@ -218,12 +221,14 @@ export class CacheWarmManager {
     // This field is validated for older clients, but is never an active limit.
     const { maxMinutes = 60, maxRefreshes = 3, maxReadTokens = 250000, maxOutputTokens = 256 } = input;
     requireValue(integer(maxMinutes, 1, 10080) && integer(maxRefreshes, 1, 500)
-      && (maxReadTokens === null || integer(maxReadTokens, 1, 100000000)) && integer(maxOutputTokens, 1, 1000000));
+      && (maxReadTokens === null || integer(maxReadTokens, 1, 100000000)) && integer(maxOutputTokens, 1, 1000000)
+      && (input.fixedEnd === undefined || input.fixedEnd === true));
     const stopped = input.enabled ? await this.stopped() : false;
     return this.transaction(async () => {
       requireValue(!this.closed || !input.enabled, 'Cache-warming broker is stopping.');
       const payload = JSON.stringify({ provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
         maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens, ...(input.ttl === undefined ? {} : { ttl: input.ttl }),
+        ...(input.fixedEnd ? { fixedEnd: true } : {}),
         ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 25 } : {}) });
       const saved = input.requestId && this.state.requests.find(r => r.requestId === input.requestId);
       if (saved) {
@@ -259,6 +264,8 @@ export class CacheWarmManager {
         generation: (p?.generation ?? 0) + 1,
         ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 25 } : { ttlPreference: input.ttl ?? '1h' }),
         maxMinutes, maxRefreshes, maxReadTokens: null, maxOutputTokens,
+        // An until= limit ends at its clock time; a restart never moves it.
+        ...(input.fixedEnd ? { fixedEnd: true } : {}),
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
       // Disabling revokes authorization without erasing this enrollment's
@@ -269,7 +276,8 @@ export class CacheWarmManager {
       if (input.enabled) this.state.attempts = this.state.attempts.filter(a => a.sessionId !== input.sessionId
         || a.generation >= value.generation || !SETTLED.has(a.state));
       if (p && !input.enabled) Object.assign(p, { enabled: false, updatedAt: this.now(), reason: 'disabled' });
-      else if (p) Object.assign(p, value); else { p = value; this.state.policies.push(p); }
+      else if (p) { delete p.fixedEnd; delete p.restartedAt; Object.assign(p, value); }
+      else { p = value; this.state.policies.push(p); }
       if (input.requestId) this.state.requests.push({ requestId: input.requestId, sessionId: p.sessionId, generation: p.generation, payload });
       await this.save(); return this.result(p, { replayed: false });
     });
@@ -365,14 +373,28 @@ export class CacheWarmManager {
       }
       const p = this.policy(input.sessionId);
       if (p?.enabled && (replaced || input.phase === 'ended')) { p.enabled = false; p.reason = 'native-binding-changed'; changed = true; }
-      // By user decision a message of the user's own can end the schedule
-      // instead of only restarting its timer. A response that is not a warm
-      // request, in a later turn than the one that first gave evidence, is that
-      // message; the first turn after enrollment only supplies the evidence.
+      // By user decision a message of the user's own either ends the schedule
+      // or restarts its whole limit. A response that is not a warm request, in
+      // a later turn than the one that first gave evidence, is that message;
+      // the first turn after enrollment only supplies the evidence.
       if (p?.enabled && sample && !repeated && !ownAttemptId && !replaced && old?.evidenceEpoch !== undefined
-        && input.epoch > old.evidenceEpoch && this.onUserMessage() === 'stop') {
-        p.enabled = false; p.reason = 'user-message'; changed = true;
-        for (const a of this.attempts(input.sessionId)) if (a.state === 'reserved') { a.state = 'revoked'; a.reason = 'user-message'; }
+        && input.epoch > old.evidenceEpoch) {
+        if (this.onUserMessage() === 'stop') {
+          p.enabled = false; p.reason = 'user-message'; changed = true;
+          for (const a of this.attempts(input.sessionId)) if (a.state === 'reserved') { a.state = 'revoked'; a.reason = 'user-message'; }
+        } else if (sample.stopReason !== 'tool_use' && successful(sample) && this.now() < p.until
+          && this.totals(p).refreshes < p.maxRefreshes) {
+          // Counted again from the reply, not from each tool step before it. A
+          // schedule that already used up its time or its requests has ended
+          // and is not revived. The duration starts over; a clock time stays.
+          p.restartedAt = this.now(); p.updatedAt = this.now(); changed = true;
+          if (!p.fixedEnd) p.until = this.now() + p.maxMinutes * 60000;
+          // Earlier settled attempts no longer count; drop them once the
+          // ledger is half used, as a new enrollment would.
+          if (this.state.attempts.length > MAX_ATTEMPTS / 2)
+            this.state.attempts = this.state.attempts.filter(a => a.sessionId !== input.sessionId
+              || a.createdAt >= p.restartedAt || !SETTLED.has(a.state));
+        }
       }
       // A normal coding turn may make several tool-use requests before its
       // final answer. These busy steps refresh usage evidence, not the timer;

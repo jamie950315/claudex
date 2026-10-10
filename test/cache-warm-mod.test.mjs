@@ -130,6 +130,14 @@ test('the shortcut turns rounds, a duration or a clock time into the confirmed b
     const configured = f.calls.findLast(call => JSON.stringify(call).includes('maxRefreshes'));
     assert.ok(JSON.stringify(configured).includes(`"maxRefreshes":${expected.maxRefreshes}`), JSON.stringify(configured));
     assert.ok(JSON.stringify(configured).includes(`"maxMinutes":${expected.maxMinutes}`));
+    assert.ok(!JSON.stringify(configured).includes('fixedEnd'));
+  }
+  {
+    // Only a clock time is a fixed end, which a restart of the limit keeps.
+    const f = await fixture(), at = new Date(await f.host.now() + 3 * 3600000);
+    const result = await f.client.sessionCommand(f.host, ['on', `until=${at.getHours()}:${String(at.getMinutes()).padStart(2, '0')}`], origin);
+    assert.equal(result.state, 'enabled');
+    assert.ok(JSON.stringify(f.calls.findLast(call => JSON.stringify(call).includes('maxRefreshes'))).includes('"fixedEnd":true'));
   }
   const f = await fixture();
   for (const words of [['on', 'for=10m'], ['on', '5m', 'for=40h'], ['on', 'rounds=0'], ['on', 'for=1h', 'until=23:00'], ['on', 'rounds=2', 'for=3h'], ['on', 'rounds=200'], ['off', 'rounds=2']])

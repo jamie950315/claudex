@@ -651,3 +651,55 @@ test('a message of the user ends the schedule only when that is the chosen setti
     } else assert.equal((await f.claim({ epoch: 3 })).claimed, false);
   }
 });
+
+test('the reply to a message of the user starts the whole limit over, unless the limit has run out', async t => {
+  const warm = async (f, epoch) => {
+    const claimed = await f.claim({ epoch }); assert.equal(claimed.claimed, true, claimed.reason);
+    await f.check(claimed.attempt.id, { epoch });
+    await f.observe({ phase: 'busy', epoch: epoch + 1, attemptId: claimed.attempt.id }); await f.receipt(claimed.attempt.id, 'submitted');
+    f.tick(1000);
+    return f.observe({ epoch: epoch + 1, attemptId: claimed.attempt.id,
+      sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0, attemptId: claimed.attempt.id }) });
+  };
+  for (const fixedEnd of [false, true]) {
+    const f = await fixture(t);
+    await f.observe({ sample: f.sample() });
+    const enabled = await f.enable({ maxMinutes: 60, maxRefreshes: 2, ...(fixedEnd ? { fixedEnd: true } : {}) });
+    const until = enabled.policy.until; assert.equal(until, f.now() + 3600000);
+    f.tick(239000);
+    assert.equal((await warm(f, 0)).policy.totals.refreshes, 1);
+    // The tool steps of the user's turn restart nothing; its reply does.
+    f.tick(60000); await f.observe({ phase: 'busy', epoch: 2 });
+    f.tick(1000);
+    const step = await f.observe({ phase: 'busy', epoch: 2, sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0, stopReason: 'tool_use' }) });
+    assert.equal(step.policy.until, until); assert.equal(step.policy.totals.refreshes, 1);
+    f.tick(1000);
+    const reply = await f.observe({ epoch: 2, sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0 }) });
+    assert.equal(reply.policy.enabled, true); assert.equal(reply.reason, 'scheduled');
+    assert.equal(reply.policy.totals.refreshes, 0); assert.equal(reply.policy.restartedAt, f.now());
+    // A duration is counted again from the reply; a clock time stays.
+    assert.equal(reply.policy.until, fixedEnd ? until : f.now() + 3600000);
+    // The restart is durable and a valid journal.
+    const saved = JSON.parse(await readFile(join(f.root, 'cache-warm.json'), 'utf8'));
+    assert.equal(saved.policies[0].restartedAt, f.now()); assert.equal(saved.policies[0].fixedEnd, fixedEnd ? true : undefined);
+    await new CacheWarmManager({ root: f.root, now: f.now }).initialize();
+    // Both requests of the new count are available again.
+    f.tick(239000); assert.equal((await warm(f, 2)).policy.totals.refreshes, 1);
+    f.tick(239000);
+    const used = await warm(f, 3);
+    assert.equal(used.policy.totals.refreshes, 2); assert.equal(used.reason, 'refresh-limit');
+    // A schedule that used up its requests has ended: a message does not revive it.
+    f.tick(60000); await f.observe({ phase: 'busy', epoch: 5 }); f.tick(1000);
+    const late = await f.observe({ epoch: 5, sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0 }) });
+    assert.equal(late.reason, 'refresh-limit'); assert.equal(late.policy.totals.refreshes, 2);
+    assert.equal(late.policy.until, used.policy.until);
+    // A new enrollment clears the restart mark and the fixed end.
+    const again = await f.enable({ maxMinutes: 30 });
+    assert.equal(again.policy.restartedAt, undefined); assert.equal(again.policy.fixedEnd, undefined);
+    // Out of time: nothing is extended.
+    f.tick(1800000); await f.observe({ phase: 'busy', epoch: 6 }); f.tick(1000);
+    const expired = await f.observe({ epoch: 6, sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0 }) });
+    assert.equal(expired.reason, 'duration-limit'); assert.equal(expired.policy.until, again.policy.until);
+  }
+  await assert.rejects((async () => { const f = await fixture(t); await f.observe(); return f.enable({ fixedEnd: false }); })());
+});

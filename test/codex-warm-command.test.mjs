@@ -23,8 +23,8 @@ test('Codex warm command parsing is exact and never interprets quoted or embedde
   const noon = new Date(2026, 0, 1, 12, 0).getTime();
   assert.deepEqual(parseCodexWarmCommand('/claudex:warm on rounds=4', noon), { action: 'on', bounds: { maxMinutes: 10080, maxRefreshes: 4 }, defaulted: false });
   assert.deepEqual(parseCodexWarmCommand('/claudex:warm on for=2h', noon), { action: 'on', bounds: { maxMinutes: 120, maxRefreshes: 4 }, defaulted: false });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=13:30', noon), { action: 'on', bounds: { maxMinutes: 90, maxRefreshes: 3 }, defaulted: false });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=2:12:00', noon), { action: 'on', bounds: { maxMinutes: 1440, maxRefreshes: 57 }, defaulted: false });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=13:30', noon), { action: 'on', bounds: { maxMinutes: 90, maxRefreshes: 3, fixedEnd: true }, defaulted: false });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=2:12:00', noon), { action: 'on', bounds: { maxMinutes: 1440, maxRefreshes: 57, fixedEnd: true }, defaulted: false });
   for (const text of ['/claudex:warm on for=10m', '/claudex:warm on rounds=0', '/claudex:warm on for=2h until=15:00', '/claudex:warm on rounds=2 for=2h', '/claudex:warm on rounds=404', '/claudex:warm off rounds=2'])
     assert.throws(() => parseCodexWarmCommand(text, noon));
   for (const text of ['/claudex:warm on 5m', '/claudex:warm on ttl=1h', '/claudex:warm off --session other',

@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.3.19 and Claude Mod 0.8.21 provide bounded, per-conversation cache warming.
+Claudex 1.3.20 and Claude Mod 0.8.22 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.21 companion and
+Use the intended existing conversation with a freshly loaded 0.8.22 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -70,8 +70,12 @@ Claude and Codex alike. Three places edit it:
   saves any `rounds=`, `for=` or `until=HH:MM` value.
 
 The same window has **When you send a message**, for both apps: keep warming
-and restart the timer (the default; the limit stays as it was), or stop
-warming with that message. It applies to warm-ups already running.
+and start the limit over (the default), or stop warming with that message. It
+applies to warm-ups already running. Starting over counts the chosen limit
+again from the reply to your message: `for=4h` runs four more hours and
+`rounds=3` allows three more requests. An `until=` limit keeps its clock time
+and only its request count starts again. A limit that has already run out is
+not started again; a reply that ends in an error leaves the limit as it was.
 
 The default limit applies only when `/claudex:warm on` is given no limit, and changes
 neither the TTL nor a warm-up already running. A saved limit that does not fit

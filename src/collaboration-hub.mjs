@@ -440,7 +440,7 @@ export class CollaborationHub extends EventEmitter {
       const action = method.slice('codex_cache_warm_'.length);
       const allowed = {
         list: ['sessionId', 'cwd'], off: ['sessionId', 'cwd'], confirm: ['confirmationId', 'bestEffort', 'sessionId', 'cwd'],
-        prepare: ['sessionId', 'cwd', 'bestEffort', 'refreshMinutes', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
+        prepare: ['sessionId', 'cwd', 'bestEffort', 'refreshMinutes', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens', 'fixedEnd'],
       }[action];
       if (!allowed || Object.keys(params).some(key => !allowed.includes(key))) throw new Error('Unsupported Codex cache-warm fields.');
       if (this.closed && !['list', 'off'].includes(action)) throw new Error('Broker is stopping.');
@@ -484,7 +484,7 @@ export class CollaborationHub extends EventEmitter {
       }
       const allowed = {
         list: ['sessionId', 'cwd'],
-        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'ttl', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],
+        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'ttl', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens', 'fixedEnd'],
         observe: ['sessionId', 'cwd', 'instanceId', 'sequence', 'phase', 'epoch', 'sample', 'attemptId'],
         claim: ['sessionId', 'cwd', 'instanceId', 'epoch'],
         check: ['sessionId', 'cwd', 'instanceId', 'epoch', 'attemptId'],

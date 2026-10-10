@@ -355,7 +355,7 @@
   "Warming stopped for that conversation.": "Warmhaltung für diese Unterhaltung gestoppt.",
   "Cache settings saved. Running warm-ups are unchanged.": "Cache-Einstellungen gespeichert. Laufende Warmhaltungen bleiben unverändert.",
   "When you send a message": "Wenn du eine Nachricht sendest",
-  "Keep warming and restart the timer": "Weiter warmhalten und Timer neu starten",
+  "Keep warming and start the limit over": "Weiter warmhalten und Limit neu beginnen",
   "Stop warming": "Warmhaltung stoppen",
-  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "Was mit einer warmgehaltenen Unterhaltung geschieht, wenn du ihr selbst eine Nachricht sendest. Weiter: Die nächste Warmhalte-Anfrage zählt ab deiner Antwort, das Limit bleibt. Stoppen: Die Warmhaltung endet mit dieser Nachricht. Gilt auch für bereits laufende Warmhaltungen."
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the limit you chose starts over from the reply, so a four-hour limit runs four more hours and a number of requests is counted again; a limit given as a clock time keeps that time. A limit that has already run out is not started again. Stop: warming ends with that message. It applies to warm-ups already running too.": "Was mit einer warmgehaltenen Unterhaltung geschieht, wenn du ihr selbst eine Nachricht sendest. Weiter: Das gewählte Limit beginnt ab der Antwort neu; ein Vier-Stunden-Limit läuft vier weitere Stunden und die Anzahl der Anfragen wird neu gezählt; ein als Uhrzeit angegebenes Limit behält diese Uhrzeit. Ein bereits abgelaufenes Limit wird nicht neu gestartet. Stoppen: Die Warmhaltung endet mit dieser Nachricht. Gilt auch für bereits laufende Warmhaltungen."
 }

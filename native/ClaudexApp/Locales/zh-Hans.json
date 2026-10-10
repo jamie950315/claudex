@@ -355,7 +355,7 @@
   "Warming stopped for that conversation.": "已停止该对话的保温。",
   "Cache settings saved. Running warm-ups are unchanged.": "缓存设置已保存。进行中的保温不受影响。",
   "When you send a message": "你发送消息时",
-  "Keep warming and restart the timer": "继续保温并重新计时",
+  "Keep warming and start the limit over": "继续保温并重新计算上限",
   "Stop warming": "停止保温",
-  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "保温中的对话收到你自己发送的消息时如何处理。继续：下一次保温请求从该次回复重新计时，上限保持不变。停止：保温在那条消息结束。对已在进行的保温同样适用。"
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the limit you chose starts over from the reply, so a four-hour limit runs four more hours and a number of requests is counted again; a limit given as a clock time keeps that time. A limit that has already run out is not started again. Stop: warming ends with that message. It applies to warm-ups already running too.": "保温中的对话收到你自己发送的消息时如何处理。继续：你选的上限从该次回复重新算起，四小时的上限会再保温四小时，次数也从头计算；以时刻指定的上限仍在那个时刻结束。已经用完的上限不会重新开始。停止：保温在那条消息结束。对已在进行的保温同样适用。"
 }

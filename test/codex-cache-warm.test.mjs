@@ -240,3 +240,18 @@ test('native events arriving inside dispatch are attributed after the exact retu
   await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
   assert.equal((await f.service.list()).attempts[0].state, 'verified');
 });
+
+test('the reply to a Codex message of the user restarts the limit and its expiry timer', async t => {
+  const f = await fixture(t); const enabled = await f.enable({ maxRefreshes: 2, maxMinutes: 60 }); await f.seed();
+  const before = (await f.service.list()).policies[0];
+  assert.equal(before.until, enabled.policy.until);
+  f.state.phase = 'busy';
+  await f.emit({ type: 'start', turnId: 'user', startedAt: f.now });
+  await f.usage('user', next); f.state.phase = 'idle';
+  await f.emit({ type: 'complete', turnId: 'user', status: 'completed', completedAt: f.now });
+  const after = (await f.service.list()).policies[0];
+  assert.equal(after.reason, 'scheduled'); assert.ok(after.until > before.until);
+  assert.equal(after.until, after.restartedAt + 3600000);
+  const live = f.timers.filter(timer => !timer.cancelled).map(timer => timer.due);
+  assert.ok(live.includes(after.until)); assert.ok(!live.includes(before.until));
+});

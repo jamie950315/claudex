@@ -104,12 +104,12 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
 
         stack.addArrangedSubview(heading("When you send a message", scope: "Claude Code and Codex"))
         messagePicker = picker("When you send a message")
-        for (value, title) in zip(WarmSettings.messageModes, ["Keep warming and restart the timer", "Stop warming"]) {
+        for (value, title) in zip(WarmSettings.messageModes, ["Keep warming and start the limit over", "Stop warming"]) {
             messagePicker.addItem(withTitle: L(title))
             messagePicker.lastItem?.representedObject = value
         }
         stack.addArrangedSubview(messagePicker)
-        stack.addArrangedSubview(wrapping(L("What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.")))
+        stack.addArrangedSubview(wrapping(L("What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the limit you chose starts over from the reply, so a four-hour limit runs four more hours and a number of requests is counted again; a limit given as a clock time keeps that time. A limit that has already run out is not started again. Stop: warming ends with that message. It applies to warm-ups already running too.")))
         let third = separator()
         stack.addArrangedSubview(third)
 

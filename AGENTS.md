@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.19 packages Claude Mod 0.8.21. Keep application and Mod versions
+Claudex.app 1.3.20 packages Claude Mod 0.8.22. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -321,8 +321,9 @@ bounded polling harness, not a production fallback.
   pair, next independent context and millisecond ordering; it never exempts
   activity within an empty candidate.
   Codex 0.162 adds a turn_attribution record to the start and root_turn_id to
-  the completion: accept only the exact composer form naming the same turn,
-  with no parent turn or initiating agent.
+  the completion: accept only the exact form naming the same turn, with no
+  parent turn or initiating agent, whose trigger is a user submission: the
+  composer or the observed iOS remote (remote_ios). Other triggers stay refused.
   Compare raw proof across both history reads. Empty controls never close a
   pending request, fabricate a reply, alter checkpoints or authorize history writes.
   An all-control new chat still waits for its first real completed dialogue.
@@ -390,9 +391,12 @@ past their end, by exact session and directory, and its Stop uses the
 controller's existing off/disable request for exactly that one. It never
 enables warming, and read-only modes can look but not save or stop.
 By user decision the same record holds `warmOnUserMessage`: `continue` (the
-default: a message of the user restarts the timer from its reply and the
-limit stays) or `stop` (that message ends the schedule with reason
-`user-message`). Both managers read it when the response arrives, so it
+default: the reply to a message of the user starts the whole chosen limit
+over: `restartedAt` is set, only later attempts count, and `until` moves to
+that reply plus maxMinutes unless the policy is `fixedEnd`, which an `until=`
+limit sets so its clock time stays; a tool step, a failed reply and a limit
+already out of time or requests restart nothing) or `stop` (that message ends
+the schedule with reason `user-message`). Both managers read it when the response arrives, so it
 applies to running schedules. The message is a response that is not a warm
 request, in a later turn than the one that first gave the binding evidence;
 the first turn after enrollment only supplies evidence, and a turn start or a

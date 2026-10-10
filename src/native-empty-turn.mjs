@@ -25,12 +25,15 @@ const CONTEXT_KINDS = {
   'additional_content.codex_apps_open_page': ['user', '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>', null],
 };
 // Codex 0.162 repeats the start identity in a turn_attribution record and the
-// root turn in the completion. Only the observed composer form is accepted.
+// root turn in the completion. The trigger names where the user submitted it:
+// the Desktop composer or, as observed, the iOS remote. Any other trigger and
+// every agent-initiated start stay refused.
+const USER_TRIGGERS = ['composer', 'remote_ios'];
 const startFields = started => Object.keys(started).every(key => START_FIELDS.includes(key) || key === 'turn_attribution')
   && (started.turn_attribution === undefined
     || keys(started.turn_attribution, ['turn_id', 'turn_trigger', 'parent_turn_id', 'initiating_agent_path', 'root_turn_id'])
       && started.turn_attribution.turn_id === started.turn_id && started.turn_attribution.root_turn_id === started.root_turn_id
-      && started.turn_attribution.turn_trigger === 'composer' && started.turn_attribution.parent_turn_id === null
+      && USER_TRIGGERS.includes(started.turn_attribution.turn_trigger) && started.turn_attribution.parent_turn_id === null
       && started.turn_attribution.initiating_agent_path === null);
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value, names) => object(value) && Object.keys(value).length === names.length

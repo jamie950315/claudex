@@ -16,8 +16,10 @@ function bounds(p) {
   if (p.maxReadTokens !== undefined && p.maxReadTokens !== null
     && (!Number.isSafeInteger(p.maxReadTokens) || p.maxReadTokens < 1 || p.maxReadTokens > 100000000))
     throw new Error('Invalid Codex cache-warm maxReadTokens.');
+  if (p.fixedEnd !== undefined && p.fixedEnd !== true) throw new Error('Invalid Codex cache-warm fixedEnd.');
   const value = { refreshMinutes: p.refreshMinutes ?? 25, maxMinutes: p.maxMinutes ?? 60,
-    maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: null, maxOutputTokens: p.maxOutputTokens ?? 256 };
+    maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: null, maxOutputTokens: p.maxOutputTokens ?? 256,
+    ...(p.fixedEnd ? { fixedEnd: true } : {}) };
   for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 10080, maxRefreshes: 500, maxOutputTokens: 1000000 }))
     if (!Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > max) throw new Error(`Invalid Codex cache-warm ${key}.`);
   return value;
@@ -105,9 +107,7 @@ export class CodexCacheWarmer {
         const reply = await this.manager.configure({ provider: 'codex', ...this.fields(b), ...bounds(p), bestEffort: true,
           enabled: true, requestId: `codex-confirm:${p.confirmationId}` });
         b.enabled = reply.policy.enabled;
-        b.expiry = this.after(Math.max(0, reply.policy.until - this.now()), () => {
-          void this.enqueue(() => this.valid(b) && this.fail(b, 'duration-limit', false)).catch(() => { this.closed = true; });
-        });
+        this.expire(b, reply.policy.until);
         b.handle.listen();
         return { ...reply, bestEffort: true, risks, awaitingFreshUsage: true };
       } catch (error) { await this.detach(b); throw error; }
@@ -197,7 +197,15 @@ export class CodexCacheWarmer {
     b.enabled = b.enabled && reply.policy?.enabled === true;
     b.reason = reply.reason;
     if (!b.enabled || !Number.isFinite(reply.nextAt)) { await this.detach(b); return; }
+    // A message of the user's own may have restarted the limit.
+    if (reply.policy.until !== b.until) this.expire(b, reply.policy.until);
     this.schedule(b, reply.nextAt);
+  }
+  expire(b, until) {
+    b.expiry?.cancel(); b.until = until;
+    b.expiry = this.after(Math.max(0, until - this.now()), () => {
+      void this.enqueue(() => this.valid(b) && this.fail(b, 'duration-limit', false)).catch(() => { this.closed = true; });
+    });
   }
   schedule(b, nextAt) {
     this.cancel(b);

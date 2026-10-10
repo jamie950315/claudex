@@ -54,13 +54,13 @@ test('one of rounds, a duration or a clock time becomes the existing bounds', ()
   assert.deepEqual(parse(['for=3h']).bounds, { maxMinutes: 180, maxRefreshes: 3 });
   assert.deepEqual(parse(['for=1h30m']).bounds, { maxMinutes: 90, maxRefreshes: 1 });
   assert.deepEqual(parse(['for=168h']).bounds, { maxMinutes: 10080, maxRefreshes: 183 });
-  assert.deepEqual(parse(['until=18:30']).bounds, { maxMinutes: 390, maxRefreshes: 7 });
+  assert.deepEqual(parse(['until=18:30']).bounds, { maxMinutes: 390, maxRefreshes: 7, fixedEnd: true });
   // A clock time already passed today is the same time tomorrow.
-  assert.deepEqual(parse(['until=11:00']).bounds, { maxMinutes: 1380, maxRefreshes: 25 });
-  assert.deepEqual(parse(['until=12:20'], 4).bounds, { maxMinutes: 20, maxRefreshes: 5 });
+  assert.deepEqual(parse(['until=11:00']).bounds, { maxMinutes: 1380, maxRefreshes: 25, fixedEnd: true });
+  assert.deepEqual(parse(['until=12:20'], 4).bounds, { maxMinutes: 20, maxRefreshes: 5, fixedEnd: true });
   // A day of the month: later this month, else the next month that has that day.
-  assert.deepEqual(parse(['until=31:18:30']).bounds, { maxMinutes: 1830, maxRefreshes: 33 });
-  assert.deepEqual(parse(['until=2:09:00']).bounds, { maxMinutes: 4140, maxRefreshes: 75 });
+  assert.deepEqual(parse(['until=31:18:30']).bounds, { maxMinutes: 1830, maxRefreshes: 33, fixedEnd: true });
+  assert.deepEqual(parse(['until=2:09:00']).bounds, { maxMinutes: 4140, maxRefreshes: 75, fixedEnd: true });
   assert.throws(() => parse(['until=20:09:00']), /more than 168 hours away/);
   assert.throws(() => parseWarmLimits(['until=31:09:00'], { intervalMinutes: 55, now: new Date(2026, 0, 31, 12, 0).getTime() }), /more than 168 hours away/);
   for (const words of [['rounds=0'], ['rounds=501'], ['rounds=1000'], ['for='], ['for=169h'], ['for=0m'], ['for=1.5h'],

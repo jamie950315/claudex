@@ -48,12 +48,13 @@ export function parseWarmLimits(words, { intervalMinutes, now }) {
     if (minutes > WARM_MAX_MINUTES) throw new Error(`until=${seen.get('until')} is more than ${WARM_MAX_HOURS} hours away.`);
   }
   if (minutes < 1 || minutes > WARM_MAX_MINUTES) throw invalid();
+  const fixedEnd = seen.has('until') ? { fixedEnd: true } : {};
   if (minutes < intervalMinutes)
     throw new Error(`No warm request fits in ${minutes} min: the first one is due ${intervalMinutes} min after a reply.`);
   const fitting = Math.floor(minutes / intervalMinutes);
   if (fitting > WARM_MAX_ROUNDS)
     throw new Error(`${minutes} min would take ${fitting} warm requests; the limit is ${WARM_MAX_ROUNDS} (${WARM_MAX_ROUNDS * intervalMinutes} min at this interval).`);
-  return { rest, bounds: { maxMinutes: minutes, maxRefreshes: fitting } };
+  return { rest, bounds: { maxMinutes: minutes, maxRefreshes: fitting, ...fixedEnd } };
 }
 const number = value => Number.isSafeInteger(value) && value >= 0;
 const timestamp = value => Number.isFinite(value) && value > 0 && !Number.isNaN(new Date(value).getTime());

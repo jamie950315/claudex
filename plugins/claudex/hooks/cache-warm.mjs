@@ -54,6 +54,8 @@ export function parseCacheWarmBounds(words = []) {
       if (seen.has('ttl') || !['1h', '5m'].includes(value)) throw new Error('Use ttl=1h or ttl=5m exactly once.');
       seen.add('ttl'); result.ttl = value; continue;
     }
+    // Set only by an until= limit: its end is a clock time a restart keeps.
+    if (word === 'fixedEnd=true' && !seen.has('fixedEnd')) { seen.add('fixedEnd'); result.fixedEnd = true; continue; }
     const match = /^(maxMinutes|maxRefreshes|maxOutputTokens)=([1-9][0-9]*)$/.exec(word);
     if (!match || seen.has(match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new Error('Use unique maxMinutes, maxRefreshes, maxOutputTokens positive integer bounds.');
     seen.add(match[1]); result[match[1]] = Number(match[2]);
