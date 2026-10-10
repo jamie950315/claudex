@@ -5,7 +5,7 @@ import { access, mkdir, open, lstat } from 'node:fs/promises';
 import { fromCommon, toCommon } from 'txcript';
 import { hash, snapshot, publishExclusive } from './storage.mjs';
 import { portableMessages } from './history.mjs';
-import { claudeCompaction, claudeCompactionHistory } from './compaction.mjs';
+import { claudeCompaction, claudeCompactionHistory, withoutRepersistedRows } from './compaction.mjs';
 import { parallelToolGraphParents } from './claude-parallel-tools.mjs';
 
 export function projectDirectory(claudeHome, cwd) {
@@ -173,7 +173,8 @@ function withoutRewoundBranches(rows, parallelParents, children) {
 }
 
 export function decodeClaude(text, { preserveCompactionHistory = false, authenticatePreservedPacket } = {}) {
-  const rows = text.split('\n').filter(Boolean).map(JSON.parse);
+  const parsed = text.split('\n').filter(Boolean).map(JSON.parse);
+  const rows = typeof authenticatePreservedPacket === 'function' ? parsed : withoutRepersistedRows(parsed);
   const compact = preserveCompactionHistory ? claudeCompactionHistory(text, rows, authenticatePreservedPacket) : claudeCompaction(text, rows);
   const main = (compact?.rows ?? rows).filter(row => !row.isSidechain);
   const ids = new Set(main.filter(row => row.uuid).map(row => row.uuid));

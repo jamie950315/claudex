@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { hash } from './storage.mjs';
 
 export const summaryText = text => `[Imported native compaction summary; earlier verbatim history is not included.]\n${text}`;
@@ -70,6 +71,31 @@ export function claudeCompaction(text, rows) {
     rows: [boundary, ...tail.map(row => row === summary ? { ...row, message: { ...row.message, content: summaryText(readable) } } : row)],
     metadata: boundaryMetadata(text, rows, index, 'claude'),
   };
+}
+
+// Fields native rewrites when it persists a row it already persisted: the
+// relinked parent, the prompt and slug of the rewriting turn, the display copy
+// of a tool result and the usage counters. Everything else must be equal.
+const stable = ({ parentUuid, promptId, slug, toolUseResult, ...row }) => row.message && typeof row.message === 'object'
+  ? { ...row, message: (({ usage, ...message }) => message)(row.message) } : row;
+
+/** Claude Code 2.1.295 /compact was observed appending, before its new
+ * boundary, a second copy of rows from an earlier generation: same uuid, type,
+ * time and message. Such a copy says nothing new, so the first record stays
+ * the history and the copy becomes an inert placeholder at its position (line
+ * ordinals and native bytes are unchanged). A row that reuses an identity with
+ * any other difference is not a copy and keeps failing as ambiguous. Only
+ * native originals are read this way: an owned history holds bridge packets,
+ * each delivered once, and keeps refusing every repeated identity.
+ */
+export function withoutRepersistedRows(rows) {
+  const first = new Map();
+  return rows.map(row => {
+    if (row.isSidechain || typeof row.uuid !== 'string' || !row.uuid) return row;
+    const known = first.get(row.uuid);
+    if (!known) { first.set(row.uuid, row); return row; }
+    return isDeepStrictEqual(stable(known), stable(row)) ? { type: 'claudex-repersisted-record' } : row;
+  });
 }
 
 /** Owned Desktop histories retain their authenticated earlier packets. A

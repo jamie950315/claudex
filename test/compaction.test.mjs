@@ -106,6 +106,35 @@ test('native readable compaction crosses a saved checkpoint and resumes both nat
   } finally { await native.close(); }
 });
 
+test('rows native persists a second time before a later /compact are inert copies', () => {
+  const at = { sessionId: id, cwd: '/tmp' };
+  const row = (uuid, parentUuid, type, text, extra = {}) => ({ uuid, parentUuid, type, ...at, timestamp: `t-${uuid}`,
+    message: { role: type, content: [{ type: 'text', text }], usage: { input_tokens: 1 } }, ...extra });
+  const boundary = (uuid, logicalParentUuid, head, summary) => ({ type: 'system', subtype: 'compact_boundary', uuid,
+    parentUuid: null, logicalParentUuid, ...at, compactMetadata: {
+      preservedSegment: { headUuid: head, anchorUuid: summary, tailUuid: logicalParentUuid },
+      preservedMessages: { anchorUuid: summary, uuids: [head, logicalParentUuid], allUuids: [head, logicalParentUuid] } } });
+  const summary = (uuid, parent) => row(uuid, parent, 'user', 'Summary text', { isCompactSummary: true, isVisibleInTranscriptOnly: true });
+  const first = [row('q0', null, 'user', 'First'), row('a0', 'q0', 'assistant', 'One'),
+    boundary('b1', 'a0', 'q0', 's1'), summary('s1', 'b1'),
+    row('q1', 's1', 'user', 'Second', { promptId: 'p1', toolUseResult: { stdout: 'long' } }), row('a1', 'q1', 'assistant', 'Two')];
+  // The observed rewrite: the first boundary, its summary, the relinked
+  // preserved rows and the following generation, with volatile fields changed.
+  const copies = (change = value => value) => [first[2], { ...first[3], promptId: 'p9' },
+    { ...first[0], parentUuid: 's1', slug: 'later' }, { ...first[1], message: { ...first[1].message, usage: { input_tokens: 9 } } },
+    change({ ...first[4], promptId: 'p9', toolUseResult: { stdout: '' } }), first[5]];
+  const rest = [boundary('b2', 'a1', 'q1', 's2'), summary('s2', 'b2'), row('q2', 's2', 'user', 'Third'), row('a2', 'q2', 'assistant', 'Three')];
+  const expected = decodeClaude(jsonl([...first, ...rest]), { preserveCompactionHistory: true });
+  const result = decodeClaude(jsonl([...first, ...copies(), ...rest]), { preserveCompactionHistory: true });
+  assert.deepEqual(result.messages.map(message => message.content), expected.messages.map(message => message.content));
+  assert.equal(result.messages.length, 8);
+  // A reused identity with other content is not a copy.
+  for (const change of [value => ({ ...value, message: { ...value.message, content: [{ type: 'text', text: 'Other' }] } }),
+    value => ({ ...value, timestamp: 'later' }), value => ({ ...value, type: 'assistant' })])
+    assert.throws(() => decodeClaude(jsonl([...first, ...copies(change), ...rest]), { preserveCompactionHistory: true }),
+      /ambiguous|preserved-segment|summary/);
+});
+
 test('a native original retains a /compact preserved segment that only references its existing prefix', () => {
   const at = { sessionId: id, cwd: '/tmp' };
   const row = (uuid, parentUuid, type, text, extra = {}) => ({ uuid, parentUuid, type, ...at,
