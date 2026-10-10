@@ -56,9 +56,12 @@ test('a newly started idle Desktop is restarted once after every adapter is writ
   assert.equal((await f.record()).attempts.at(-1).outcome, 'relaunched');
   // The restarted Desktop loads the patched files; nothing is written, nothing repeats.
   assert.equal(await f.relaunch.consider(pass('index-new.js', installed(false))), null);
-  // A manual restart after a later write is recognized without another automatic one.
-  assert.equal((await f.relaunch.consider(pass('index-new.js', installed(true)))).reason, 'already restarted for this frontend');
-  assert.equal(f.count('/usr/bin/osascript'), 1);
+  // A file of the same frontend that arrives after that restart earns a second one; a third stays with the user.
+  const late = { ...installed(false), commands: { status: 'installed', asset: 'commands.js', changed: true } };
+  assert.equal((await f.relaunch.consider(pass('index-new.js', late))).state, 'relaunched');
+  assert.equal((await f.relaunch.consider(pass('index-new.js', late))).reason, 'restart limit reached');
+  assert.equal(f.count('/usr/bin/osascript'), 2);
+  assert.deepEqual((await f.record()).attempts.map(attempt => attempt.outcome), ['relaunched', 'relaunched']);
 });
 
 test('nothing is restarted when adapters were already installed or the pass is not coherent', async t => {
@@ -102,7 +105,7 @@ test('a declined quit is never forced or repeated, and restarts are bounded acro
   const result = await declined.relaunch.consider(pass('index-c.js', installed(true)));
   assert.equal(result.reason, 'Desktop declined to quit'); assert.equal(declined.count('/usr/bin/open'), 0);
   assert.equal((await declined.record()).attempts[0].outcome, 'quit-declined');
-  assert.equal((await declined.relaunch.consider(pass('index-c.js', installed(true)))).reason, 'already restarted for this frontend');
+  assert.equal((await declined.relaunch.consider(pass('index-c.js', installed(true)))).reason, 'Desktop declined an earlier restart');
   assert.equal(declined.count('/usr/bin/osascript'), 1);
 
   const f = await fixture(t);

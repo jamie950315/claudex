@@ -153,6 +153,11 @@ export function commandCatalogPatchContract(source, original, b) {
   const ast = syntax(source), orig = syntax(original);
   const helper = ast.body.pop();
   assert.equal(helper.type, 'FunctionDeclaration'); assert.equal(helper.id.name, '__cldxCommandCatalog');
+  // The optional load line is one contained console call and nothing else.
+  const line = ast.body.at(-1), logged = line?.type === 'TryStatement' && line.block.body.length === 1 ? line.block.body[0].expression : null;
+  if (logged?.callee?.object?.name === 'console' && logged.callee.property?.name === 'warn' && logged.arguments.length === 1
+    && logged.arguments[0].left?.value === '[Claudex commands] loaded ' && typeof logged.arguments[0].right?.value === 'string'
+    && line.handler?.body.body.length === 0 && !line.finalizer) ast.body.pop();
   const fn = only(nodes(ast, n => n.type === b.fn.type && n.start === b.fn.start), 'catalogue query');
   const call = fn.body.body[0].argument;
   assert.equal(call.callee.name, '__cldxCommandCatalog'); assert.equal(call.arguments.length, 2);

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.7 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.8 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -2029,8 +2029,11 @@ old, no Claude prompt was submitted since it started and Claudex is not stopped.
 A Code session process beneath it is not work: Desktop starts one for the
 session it reopens (observed eight seconds after launch, before any input). It quits through the application
 (never a signal), reopens it, records the attempt in claude-relaunch.json and
-never repeats for the same frontend entry or more than twice in ten minutes. A
-declined quit is final. Outside that window the user performs the restart and
+never restarts more than twice in ten minutes. Each restart answers one write
+and Desktop must be newly started, so that limit ends any loop after two
+restarts; a frontend may use both, which loads a file that arrived after the
+first. A declined quit, or one whose outcome was never recorded, is final for
+its frontend. Outside that window the user performs the restart and
 the resource stays restart-required; no other automatic reload or quit exists.
 rendererAdapters.relaunchAfterUpdate: false disables only the automatic restart.
 Whenever the user must restart instead, the decision is published as watcher
@@ -2050,7 +2053,8 @@ supplies the controller; tests inject process data and never touch a real
 application. Composer drafts are not observable from outside the renderer.
 Unsupported structural/API changes remain explicit skipped adapters.
 
-Each resource logs its bounded loaded asset name; owner/chat wake also log started.
+Each resource logs its bounded loaded asset name, the command catalogue as
+`[Claudex commands] loaded <asset>` when its module is evaluated; owner/chat wake also log started.
 These lines prove bootstrap execution, never native receipt or owner reconnect.
 Owner wake keeps API availability, exact stdio lookup/connection and selection/
 submit received, matched, ignored, called, accepted/deferred or fixed failure

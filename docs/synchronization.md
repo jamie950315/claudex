@@ -549,8 +549,8 @@ makes that following start automatically, once, while Desktop has just been
 opened: it is at most one minute old, no prompt
 has been submitted since it started and every enabled adapter is installed for
 the new frontend. It asks the application to quit, never signals it, and reopens
-it. It does not repeat for the same frontend, restarts at most twice in ten
-minutes and treats a declined quit as final; `claude-relaunch-status.json` shows
+it. It restarts at most twice in ten minutes (a second restart loads a file
+that arrived after the first) and treats a declined quit as final; `claude-relaunch-status.json` shows
 the last decision. Otherwise the resource stays `restart-required` until you
 restart Claude yourself; the app then shows "Restart Claude to finish
 updating" and sends a notification, which ends once Claude has been reopened.

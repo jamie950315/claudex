@@ -17,8 +17,8 @@ export const CLAUDE_DESKTOP_BUNDLE_ID = 'com.anthropic.claudefordesktop';
  * that window the resource stays restart-required and nothing is restarted;
  * that decision carries the time of the last write, so a reader can tell the
  * user to restart and stop saying so once Desktop has been started after it.
- * It never force-quits, never repeats for the same frontend entry and never
- * touches native histories or sessions.
+ * It never force-quits, restarts at most twice in ten minutes, never asks again
+ * after a declined quit and never touches native histories or sessions.
  */
 export function createClaudeDesktopRelaunch({ root, run = execute, now = () => Date.now(), windowMs = 60_000,
   quitTimeoutMs = 60_000, sleep = delay, stopState = readAppStopState, alive = pid => {
@@ -82,7 +82,10 @@ export function createClaudeDesktopRelaunch({ root, run = execute, now = () => D
     if (adapters.some(([, adapter]) => adapter.status !== 'installed'))
       return report({ state: 'restart-required', entry, reason: 'adapters still incomplete', requiredSince: writtenAt, notBefore: startedAt + windowMs });
     if (!automatic) return manual('automatic restart is disabled');
-    if (attempts.some(attempt => attempt.entry === entry)) return manual('already restarted for this frontend');
+    // Each restart answers one write and Desktop must be newly started, so the
+    // limit below already ends any loop after two restarts. Only a refusal, or
+    // a quit whose outcome was never recorded, is final for its frontend.
+    if (attempts.some(attempt => attempt.entry === entry && attempt.outcome !== 'relaunched')) return manual('Desktop declined an earlier restart');
     if (attempts.filter(attempt => attempt.at >= now() - 600_000).length >= 2) return manual('restart limit reached');
     if (now() - startedAt > windowMs) return manual('Desktop is no longer newly started');
     // A prompt submitted since it started is work a restart could interrupt.

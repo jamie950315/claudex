@@ -447,10 +447,13 @@ export function commandCatalogAnchors(source, graph) {
   return { fn, result, session, native };
 }
 
-export function transformCommandCatalog(source, b) {
+/** The load line the other adapters also write: it shows that the renderer
+ * evaluated this module, never that a catalogue query ran. */
+export const commandCatalogLoadLine = assetName => `try{console.warn("[Claudex commands] loaded "+${JSON.stringify(assetName)})}catch{}`;
+export function transformCommandCatalog(source, b, assetName) {
   return applyEdits(source, [
     replace(b.result, `__cldxCommandCatalog(await (${code(source, b.result)}),${b.session})`),
-    insert(source.length, `\n;${exposeClaudexCommand.toString().replace('exposeClaudexCommand', '__cldxCommandCatalog')}\n`),
+    insert(source.length, `\n;${typeof assetName === 'string' ? commandCatalogLoadLine(assetName) : ''}${exposeClaudexCommand.toString().replace('exposeClaudexCommand', '__cldxCommandCatalog')}\n`),
   ]);
 }
 

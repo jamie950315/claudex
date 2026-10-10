@@ -32,7 +32,7 @@ export async function buildClaudeRendererCandidate({ root, home = homedir(), ada
   const entry = inspectFolderCache(original, options);
   if (entry.sourceHash !== target.sourceHash) throw new Error('Claude renderer original changed after graph validation');
   const common = { root, bindings, assetName };
-  if (adapter === 'commands') return replaceFolderCacheSource(original, transformCommandCatalog(entry.source, bindings), options);
+  if (adapter === 'commands') return replaceFolderCacheSource(original, transformCommandCatalog(entry.source, bindings, assetName), options);
   if (adapter === 'folders') {
     const candidate = await buildClaudeFolderCandidate({ ...common, original, registryRoot, targetURL: target.url,
     // Chat wake is independent and starts at module load. Folders retain only

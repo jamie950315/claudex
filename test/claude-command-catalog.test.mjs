@@ -42,6 +42,10 @@ for (const tag of ['a', 'b']) test(`native catalogue ${tag}: first-use entry, ex
     executable = executable.slice(0, n.start) + executable.slice(n.end);
   const calls = [], nativeRows = Object.freeze([workflow]);
   const context = { [`L${tag}`]: { getSupportedCommands: async args => { calls.push(args); return nativeRows; } } };
+  // The load line names the asset; a renderer without a console still evaluates the module.
+  const lines = [];
+  runInNewContext(executable, { ...context, console: { warn: line => lines.push(line) } });
+  assert.deepEqual(lines, [`[Claudex commands] loaded ${new URL(resources.commands.url).pathname.split('/').at(-1)}`]);
   runInNewContext(executable, context);
   const query = context[`commands${tag}`];
   assert.equal((await query('/selected-project', null))[0].name, 'claudex');
