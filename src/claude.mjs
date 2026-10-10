@@ -135,21 +135,24 @@ function resultsAfterTheirCalls(rows) {
   return rows.flatMap(row => moved.has(row) ? [] : [row, ...late.get(row.uuid) ?? []]);
 }
 
-// Rewinding in Claude and sending another prompt leaves the replaced turns in
-// the file as a sibling branch. The native conversation is the branch that
-// ends at the last authored row, and every fork on it must continue with a
-// real user prompt. Rows of the replaced branches are left out of the decoded
-// history; nothing else is dropped, and any other fork (a second assistant
-// reply, competing tool results) is still refused. A rewind that removes
-// already synchronized turns then fails the saved prefix check as before.
-function withoutRewoundBranches(rows, parallelParents, children) {
-  const refuse = () => { throw new Error('Nonlinear Claude history requires an explicit branch selection.'); };
+// Native keeps every branch in the file. The conversation is the branch that
+// ends at the last authored row. Where it forks:
+// - the active child is a real user prompt: a rewind (or an edited prompt).
+//   Every sibling branch was replaced and is left out;
+// - otherwise a sibling that is a tool result, or another block of a response
+//   on the active branch, belongs to the same wave of work and is kept at its
+//   physical position; any other sibling (another reply to the same input, an
+//   abandoned prompt) was replaced and is left out.
+// By user decision no fork shape is refused for being unfamiliar: nothing that
+// belongs to the active conversation is dropped, and a replaced branch that
+// held already synchronized turns still fails the saved prefix check.
+function withoutReplacedBranches(rows, parallelParents, children) {
   const authored = row => row.type === 'user' || row.type === 'assistant';
   const byId = new Map(rows.filter(row => row.uuid).map(row => [row.uuid, row]));
   const parentOf = row => authored(row) ? parallelParents.get(row.uuid) ?? row.parentUuid : row.parentUuid;
   const parents = new Set(rows.filter(row => row.uuid).map(parentOf).filter(Boolean));
   const leaf = rows.findLast(row => authored(row) && row.uuid && !parents.has(row.uuid));
-  if (!leaf) refuse();
+  if (!leaf) return rows;
   const ancestors = start => {
     const chain = new Set();
     for (let row = start; row && !chain.has(row.uuid); row = byId.get(parentOf(row))) chain.add(row.uuid);
@@ -158,18 +161,18 @@ function withoutRewoundBranches(rows, parallelParents, children) {
   const active = ancestors(leaf), replaced = new Set();
   const prompt = row => row.type === 'user' && !row.isMeta && (typeof row.message?.content === 'string'
     || Array.isArray(row.message?.content) && row.message.content.length > 0 && row.message.content.every(block => block.type !== 'tool_result'));
+  const response = row => row.type === 'assistant' ? row.message?.id ?? row.requestId ?? null : null;
+  const activeResponses = new Set([...active].map(uuid => response(byId.get(uuid))).filter(Boolean));
+  const sameWave = row => row.type === 'user' ? !prompt(row) : activeResponses.has(response(row));
   for (const siblings of children.values()) {
     if (siblings.size < 2) continue;
     const kept = [...siblings].filter(uuid => active.has(uuid));
-    if (kept.length !== 1 || !prompt(byId.get(kept[0]))) refuse();
-    for (const uuid of siblings) if (uuid !== kept[0]) replaced.add(uuid);
+    const rewound = kept.length === 1 && prompt(byId.get(kept[0]));
+    for (const uuid of siblings) if (!active.has(uuid) && (rewound || !sameWave(byId.get(uuid)))) replaced.add(uuid);
   }
-  return rows.filter(row => {
-    if (!authored(row) || !row.uuid || active.has(row.uuid)) return true;
-    // Only rows under a replaced branch may be left out.
-    if (![...ancestors(row)].some(uuid => replaced.has(uuid))) refuse();
-    return false;
-  });
+  if (!replaced.size) return rows;
+  return rows.filter(row => !authored(row) || !row.uuid || active.has(row.uuid)
+    || ![...ancestors(row)].some(uuid => replaced.has(uuid)));
 }
 
 export function decodeClaude(text, { preserveCompactionHistory = false, authenticatePreservedPacket } = {}) {
@@ -191,7 +194,7 @@ export function decodeClaude(text, { preserveCompactionHistory = false, authenti
       children.set(parentUuid, siblings);
     }
   }
-  const current = forked ? withoutRewoundBranches(main, parallelParents, children) : main;
+  const current = forked ? withoutReplacedBranches(main, parallelParents, children) : main;
   const common = JSON.parse(toCommon(resultsAfterTheirCalls(current).map(row => JSON.stringify(row)).join('\n'), 'claude_code'));
   preserveUnpairedLocalCommands(common, main);
   if (compact) common.meta.compaction = compact.metadata;

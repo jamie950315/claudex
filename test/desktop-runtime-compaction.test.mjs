@@ -60,11 +60,15 @@ test('an unmanaged compacted Local tail still waits for a real complete assistan
   } finally { await f.runtime.close(); }
 });
 
-test('unmanaged Local preserved-segment compaction remains explicit rather than inventing a history link', async () => {
+test('unmanaged Local compaction with an unfamiliar preserved-segment record keeps the whole history', async () => {
   const f = await fixture();
   try {
+    const before = await f.runtime.inspect(f.record);
     await f.compact({ preserved: true });
-    await assert.rejects(f.runtime.inspect(f.record), /preserved-segment/);
+    const after = await f.runtime.inspect(f.record);
+    assert.equal(after.common.messages.length, 5);
+    assert.equal(fingerprint(after.common, before.common.messages.length), before.digest);
+    assert.equal(after.common.meta.compaction.retainedHistory, true);
   } finally { await f.runtime.close(); }
 });
 
@@ -129,12 +133,15 @@ test('an owned history the user compacts interactively keeps its prefix under th
   assert.deepEqual(result.rows.slice(0, 2), [packet, reply]);
   assert.match(result.rows[3].message.content, /^\[Imported native compaction summary; complete earlier verified history is retained\.\]/);
   for (const [mutate, expected] of [
-    [({ summary }) => { summary.queueTranscriptOnly = false; }, /exact native history link/],
-    [({ summary }) => { delete summary.isVisibleInTranscriptOnly; }, /exact native history link/],
     // A queued summary keeps the stricter owned rule: one authenticated packet.
     [({ summary }) => { summary.queueTranscriptOnly = true; }, /preserved-segment/],
-    [({ boundary }) => { boundary.compactMetadata.preservedMessages.uuids = [randomUUID()]; }, /preserved-segment/],
-    [({ boundary }) => { boundary.compactMetadata.preservedSegment.anchorUuid = randomUUID(); }, /preserved-segment/],
-    [({ boundary }) => { boundary.logicalParentUuid = packet.uuid; }, /preserved-segment/],
+    // The boundary must follow the last row: otherwise earlier history is missing.
+    [({ boundary }) => { boundary.logicalParentUuid = packet.uuid; }, /complete persisted prefix/],
+    [({ summary }) => { summary.sessionId = randomUUID(); }, /exact native history link/],
   ]) assert.throws(() => read(build(mutate)), expected);
+  // Flags and segment descriptions native may change do not alter what is kept.
+  for (const mutate of [({ summary }) => { summary.queueTranscriptOnly = false; }, ({ summary }) => { delete summary.isVisibleInTranscriptOnly; },
+    ({ boundary }) => { boundary.compactMetadata.preservedMessages.uuids = [randomUUID()]; },
+    ({ boundary }) => { boundary.compactMetadata.preservedSegment.anchorUuid = randomUUID(); }])
+    assert.deepEqual(read(build(mutate)).rows.slice(0, 2), [packet, reply]);
 });

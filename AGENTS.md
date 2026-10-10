@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.23 packages Claude Mod 0.8.22. Keep application and Mod versions
+Claudex.app 1.3.24 packages Claude Mod 0.8.22. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1389,11 +1389,15 @@ authenticated packet already present once in that prefix; it is not replayed.
 Semantic baseline resets require a new boundary after an unchanged saved byte
 prefix; checkpoints advance only on successful promotion. Opaque Codex summaries,
 replacement histories, and general Claude preserved-segment chains remain blocked.
-Native Claude originals (Desktop Local, CLI 2.1.284 /compact) keep their complete
-readable prefix, so a preserved segment there is accepted when its uuids exist
-exactly once before the boundary as a contiguous parent chain ending at the
-logical parent, anchored to the summary and ordered within allUuids (which may
-list unpersisted rows). Their interactive summary may omit queueTranscriptOnly.
+Native Claude originals (Desktop Local, CLI /compact) and owned histories the
+user compacts from Desktop keep every earlier row in the file. By the
+tolerance rule the retained-history reader checks only what would be a real
+problem: the boundary names the row it follows and that row is the last one
+before it (otherwise earlier history is missing), the summary is readable and
+belongs to the same session and directory, and no identity repeats with
+different content. How native flags the summary, links it, or describes the
+segment it preserved (preservedSegment, preservedMessages, in any shape) is its
+own bookkeeping and is not compared.
 Claude Code 2.1.295 /compact was observed appending, before its new boundary,
 a second copy of rows of an earlier generation (same uuid, type, time and
 message; relinked parent, new prompt ID and slug, emptied display tool
@@ -1403,9 +1407,9 @@ any other difference is still ambiguous, and owned histories keep refusing
 every repeated identity.
 An owned history the user compacts from Desktop writes the same interactive
 summary and keeps its complete prefix too, so it uses that same retained-prefix
-proof. A queued summary (queueTranscriptOnly true) in an owned history keeps
-the stricter single authenticated packet rule; an explicit false is refused.
-Nothing is replayed.
+proof. A queued summary (queueTranscriptOnly true) in an owned history is
+Claudex's own context reset, a write, and keeps its exact form and the single
+authenticated packet rule. Nothing is replayed.
 The Local archival publisher skips an original left in its old project by a
 Codex project move (no same-project continuation); other cwd mismatches fail.
 Watcher status lists each blocked conversation once, even when several held
@@ -1419,13 +1423,21 @@ PreToolUse hook rows may carry another absolute cwd, because a tool in the wave
 (for example Bash `cd`) can move the native cwd before they are persisted. Validate one final
 join and reject intervening authored input or alternate continuations. Only
 virtual graph-validation parents change; native bytes, codec input, message
-order and every tool record remain untouched. Missing/ambiguous evidence and
-actual competing branches still block; saved semantic prefixes must still match.
-By user decision one fork is followed: a native rewind. The decoded history is
-the branch ending at the last authored row, each fork on it must continue with
-a real user prompt, and only rows under a replaced branch are left out. A
-second assistant reply or competing tool results stay refused, and a rewind
-that removes synchronized turns still fails the prefix check.
+order and every tool record remain untouched. Saved semantic prefixes must
+still match.
+By user decision no fork is refused for its shape. The decoded history is the
+branch ending at the last authored row, as in the native app. Where it forks
+on a real user prompt (a rewind or an edited prompt) every sibling branch was
+replaced and is left out. Elsewhere a sibling that is a tool result, or a
+block of a response on the active branch, is the same wave of work and stays
+at its physical position; any other sibling (a regenerated reply, an
+abandoned prompt) was replaced and is left out. The exact parallel-tool and
+streamed-wave proofs above only relink what they recognize; an unrecognized
+wave is read in physical order. Real problems keep their own checks: a
+missing parent, an unfinished or unpaired tool call (assertComplete), and a
+replaced branch that held synchronized turns (the prefix check). Decoding the
+local transcripts before and after a change to this must give identical
+messages for every file that decoded before.
 The observed empty-display successful PreToolUse hook attachment may occur
 between results when its tool, native parent, session and pending-result position
 all match. Its historical command/stdout remain inert and are never executed.

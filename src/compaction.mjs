@@ -53,13 +53,15 @@ function claudeSummary(rows, index, end = rows.length, allowPreservedMetadata = 
   const tail = rows.slice(index + 1, end).filter(row => !row.isSidechain);
   const summaries = tail.filter(row => row.isCompactSummary);
   const summary = summaries[0];
-  if (summaries.length !== 1 || summary.type !== 'user' || summary.parentUuid !== boundary.uuid) {
+  // With the earlier history retained, the summary is one more record of the
+  // file: how native links, types or repeats it does not change what is kept.
+  if (!summary || !allowPreservedMetadata && (summaries.length !== 1 || summary.type !== 'user' || summary.parentUuid !== boundary.uuid)) {
     throw new Error('Claude compaction requires one explicitly linked native summary.');
   }
   const content = summary.message?.content;
   const readable = typeof content === 'string' ? content : Array.isArray(content) && content.every(block => block.type === 'text' && typeof block.text === 'string') ? content.map(block => block.text).join('\n') : '';
   if (!readable.trim()) throw new Error('Claude compaction summary is missing or opaque.');
-  if (tail.slice(0, tail.indexOf(summary)).some(row => row.type === 'user' || row.type === 'assistant')) throw new Error('Claude compaction summary order is ambiguous.');
+  if (!allowPreservedMetadata && tail.slice(0, tail.indexOf(summary)).some(row => row.type === 'user' || row.type === 'assistant')) throw new Error('Claude compaction summary order is ambiguous.');
   return { boundary, summary, readable, tail };
 }
 
@@ -112,35 +114,32 @@ export function claudeCompactionHistory(text, rows, authenticatePreservedPacket)
   for (let ordinal = 0; ordinal < boundaries.length; ordinal++) {
     const index = boundaries[ordinal];
     const { boundary, summary, readable } = claudeSummary(rows, index, boundaries[ordinal + 1], true);
-    if (boundary.parentUuid !== null || typeof boundary.logicalParentUuid !== 'string' || !boundary.logicalParentUuid
-      || !summary.uuid || summary.sessionId !== boundary.sessionId || summary.cwd !== boundary.cwd
-      // An interactive /compact summary is not queued input, in a native
-      // original or in an owned conversation the user compacts from Desktop.
-      || summary.isVisibleInTranscriptOnly !== true
-      || summary.queueTranscriptOnly !== true && summary.queueTranscriptOnly !== undefined)
+    // By user decision this names the real problems only. The complete
+    // earlier history must still be in the file: the boundary names the row
+    // it follows (checked below against the physical prefix) and the summary
+    // belongs to the same session and directory. How native flags the summary
+    // or describes the segment it preserved is its own bookkeeping.
+    if (typeof boundary.logicalParentUuid !== 'string' || !boundary.logicalParentUuid
+      || !summary.uuid || summary.sessionId !== boundary.sessionId || summary.cwd !== boundary.cwd)
       throw new Error('Owned Claude compaction lacks an exact native history link.');
-    const interactive = summary.queueTranscriptOnly === undefined;
+    // A queued summary in an owned history is Claudex's own context reset; an
+    // interactive /compact, in a native original or an owned conversation, is not.
+    const interactive = summary.queueTranscriptOnly !== true;
+    // Claudex's own reset is a write it must be able to prove exactly.
+    if (!interactive && typeof authenticatePreservedPacket === 'function'
+      && (boundary.parentUuid !== null || summary.type !== 'user' || summary.parentUuid !== boundary.uuid
+        || summary.isVisibleInTranscriptOnly !== true
+        || rows.slice(index + 1, boundaries[ordinal + 1]).filter(row => !row.isSidechain && row.isCompactSummary).length !== 1))
+      throw new Error('Owned Claude compaction lacks an exact native history link.');
     if (boundary.compactMetadata?.preservedSegment || boundary.compactMetadata?.preservedMessages) {
       const segment = boundary.compactMetadata.preservedSegment, messages = boundary.compactMetadata.preservedMessages;
       const keys = (value, expected) => value && !Array.isArray(value) && typeof value === 'object'
         && Object.keys(value).sort().join(',') === expected;
       // A native original, and an owned history compacted interactively, keep
-      // the complete earlier history, so a preserved segment only references
-      // rows that already exist in that prefix: an exact, contiguous parent
-      // chain ending at the boundary's logical parent and anchored to its
-      // summary. Nothing is replayed or reordered.
+      // every earlier row, so a preserved segment only points at rows the
+      // file already holds. Nothing is replayed or reordered; a row that
+      // native wrote a second time is caught as a repeated identity below.
       if (typeof authenticatePreservedPacket !== 'function' || interactive) {
-        const uuids = messages?.uuids, all = messages?.allUuids;
-        const chain = Array.isArray(uuids) ? uuids.map(uuid => rows.slice(0, index).filter(row => !row.isSidechain && row.uuid === uuid)) : [];
-        if (!keys(segment, 'anchorUuid,headUuid,tailUuid') || !keys(messages, 'allUuids,anchorUuid,uuids')
-          || !Array.isArray(uuids) || !uuids.length || uuids.length > 4096 || !Array.isArray(all) || all.length > 4096
-          || new Set(uuids).size !== uuids.length || uuids.some(uuid => typeof uuid !== 'string' || !uuid)
-          || uuids.some((uuid, n) => all.indexOf(uuid) < (n ? all.indexOf(uuids[n - 1]) + 1 : 0))
-          || segment.headUuid !== uuids[0] || segment.tailUuid !== uuids.at(-1) || boundary.logicalParentUuid !== uuids.at(-1)
-          || segment.anchorUuid !== summary.uuid || messages.anchorUuid !== summary.uuid
-          || chain.some(found => found.length !== 1)
-          || chain.some(([row], n) => n > 0 && row.parentUuid !== uuids[n - 1]))
-          throw new Error('Claude compaction preserved-segment dependencies are unsupported; automatic handoff paused.');
         summaries.set(summary, { ...summary, message: { ...summary.message,
           content: `[Imported native compaction summary; complete earlier verified history is retained.]\n${readable}` } });
         continue;

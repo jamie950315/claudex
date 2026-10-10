@@ -98,14 +98,17 @@ test('project paths match Claude project encoding', () => {
   assert.equal(projectDirectory('/tmp/claude-home', '/Users/example/a.b_c'), '/tmp/claude-home/projects/-Users-example-a-b-c');
 });
 
-test('missing parents and competing branches are not silently flattened', () => {
+test('a missing parent is refused and a replaced reply is left out', () => {
   const row = (uuid, parentUuid, role) => ({ type: role, uuid, parentUuid, message: { role, content: 'text' } });
   assert.throws(() => decodeClaude(JSON.stringify(row('a', 'missing', 'user')) + '\n'), /missing its parent/);
+  // A second reply to the same input replaces the first: the last one is the conversation.
   const rows = [row('a', null, 'user'), row('b', 'a', 'assistant'), row('c', 'a', 'assistant')];
-  assert.throws(() => decodeClaude(rows.map(value => JSON.stringify(value)).join('\n') + '\n'), /Nonlinear/);
+  rows[1].message.content = 'first reply'; rows[2].message.content = 'second reply';
+  const decoded = JSON.stringify(decodeClaude(rows.map(value => JSON.stringify(value)).join('\n') + '\n').messages);
+  assert.ok(decoded.includes('second reply')); assert.ok(!decoded.includes('first reply'));
 });
 
-test('a rewound branch is left out and every other fork is still refused', () => {
+test('a rewound branch is left out and other forks are read by what they are', () => {
   const base = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/tmp/claudex-rewind', version: '2.1.281',
     timestamp: '2026-10-06T00:00:00.000Z', isSidechain: false, userType: 'external' };
   const row = (uuid, parentUuid, type, content, extra = {}) => ({ ...base, uuid, parentUuid, type,
@@ -123,9 +126,11 @@ test('a rewound branch is left out and every other fork is still refused', () =>
   // Rewinding twice from the same point keeps only the last branch.
   const again = [row('u4', 'a1', 'user', 'Third wording'), reply('a4', 'u4', 'Third answer')];
   assert.deepEqual(texts(decodeClaude(text([...start, ...replacedBranch, ...kept, ...again]))).slice(2), ['Third wording', 'Third answer']);
-  // A second assistant reply or a competing tool result is not a rewind.
-  assert.throws(() => decodeClaude(text([...start, reply('a1b', 'u1', 'Competing answer')])), /Nonlinear/);
+  // A regenerated reply replaces the earlier one.
+  assert.deepEqual(texts(decodeClaude(text([...start, reply('a1b', 'u1', 'Competing answer')]))), ['First question', 'Competing answer']);
+  // Two results for one call are both kept, never one chosen: the completeness check names the problem.
   const call = row('c1', 'u3', 'assistant', [{ type: 'tool_use', id: 'tool-1', name: 'Bash', input: {} }]);
-  const result = uuid => row(uuid, 'c1', 'user', [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done' }]);
-  assert.throws(() => decodeClaude(text([...start, kept[0], call, result('r1'), result('r2')])), /Nonlinear/);
+  const result = uuid => row(uuid, 'c1', 'user', [{ type: 'tool_result', tool_use_id: 'tool-1', content: 'done ' + uuid }]);
+  const doubled = JSON.stringify(decodeClaude(text([...start, kept[0], call, result('r1'), result('r2')])).messages);
+  assert.ok(doubled.includes('done r1') && doubled.includes('done r2'));
 });

@@ -152,10 +152,15 @@ test('a native original retains a /compact preserved segment that only reference
   assert.match(result.messages[4].content[0].text, /complete earlier verified history is retained/);
   // Without full-history retention the segment would be a dependency.
   assert.throws(() => decodeClaude(jsonl(build())), /preserved-segment/);
-  // A missing, broken or reordered chain is still unsupported.
+  // How native describes the segment is its own bookkeeping: every earlier
+  // row is still in the file, so the history is the same whatever it lists.
   for (const preserved of [{ anchorUuid: 'summary', uuids: ['q1', 'gone'], allUuids: ['q1', 'gone'] },
     { anchorUuid: 'summary', uuids: ['q0', 'a1'], allUuids: ['q0', 'a1'] },
     { anchorUuid: 'summary', uuids: ['q1', 'a1'], allUuids: ['a1', 'q1'] },
-    { anchorUuid: 'other', uuids: ['q1', 'a1'], allUuids: ['q1', 'a1'] }])
-    assert.throws(() => decodeClaude(jsonl(build(preserved)), { preserveCompactionHistory: true }), /preserved-segment/);
+    { anchorUuid: 'other', uuids: ['q1', 'a1'], allUuids: ['q1', 'a1'] }, { futureShape: true }, {}])
+    assert.deepEqual(decodeClaude(jsonl(build(preserved)), { preserveCompactionHistory: true }).messages.map(message => message.content),
+      result.messages.map(message => message.content));
+  // A boundary that does not follow the last row of the file means earlier history is missing.
+  const broken = build(); broken[4].logicalParentUuid = 'q1';
+  assert.throws(() => decodeClaude(jsonl(broken), { preserveCompactionHistory: true }), /complete persisted prefix/);
 });

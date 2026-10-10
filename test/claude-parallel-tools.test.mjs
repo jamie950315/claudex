@@ -32,6 +32,17 @@ function fixture() {
   return { rows, row, get: id => rows.find(row => row.uuid === id), sessionId: base.sessionId };
 }
 const read = rows => decodeClaude(text(rows), { preserveCompactionHistory: true });
+// By user decision an unfamiliar graph is read, never refused for its shape.
+// What can still stop it is a real problem the completeness check names.
+const REAL_PROBLEM = /missing its parent|tool call|tool result|complete assistant turn/i;
+function settles(rows, label) {
+  let common;
+  try { common = read(rows); } catch (error) { assert.match(error.message, REAL_PROBLEM, label); return null; }
+  try { assertComplete(common); } catch (error) { assert.match(error.message, REAL_PROBLEM, label); return null; }
+  return common;
+}
+const texts = common => common.messages.flatMap(message => message.content)
+  .map(block => block.text ?? block.content ?? block.type).filter(value => typeof value === 'string');
 
 test('the observed native parallel-tool graph preserves both results and its saved prefix without rewriting rows', () => {
   const f = fixture(), before = text(f.rows), prefix = read(f.rows.slice(0, 2));
@@ -115,7 +126,7 @@ test('a streamed block may follow a partial result while an earlier call of the 
   assert.deepEqual(tools.map(b => b.id ?? b.tool_use_id), ['tool-a', 'tool-b', 'tool-a', 'tool-c', 'tool-b', 'tool-c']);
 });
 
-test('streamed waves reject early continuation, alternate joins and changed response identity', () => {
+test('streamed waves in an unfamiliar shape are read without losing a result', () => {
   for (const mutate of [
     f => { f.get('stream-3').parentUuid = 'result-a'; },
     f => { const call = f.get('stream-3'); f.rows.splice(f.rows.indexOf(call), 1);
@@ -130,7 +141,10 @@ test('streamed waves reject early continuation, alternate joins and changed resp
     f => { f.rows.push(f.row('alternate', 'result-b', 'assistant', [{ type: 'text', text: 'Other branch' }])); },
   ]) {
     const f = waveFixture(); mutate(f);
-    assert.throws(() => read(f.rows), /Nonlinear|missing its parent/, mutate.toString());
+    const common = settles(f.rows, mutate.toString());
+    if (common) for (const row of f.rows) for (const block of Array.isArray(row.message?.content) ? row.message.content : [])
+      if (block.type === 'tool_result' && typeof block.content === 'string')
+        assert.ok(JSON.stringify(common.messages).includes(block.content), mutate.toString());
   }
 });
 
@@ -162,7 +176,8 @@ test('an exact successful PreToolUse hook between parallel results remains inert
     f => { f.rows.push(f.row('competing-final', 'hook', 'assistant', [{ type: 'text', text: 'An alternate branch' }])); },
   ]) {
     const invalid = make(); mutate(invalid);
-    assert.throws(() => read(invalid.rows), /Nonlinear|missing its parent/, mutate.toString());
+    const common = settles(invalid.rows, mutate.toString());
+    if (common) for (const value of ['Result A', 'Result B']) assert.ok(JSON.stringify(common.messages).includes(value), mutate.toString());
   }
 });
 
@@ -182,7 +197,7 @@ test('a tool that changes the native cwd keeps its later hook and result rows in
   assert.equal(text(f.rows), before);
 });
 
-test('ambiguous tool metadata, missing results and real competing continuations stay blocked', () => {
+test('changed tool metadata is read as written; a missing result and a replaced continuation are handled as what they are', () => {
   const mutations = [
     f => { f.get('stream-2').message.id = 'different-response'; },
     f => { f.get('stream-2').requestId = 'different-request'; },
@@ -210,10 +225,28 @@ test('ambiguous tool metadata, missing results and real competing continuations 
       f.row('competing-final', 'branch-anchor', 'assistant', [{ type: 'text', text: 'Another branch' }])); },
     f => { f.rows.splice(f.rows.indexOf(f.get('result-b')), 0, f.row('intervening-user', 'result-a', 'user', 'Another branch')); },
   ];
+  const baseline = texts(read(fixture().rows));
   for (const mutate of mutations) {
     const f = fixture(); mutate(f);
-    assert.throws(() => read(f.rows), /Nonlinear|missing its parent/, mutate.toString());
+    const common = settles(f.rows, mutate.toString());
+    // Nothing of the original wave disappears when a label differs.
+    if (common) for (const value of ['Result A', 'Result B'])
+      if (baseline.includes(value) && f.rows.some(row => JSON.stringify(row.message?.content ?? '').includes(value)))
+        assert.ok(JSON.stringify(common.messages).includes(value), mutate.toString());
   }
+  // A label native may change leaves the decoded history exactly as it was.
+  for (const mutate of [f => { f.get('result-b').promptId = 'different-prompt'; }, f => { f.get('result-b').version = 'different'; },
+    f => { f.get('stream-2').apiBlockIndex = 3; }, f => { f.get('stream-2').cwd = '/different'; }]) {
+    const f = fixture(); mutate(f);
+    assert.deepEqual(texts(read(f.rows)), baseline, mutate.toString());
+  }
+  // A second continuation replaces the first, as in the native app: the last one is the conversation.
+  const f = fixture(); f.rows.push(f.row('competing-final', 'result-b', 'assistant', [{ type: 'text', text: 'Another branch' }]));
+  const replaced = texts(read(f.rows));
+  assert.ok(replaced.includes('Another branch')); assert.ok(!replaced.includes('Both tools completed'));
+  // A result that never arrived is an unfinished tool call, whatever the graph looks like.
+  const missing = fixture(); missing.rows.splice(missing.rows.indexOf(missing.get('result-b')), 1); missing.get('final').parentUuid = 'result-a';
+  assert.throws(() => assertComplete(read(missing.rows)), /tool call/i);
 });
 
 test('a native result persisted one row before its exact parent call decodes after that call', () => {
