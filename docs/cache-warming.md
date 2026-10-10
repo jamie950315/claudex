@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.3.16 and Claude Mod 0.8.18 provide bounded, per-conversation cache warming.
+Claudex 1.3.17 and Claude Mod 0.8.19 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.18 companion and
+Use the intended existing conversation with a freshly loaded 0.8.19 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -56,15 +56,20 @@ uses far more plan quota than the other two; choose a limit to change that.
 The advanced `/claudex warm on` and the CLI keep their own defaults of 60
 minutes and 3 requests.
 
-On Claude that default can be changed. The Mod pane's Cache settings tab has a
-**Default warming limit** choice (1 to 168 hours, or 3 to 100 requests) with
-the same preview and confirmation as the other settings, and
-`/claudex warm limit for=6h` (then the shown `confirm` command) saves any
-`rounds=`, `for=` or `until=HH:MM` value. It is stored in the plugin's own
-store for sessions sharing it, applies only when `/claudex:warm on` is given
-no limit, and changes neither the TTL nor a warm-up already running. A saved
-limit that does not fit the session's TTL is refused when warming is enabled.
-Codex cannot read that store and keeps four hours. The summary's last line
+That default can be changed, and it is one setting saved in Claudex for
+Claude and Codex alike. Three places edit it:
+
+- Claudex.app: **Cache settings…** (main window footer or the menu bar menu)
+  opens a window with a **Default warming limit** choice and a Save button.
+- The Mod pane's Cache settings tab has the same choice (1 to 168 hours, or 3
+  to 100 requests) with the preview and confirmation of its other settings.
+- `/claudex warm limit for=6h` in Claude (then the shown `confirm` command)
+  saves any `rounds=`, `for=` or `until=HH:MM` value.
+
+It applies only when `/claudex:warm on` is given no limit, and changes
+neither the TTL nor a warm-up already running. A saved limit that does not fit
+a conversation's refresh interval is refused when warming is enabled there.
+The summary's last line
 shows the requests used, the limit and the end time.
 
 Choose one `on` form and send it once. It directly applies the session TTL and

@@ -321,5 +321,21 @@
   "Waiting for Desktop integration": "デスクトップ連携を待機中",
   "Restart Claude to finish updating": "更新を完了するには Claude を再起動してください",
   "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claudex の準備が整う前に Claude Desktop が新しいバージョンを読み込みました。Claude を終了して開き直すと、フォルダ配置、会話の起動、/claudex コマンドが復元されます。同期には影響しません。",
-  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex によるデスクトップ連携の再開と確認の完了を待っています。操作は不要です。"
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex によるデスクトップ連携の再開と確認の完了を待っています。操作は不要です。",
+  "Cache settings…": "キャッシュ設定…",
+  "Cache settings": "キャッシュ設定",
+  "Default warming limit": "既定のウォーム上限",
+  "Used when /claudex:warm on is given no limit, in Claude and in Codex. Saving changes no running warm-up and starts no model work.": "Claude と Codex で /claudex:warm on に上限を指定しない場合に使われます。保存しても実行中のウォームは変わらず、モデルの処理も始まりません。",
+  "Turn warming on or off inside a conversation with /claudex:warm on, off or status.": "ウォームのオン・オフと確認は、会話内で /claudex:warm on、off、status を入力します。",
+  "%@ warm requests": "ウォーム要求 %@ 回",
+  "1 hour": "1 時間",
+  "%@ hours": "%@ 時間",
+  "Save": "保存",
+  "Reload": "再読み込み",
+  "Conversations being kept warm now: Claude %@ · Codex %@": "現在ウォーム中の会話：Claude %@ · Codex %@",
+  "Loading cache settings…": "キャッシュ設定を読み込み中…",
+  "Saving cache settings…": "キャッシュ設定を保存中…",
+  "Default warming limit saved. Running warm-ups are unchanged.": "既定のウォーム上限を保存しました。実行中のウォームは変わりません。",
+  "Cache settings could not be loaded or saved.": "キャッシュ設定を読み込みまたは保存できませんでした。",
+  "Cache settings are unavailable. Check that Claudex is running, then reload.": "キャッシュ設定を利用できません。Claudex が動作していることを確認して、再読み込みしてください。"
 }

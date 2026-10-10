@@ -321,5 +321,21 @@
   "Waiting for Desktop integration": "Warten auf die Desktop-Integration",
   "Restart Claude to finish updating": "Claude neu starten, um die Aktualisierung abzuschließen",
   "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claude Desktop hat eine neue Version geladen, bevor Claudex sie vorbereiten konnte. Beende Claude und öffne es erneut, um Ordnerzuordnung, Aufwecken von Unterhaltungen und den Befehl /claudex wiederherzustellen. Die Synchronisierung ist nicht betroffen.",
-  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Es wird gewartet, bis Claudex die Desktop-Integration fortsetzt und die Prüfung abschließt. Sie müssen nichts tun."
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Es wird gewartet, bis Claudex die Desktop-Integration fortsetzt und die Prüfung abschließt. Sie müssen nichts tun.",
+  "Cache settings…": "Cache-Einstellungen…",
+  "Cache settings": "Cache-Einstellungen",
+  "Default warming limit": "Standardlimit für die Warmhaltung",
+  "Used when /claudex:warm on is given no limit, in Claude and in Codex. Saving changes no running warm-up and starts no model work.": "Gilt in Claude und Codex, wenn /claudex:warm on kein Limit erhält. Speichern ändert keine laufende Warmhaltung und startet keine Modellarbeit.",
+  "Turn warming on or off inside a conversation with /claudex:warm on, off or status.": "Die Warmhaltung wird in einer Unterhaltung mit /claudex:warm on, off oder status ein- und ausgeschaltet oder geprüft.",
+  "%@ warm requests": "%@ Warmhalte-Anfragen",
+  "1 hour": "1 Stunde",
+  "%@ hours": "%@ Stunden",
+  "Save": "Speichern",
+  "Reload": "Neu laden",
+  "Conversations being kept warm now: Claude %@ · Codex %@": "Derzeit warmgehaltene Unterhaltungen: Claude %@ · Codex %@",
+  "Loading cache settings…": "Cache-Einstellungen werden geladen…",
+  "Saving cache settings…": "Cache-Einstellungen werden gespeichert…",
+  "Default warming limit saved. Running warm-ups are unchanged.": "Standardlimit gespeichert. Laufende Warmhaltungen bleiben unverändert.",
+  "Cache settings could not be loaded or saved.": "Cache-Einstellungen konnten nicht geladen oder gespeichert werden.",
+  "Cache settings are unavailable. Check that Claudex is running, then reload.": "Cache-Einstellungen sind nicht verfügbar. Prüfe, ob Claudex läuft, und lade neu."
 }

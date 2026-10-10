@@ -383,12 +383,15 @@ test('cache warming status stays read-only and plugin-origin commands cannot opt
   seen.length = 0
   const status = await $.command.run({ command: 'claudex', args: 'warm status' })
   expect(JSON.parse(status.text).local.enabled).toBe(false)
-  expect(seen.map(item => item.action)).toEqual(['list'])
+  // Status reads the shared default limit and the policy list; it writes nothing.
+  expect(seen.map(item => item.action)).toEqual(['settings', 'list'])
+  expect(seen[0].params.defaultLimit).toBeUndefined()
   expect(seen[0].op).toBe('cache-warm')
   expect(seen[0].context).toEqual({ sessionId: ID, cwd: '/fixture' })
   const enable = await $.command.run({ command: 'claudex', args: 'warm on' })
   expect(enable.text).toMatch(/explicit native user command/)
-  expect(seen.length).toBe(1)
+  // The refused command contacted nothing.
+  expect(seen.length).toBe(2)
 })
 
 test('namespaced warm command answers locally and preserves native user-origin requirements', async ($, on) => {
@@ -407,10 +410,13 @@ test('namespaced warm command answers locally and preserves native user-origin r
   expect(status.text).toMatch(/6,010/)
   expect(status.text).toMatch(/Unlimited/)
   expect(status.text).toMatch(/UTC[+-]/)
-  expect(seen.map(item => item.action)).toEqual(['list'])
+  // Status reads the shared default limit and the policy list; it writes nothing.
+  expect(seen.map(item => item.action)).toEqual(['settings', 'list'])
+  expect(seen[0].params.defaultLimit).toBeUndefined()
   const enable = await $.command.run({ command: 'claudex:warm', args: 'on 5m' })
   expect(enable.text).toMatch(/explicit native user command/)
-  expect(seen.length).toBe(1)
+  // The refused command contacted nothing.
+  expect(seen.length).toBe(2)
 })
 
 test('saved TTL preference is applied through native startup APIs without enabling warming', async ($, on) => {
@@ -446,7 +452,16 @@ test('startup TTL policy conflicts are visible and do not rewrite the saved choi
 
 test('cache pane applies TTL and startup preferences through explicit native UI confirmation', async ($, on) => {
   const seen: any[] = []
-  stubs(on, false, request => { seen.push(request); return { policies: [] } })
+  let savedLimit: string | undefined
+  stubs(on, false, request => {
+    seen.push(request)
+    // The default limit lives in the broker, not in the plugin store.
+    if (request.action === 'settings') {
+      if (request.params.defaultLimit !== undefined) savedLimit = request.params.defaultLimit
+      return { defaultLimit: savedLimit ?? 'for=4h', saved: savedLimit !== undefined }
+    }
+    return { policies: [] }
+  })
   await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, bodyColumns: 40 } })
   await ui.press({ key: 'tab-cache' })
@@ -488,6 +503,7 @@ test('cache pane applies TTL and startup preferences through explicit native UI 
   await ui.press({ key: 'cache-confirm' })
   status = JSON.parse((await $.command.run({ command: 'claudex', args: 'warm status' })).text)
   expect(status.defaultLimit).toBe('rounds=10')
+  expect(savedLimit).toBe('rounds=10')
   expect(status.nativeCache.value).toBe('1h')
   expect(seen.some(item => item.op === 'cache-warm' && item.action === 'configure' && item.params.enabled)).toBe(false)
   await ui.unmount()

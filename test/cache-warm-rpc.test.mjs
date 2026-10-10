@@ -62,6 +62,27 @@ test('application stop blocks warming but permits status, disable and ended obse
   await f.call('observe', { instanceId: 'fixture-instance', sequence: 2, phase: 'ended', epoch: 2 });
 });
 
+test('the default warming limit is one broker setting for the Mod, Codex and the app', async t => {
+  const f = await fixture(t);
+  assert.deepEqual(await f.call('settings'), { defaultLimit: 'for=4h', saved: false });
+  assert.deepEqual(await f.rpc('cache_warm_settings', {}, 'codex'), { defaultLimit: 'for=4h', saved: false });
+  assert.deepEqual(await f.call('settings', { defaultLimit: 'rounds=12' }), { defaultLimit: 'rounds=12', saved: true });
+  assert.deepEqual(await f.rpc('cache_warm_settings', {}, 'codex'), { defaultLimit: 'rounds=12', saved: true });
+  for (const defaultLimit of ['until=11:18:30', 'for=200h', 'rounds=0', 'ttl=1h', '', null, 4])
+    await assert.rejects(f.rpc('cache_warm_settings', { defaultLimit }), /limit|Limits|fits/i);
+  await assert.rejects(f.rpc('cache_warm_settings', { defaultLimit: 'for=8h', enabled: true }), /Unsupported/);
+  assert.equal((await f.rpc('cache_warm_settings')).defaultLimit, 'rounds=12');
+  // Saving a default enrolls nothing, and reading it stays possible while the app is stopped.
+  assert.equal((await f.call('list')).policies.length, 0);
+  await writeFile(join(f.root, 'app-stop.json'), JSON.stringify({ version: 1, stopped: true }), { mode: 0o600 });
+  assert.equal((await f.call('settings')).defaultLimit, 'rounds=12');
+  await assert.rejects(f.call('settings', { defaultLimit: 'for=1h' }), { code: 'APP_STOPPED' });
+  const old = f.hub.actor;
+  f.hub.actor = () => ({ peer: 'claude', task: { id: 'worker' } });
+  try { await assert.rejects(f.hub.dispatch({ method: 'cache_warm_settings', params: {}, peer: 'claude', token: 'unused' }), /external controller/); }
+  finally { f.hub.actor = old; }
+});
+
 test('worker capability cannot configure native cache warming', async t => {
   const f = await fixture(t);
   const old = f.hub.actor;

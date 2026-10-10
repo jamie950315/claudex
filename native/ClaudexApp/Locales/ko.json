@@ -321,5 +321,21 @@
   "Waiting for Desktop integration": "데스크톱 연동 대기 중",
   "Restart Claude to finish updating": "업데이트를 완료하려면 Claude를 다시 시작하세요",
   "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claudex가 준비하기 전에 Claude Desktop이 새 버전을 불러왔습니다. Claude를 종료한 뒤 다시 열면 폴더 배치, 대화 깨우기, /claudex 명령이 복원됩니다. 동기화에는 영향이 없습니다.",
-  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex의 데스크톱 연동 재개 및 확인 완료를 기다리고 있습니다. 별도 조치가 필요하지 않습니다."
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex의 데스크톱 연동 재개 및 확인 완료를 기다리고 있습니다. 별도 조치가 필요하지 않습니다.",
+  "Cache settings…": "캐시 설정…",
+  "Cache settings": "캐시 설정",
+  "Default warming limit": "기본 웜 제한",
+  "Used when /claudex:warm on is given no limit, in Claude and in Codex. Saving changes no running warm-up and starts no model work.": "Claude 와 Codex 에서 /claudex:warm on 에 제한을 지정하지 않을 때 사용됩니다. 저장해도 진행 중인 웜 요청은 바뀌지 않으며 모델 작업도 시작되지 않습니다.",
+  "Turn warming on or off inside a conversation with /claudex:warm on, off or status.": "웜 기능은 대화에서 /claudex:warm on, off 또는 status 로 켜고 끄거나 확인합니다.",
+  "%@ warm requests": "웜 요청 %@회",
+  "1 hour": "1시간",
+  "%@ hours": "%@시간",
+  "Save": "저장",
+  "Reload": "다시 불러오기",
+  "Conversations being kept warm now: Claude %@ · Codex %@": "현재 웜 상태를 유지 중인 대화: Claude %@ · Codex %@",
+  "Loading cache settings…": "캐시 설정을 불러오는 중…",
+  "Saving cache settings…": "캐시 설정을 저장하는 중…",
+  "Default warming limit saved. Running warm-ups are unchanged.": "기본 웜 제한을 저장했습니다. 진행 중인 웜 요청은 그대로입니다.",
+  "Cache settings could not be loaded or saved.": "캐시 설정을 불러오거나 저장할 수 없습니다.",
+  "Cache settings are unavailable. Check that Claudex is running, then reload.": "캐시 설정을 사용할 수 없습니다. Claudex 가 실행 중인지 확인한 다음 다시 불러오세요."
 }

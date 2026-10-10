@@ -5,12 +5,12 @@ import { callCollaboration } from './collaboration-transport.mjs';
 import { createCodexCacheNative } from './codex-cache-native.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { formatWarmSummary, parseWarmLimits, WARM_LIMIT_HELP } from '../plugins/claudex/hooks/cache-warm-display.mjs';
+import { formatWarmSummary, parseWarmLimits, defaultWarmLimit, WARM_LIMIT_HELP } from '../plugins/claudex/hooks/cache-warm-display.mjs';
 import { createLocalization } from '../plugins/claudex/hooks/localization.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const PREFIX = '/claudex:warm';
-const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}; without one it warms for 4 hours. Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
+const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}; without one it uses the default limit saved in Claudex (4 hours unless changed). Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
 const block = text => {
   return { decision: 'block', reason: text, systemMessage: text };
 };
@@ -32,7 +32,8 @@ export function parseCodexWarmCommand(prompt, now = Date.now()) {
   if (action === 'on') {
     // Codex refreshes every 25 minutes; the user's limits become its bounds.
     const { rest, bounds } = parseWarmLimits(args, { intervalMinutes: 25, now });
-    if (!rest.length) return { action, bounds };
+    // Without a limit word the handler applies the default saved in Claudex.
+    if (!rest.length) return { action, bounds, defaulted: !args.some(word => /^(rounds|for|until)=/.test(word)) };
   }
   if (action === 'confirm' && args.length === 2 && UUID.test(args[0]) && args[1] === 'accept-best-effort')
     return { action, confirmationId: args[0] };
@@ -76,7 +77,14 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
     // The explicit user on command is enrollment consent. Keep the broker's
     // one-use prepare/confirm transaction internal, with a fresh context fence.
     if (action === 'on' || action === 'confirm') params.bestEffort = true;
-    if (action === 'on') Object.assign(params, command.bounds);
+    if (action === 'on') {
+      let { bounds } = command;
+      if (command.defaulted) {
+        const limit = defaultWarmLimit((await call(root, 'cache_warm_settings', {}))?.defaultLimit);
+        ({ bounds } = parseWarmLimits([limit], { intervalMinutes: 25, now: Date.now() }));
+      }
+      Object.assign(params, bounds);
+    }
     if (action === 'confirm') params.confirmationId = command.confirmationId;
     const method = `codex_cache_warm_${action === 'on' ? 'prepare' : action === 'status' ? 'list' : action}`;
     let result = await call(root, method, params);

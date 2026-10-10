@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.16 packages Claude Mod 0.8.18. Keep application and Mod versions
+Claudex.app 1.3.17 packages Claude Mod 0.8.19. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -368,14 +368,19 @@ interval 4 or 55 minutes by TTL, Codex 25). By user decision exactly one of
 never a combination. By user decision an `on` command without a limit warms
 for four hours, exactly as `for=4h` (4 requests at a 1h TTL, 60 at 5m, 9 on
 Codex); the advanced `/claudex warm on` and CLI keep their 60-minute,
-3-request defaults. The Claude side of that default is a confirmed
-plugin-store setting (`cache-warm-default-limit`, `{version, limit}`): the Mod
-Cache tab offers fixed choices and `/claudex warm limit WORD` accepts any
-`rounds=`, `for=` or `until=HH:MM` valid for at least one TTL, never a day of
-the month. It uses the same preview/confirm path, writes nothing on
-selection, and changes neither the TTL, a running policy nor Codex, whose
-default stays four hours. Whether the saved limit fits the session's interval
-is decided, and refused explicitly, when warming is enabled. A time limit allows the requests that fit in it; rounds
+3-request defaults. By user decision that default is one broker setting
+shared by Claude, Codex and the app: `defaultWarmLimit` in the collaboration
+ledger, read and written only through controller `cache_warm_settings` (never
+a managed worker, and writes refuse while the app is stopped). The Mod Cache
+tab offers fixed choices and `/claudex warm limit WORD` accepts any `rounds=`,
+`for=` or `until=HH:MM` valid for at least one TTL, never a day of the month,
+through the same preview/confirm path; the Codex hook reads the setting when
+its `on` command has no limit; the app's Cache settings window (its own
+window, opened by the footer button or the menu) saves a fixed choice with
+Save and writes nothing on open, reload or selection. Saving changes neither
+the TTL nor a running policy and enrolls nothing. Whether the saved limit fits
+a session's interval is decided, and refused explicitly, when warming is
+enabled; an unreachable broker fails the `on` command instead of guessing. A time limit allows the requests that fit in it; rounds
 must fit in 168 hours. A limit no request fits in, or one needing more than
 500 requests, is refused with its reason instead of being shortened. The
 broker bounds are maxRefreshes 1..500 and maxMinutes 1..10080. The attempt
@@ -1349,6 +1354,13 @@ readable prefix, so a preserved segment there is accepted when its uuids exist
 exactly once before the boundary as a contiguous parent chain ending at the
 logical parent, anchored to the summary and ordered within allUuids (which may
 list unpersisted rows). Their interactive summary may omit queueTranscriptOnly.
+Claude Code 2.1.295 /compact was observed appending, before its new boundary,
+a second copy of rows of an earlier generation (same uuid, type, time and
+message; relinked parent, new prompt ID and slug, emptied display tool
+result, usage). In a native original such a copy is an inert placeholder at
+its position and the first record stays the history. A reused identity with
+any other difference is still ambiguous, and owned histories keep refusing
+every repeated identity.
 An owned history the user compacts from Desktop writes the same interactive
 summary and keeps its complete prefix too, so it uses that same retained-prefix
 proof. A queued summary (queueTranscriptOnly true) in an owned history keeps

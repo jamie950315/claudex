@@ -168,7 +168,7 @@ export function validateRequest(value) {
   fields(value, [...common, ...extras], [...common, ...extras.filter(key => !['params', 'target', 'excludeIds', 'reason', 'route'].includes(key) && !(key === 'observation' && value.op === 'wake-next'))]);
   const request = { ...value, context: context(value.context) };
   if (value.op === 'cache-warm') {
-    insist(['list', 'configure', 'observe', 'claim', 'check', 'receipt'].includes(value.action), 'UNSUPPORTED_OPERATION');
+    insist(['list', 'configure', 'observe', 'claim', 'check', 'receipt', 'settings'].includes(value.action), 'UNSUPPORTED_OPERATION');
     insist(record(value.params ?? {}) && Buffer.byteLength(JSON.stringify(value.params ?? {})) <= 16384, 'INVALID_PARAMS');
     request.params = structuredClone(value.params ?? {});
     for (const key of ['sessionId', 'cwd']) if (request.params[key] !== undefined)

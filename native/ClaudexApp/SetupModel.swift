@@ -172,6 +172,32 @@ struct ModelSettings: Decodable {
     }
 }
 
+/// The limit a warming on command uses when it is given none. One setting in
+/// the Claudex broker, shared by Claude, Codex and this window.
+struct WarmSettings: Decodable {
+    struct Active: Decodable {
+        let claude: Int?
+        let codex: Int?
+    }
+    let defaultLimit: String
+    let saved: Bool
+    let active: Active?
+
+    static let presets = ["for=1h", "for=2h", "for=4h", "for=8h", "for=12h", "for=24h", "for=72h", "for=168h",
+                          "rounds=3", "rounds=5", "rounds=10", "rounds=20", "rounds=50", "rounds=100"]
+
+    static func valid(_ limit: String) -> Bool {
+        limit.utf8.count <= 32 && limit.range(of: "^(rounds|for|until)=[0-9a-z:]+$", options: .regularExpression) != nil
+    }
+
+    static func parse(_ data: Data) throws -> WarmSettings {
+        let settings = try JSONDecoder().decode(WarmSettings.self, from: data)
+        guard valid(settings.defaultLimit),
+              [settings.active?.claude, settings.active?.codex].allSatisfy({ $0 == nil || (0...4096).contains($0!) }) else { throw SetupParseError.invalid }
+        return settings
+    }
+}
+
 enum SetupCommand {
     case inspect
     case startup
@@ -252,6 +278,18 @@ final class SetupRunner {
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<ModelSettings, SetupProcessError> in
                 do { return .success(try ModelSettings.parse(data)) }
+                catch { return .failure(.invalidResponse) }
+            }
+            DispatchQueue.main.async { completion(result) }
+        }
+    }
+
+    func warmSettings(defaultLimit: String? = nil, completion: @escaping (Result<WarmSettings, SetupProcessError>) -> Void) {
+        var arguments = ["warm-settings"]
+        if let defaultLimit { arguments += ["--default-limit", defaultLimit] }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = self.executeData(arguments).flatMap { data -> Result<WarmSettings, SetupProcessError> in
+                do { return .success(try WarmSettings.parse(data)) }
                 catch { return .failure(.invalidResponse) }
             }
             DispatchQueue.main.async { completion(result) }
@@ -340,7 +378,7 @@ final class SetupRunner {
         group.wait()
         if tooLarge { return .failure(.excessiveOutput) }
         guard process.terminationStatus == 0 else {
-            if ["models", "stop", "stop-status", "resolve-uncertain"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
+            if ["models", "warm-settings", "stop", "stop-status", "resolve-uncertain"].contains(arguments.first ?? ""), let response = try? JSONSerialization.jsonObject(with: stdout) as? [String: Any],
                let detail = response["error"] as? String, !detail.isEmpty, detail.count <= 2_000 {
                 return .failure(.engineMessage(detail))
             }

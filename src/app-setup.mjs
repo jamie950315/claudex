@@ -121,7 +121,8 @@ export class AppSetup {
   }
 
   async collaborationRequest(method, params = {}) {
-    if (this.readOnly && (method !== 'list' && method !== 'models' && method !== 'mod_wake_status'
+    const reads = ['list', 'models', 'mod_wake_status', 'cache_warm_settings', 'cache_warm_list', 'codex_cache_warm_list'];
+    if (this.readOnly && (!reads.includes(method) || method === 'cache_warm_settings' && params.defaultLimit !== undefined
       || method === 'models' && (params.defaultModels !== undefined || params.defaultEfforts !== undefined || params.defaultPermission !== undefined)))
       this.requireWritable();
     const root = join(this.root, 'collaboration');
@@ -187,6 +188,19 @@ export class AppSetup {
       ...(defaultEfforts === undefined ? {} : { defaultEfforts }),
       ...(defaultPermission === undefined ? {} : { defaultPermission }),
     });
+  }
+
+  /** The limit a warming on command uses when it is given none, shared by
+   * Claude and Codex. Saving it changes no enrollment and starts no model work.
+   * The enrolled counts are a best-effort summary of the two status lists. */
+  async warmSettings(defaultLimit) {
+    if (defaultLimit !== undefined) this.requireWritable();
+    const settings = await this.collaborationRequest('cache_warm_settings', defaultLimit === undefined ? {} : { defaultLimit });
+    const enrolled = async method => {
+      try { return (await this.collaborationRequest(method)).policies.filter(policy => policy.enabled === true).length; }
+      catch { return null; }
+    };
+    return { ...settings, active: { claude: await enrolled('cache_warm_list'), codex: await enrolled('codex_cache_warm_list') } };
   }
 
   /** The user's confirmation in the app is the operator attestation for work the

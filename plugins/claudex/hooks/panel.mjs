@@ -151,7 +151,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       Select({ key: 'cache-limit', label: t('Default warming limit'), value: state.cacheForm.limit,
         options: [...new Set([...WARM_LIMIT_PRESETS, state.cacheForm.limit])].map(value => ({ value, label: value })),
         onSelect: value => { if (controller.state === state) controller.cacheEdit(host(), 'limit', value); } }),
-      muted(t('Used when /claudex:warm on is given no limit. It changes neither a running warm-up nor Codex.')),
+      muted(t('Used when /claudex:warm on is given no limit. Saved in Claudex and shared with Codex; a running warm-up is unchanged.')),
       button('cache-preview-limit', t('Preview default limit'), () => controller.cachePrepare(host(), 'limit')),
     ]));
     if (state.cachePending) body.push(section(t('Review cache change'), [

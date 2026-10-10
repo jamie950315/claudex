@@ -148,3 +148,20 @@ export function formatWarmSummary(result = {}, { provider, sessionId, cwd, t = i
     used: count(policy.totals?.refreshes), max: count(policy.maxRefreshes), time: time(policy.until) })] : [];
   return [heading, tokens, history, t('Next warm: {next}', { next }), ...limits].join('\n');
 }
+
+export const DEFAULT_WARM_LIMIT = 'for=4h';
+
+/** The limit /claudex:warm on uses when it is given none. Whether it fits the
+ * refresh interval is decided when warming is enabled; here it must be valid
+ * for at least one TTL and may not name a day of the month. */
+export function defaultWarmLimit(value, now = Date.now()) {
+  if (value === undefined || value === null) return DEFAULT_WARM_LIMIT;
+  const limit = value;
+  if (typeof limit !== 'string' || limit.length > 32 || /^until=[^:]*:[^:]*:/.test(limit)) throw new Error(`Default warming limit must be ${WARM_LIMIT_HELP}, without a day of the month.`);
+  let failure;
+  for (const intervalMinutes of [55, 4]) {
+    try { if (!parseWarmLimits([limit], { intervalMinutes, now }).rest.length) return limit; }
+    catch (error) { failure = error; }
+  }
+  throw failure ?? new Error(`Default warming limit must be ${WARM_LIMIT_HELP}.`);
+}

@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { handleCodexWarmCommand, parseCodexWarmCommand } from '../src/codex-warm-command.mjs';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
-import { serveCollaborationSocket } from '../src/collaboration-transport.mjs';
+import { serveCollaborationSocket, callCollaboration } from '../src/collaboration-transport.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const TOKEN = '22222222-2222-4222-8222-222222222222';
@@ -18,13 +18,13 @@ test('Codex warm command parsing is exact and never interprets quoted or embedde
   for (const text of ['Hello', 'Explain /claudex:warm on', '`/claudex:warm on`', '/claudex:warmup on'])
     assert.equal(parseCodexWarmCommand(text), null);
   assert.deepEqual(parseCodexWarmCommand(' /claudex:warm '), { action: 'status' });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on'), { action: 'on', bounds: { maxMinutes: 240, maxRefreshes: 9 } });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on'), { action: 'on', bounds: { maxMinutes: 240, maxRefreshes: 9 }, defaulted: true });
   assert.deepEqual(parseCodexWarmCommand(`/claudex:warm confirm ${TOKEN} accept-best-effort`), { action: 'confirm', confirmationId: TOKEN });
   const noon = new Date(2026, 0, 1, 12, 0).getTime();
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on rounds=4', noon), { action: 'on', bounds: { maxMinutes: 10080, maxRefreshes: 4 } });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on for=2h', noon), { action: 'on', bounds: { maxMinutes: 120, maxRefreshes: 4 } });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=13:30', noon), { action: 'on', bounds: { maxMinutes: 90, maxRefreshes: 3 } });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=2:12:00', noon), { action: 'on', bounds: { maxMinutes: 1440, maxRefreshes: 57 } });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on rounds=4', noon), { action: 'on', bounds: { maxMinutes: 10080, maxRefreshes: 4 }, defaulted: false });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on for=2h', noon), { action: 'on', bounds: { maxMinutes: 120, maxRefreshes: 4 }, defaulted: false });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=13:30', noon), { action: 'on', bounds: { maxMinutes: 90, maxRefreshes: 3 }, defaulted: false });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on until=2:12:00', noon), { action: 'on', bounds: { maxMinutes: 1440, maxRefreshes: 57 }, defaulted: false });
   for (const text of ['/claudex:warm on for=10m', '/claudex:warm on rounds=0', '/claudex:warm on for=2h until=15:00', '/claudex:warm on rounds=2 for=2h', '/claudex:warm on rounds=404', '/claudex:warm off rounds=2'])
     assert.throws(() => parseCodexWarmCommand(text, noon));
   for (const text of ['/claudex:warm on 5m', '/claudex:warm on ttl=1h', '/claudex:warm off --session other',
@@ -100,6 +100,15 @@ test('one on command enables its exact chat over private Unix RPC without a seco
   assert.equal(status.policies[0].maxRefreshes, 7); assert.equal(status.policies[0].maxMinutes, 10080);
   await send('/claudex:warm off');
   status = await hub.codexCacheWarm.list(); assert.equal(status.policies[0].enabled, false);
+  // Without a limit the default saved in Claudex applies: four hours, then the saved choice.
+  await send('/claudex:warm on');
+  status = await hub.codexCacheWarm.list(); assert.equal(status.policies[0].maxMinutes, 240); assert.equal(status.policies[0].maxRefreshes, 9);
+  await send('/claudex:warm off');
+  await callCollaboration({ root: hub.root, peer: 'claude', token: hub.controllerToken, method: 'cache_warm_settings', params: { defaultLimit: 'for=2h' } });
+  await send('/claudex:warm on');
+  status = await hub.codexCacheWarm.list(); assert.equal(status.policies[0].maxMinutes, 120); assert.equal(status.policies[0].maxRefreshes, 4);
+  await send('/claudex:warm off');
+  status = await hub.codexCacheWarm.list(); assert.equal(status.policies[0].enabled, false);
   assert.equal((await hub.codexCacheWarm.list()).attemptCount, 0);
 });
 
@@ -111,6 +120,7 @@ test('direct on keeps the context fence and never retries an uncertain internal 
       stopped: async () => null, verify: async () => ++checks === 1 || scenario !== 'context-changed',
       call: async (_root, method, params) => {
         methods.push(method);
+        if (method === 'cache_warm_settings') return { defaultLimit: 'for=4h', saved: false };
         if (method === 'codex_cache_warm_prepare') return { ...preview, ...(scenario === 'wrong-target' ? { sessionId: TOKEN } : {}) };
         assert.equal(method, 'codex_cache_warm_confirm');
         assert.deepEqual(params, { sessionId: ID, cwd: '/fixture', bestEffort: true, confirmationId: TOKEN });
@@ -119,6 +129,6 @@ test('direct on keeps the context fence and never retries an uncertain internal 
     });
     assert.equal(reply.decision, 'block'); assert.match(reply.reason, /Operation not confirmed/);
     assert.deepEqual(methods, scenario === 'uncertain'
-      ? ['codex_cache_warm_prepare', 'codex_cache_warm_confirm'] : ['codex_cache_warm_prepare']);
+      ? ['cache_warm_settings', 'codex_cache_warm_prepare', 'codex_cache_warm_confirm'] : ['cache_warm_settings', 'codex_cache_warm_prepare']);
   }
 });

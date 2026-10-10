@@ -321,5 +321,21 @@
   "Waiting for Desktop integration": "等待桌面整合",
   "Restart Claude to finish updating": "請重新啟動 Claude 以完成更新",
   "Claude Desktop loaded a new version before Claudex could prepare it. Quit and reopen Claude to restore folder placement, conversation wake and the /claudex command. Synchronization is not affected.": "Claude Desktop 在 Claudex 準備好之前就載入了新版本。請結束並重新開啟 Claude，以恢復資料夾歸位、對話喚醒與 /claudex 指令。同步不受影響。",
-  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex 正在恢復桌面整合並等待檢查完成，不需要您操作。"
+  "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.": "Claudex 正在恢復桌面整合並等待檢查完成，不需要您操作。",
+  "Cache settings…": "快取設定…",
+  "Cache settings": "快取設定",
+  "Default warming limit": "預設保溫上限",
+  "Used when /claudex:warm on is given no limit, in Claude and in Codex. Saving changes no running warm-up and starts no model work.": "在 Claude 與 Codex 中，/claudex:warm on 未指定上限時使用。儲存不會改變進行中的保溫，也不會啟動任何模型工作。",
+  "Turn warming on or off inside a conversation with /claudex:warm on, off or status.": "在對話中輸入 /claudex:warm on、off 或 status 來開啟、關閉或查看保溫。",
+  "%@ warm requests": "%@ 次保溫請求",
+  "1 hour": "1 小時",
+  "%@ hours": "%@ 小時",
+  "Save": "儲存",
+  "Reload": "重新載入",
+  "Conversations being kept warm now: Claude %@ · Codex %@": "目前保溫中的對話：Claude %@ · Codex %@",
+  "Loading cache settings…": "正在載入快取設定…",
+  "Saving cache settings…": "正在儲存快取設定…",
+  "Default warming limit saved. Running warm-ups are unchanged.": "預設保溫上限已儲存。進行中的保溫不受影響。",
+  "Cache settings could not be loaded or saved.": "無法載入或儲存快取設定。",
+  "Cache settings are unavailable. Check that Claudex is running, then reload.": "無法取得快取設定。請確認 Claudex 正在執行，然後重新載入。"
 }

@@ -1,5 +1,6 @@
 // This client observes only native metadata. The broker owns policy and budgets.
-import { parseWarmLimits, WARM_LIMIT_HELP } from './cache-warm-display.mjs';
+import { parseWarmLimits, WARM_LIMIT_HELP, defaultWarmLimit } from './cache-warm-display.mjs';
+export { defaultWarmLimit };
 
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const count = value => Number.isSafeInteger(value) && value >= 0;
@@ -7,25 +8,6 @@ const token = () => `warm-${Date.now()}-${Math.random().toString(36).slice(2, 14
 const defaults = Object.freeze({ ttl: '1h', maxMinutes: 60, maxRefreshes: 3, maxReadTokens: null, maxOutputTokens: 256 });
 export const CACHE_TTL_PREFERENCE_KEY = 'cache-ttl-preference';
 export const CACHE_TTL_LAST_KEY = 'cache-ttl-last-choice';
-export const CACHE_WARM_LIMIT_KEY = 'cache-warm-default-limit';
-export const DEFAULT_WARM_LIMIT = 'for=4h';
-
-/** The limit /claudex:warm on uses when it is given none. Whether it fits the
- * refresh interval is decided when warming is enabled; here it must be valid
- * for at least one TTL and may not name a day of the month. */
-export function defaultWarmLimit(value, now = Date.now()) {
-  if (value === undefined || value === null) return DEFAULT_WARM_LIMIT;
-  const limit = typeof value === 'string' ? value : value?.limit;
-  if (typeof value === 'object' && (value.version !== 1 || Object.keys(value).length !== 2) || typeof limit !== 'string'
-    || limit.length > 32 || /^until=[^:]*:[^:]*:/.test(limit)) throw new Error(`Default warming limit must be ${WARM_LIMIT_HELP}, without a day of the month.`);
-  let failure;
-  for (const intervalMinutes of [55, 4]) {
-    try { if (!parseWarmLimits([limit], { intervalMinutes, now }).rest.length) return limit; }
-    catch (error) { failure = error; }
-  }
-  throw failure ?? new Error(`Default warming limit must be ${WARM_LIMIT_HELP}.`);
-}
-
 export function cacheTtlPreference(value) {
   if (value === undefined || value === null) return { version: 1, mode: 'session' };
   if (value?.version !== 1 || !['session', 'remember', 'default'].includes(value.mode)
@@ -101,8 +83,12 @@ export function createCacheWarmClient() {
       throw new Error('Saved last TTL choice is invalid; no native setting was changed.');
     return last?.revision === preference.revision ? { ...preference, ttl: last.ttl } : preference;
   }
-  // Hosts without the store entry keep the built-in default.
-  const readLimit = async host => defaultWarmLimit(await host.readWarmLimit?.(), await host.now());
+  // The default limit lives in the Claudex broker, shared with Codex and the app.
+  const limitSetting = async (host, params = {}) => {
+    const result = await host.bridge({ version: 1, op: 'cache-warm', action: 'settings', context: await host.context(), params });
+    return defaultWarmLimit(result?.defaultLimit, await host.now());
+  };
+  const readLimit = host => limitSetting(host);
   async function savePreference(host, preference) {
     await host.writeTtlPreference(preference);
     if (!preferenceEqual(await readPreference(host), preference)) throw new Error('Cache TTL preference readback failed; the saved preference may have changed.');
@@ -238,6 +224,8 @@ export function createCacheWarmClient() {
       // remember-last. Preserve the native origin; do not manufacture a user.
       words = words.map((word, index) => index > 0 && words[0] === 'on' && ['5m', '1h'].includes(word) ? `ttl=${word}` : word);
       if (words[0] !== 'on') return this.command(host, words, origin, undefined, { sessionOnly: true });
+      // Refuse a model- or plugin-authored command before it reads any setting.
+      if (!['composer', 'bridge', 'sdk', 'claudex-panel'].includes(origin?.kind)) throw new Error('Cache warming requires an explicit native user command.');
       // The user's own limits become the existing bounds. The refresh interval
       // follows the TTL this command will apply: its own, else the saved one.
       const ttlWord = words.find(word => word.startsWith('ttl='));
@@ -282,7 +270,7 @@ export function createCacheWarmClient() {
         confirmation = { id: token(), b, epoch: b.epoch, expiresAt: await host.now() + 120000, limit, limitOnly: true, sessionOnly };
         return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
           defaultLimit: limit, previousDefaultLimit: previous,
-          effects: 'Save the limit that /claudex:warm on uses when it is given none, for sessions sharing this native plugin store. It changes neither the native TTL, a running warm-up nor Codex, and never enables model work.',
+          effects: 'Save the limit that /claudex:warm on uses when it is given none, in Claudex, for Claude and Codex alike. It changes neither the native TTL nor a running warm-up, and never enables model work.',
           expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
       }
       if (words[0] === 'on' || words[0] === 'preference' || words[0] === 'ttl') {
@@ -332,8 +320,7 @@ export function createCacheWarmClient() {
           throw new Error('Cache warming confirmation expired or its native context changed.');
         if (prepared.limitOnly) {
           if (await host.now() >= prepared.expiresAt || !await safeContext(b, prepared.epoch)) throw new Error('Cache warming confirmation expired or its native context changed.');
-          await host.writeWarmLimit({ version: 1, limit: prepared.limit });
-          if (await readLimit(host) !== prepared.limit) throw new Error('Default warming limit readback failed; the saved limit may have changed.');
+          if (await limitSetting(host, { defaultLimit: prepared.limit }) !== prepared.limit || await readLimit(host) !== prepared.limit) throw new Error('Default warming limit readback failed; the saved limit may have changed.');
           return { state: 'limit-saved', defaultLimit: prepared.limit, local: this.snapshot() };
         }
         if (b.phase !== 'idle' || b.pending || b.dispatch || b.checking || b.configuring || b.restoring || b.turn?.attemptId)

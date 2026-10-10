@@ -22,7 +22,6 @@ async function fixture() {
     readTtlPreference: async () => preference,
     writeTtlPreference: async value => { preference = structuredClone(value); },
     readWarmLimit: async () => warmLimit,
-    writeWarmLimit: async value => { warmLimit = structuredClone(value); },
     readLastTtlChoice: async revision => lastChoices.get(revision),
     writeLastTtlChoice: async value => { lastChoices.set(value.revision, structuredClone(value)); },
     checkCacheTtl: async desired => { const state = await host.readCacheTtl(); assertNativeCacheTtlChange(state, desired); return state; },
@@ -34,6 +33,11 @@ async function fixture() {
     readPrompt: async () => ({ text: draft, cursor: draft.length }),
     after(ms, callback) { const timer = { due: now + ms, callback, cancelled: false, cancel() { this.cancelled = true; } }; timers.push(timer); return timer; },
     async bridge(request) {
+      // The shared default limit is a broker setting; reading it is not session traffic.
+      if (request.action === 'settings') {
+        if (request.params.defaultLimit !== undefined) warmLimit = request.params.defaultLimit;
+        return { defaultLimit: warmLimit ?? 'for=4h', saved: warmLimit !== undefined };
+      }
       calls.push(request);
       if (hooks[request.action]) return hooks[request.action](request);
       if (request.action === 'configure') { enabled = request.params.enabled; return { policy: { enabled } }; }
@@ -143,7 +147,7 @@ test('a saved default limit replaces four hours for commands without one, throug
   const configured = () => f.calls.filter(call => JSON.stringify(call).includes('"configure"')).length;
   assert.equal(await f.host.readWarmLimit(), undefined); assert.equal(configured(), 0);
   const saved = await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin);
-  assert.equal(saved.state, 'limit-saved'); assert.deepEqual(await f.host.readWarmLimit(), { version: 1, limit: 'rounds=7' });
+  assert.equal(saved.state, 'limit-saved'); assert.equal(await f.host.readWarmLimit(), 'rounds=7');
   assert.equal(f.client.snapshot().enabled, false); assert.equal(configured(), 0);
   await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin), /expired|changed/);
   await f.client.sessionCommand(f.host, ['on'], origin);
@@ -155,8 +159,8 @@ test('a saved default limit replaces four hours for commands without one, throug
     await assert.rejects(f.client.command(f.host, ['limit', word], origin), /limit|Limits|fits/i);
   await assert.rejects(f.client.command(f.host, ['limit', 'for=8h'], { kind: 'plugin' }), /explicit native user/);
   // Valid for one TTL is enough to save; the other TTL refuses it when warming is enabled.
-  assert.equal(defaultWarmLimit('rounds=300'), 'rounds=300'); assert.equal(defaultWarmLimit({ version: 1, limit: 'until=18:30' }), 'until=18:30');
-  assert.throws(() => defaultWarmLimit({ version: 2, limit: 'for=4h' }), /Default warming limit/);
+  assert.equal(defaultWarmLimit('rounds=300'), 'rounds=300'); assert.equal(defaultWarmLimit('until=18:30'), 'until=18:30');
+  assert.throws(() => defaultWarmLimit({ version: 1, limit: 'for=4h' }), /Default warming limit/);
   const strict = await fixture();
   const next = await strict.client.command(strict.host, ['limit', 'rounds=300'], origin);
   await strict.client.command(strict.host, ['confirm', next.confirm.split(' ').at(-1)], origin);

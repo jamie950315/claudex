@@ -254,7 +254,7 @@ export async function buildClaudexApp({
     await run(join(runtime, 'bin', 'node'), [join(runtime, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), 'ls', '--omit=dev', '--depth=0'], { cwd: engine });
     await writeFile(join(contents, 'Info.plist'), plist(manifest.version));
     await writeFile(join(stageRoot, 'node-entitlements.plist'), '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/></dict></plist>');
-    const swiftSources = ['main.swift', 'SetupModel.swift', 'StatusController.swift', 'Localization.swift'].map(name => join(source, 'native', 'ClaudexApp', name));
+    const swiftSources = ['main.swift', 'SetupModel.swift', 'StatusController.swift', 'Localization.swift', 'CacheSettings.swift'].map(name => join(source, 'native', 'ClaudexApp', name));
     swiftSources.push(join(source, 'native', 'ClaudexStatus', 'StatusModel.swift'));
     for (const swiftSource of swiftSources) await requireRegular(swiftSource);
     await run('/usr/bin/xcrun', ['swiftc', ...swiftSources, '-framework', 'Cocoa', '-framework', 'UserNotifications', '-target', `${arch}-apple-macos13.0`, '-o', join(macos, 'ClaudexApp')]);

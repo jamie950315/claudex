@@ -9,6 +9,7 @@ import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict 
 import { ChatMailbox } from './chat-mailbox.mjs';
 import { CacheWarmManager } from './cache-warm.mjs';
 import { CodexCacheWarmer } from './codex-cache-warm.mjs';
+import { defaultWarmLimit, DEFAULT_WARM_LIMIT } from '../plugins/claudex/hooks/cache-warm-display.mjs';
 import { readAppStopState } from './app-stop-state.mjs';
 import { dispatchModWake, modSessionObservation, modDeliveryDiagnosis } from './mod-wake-broker.mjs';
 import { enrichChatTitles } from './chat-titles.mjs';
@@ -224,6 +225,8 @@ export class CollaborationHub extends EventEmitter {
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
+    if (Object.hasOwn(this.state, 'defaultWarmLimit') && typeof this.state.defaultWarmLimit !== 'string')
+      throw new Error('Malformed default warming limit.');
     if (this.state.nativeWakeRoute !== undefined && !['mod', 'mod-self', 'renderer'].includes(this.state.nativeWakeRoute))
       throw new Error('Malformed Claude native wake route.');
     if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
@@ -440,7 +443,20 @@ export class CollaborationHub extends EventEmitter {
     if (method.startsWith('cache_warm_')) {
       if (actor.task) throw new Error('Only an external controller or its native Mod may manage cache warming.');
       const action = method.slice('cache_warm_'.length);
-      if (!['list', 'configure', 'observe', 'claim', 'check', 'receipt'].includes(action)) throw new Error('Unsupported cache-warm operation.');
+      if (!['list', 'configure', 'observe', 'claim', 'check', 'receipt', 'settings'].includes(action)) throw new Error('Unsupported cache-warm operation.');
+      // The limit an on command uses when it is given none: one saved choice
+      // for Claude, Codex and the app. Saving it changes no enrollment.
+      if (action === 'settings') {
+        if (Object.keys(params).some(key => !['sessionId', 'cwd', 'defaultLimit'].includes(key))) throw new Error('Unsupported cache-warm fields.');
+        const update = Object.hasOwn(params, 'defaultLimit'), selected = update ? defaultWarmLimit(params.defaultLimit) : null;
+        if (update && typeof params.defaultLimit !== 'string') throw new Error('defaultLimit must be a limit word.');
+        if (update && this.closed) throw new Error('Broker is stopping; new mutations are refused.');
+        return this.mutate(state => {
+          if (this.actor(envelope, state).task) throw new Error('Only an external controller or its native Mod may manage cache warming.');
+          if (update) state.defaultWarmLimit = selected;
+          return { defaultLimit: state.defaultWarmLimit ?? DEFAULT_WARM_LIMIT, saved: state.defaultWarmLimit !== undefined };
+        });
+      }
       const allowed = {
         list: ['sessionId', 'cwd'],
         configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'ttl', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens'],

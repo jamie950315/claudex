@@ -60,6 +60,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var claudeEffortDraft: String?
     private var permissionPicker: NSPopUpButton!
     private var permissionDraft: String?
+    private var cacheSettings: CacheSettingsWindowController?
     private var modelMessage: NSTextField!
     private var modelSaveButton: NSButton!
     private var modelReloadButton: NSButton!
@@ -164,6 +165,9 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         claudeEffortDraft = claudeEffortPicker?.selectedItem?.representedObject as? String
         permissionDraft = permissionPicker?.selectedItem?.representedObject as? String
         Localization.shared.select(code, persist: !inspectOnly && !uiSmoke)
+        // The cache window is rebuilt in the new language the next time it opens.
+        cacheSettings?.close()
+        cacheSettings = nil
         let visible = window.isVisible
         let frame = window.frame
         window.delegate = nil
@@ -188,6 +192,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         // Defer, never cancel: a logout or restart must wait for the services
         // to stop instead of being aborted by this app.
         stopping = true
+        cacheSettings?.stopping = true
         updateRefreshTimer()
         health.headline = nil
         health.descriptionText = nil
@@ -234,6 +239,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             case .failure(let error):
                 NSApp.reply(toApplicationShouldTerminate: false)
                 self.stopping = false
+                self.cacheSettings?.stopping = false
                 self.languagePicker.isEnabled = true
                 self.bindHealthView()
                 self.health.refresh()
@@ -315,6 +321,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         menu.addItem(heading)
         addMenu(menu, "Open Claudex…", #selector(showSetup(_:)))
         addMenu(menu, "Refresh status", #selector(refreshStatus(_:)))
+        if !uiSmoke { addMenu(menu, "Cache settings…", #selector(showCacheSettings(_:))) }
         menu.addItem(.separator())
         addMenu(menu, "Open Codex", #selector(openCodex(_:)))
         addMenu(menu, "Open Claude", #selector(openClaude(_:)))
@@ -495,6 +502,10 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         refreshButton = NSButton(title: L("Refresh status"), target: self, action: #selector(refreshStatus(_:)))
         refreshButton.bezelStyle = .rounded
         footer.addArrangedSubview(refreshButton)
+        let cacheButton = NSButton(title: L("Cache settings…"), target: self, action: #selector(showCacheSettings(_:)))
+        cacheButton.bezelStyle = .rounded
+        cacheButton.isEnabled = !uiSmoke
+        footer.addArrangedSubview(cacheButton)
         detailsButton = NSButton(title: L("Show advanced diagnostics"), target: self, action: #selector(toggleDetails(_:)))
         detailsButton!.bezelStyle = .inline
         footer.addArrangedSubview(detailsButton!)
@@ -871,6 +882,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             self.updateRefreshTimer(windowVisible: true, synthetic: true)
             pollingValid = pollingValid && self.refreshTimer == nil
             self.stopping = false
+            self.cacheSettings?.stopping = false
             if pollingValid { print("Claudex inspection timer: lifecycle ready") }
             self.window.setContentSize(NSSize(width: 560, height: 480))
             self.window.contentView?.layoutSubtreeIfNeeded()
@@ -1131,6 +1143,14 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         fitWindowToContent()
         pageScroll.contentView.scroll(to: .zero)
         pageScroll.reflectScrolledClipView(pageScroll.contentView)
+    }
+    /// A separate window for the shared warming default. Read-only modes can
+    /// look but not save; opening it never changes a setting.
+    @objc private func showCacheSettings(_ sender: Any?) {
+        guard !uiSmoke && !stopping else { return }
+        NSApp.setActivationPolicy(.regular)
+        if cacheSettings == nil { cacheSettings = CacheSettingsWindowController(runner: runner, writable: !inspectOnly) }
+        cacheSettings?.show()
     }
     @objc private func showDiagnostics(_ sender: Any?) { health.showDiagnostics(sender) }
     @objc private func notifications(_ sender: Any?) { health.notificationAction(sender) }
