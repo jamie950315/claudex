@@ -554,6 +554,10 @@ minutes and treats a declined quit as final; `claude-relaunch-status.json` shows
 the last decision. Otherwise the resource stays `restart-required` until you
 restart Claude yourself; the app then shows "Restart Claude to finish
 updating" and sends a notification, which ends once Claude has been reopened.
+The request is saved, so restarting Claudex before Claude does not lose it.
+While Claude Desktop starts it rewrites its cache; a frontend check interrupted
+by that is shown as checking for up to a minute before it is reported as a
+failure.
 A draft typed into the composer within those first
 moments cannot be seen from outside and would be lost. Set
 `rendererAdapters.relaunchAfterUpdate` to `false` in `config.json` to disable the

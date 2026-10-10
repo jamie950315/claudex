@@ -32,13 +32,27 @@ const heldReason = 'Desktop integration is waiting for Claudex to resume and fin
  */
 export async function startClaudeRendererMaintenance({ root, home = homedir(), folders = true, signal, onStatus = () => {},
   settleMs = 1000, watchFactory = watch, watchAppStop, maintain = ensureClaudeRendererAdapters, stopState = readAppStopState,
-  writeStatus = writeDiagnosticJSON, afterPass } = {}) {
+  writeStatus = writeDiagnosticJSON, afterPass, settlingMs = 60_000 } = {}) {
   if (!Number.isInteger(settleMs) || settleMs < 0 || settleMs > 60_000) throw new Error('Invalid renderer maintenance settle interval');
   let closed = false, dirty = false, pending, timer, watcher, stopWatcher, closing, notificationsFailed = false, publication = Promise.resolve();
   const files = new Set(); let anonymous = true, observations = new Map();
   let transientRetryUsed = false;
   let cacheRevalidationNeeded = false;
   let lastFailure;
+  // Desktop rewrites its cache for some seconds while it starts, so the one
+  // immediate rediscovery can meet the same eviction. Such a refusal is shown
+  // as checking while the cache may still be settling. The timer only ends
+  // that claim; it inspects nothing and retries nothing.
+  let transientSince = 0, settleTimer;
+  const settled = () => { transientSince = 0; clearTimeout(settleTimer); settleTimer = undefined; };
+  const settling = explicit => {
+    clearTimeout(settleTimer); settleTimer = undefined;
+    transientSince ||= Date.now();
+    const left = transientSince + settlingMs - Date.now();
+    if (left <= 0 || notificationsFailed) return false;
+    settleTimer = setTimeout(() => { settleTimer = undefined; if (!closed && !pending) void present(explicit); }, left); settleTimer.unref?.();
+    return true;
+  };
   const rememberFailure = (phase, code) => {
     lastFailure = { at: Date.now(), phase, code: diagnosticCodes.has(code) ? code : 'validation-refused' };
   };
@@ -95,13 +109,15 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           if (refused) rememberFailure(phase, (refusals.find(a => !transientCodes.has(a.failure?.code)) ?? refusals[0]).failure?.code);
           else if (lastFailure && !lastFailure.recoveredAt) lastFailure.recoveredAt = Date.now();
           const retryScheduled = retryInterruptedCache();
-          const checking = retryScheduled && refusals.every(a => transientCodes.has(a.failure?.code));
-          const summary = await present({ state: notificationsFailed ? 'skipped' : checking ? 'checking' : refused ? 'degraded' : 'ready',
-            ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : checking ? { reason: checkingReason } : {}),
-            entry: result.entry, missingChunks: result.missingChunks,
+          const transient = refused && refusals.every(a => transientCodes.has(a.failure?.code));
+          const details = { entry: result.entry, missingChunks: result.missingChunks,
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
               { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation', 'search'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
-                ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) });
+                ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) };
+          if (!transient) settled();
+          const checking = transient && (settling({ state: 'degraded', ...details }) || retryScheduled);
+          const summary = await present({ state: notificationsFailed ? 'skipped' : checking ? 'checking' : refused ? 'degraded' : 'ready',
+            ...(notificationsFailed ? { reason: 'Frontend cache notifications unavailable' } : checking ? { reason: checkingReason } : {}), ...details });
           // An optional consumer of coherent passes (the one-time Desktop
           // restart after a frontend update). Its failure is not a cache failure.
           if (afterPass && !closed && !signal?.aborted) await (async () => afterPass(summary))().catch(() => {});
@@ -116,10 +132,13 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           // Chromium can evict an entry during the inventory walk, after its
           // last notification. Re-discover once in this pass; never replay a
           // native operation or poll persistent validation/permission failures.
-          const checking = retryInterruptedCache() && !notificationsFailed;
+          const refusal = { reason: `Frontend cache discovery or maintenance refused; no native work was restarted [${phase}/${code}]`, failure: { phase, code } };
+          const retryScheduled = retryInterruptedCache();
+          if (held || !transientCodes.has(code)) settled();
+          const checking = !held && transientCodes.has(code) && (settling({ state: 'skipped', ...refusal }) || retryScheduled) && !notificationsFailed;
           if (!closed) await present({ state: held && !notificationsFailed ? 'held' : checking ? 'checking' : 'skipped',
-            reason: held && !notificationsFailed ? heldReason : checking ? checkingReason : `Frontend cache discovery or maintenance refused; no native work was restarted [${phase}/${code}]`,
-            ...(!held ? { failure: { phase, code } } : {}) });
+            reason: held && !notificationsFailed ? heldReason : checking ? checkingReason : refusal.reason,
+            ...(!held ? { failure: refusal.failure } : {}) });
         }
       }
     })().finally(() => { pending = undefined; });
@@ -136,7 +155,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
   };
   const close = () => {
     if (closing) return closing;
-    closed = true; clearTimeout(timer); watcher?.close(); stopWatcher?.close(); signal?.removeEventListener('abort', abort);
+    closed = true; clearTimeout(timer); clearTimeout(settleTimer); watcher?.close(); stopWatcher?.close(); signal?.removeEventListener('abort', abort);
     closing = (async () => { await pending; await publication; })();
     return closing;
   };

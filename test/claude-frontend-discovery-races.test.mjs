@@ -71,7 +71,7 @@ test('two real unrelated inventory evictions recover on the final vanished-entry
     }));
     assert.equal(calls, 2); assert.equal(evicted, 2);
     assert.deepEqual(statuses.map(status => [status.state, status.failure.code]),
-      [['checking', 'cache-entry-missing'], ['skipped', 'cache-entry-missing']]);
+      [['checking', 'cache-entry-missing'], ['checking', 'cache-entry-missing']]);
     await new Promise(resolve => setTimeout(resolve, 30));
     assert.equal(calls, 2, 'no third attempt without another native cache event');
     for (const resource of Object.values(f.resources)) assert.deepEqual(await readFile(resource.path), resource.bytes);
@@ -84,6 +84,8 @@ test('two real unrelated inventory evictions recover on the final vanished-entry
       })]);
     } finally { clearTimeout(timeout); }
     assert.equal(calls, 3);
+    // A starting Desktop evicts entries like this; the recovery is never shown as a failure.
+    assert.equal(statuses.some(status => ['skipped', 'degraded'].includes(status.state)), false);
     assert.ok(Object.values(statuses.at(-1).adapters).every(adapter => adapter.status === 'installed'));
     assert.equal(statuses.at(-1).lastFailure.code, 'cache-entry-missing');
     assert.ok(statuses.at(-1).lastFailure.recoveredAt >= statuses.at(-1).lastFailure.at);

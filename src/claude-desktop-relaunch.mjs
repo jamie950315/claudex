@@ -26,10 +26,11 @@ export function createClaudeDesktopRelaunch({ root, run = execute, now = () => D
   } } = {}) {
   if (!root || !Number.isInteger(windowMs) || windowMs < 1000 || windowMs > 600_000) throw new Error('Invalid Claude relaunch configuration.');
   const recordPath = join(root, 'claude-relaunch.json'), statusPath = join(root, 'claude-relaunch-status.json');
-  // Adapters newly written for an entry since this watcher started. A resource
-  // found already installed may have been loaded and proves nothing to repair.
-  const written = new Map();
-  let writtenAt = 0;
+  // Adapters newly written for one entry and the time of the last write. A
+  // resource found already installed may have been loaded and proves nothing to
+  // repair. The record keeps them, so a watcher restart before the Desktop
+  // restart neither forgets the request nor the automatic restart.
+  let pending = null, loaded = false;
   let last = null;
   const report = async value => {
     const key = JSON.stringify(value);
@@ -41,16 +42,29 @@ export function createClaudeDesktopRelaunch({ root, run = execute, now = () => D
   async function consider(summary, { automatic = true } = {}) {
     const entry = summary?.entry?.asset, adapters = Object.entries(summary?.adapters ?? {});
     if (typeof entry !== 'string' || !adapters.length) return null;
+    const record = await readJSON(recordPath, { version: 1, attempts: [] });
+    let attempts = Array.isArray(record?.attempts) ? record.attempts : [];
+    if (!loaded) {
+      loaded = true;
+      const saved = record?.pending;
+      if (typeof saved?.entry === 'string' && Array.isArray(saved.adapters) && Number.isFinite(saved.writtenAt))
+        pending = { entry: saved.entry, adapters: new Set(saved.adapters.filter(name => typeof name === 'string')), writtenAt: saved.writtenAt };
+    }
+    const save = () => writeJSON(recordPath, { version: 1, attempts,
+      ...(pending?.adapters.size ? { pending: { entry: pending.entry, adapters: [...pending.adapters], writtenAt: pending.writtenAt } } : {}) });
+    const settle = async () => { pending = null; await save(); };
     // Writes are remembered from every pass of this entry, including a pass
     // still waiting for a late chunk; only a coherent pass may act on them.
-    const pending = written.get(entry) ?? new Set();
-    for (const [name, adapter] of adapters) if (adapter.status === 'installed' && adapter.changed === true) { pending.add(name); writtenAt = now(); }
+    let changed = false;
+    if (pending?.entry !== entry) { changed = Boolean(pending?.adapters.size); pending = { entry, adapters: new Set(), writtenAt: 0 }; }
+    for (const [name, adapter] of adapters) if (adapter.status === 'installed' && adapter.changed === true) {
+      pending.adapters.add(name); pending.writtenAt = now(); changed = true;
+    }
+    if (changed) await save();
+    const writtenAt = pending.writtenAt;
     const manual = reason => report({ state: 'restart-required', entry, reason, requiredSince: writtenAt });
-    written.clear(); written.set(entry, pending);
-    if (summary.state !== 'ready' || !pending.size) return null;
+    if (summary.state !== 'ready' || !pending.adapters.size) return null;
     if ((await stopState(root))?.stopped) return report({ state: 'waiting', entry, waiting: 'Claudex is stopped' });
-    const record = await readJSON(recordPath, { version: 1, attempts: [] });
-    const attempts = Array.isArray(record?.attempts) ? record.attempts : [];
 
     const processes = parseProcesses(await text('/bin/ps', ['-axo', 'pid=,ppid=,command=']));
     const mains = processes.filter(item => item.ppid === 1 && /\.app\/Contents\/MacOS\/Claude$/.test(item.command));
@@ -61,7 +75,7 @@ export function createClaudeDesktopRelaunch({ root, run = execute, now = () => D
     const startedAt = Date.parse(await text('/bin/ps', ['-o', 'lstart=', '-p', String(main.pid)]));
     if (!Number.isFinite(startedAt)) return manual('Desktop start time unavailable');
     // A Desktop started after the last write has loaded the written files.
-    if (startedAt > writtenAt) { written.delete(entry); return report({ state: 'current', entry }); }
+    if (startedAt > writtenAt) { await settle(); return report({ state: 'current', entry }); }
     // Lazy chunks arrive over the first seconds. Restarting before every
     // adapter is written would load the late ones unpatched again. Should one
     // never arrive, the user is asked once Desktop is no longer newly started.
@@ -78,16 +92,16 @@ export function createClaudeDesktopRelaunch({ root, run = execute, now = () => D
     if (Object.values(inbox.entries ?? {}).some(event => event.side === 'claude' && event.kind === 'started' && event.at >= startedAt))
       return manual('Claude activity since start');
 
-    const attempt = { entry, pid: main.pid, startedAt, at: now(), outcome: 'quitting' };
-    const save = outcome => writeJSON(recordPath, { version: 1, attempts: [...attempts, { ...attempt, outcome }].slice(-8) });
-    await save('quitting');
+    const earlier = attempts, attempt = { entry, pid: main.pid, startedAt, at: now() };
+    const outcome = value => { attempts = [...earlier, { ...attempt, outcome: value }].slice(-8); return save(); };
+    await outcome('quitting');
     await report({ state: 'relaunching', entry, pid: main.pid });
     await run('/usr/bin/osascript', ['-e', `tell application id ${JSON.stringify(CLAUDE_DESKTOP_BUNDLE_ID)} to quit`]).catch(() => {});
     for (const deadline = now() + quitTimeoutMs; now() < deadline && alive(main.pid);) await sleep(1000);
-    if (alive(main.pid)) { await save('quit-declined'); return manual('Desktop declined to quit'); }
+    if (alive(main.pid)) { await outcome('quit-declined'); return manual('Desktop declined to quit'); }
     await run('/usr/bin/open', ['-b', CLAUDE_DESKTOP_BUNDLE_ID]);
-    await save('relaunched');
-    written.delete(entry);
+    pending = null;
+    await outcome('relaunched');
     return report({ state: 'relaunched', entry, previousPid: main.pid });
   }
   return { consider };

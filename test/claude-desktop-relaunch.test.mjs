@@ -14,10 +14,12 @@ const installed = (changed, names = ['folders', 'chatWake', 'ownerWake', 'comman
   Object.fromEntries(names.map(name => [name, { status: 'installed', asset: `${name}.js`, changed }]));
 const pass = (entry, adapters, state = 'ready') => ({ state, entry: { asset: entry }, adapters });
 
-async function fixture(t, { age = 20_000, extra = [], bundleId = CLAUDE_DESKTOP_BUNDLE_ID, entries = {}, mains = 1, quits = true, stopped } = {}) {
-  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-claude-relaunch-')));
-  t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(join(root, 'sync-events'));
+async function fixture(t, { age = 20_000, extra = [], bundleId = CLAUDE_DESKTOP_BUNDLE_ID, entries = {}, mains = 1, quits = true, stopped, root } = {}) {
+  if (!root) {
+    root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-claude-relaunch-')));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    await mkdir(join(root, 'sync-events'));
+  }
   await writeFile(join(root, 'sync-events', 'inbox.json'), JSON.stringify({ version: 1, entries }));
   const calls = []; let running = true, clock = NOW;
   const run = async (command, args) => {
@@ -121,4 +123,32 @@ test('renderer maintenance hands each coherent pass to its consumer and survives
   notify('change', null); await new Promise(resolve => setTimeout(resolve, 20)); await maintenance.close();
   assert.equal(seen.length, 2); assert.equal(seen[0].entry.asset, 'index-new.js'); assert.equal(seen[0].adapters.commands.changed, true);
   assert.deepEqual(statuses, ['ready', 'ready']);
+});
+
+test('a restart request survives a watcher restart and ends once Desktop was started after the write', async t => {
+  const first = await fixture(t, { age: 61_000 });
+  const asked = await first.relaunch.consider(pass('index-p.js', installed(true)));
+  assert.equal(asked.reason, 'Desktop is no longer newly started');
+  assert.deepEqual((await first.record()).pending, { entry: 'index-p.js', adapters: ['folders', 'chatWake', 'ownerWake', 'commands'], writtenAt: asked.requiredSince });
+  // A new watcher finds everything already installed; the saved write still asks.
+  const second = await fixture(t, { age: 61_000, root: first.root });
+  const again = await second.relaunch.consider(pass('index-p.js', installed(false)));
+  assert.equal(again.state, 'restart-required'); assert.equal(again.requiredSince, asked.requiredSince);
+  const third = await fixture(t, { age: -5_000, root: first.root });
+  assert.equal((await third.relaunch.consider(pass('index-p.js', installed(false)))).state, 'current');
+  assert.equal((await third.record()).pending, undefined);
+  assert.equal(await (await fixture(t, { age: 61_000, root: first.root })).relaunch.consider(pass('index-p.js', installed(false))), null);
+  assert.equal([first, second, third].reduce((sum, f) => sum + f.count('/usr/bin/osascript'), 0), 0);
+
+  // A write saved while Claudex was stopped still earns the automatic restart, and another frontend drops it.
+  const held = await fixture(t, { stopped: true });
+  assert.equal((await held.relaunch.consider(pass('index-q.js', installed(true)))).state, 'waiting');
+  const resumed = await fixture(t, { root: held.root });
+  assert.equal((await resumed.relaunch.consider(pass('index-q.js', installed(false)))).state, 'relaunched');
+  const record = await resumed.record();
+  assert.equal(record.pending, undefined); assert.equal(record.attempts.at(-1).outcome, 'relaunched');
+  const other = await fixture(t, { age: 61_000 });
+  await other.relaunch.consider(pass('index-r.js', installed(true)));
+  assert.equal(await (await fixture(t, { age: 61_000, root: other.root })).relaunch.consider(pass('index-s.js', installed(false))), null);
+  assert.equal((await other.record()).pending, undefined);
 });

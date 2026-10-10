@@ -358,7 +358,7 @@ test('automatic cache notifications reapply all adapters to a new graph, seriali
 
 for(const partial of [false,true]) test(`a refused pass is revalidated on unchanged asset hints; partial=${partial}`,async t=>{
   const f=await fixture(t),statuses=[];let notify,calls=0,refuse=false;
-  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,
+  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,settlingMs:20,
     maintain:async(options,deps)=>{calls++;if(refuse&&!partial)throw new Error('Claude frontend graph: graph changed during discovery');const result=await ensureClaudeRendererAdapters(options,deps);if(refuse)result.adapters.ownerWake={status:'skipped'};return result},
     watchFactory:(_path,listener)=>{notify=listener;const e=new EventEmitter;e.close=()=>{};return e},
     writeStatus:async(_path,value)=>statuses.push(value)});
@@ -375,11 +375,14 @@ for(const partial of [false,true]) test(`a refused pass is revalidated on unchan
 
 for(const persistent of [false,true]) test(`an evicted cache entry gets one full rediscovery without another notification; persistent=${persistent}`,async t=>{
   const f=await fixture(t),statuses=[];let calls=0;
-  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,
+  const maintenance=await startClaudeRendererMaintenance({...f,settleMs:0,settlingMs:40,
     maintain:async()=>{calls++;if(calls===1||persistent)throw Object.assign(new Error('Cache entry disappeared'),{code:'CLAUDEX_FRONTEND_CACHE_MISSING'});return{entry:{},adapters:{}}},
     watchFactory:()=>{const e=new EventEmitter;e.close=()=>{};return e},writeStatus:async(_path,s)=>statuses.push(s)});
   t.after(()=>maintenance.close());
-  assert.equal(calls,2);assert.equal(statuses.at(-1).state,persistent?'skipped':'ready');
+  // A second eviction is still shown as checking while the cache may be settling; the claim then
+  // ends by itself, without another inspection.
+  assert.equal(calls,2);assert.equal(statuses.at(-1).state,persistent?'checking':'ready');
+  if(persistent){for(let i=0;i<100&&statuses.at(-1).state!=='skipped';i++)await new Promise(r=>setTimeout(r,10));assert.equal(statuses.at(-1).state,'skipped');assert.equal(calls,2)}
   assert.equal(statuses[0].state,'checking');
   assert.equal(statuses.at(-1).lastFailure.code,'cache-entry-missing');
   if(persistent){assert.equal(statuses.at(-1).lastFailure.recoveredAt,undefined);assert.match(statuses.at(-1).reason,/discovery-or-installation\/cache-entry-missing/)}
@@ -476,7 +479,8 @@ test('a vanished unknown cache hint recovers an interrupted inventory, then heal
     writeStatus: async (_path, status) => statuses.push(status),
   });
   t.after(() => maintenance.close());
-  assert.equal(calls, 2); assert.equal(statuses.at(-1).state, 'skipped');
+  assert.equal(calls, 2); assert.equal(statuses.at(-1).state, 'checking');
+  assert.deepEqual(statuses.at(-1).failure, { phase: 'discovery-or-installation', code: 'cache-entry-missing' });
   // This deleted filename was never part of a successfully proved graph.
   notify('rename', '0000000000000000_0');
   for (let i = 0; i < 100 && statuses.at(-1).state !== 'ready'; i++) await new Promise(resolve => setTimeout(resolve, 10));

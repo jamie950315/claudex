@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.5 packages Claude Mod 0.8.15. Keep application and Mod versions
+Claudex.app 1.3.6 packages Claude Mod 0.8.15. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -1953,6 +1953,12 @@ Do not schedule polling or retry timers. A missing cache entry or changed graph
 during discovery permits one immediate full rediscovery in the same pass; a
 second failure stays explicit until another native event. While that one immediate
 rediscovery is scheduled, report checking, not ready or a request for user action.
+Desktop rewrites its cache for some seconds while it starts (observed: both
+discoveries met an eviction, the next cache event recovered ten seconds later),
+so a refusal made only of those transient codes keeps reporting checking for
+sixty seconds from the first one. One timer ends that claim and publishes the
+explicit refusal; it inspects nothing and retries nothing. A coherent pass or a
+permanent refusal ends it at once.
 An app-stop hold reports held until its existing release-triggered discovery completes;
 never record that normal lifecycle fence as a frontend failure or poll its release.
 Mixed permanent refusals still degrade; genuine map/history errors keep priority.
@@ -2015,7 +2021,10 @@ is restart-required; unchanged cache is load-not-verified, never proof of live
 reception. By user decision src/claude-desktop-relaunch.mjs makes that restart
 once, automatically, only while Claude Desktop has just been opened: every
 enabled adapter is installed for the entry and at least one was written since
-the watcher started, the single verified Desktop process is at most one minute
+the watcher started (or saved by an earlier watcher: claude-relaunch.json keeps
+the entry, its written adapters and the last write time until Desktop has been
+started after that write, another frontend replaces it or the restart is made),
+the single verified Desktop process is at most one minute
 old, no Claude prompt was submitted since it started and Claudex is not stopped.
 A Code session process beneath it is not work: Desktop starts one for the
 session it reopens (observed eight seconds after launch, before any input). It quits through the application
