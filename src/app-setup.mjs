@@ -195,8 +195,9 @@ export class AppSetup {
    * Claude Code startup TTL preference and the enrollments still running.
    * Saving changes no enrollment and starts no model work. The list is a
    * bounded, content-free summary of the two status lists. */
-  async warmSettings({ defaultLimit, ttlMode, ttl } = {}) {
+  async warmSettings({ defaultLimit, ttlMode, ttl, onUserMessage } = {}) {
     const params = {};
+    if (onUserMessage !== undefined) params.onUserMessage = onUserMessage;
     if (defaultLimit !== undefined) params.defaultLimit = defaultLimit;
     if (ttlMode !== undefined) {
       if (!['session', 'remember', 'default'].includes(ttlMode) || (ttlMode === 'session' ? ttl !== undefined : !['1h', '5m'].includes(ttl)))
@@ -210,7 +211,7 @@ export class AppSetup {
     // What the next Claude Code session restores: a remembered choice wins over the TTL it was saved with.
     const startupTtl = !preference || preference.mode === 'session' ? null
       : preference.mode === 'remember' && last?.revision === preference.revision ? last.ttl : preference.ttl;
-    return { defaultLimit: settings.defaultLimit, saved: settings.saved,
+    return { defaultLimit: settings.defaultLimit, saved: settings.saved, onUserMessage: settings.onUserMessage ?? 'continue',
       ttlMode: preference?.mode ?? null, startupTtl, ...await this.warmEnrollments() };
   }
 

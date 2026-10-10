@@ -353,5 +353,9 @@
   "Stop warming %@": "Interrompi il mantenimento di %@",
   "Stopping warming…": "Interruzione del mantenimento…",
   "Warming stopped for that conversation.": "Mantenimento interrotto per quella conversazione.",
-  "Cache settings saved. Running warm-ups are unchanged.": "Impostazioni cache salvate. I mantenimenti in corso restano invariati."
+  "Cache settings saved. Running warm-ups are unchanged.": "Impostazioni cache salvate. I mantenimenti in corso restano invariati.",
+  "When you send a message": "Quando invii un messaggio",
+  "Keep warming and restart the timer": "Continua il mantenimento e riavvia il timer",
+  "Stop warming": "Interrompi il mantenimento",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "Cosa succede a una conversazione mantenuta attiva quando le invii un tuo messaggio. Continua: la prossima richiesta parte dalla tua risposta e il limite resta invariato. Interrompi: il mantenimento termina con quel messaggio. Vale anche per i mantenimenti già in corso."
 }

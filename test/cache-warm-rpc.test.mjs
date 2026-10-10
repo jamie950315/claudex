@@ -63,7 +63,7 @@ test('application stop blocks warming but permits status, disable and ended obse
 });
 
 test('the default warming limit is one broker setting for the Mod, Codex and the app', async t => {
-  const f = await fixture(t), unsaved = { ttlPreference: null, ttlLastChoice: null };
+  const f = await fixture(t), unsaved = { onUserMessage: 'continue', ttlPreference: null, ttlLastChoice: null };
   assert.deepEqual(await f.call('settings'), { defaultLimit: 'for=4h', saved: false, ...unsaved });
   assert.deepEqual(await f.rpc('cache_warm_settings', {}, 'codex'), { defaultLimit: 'for=4h', saved: false, ...unsaved });
   assert.deepEqual(await f.call('settings', { defaultLimit: 'rounds=12' }), { defaultLimit: 'rounds=12', saved: true, ...unsaved });
@@ -82,6 +82,10 @@ test('the default warming limit is one broker setting for the Mod, Codex and the
   await assert.rejects(f.call('settings', { ttlLastChoice: { revision: 'warm-fixture-1', ttl: '5m' } }), /does not belong/);
   for (const ttlPreference of [null, 'default', { version: 1, mode: 'default' }, { version: 1, mode: 'session', ttl: '1h' }, { version: 2, mode: 'session' }, { version: 1, mode: 'remember', ttl: '1h' }])
     await assert.rejects(f.rpc('cache_warm_settings', { ttlPreference }), /preference/i);
+  // What a message of the user does to a running schedule is one more shared choice.
+  assert.equal((await f.call('settings', { onUserMessage: 'stop' })).onUserMessage, 'stop');
+  assert.equal((await f.rpc('cache_warm_settings', {}, 'codex')).onUserMessage, 'stop');
+  for (const onUserMessage of ['restart', '', null, true]) await assert.rejects(f.rpc('cache_warm_settings', { onUserMessage }), /continue or stop/);
   assert.equal((await f.rpc('cache_warm_settings')).defaultLimit, 'rounds=12');
   // Saving a default enrolls nothing, and reading it stays possible while the app is stopped.
   assert.equal((await f.call('list')).policies.length, 0);
@@ -89,6 +93,7 @@ test('the default warming limit is one broker setting for the Mod, Codex and the
   assert.equal((await f.call('settings')).defaultLimit, 'rounds=12');
   await assert.rejects(f.call('settings', { defaultLimit: 'for=1h' }), { code: 'APP_STOPPED' });
   await assert.rejects(f.call('settings', { ttlPreference: { version: 1, mode: 'session' } }), { code: 'APP_STOPPED' });
+  await assert.rejects(f.call('settings', { onUserMessage: 'continue' }), { code: 'APP_STOPPED' });
   const old = f.hub.actor;
   f.hub.actor = () => ({ peer: 'claude', task: { id: 'worker' } });
   try { await assert.rejects(f.hub.dispatch({ method: 'cache_warm_settings', params: {}, peer: 'claude', token: 'unused' }), /external controller/); }

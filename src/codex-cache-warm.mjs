@@ -26,9 +26,9 @@ function bounds(p) {
 /** Broker-owned native observer and finite scheduler. No external usage reports
  * or dispatch claims are accepted. Status never starts a native connection. */
 export class CodexCacheWarmer {
-  constructor({ root, stopped = async () => false, native = createCodexCacheNative({ syncRoot: dirname(root) }), now = Date.now,
+  constructor({ root, stopped = async () => false, onUserMessage, native = createCodexCacheNative({ syncRoot: dirname(root) }), now = Date.now,
     after = (ms, callback) => { const timer = setTimeout(callback, ms); timer.unref?.(); return { cancel: () => clearTimeout(timer) }; } }) {
-    this.manager = new CacheWarmManager({ root, provider: 'codex', stopped, now });
+    this.manager = new CacheWarmManager({ root, provider: 'codex', stopped, now, onUserMessage });
     Object.assign(this, { stopped, native, now, after });
     this.bindings = new Map(); this.previews = new Map(); this.serial = Promise.resolve(); this.closed = false;
   }

@@ -95,7 +95,8 @@ function validate(state, provider) {
 /** Broker-owned bounded intent ledger. Native observations are ephemeral and
  * never restore a dispatch lease after restart. No method performs inference. */
 export class CacheWarmManager {
-  constructor({ root, provider = 'claude', now = Date.now, stopped = async () => false }) {
+  constructor({ root, provider = 'claude', now = Date.now, stopped = async () => false, onUserMessage = () => 'continue' }) {
+    this.onUserMessage = onUserMessage;
     requireValue(typeof root === 'string' && isAbsolute(root) && resolve(root) === root);
     requireValue(['claude', 'codex'].includes(provider), 'Unsupported cache-warming provider.');
     this.provider = provider;
@@ -307,7 +308,9 @@ export class CacheWarmManager {
         return { observed: false, reason: 'stale-sample' };
       const b = { sessionId: input.sessionId, cwd: input.cwd, instanceId: input.instanceId,
         sequence: input.sequence, epoch: input.epoch, phase: input.phase,
-        sample: sample ?? (!replaced && old?.epoch === input.epoch ? old.sample : null) };
+        sample: sample ?? (!replaced && old?.epoch === input.epoch ? old.sample : null),
+        // The turn that first gave this binding native evidence.
+        evidenceEpoch: !replaced && old?.evidenceEpoch !== undefined ? old.evidenceEpoch : sample ? input.epoch : undefined };
       let changed = false;
       for (const a of this.attempts(input.sessionId)) {
         if (a.state === 'reserved' && (replaced || input.phase !== 'idle' || input.epoch !== a.epoch || sample && sample.id !== a.sampleId)) {
@@ -362,6 +365,15 @@ export class CacheWarmManager {
       }
       const p = this.policy(input.sessionId);
       if (p?.enabled && (replaced || input.phase === 'ended')) { p.enabled = false; p.reason = 'native-binding-changed'; changed = true; }
+      // By user decision a message of the user's own can end the schedule
+      // instead of only restarting its timer. A response that is not a warm
+      // request, in a later turn than the one that first gave evidence, is that
+      // message; the first turn after enrollment only supplies the evidence.
+      if (p?.enabled && sample && !repeated && !ownAttemptId && !replaced && old?.evidenceEpoch !== undefined
+        && input.epoch > old.evidenceEpoch && this.onUserMessage() === 'stop') {
+        p.enabled = false; p.reason = 'user-message'; changed = true;
+        for (const a of this.attempts(input.sessionId)) if (a.state === 'reserved') { a.state = 'revoked'; a.reason = 'user-message'; }
+      }
       // A normal coding turn may make several tool-use requests before its
       // final answer. These busy steps refresh usage evidence, not the timer;
       // they are not a failed warming attempt and must not revoke its opt-in.

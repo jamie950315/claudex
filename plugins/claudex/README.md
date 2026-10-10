@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.20
+# Claudex native companion, 0.8.21
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -92,7 +92,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.20-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.21-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

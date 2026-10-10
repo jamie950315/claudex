@@ -6,7 +6,7 @@ const { positionals, values } = parseArgs({ allowPositionals: true, options: {
   root: { type: 'string' }, provider: { type: 'string' }, 'runtime-directory': { type: 'string' },
   'codex-model': { type: 'string' }, 'claude-model': { type: 'string' },
   'codex-effort': { type: 'string' }, 'claude-effort': { type: 'string' },
-  'default-permission': { type: 'string' }, 'default-limit': { type: 'string' }, 'ttl-mode': { type: 'string' }, ttl: { type: 'string' },
+  'default-permission': { type: 'string' }, 'default-limit': { type: 'string' }, 'ttl-mode': { type: 'string' }, 'on-message': { type: 'string' }, ttl: { type: 'string' },
   session: { type: 'string' }, cwd: { type: 'string' }, 'read-only': { type: 'boolean' },
   receiver: { type: 'string' }, enable: { type: 'boolean' },
 } });
@@ -37,7 +37,7 @@ try {
       claude: values['claude-effort'].trim() || null,
     } : undefined, values['default-permission']);
   }
-  else if (action === 'warm-settings') result = await app.warmSettings({ defaultLimit: values['default-limit'], ttlMode: values['ttl-mode'], ttl: values.ttl });
+  else if (action === 'warm-settings') result = await app.warmSettings({ defaultLimit: values['default-limit'], ttlMode: values['ttl-mode'], ttl: values.ttl, onUserMessage: values['on-message'] });
   else if (action === 'warm-stop') result = await app.warmStop({ provider: values.provider, sessionId: values.session, cwd: values.cwd });
   else if (action === 'resolve-uncertain') result = await app.resolveUncertain();
   else throw new Error('Unsupported setup action.');

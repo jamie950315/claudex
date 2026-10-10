@@ -353,5 +353,9 @@
   "Stop warming %@": "Detener el refresco de %@",
   "Stopping warming…": "Deteniendo el refresco…",
   "Warming stopped for that conversation.": "Refresco detenido para esa conversación.",
-  "Cache settings saved. Running warm-ups are unchanged.": "Ajustes de caché guardados. Los refrescos en curso no cambian."
+  "Cache settings saved. Running warm-ups are unchanged.": "Ajustes de caché guardados. Los refrescos en curso no cambian.",
+  "When you send a message": "Cuando envías un mensaje",
+  "Keep warming and restart the timer": "Seguir refrescando y reiniciar el temporizador",
+  "Stop warming": "Detener el refresco",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "Qué ocurre con una conversación que se mantiene activa cuando le envías un mensaje propio. Seguir: la siguiente solicitud se cuenta desde tu respuesta y el límite no cambia. Detener: el refresco termina con ese mensaje. También se aplica a los refrescos en curso."
 }

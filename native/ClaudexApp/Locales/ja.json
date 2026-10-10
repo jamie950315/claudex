@@ -353,5 +353,9 @@
   "Stop warming %@": "%@ のウォームを停止",
   "Stopping warming…": "ウォームを停止中…",
   "Warming stopped for that conversation.": "その会話のウォームを停止しました。",
-  "Cache settings saved. Running warm-ups are unchanged.": "キャッシュ設定を保存しました。実行中のウォームは変わりません。"
+  "Cache settings saved. Running warm-ups are unchanged.": "キャッシュ設定を保存しました。実行中のウォームは変わりません。",
+  "When you send a message": "メッセージを送信したとき",
+  "Keep warming and restart the timer": "ウォームを続け、タイマーをやり直す",
+  "Stop warming": "ウォームを停止",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "ウォーム中の会話に自分でメッセージを送ったときの動作です。続行：次のウォーム要求はその返信から計り直し、上限はそのままです。停止：そのメッセージでウォームを終了します。実行中のウォームにも適用されます。"
 }

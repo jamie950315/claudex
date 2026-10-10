@@ -353,5 +353,9 @@
   "Stop warming %@": "Stop warming %@",
   "Stopping warming…": "Stopping warming…",
   "Warming stopped for that conversation.": "Warming stopped for that conversation.",
-  "Cache settings saved. Running warm-ups are unchanged.": "Cache settings saved. Running warm-ups are unchanged."
+  "Cache settings saved. Running warm-ups are unchanged.": "Cache settings saved. Running warm-ups are unchanged.",
+  "When you send a message": "When you send a message",
+  "Keep warming and restart the timer": "Keep warming and restart the timer",
+  "Stop warming": "Stop warming",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too."
 }

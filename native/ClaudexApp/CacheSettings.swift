@@ -13,6 +13,7 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow!
     private var content: NSView!
     private var limitPicker: NSPopUpButton!
+    private var messagePicker: NSPopUpButton!
     private var modePicker: NSPopUpButton!
     private var ttlPicker: NSPopUpButton!
     private var legacy: NSTextField!
@@ -101,6 +102,17 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         let first = separator()
         stack.addArrangedSubview(first)
 
+        stack.addArrangedSubview(heading("When you send a message", scope: "Claude Code and Codex"))
+        messagePicker = picker("When you send a message")
+        for (value, title) in zip(WarmSettings.messageModes, ["Keep warming and restart the timer", "Stop warming"]) {
+            messagePicker.addItem(withTitle: L(title))
+            messagePicker.lastItem?.representedObject = value
+        }
+        stack.addArrangedSubview(messagePicker)
+        stack.addArrangedSubview(wrapping(L("What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.")))
+        let third = separator()
+        stack.addArrangedSubview(third)
+
         stack.addArrangedSubview(heading("Startup cache TTL", scope: "Claude Code only"))
         let ttlRow = NSStackView()
         ttlRow.orientation = .horizontal
@@ -155,7 +167,7 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             content.widthAnchor.constraint(equalToConstant: width),
         ])
-        for line in [first, second] { line.widthAnchor.constraint(equalToConstant: width - 44).isActive = true }
+        for line in [first, second, third] { line.widthAnchor.constraint(equalToConstant: width - 44).isActive = true }
         rows.widthAnchor.constraint(equalToConstant: width - 44).isActive = true
         window.contentView = content
         show(nil)
@@ -179,6 +191,7 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
             limitPicker.lastItem?.representedObject = value
             if value == limit { limitPicker.select(limitPicker.lastItem) }
         }
+        messagePicker.selectItem(at: WarmSettings.messageModes.firstIndex(of: loaded?.onUserMessage ?? "continue") ?? 0)
         modePicker.selectItem(at: WarmSettings.ttlModes.firstIndex(of: loaded?.ttlMode ?? "session") ?? 0)
         ttlPicker.selectItem(at: WarmSettings.ttls.firstIndex(of: loaded?.startupTtl ?? "1h") ?? 0)
         legacy.isHidden = loaded == nil || loaded?.ttlMode != nil
@@ -216,6 +229,8 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
     private var chosenLimit: String? { limitPicker.selectedItem?.representedObject as? String }
     private var chosenMode: String { modePicker.selectedItem?.representedObject as? String ?? "session" }
     private var chosenTtl: String { ttlPicker.selectedItem?.representedObject as? String ?? "1h" }
+    private var chosenMessage: String { messagePicker.selectedItem?.representedObject as? String ?? "continue" }
+    private var messageChanged: Bool { settings != nil && chosenMessage != (settings?.onUserMessage ?? "continue") }
     private var limitChanged: Bool { chosenLimit != nil && chosenLimit != settings?.defaultLimit }
     private var ttlChanged: Bool {
         guard let settings else { return false }
@@ -229,21 +244,22 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         let editable = writable && !busy && !stopping && settings != nil
         limitPicker.isEnabled = editable
         modePicker.isEnabled = editable
+        messagePicker.isEnabled = editable
         ttlPicker.isEnabled = editable && chosenMode != "session"
-        saveButton.isEnabled = editable && (limitChanged || ttlChanged)
+        saveButton.isEnabled = editable && (limitChanged || ttlChanged || messageChanged)
         reloadButton.isEnabled = !busy && !stopping
         for case let row as NSStackView in rows.arrangedSubviews {
             for case let button as NSButton in row.arrangedSubviews { button.isEnabled = editable }
         }
     }
 
-    private func load(limit: String? = nil, mode: String? = nil, ttl: String? = nil, stop: WarmSettings.Enrollment? = nil) {
+    private func load(limit: String? = nil, mode: String? = nil, ttl: String? = nil, onMessage: String? = nil, stop: WarmSettings.Enrollment? = nil) {
         guard !busy && !stopping else { return }
-        let saving = limit != nil || mode != nil
+        let saving = limit != nil || mode != nil || onMessage != nil
         busy = true
         message.stringValue = L(stop != nil ? "Stopping warming…" : saving ? "Saving cache settings…" : "Loading cache settings…")
         updateControls()
-        runner.warmSettings(defaultLimit: limit, ttlMode: mode, ttl: ttl, stop: stop) { [weak self] result in
+        runner.warmSettings(defaultLimit: limit, ttlMode: mode, ttl: ttl, onMessage: onMessage, stop: stop) { [weak self] result in
             guard let self else { return }
             self.busy = false
             switch result {
@@ -284,8 +300,9 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         let limit = limitChanged ? chosenLimit : nil
         if let limit, !WarmSettings.valid(limit) { return }
         let mode = ttlChanged ? chosenMode : nil
-        guard limit != nil || mode != nil else { return }
-        load(limit: limit, mode: mode, ttl: mode == nil || mode == "session" ? nil : chosenTtl)
+        let onMessage = messageChanged ? chosenMessage : nil
+        guard limit != nil || mode != nil || onMessage != nil else { return }
+        load(limit: limit, mode: mode, ttl: mode == nil || mode == "session" ? nil : chosenTtl, onMessage: onMessage)
     }
     @objc private func stop(_ sender: NSButton) {
         guard writable, let warming = settings?.warming, warming.indices.contains(sender.tag) else { return }

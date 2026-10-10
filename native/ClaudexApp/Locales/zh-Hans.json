@@ -353,5 +353,9 @@
   "Stop warming %@": "停止保温 %@",
   "Stopping warming…": "正在停止保温…",
   "Warming stopped for that conversation.": "已停止该对话的保温。",
-  "Cache settings saved. Running warm-ups are unchanged.": "缓存设置已保存。进行中的保温不受影响。"
+  "Cache settings saved. Running warm-ups are unchanged.": "缓存设置已保存。进行中的保温不受影响。",
+  "When you send a message": "你发送消息时",
+  "Keep warming and restart the timer": "继续保温并重新计时",
+  "Stop warming": "停止保温",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "保温中的对话收到你自己发送的消息时如何处理。继续：下一次保温请求从该次回复重新计时，上限保持不变。停止：保温在那条消息结束。对已在进行的保温同样适用。"
 }

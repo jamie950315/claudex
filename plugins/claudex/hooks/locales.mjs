@@ -23,6 +23,7 @@ const rows = {
   "Waiting for the native session": ["等待原生對話連線", "等待原生会话连接", "ネイティブセッション待ち", "네이티브 세션 대기", "Esperando la sesión nativa", "Wartet auf native Sitzung", "En attente de la session native", "In attesa della sessione nativa"],
   "Waiting for the current turn": ["等待目前回合結束", "等待当前回合结束", "現在のターン完了待ち", "현재 턴 완료 대기", "Esperando el turno actual", "Wartet auf aktuellen Durchgang", "En attente du tour actuel", "In attesa del turno attuale"],
   "Warming in progress": ["暖機進行中", "正在预热", "キャッシュ維持中", "웜 요청 진행 중", "Refresco en curso", "Warmhaltung läuft", "Maintien en cours", "Aggiornamento in corso"],
+  "Stopped by your message": ["因你送出訊息而停止", "因你发送消息而停止", "メッセージ送信により停止", "메시지 전송으로 중지됨", "Detenido por tu mensaje", "Durch deine Nachricht gestoppt", "Arrêté par votre message", "Interrotto dal tuo messaggio"],
   "Time limit reached": ["已達時間上限", "已达时间上限", "時間上限に到達", "시간 제한 도달", "Límite de tiempo alcanzado", "Zeitlimit erreicht", "Limite de durée atteinte", "Limite di tempo raggiunto"],
   "Refresh limit reached": ["已達暖機次數上限", "已达预热次数上限", "キャッシュ維持回数の上限に到達", "웜 요청 횟수 제한 도달", "Límite de refrescos alcanzado", "Warmhaltungslimit erreicht", "Limite de maintiens atteinte", "Limite di aggiornamenti raggiunto"],
   "Token budget reached": ["已達 token 預算上限", "已达 token 预算上限", "トークン予算に到達", "토큰 예산 도달", "Presupuesto de tokens agotado", "Token-Budget erreicht", "Budget de tokens atteint", "Budget token raggiunto"],

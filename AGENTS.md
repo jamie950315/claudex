@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.18 packages Claude Mod 0.8.20. Keep application and Mod versions
+Claudex.app 1.3.19 packages Claude Mod 0.8.21. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -388,7 +388,15 @@ revision itself; the session TTL of a running process still changes only
 inside that session. The window lists enrollments that are enabled and not
 past their end, by exact session and directory, and its Stop uses the
 controller's existing off/disable request for exactly that one. It never
-enables warming, and read-only modes can look but not save or stop. Saving changes neither
+enables warming, and read-only modes can look but not save or stop.
+By user decision the same record holds `warmOnUserMessage`: `continue` (the
+default: a message of the user restarts the timer from its reply and the
+limit stays) or `stop` (that message ends the schedule with reason
+`user-message`). Both managers read it when the response arrives, so it
+applies to running schedules. The message is a response that is not a warm
+request, in a later turn than the one that first gave the binding evidence;
+the first turn after enrollment only supplies evidence, and a turn start or a
+command that makes no model request never counts. Saving changes neither
 the TTL nor a running policy and enrolls nothing. Whether the saved limit fits
 a session's interval is decided, and refused explicitly, when warming is
 enabled; an unreachable broker fails the `on` command instead of guessing. A time limit allows the requests that fit in it; rounds

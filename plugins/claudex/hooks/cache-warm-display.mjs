@@ -67,6 +67,7 @@ const reasons = {
   'attempt-pending': 'Warming in progress',
   'duration-limit': 'Time limit reached',
   'refresh-limit': 'Refresh limit reached',
+  'user-message': 'Stopped by your message',
   'read-budget': 'Token budget reached',
   'output-budget': 'Token budget reached',
   'actual-budget-exceeded': 'Token budget reached',
@@ -84,7 +85,7 @@ const reasons = {
   'native-uncertain': 'Delivery uncertain; stopped',
   uncertain: 'Delivery uncertain; stopped',
 };
-const terminal = new Set(['duration-limit', 'refresh-limit', 'read-budget', 'output-budget', 'actual-budget-exceeded',
+const terminal = new Set(['duration-limit', 'refresh-limit', 'user-message', 'read-budget', 'output-budget', 'actual-budget-exceeded',
   'cache-expired', 'native-ended', 'broker-stopping', 'broker-stopped', 'broker-restarted', 'app-stopped']);
 
 // Date getters work in the native Mod runtime without depending on Intl support.

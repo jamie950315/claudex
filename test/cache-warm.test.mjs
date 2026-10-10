@@ -615,3 +615,39 @@ test('Codex cache hits remain candidates until exact own idle finalizes every re
     assert.equal(entry.responseIds.length, 2);
   }
 });
+
+test('a message of the user ends the schedule only when that is the chosen setting', async t => {
+  for (const mode of ['continue', 'stop']) {
+    let setting = mode;
+    const f = await fixture(t, { onUserMessage: () => setting });
+    // Enrollment before any reply: the first turn only supplies the evidence,
+    // including its tool-use steps.
+    await f.observe(); await f.enable();
+    await f.observe({ phase: 'busy', epoch: 1 });
+    f.tick(1000); await f.observe({ phase: 'busy', epoch: 1, sample: f.sample({ stopReason: 'tool_use' }) });
+    f.tick(1000); const first = await f.observe({ epoch: 1, sample: f.sample() });
+    assert.equal(first.policy.enabled, true);
+    // A warm request of its own never counts as the user's message.
+    f.tick(239000);
+    const claimed = await f.claim({ epoch: 1 }); assert.equal(claimed.claimed, true);
+    await f.check(claimed.attempt.id, { epoch: 1 });
+    await f.observe({ phase: 'busy', epoch: 2, attemptId: claimed.attempt.id }); await f.receipt(claimed.attempt.id, 'submitted');
+    f.tick(1000);
+    const warmed = await f.observe({ epoch: 2, attemptId: claimed.attempt.id,
+      sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0, attemptId: claimed.attempt.id }) });
+    assert.equal(warmed.policy.enabled, true);
+    // Starting a turn changes nothing by itself; its first response is the message.
+    assert.equal((await f.observe({ phase: 'busy', epoch: 3 })).policy.enabled, true);
+    f.tick(1000);
+    const next = await f.observe({ epoch: 3, sample: f.sample({ cacheReadTokens: 6000 }) });
+    assert.equal(next.policy.enabled, mode === 'continue');
+    assert.equal(next.reason, mode === 'continue' ? 'scheduled' : 'user-message');
+    if (mode === 'continue') {
+      assert.ok(next.nextAt > f.now());
+      // The setting is read when the message arrives, so it applies to a running schedule.
+      setting = 'stop'; f.tick(1000); await f.observe({ phase: 'busy', epoch: 4 });
+      const later = await f.observe({ epoch: 4, sample: f.sample({ cacheReadTokens: 6000 }) });
+      assert.equal(later.reason, 'user-message');
+    } else assert.equal((await f.claim({ epoch: 3 })).claimed, false);
+  }
+});

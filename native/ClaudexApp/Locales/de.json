@@ -353,5 +353,9 @@
   "Stop warming %@": "Warmhaltung für %@ stoppen",
   "Stopping warming…": "Warmhaltung wird gestoppt…",
   "Warming stopped for that conversation.": "Warmhaltung für diese Unterhaltung gestoppt.",
-  "Cache settings saved. Running warm-ups are unchanged.": "Cache-Einstellungen gespeichert. Laufende Warmhaltungen bleiben unverändert."
+  "Cache settings saved. Running warm-ups are unchanged.": "Cache-Einstellungen gespeichert. Laufende Warmhaltungen bleiben unverändert.",
+  "When you send a message": "Wenn du eine Nachricht sendest",
+  "Keep warming and restart the timer": "Weiter warmhalten und Timer neu starten",
+  "Stop warming": "Warmhaltung stoppen",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "Was mit einer warmgehaltenen Unterhaltung geschieht, wenn du ihr selbst eine Nachricht sendest. Weiter: Die nächste Warmhalte-Anfrage zählt ab deiner Antwort, das Limit bleibt. Stoppen: Die Warmhaltung endet mit dieser Nachricht. Gilt auch für bereits laufende Warmhaltungen."
 }

@@ -353,5 +353,9 @@
   "Stop warming %@": "%@ 웜 중지",
   "Stopping warming…": "웜 기능을 중지하는 중…",
   "Warming stopped for that conversation.": "해당 대화의 웜 기능을 중지했습니다.",
-  "Cache settings saved. Running warm-ups are unchanged.": "캐시 설정을 저장했습니다. 진행 중인 웜 요청은 그대로입니다."
+  "Cache settings saved. Running warm-ups are unchanged.": "캐시 설정을 저장했습니다. 진행 중인 웜 요청은 그대로입니다.",
+  "When you send a message": "메시지를 보낼 때",
+  "Keep warming and restart the timer": "웜을 유지하고 타이머 다시 시작",
+  "Stop warming": "웜 중지",
+  "What happens to a conversation that is being kept warm when you send it a message of your own. Keep: the next warm request is timed from your reply and the limit stays as it was. Stop: warming ends with that message. It applies to warm-ups already running too.": "웜 상태를 유지 중인 대화에 직접 메시지를 보낼 때의 동작입니다. 유지: 다음 웜 요청은 그 답변부터 다시 계산하며 제한은 그대로입니다. 중지: 그 메시지로 웜이 끝납니다. 이미 진행 중인 웜에도 적용됩니다."
 }

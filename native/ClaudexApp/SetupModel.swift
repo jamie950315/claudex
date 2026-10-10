@@ -195,6 +195,8 @@ struct WarmSettings: Decodable {
     /// nil while no preference has been saved in Claudex.
     let ttlMode: String?
     let startupTtl: String?
+    /// What a message of the user's own does to a running schedule.
+    let onUserMessage: String?
     let active: Active?
     let warming: [Enrollment]?
 
@@ -202,6 +204,7 @@ struct WarmSettings: Decodable {
                           "rounds=3", "rounds=5", "rounds=10", "rounds=20", "rounds=50", "rounds=100"]
     static let ttlModes = ["session", "remember", "default"]
     static let ttls = ["1h", "5m"]
+    static let messageModes = ["continue", "stop"]
 
     static func valid(_ limit: String) -> Bool {
         limit.utf8.count <= 32 && limit.range(of: "^(rounds|for|until)=[0-9a-z:]+$", options: .regularExpression) != nil
@@ -212,6 +215,7 @@ struct WarmSettings: Decodable {
         guard valid(settings.defaultLimit),
               settings.ttlMode == nil || ttlModes.contains(settings.ttlMode!),
               settings.startupTtl == nil || ttls.contains(settings.startupTtl!),
+              settings.onUserMessage == nil || messageModes.contains(settings.onUserMessage!),
               [settings.active?.claude, settings.active?.codex].allSatisfy({ $0 == nil || (0...4096).contains($0!) }),
               (settings.warming ?? []).count <= 64,
               (settings.warming ?? []).allSatisfy({ ["claude", "codex"].contains($0.provider) && !$0.sessionId.isEmpty
@@ -307,13 +311,14 @@ final class SetupRunner {
         }
     }
 
-    func warmSettings(defaultLimit: String? = nil, ttlMode: String? = nil, ttl: String? = nil,
+    func warmSettings(defaultLimit: String? = nil, ttlMode: String? = nil, ttl: String? = nil, onMessage: String? = nil,
                       stop: WarmSettings.Enrollment? = nil, completion: @escaping (Result<WarmSettings, SetupProcessError>) -> Void) {
         var arguments = ["warm-settings"]
         if let stop { arguments = ["warm-stop", "--provider", stop.provider, "--session", stop.sessionId, "--cwd", stop.cwd] }
         if let defaultLimit { arguments += ["--default-limit", defaultLimit] }
         if let ttlMode { arguments += ["--ttl-mode", ttlMode] }
         if let ttl { arguments += ["--ttl", ttl] }
+        if let onMessage { arguments += ["--on-message", onMessage] }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<WarmSettings, SetupProcessError> in
                 do { return .success(try WarmSettings.parse(data)) }
