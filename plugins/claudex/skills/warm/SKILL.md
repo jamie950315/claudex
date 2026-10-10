@@ -22,7 +22,8 @@ Supported human commands:
   `ttl=5m` and `ttl=1h` are also accepted.
 - One of `rounds=N` (up to 500), `for=90m|3h|1h30m` (up to 168 hours) or
   `until=HH:MM` / `until=DD:HH:MM` after `on` chooses how many warm requests, how
-  long or until what local time. Only one of them may be given.
+  long or until what local time. Only one of them may be given; without one,
+  warming lasts four hours.
 - No second confirmation command is needed.
 - `/claudex:warm off` stops warming, leaving this session's native TTL unchanged.
 - `/claudex:warm status` (or no arguments) inspects without enabling anything.

@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 1.3.15 packages Claude Mod 0.8.17. Keep application and Mod versions
+Claudex.app 1.3.16 packages Claude Mod 0.8.18. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -365,7 +365,10 @@ maxRefreshes/maxMinutes bounds for both providers' `on` commands (Claude
 interval 4 or 55 minutes by TTL, Codex 25). By user decision exactly one of
 `rounds=N` (at most 500), `for=DURATION` (at most 168 hours) or
 `until=HH:MM|DD:HH:MM` (the next occurrence, within 168 hours) is accepted,
-never a combination. A time limit allows the requests that fit in it; rounds
+never a combination. By user decision an `on` command without a limit warms
+for four hours, exactly as `for=4h` (4 requests at a 1h TTL, 60 at 5m, 9 on
+Codex); the advanced `/claudex warm on` and CLI keep their 60-minute,
+3-request defaults. A time limit allows the requests that fit in it; rounds
 must fit in 168 hours. A limit no request fits in, or one needing more than
 500 requests, is refused with its reason instead of being shortened. The
 broker bounds are maxRefreshes 1..500 and maxMinutes 1..10080. The attempt

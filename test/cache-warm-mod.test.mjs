@@ -117,7 +117,8 @@ test('namespaced shortcut applies TTL only to its session, never the shared reme
 test('the shortcut turns rounds, a duration or a clock time into the confirmed bounds', async () => {
   const origin = { kind: 'composer' };
   for (const [words, expected] of [[['on', '5m', 'rounds=6'], { maxRefreshes: 6, maxMinutes: 10080 }],
-    [['on', 'for=3h'], { maxRefreshes: 3, maxMinutes: 180 }], [['on', '5m', 'for=40m'], { maxRefreshes: 10, maxMinutes: 40 }]]) {
+    [['on', 'for=3h'], { maxRefreshes: 3, maxMinutes: 180 }], [['on'], { maxRefreshes: 4, maxMinutes: 240 }],
+    [['on', '5m'], { maxRefreshes: 60, maxMinutes: 240 }], [['on', '5m', 'for=40m'], { maxRefreshes: 10, maxMinutes: 40 }]]) {
     const f = await fixture(), result = await f.client.sessionCommand(f.host, words, origin);
     assert.equal(result.state, 'enabled');
     const configured = f.calls.findLast(call => JSON.stringify(call).includes('maxRefreshes'));

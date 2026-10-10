@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.3.14 and Claude Mod 0.8.17 provide bounded, per-conversation cache warming.
+Claudex 1.3.16 and Claude Mod 0.8.18 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.17 companion and
+Use the intended existing conversation with a freshly loaded 0.8.18 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -50,7 +50,11 @@ every 25 minutes on Codex. `rounds` must fit in 168 hours at that interval (at
 most 183 at a 1h TTL, 403 on Codex). A time shorter than one interval, a time
 that would need more than 500 requests, or an end more than 168 hours away is
 refused with the reason instead of being silently shortened. Without any of
-these the defaults stay 60 minutes and 3 requests. The summary's last line
+these, `/claudex:warm on` warms for four hours, exactly as `for=4h`: up to 4
+requests at a 1h TTL, 60 at 5m and 9 on Codex. A five-minute TTL therefore
+uses far more plan quota than the other two; choose a limit to change that.
+The advanced `/claudex warm on` and the CLI keep their own defaults of 60
+minutes and 3 requests. The summary's last line
 shows the requests used, the limit and the end time.
 
 Choose one `on` form and send it once. It directly applies the session TTL and

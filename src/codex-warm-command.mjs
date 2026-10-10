@@ -10,7 +10,7 @@ import { createLocalization } from '../plugins/claudex/hooks/localization.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const PREFIX = '/claudex:warm';
-const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}. Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
+const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}; without one it warms for 4 hours. Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
 const block = text => {
   return { decision: 'block', reason: text, systemMessage: text };
 };
@@ -28,7 +28,7 @@ export function parseCodexWarmCommand(prompt, now = Date.now()) {
   if (typeof prompt !== 'string' || !/^\/claudex:warm(?:\s|$)/u.test(prompt.trim())) return null;
   if (prompt.length > 1024 || /[\r\n\0]/u.test(prompt.trim())) throw new Error(HELP);
   const [, action = 'status', ...args] = prompt.trim().split(/\s+/u);
-  if (['on', 'off', 'status'].includes(action) && !args.length) return { action };
+  if (['off', 'status'].includes(action) && !args.length) return { action };
   if (action === 'on') {
     // Codex refreshes every 25 minutes; the user's limits become its bounds.
     const { rest, bounds } = parseWarmLimits(args, { intervalMinutes: 25, now });

@@ -18,7 +18,7 @@ test('Codex warm command parsing is exact and never interprets quoted or embedde
   for (const text of ['Hello', 'Explain /claudex:warm on', '`/claudex:warm on`', '/claudex:warmup on'])
     assert.equal(parseCodexWarmCommand(text), null);
   assert.deepEqual(parseCodexWarmCommand(' /claudex:warm '), { action: 'status' });
-  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on'), { action: 'on' });
+  assert.deepEqual(parseCodexWarmCommand('/claudex:warm on'), { action: 'on', bounds: { maxMinutes: 240, maxRefreshes: 9 } });
   assert.deepEqual(parseCodexWarmCommand(`/claudex:warm confirm ${TOKEN} accept-best-effort`), { action: 'confirm', confirmationId: TOKEN });
   const noon = new Date(2026, 0, 1, 12, 0).getTime();
   assert.deepEqual(parseCodexWarmCommand('/claudex:warm on rounds=4', noon), { action: 'on', bounds: { maxMinutes: 10080, maxRefreshes: 4 } });

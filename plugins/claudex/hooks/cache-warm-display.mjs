@@ -1,11 +1,12 @@
 // Read-only presentation and limit parsing shared by native local commands. No scheduling or inference.
 export const WARM_LIMIT_HELP = 'one of rounds=N (1-500), for=90m|3h|1h30m (up to 168h) or until=HH:MM|DD:HH:MM (local 24-hour time, within 168h)';
-const WARM_MAX_HOURS = 168, WARM_MAX_MINUTES = WARM_MAX_HOURS * 60, WARM_MAX_ROUNDS = 500;
+const WARM_MAX_HOURS = 168, WARM_MAX_MINUTES = WARM_MAX_HOURS * 60, WARM_MAX_ROUNDS = 500, WARM_DEFAULT_MINUTES = 240;
 
 /** Turn the user's one chosen limit into the existing maxMinutes/maxRefreshes
  * bounds. rounds is a number of warm requests, for a duration, until a local
  * HH:MM or day-of-month DD:HH:MM. A time limit allows the requests that fit in
- * it; rounds must fit in 168 hours. Returns the remaining words and the bounds. */
+ * it; rounds must fit in 168 hours. With no limit the command warms for four
+ * hours, as for=4h. Returns the remaining words and the bounds. */
 export function parseWarmLimits(words, { intervalMinutes, now }) {
   const rest = [], seen = new Map();
   for (const word of words) {
@@ -14,7 +15,6 @@ export function parseWarmLimits(words, { intervalMinutes, now }) {
     if (seen.size) throw new Error(`Choose only one limit: ${WARM_LIMIT_HELP}.`);
     seen.set(match[1], match[2]);
   }
-  if (!seen.size) return { rest, bounds: {} };
   const invalid = () => new Error(`Limits: ${WARM_LIMIT_HELP}.`);
   if (!Number.isSafeInteger(intervalMinutes) || intervalMinutes < 1 || !Number.isFinite(now)) throw invalid();
   if (seen.has('rounds')) {
@@ -25,12 +25,12 @@ export function parseWarmLimits(words, { intervalMinutes, now }) {
       throw new Error(`${rounds} warm requests cannot fit in ${WARM_MAX_HOURS} hours at one every ${intervalMinutes} min; the most is ${fitting}.`);
     return { rest, bounds: { maxMinutes: WARM_MAX_MINUTES, maxRefreshes: rounds } };
   }
-  let minutes;
+  let minutes = WARM_DEFAULT_MINUTES;
   if (seen.has('for')) {
     const duration = /^(?:([0-9]{1,3})h)?(?:([0-9]{1,5})m)?$/.exec(seen.get('for'));
     if (!duration || duration[1] === undefined && duration[2] === undefined) throw invalid();
     minutes = Number(duration[1] ?? 0) * 60 + Number(duration[2] ?? 0);
-  } else {
+  } else if (seen.has('until')) {
     const clock = /^(?:(0?[1-9]|[12][0-9]|3[01]):)?([01]?[0-9]|2[0-3]):([0-5][0-9])$/.exec(seen.get('until'));
     if (!clock) throw invalid();
     const start = new Date(now), day = clock[1] === undefined ? null : Number(clock[1]);

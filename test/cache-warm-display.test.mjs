@@ -45,7 +45,10 @@ test('a policy with a round limit shows how much of the chosen limits is used', 
 
 test('one of rounds, a duration or a clock time becomes the existing bounds', () => {
   const noon = new Date(2026, 0, 30, 12, 0).getTime(), parse = (words, intervalMinutes = 55) => parseWarmLimits(words, { intervalMinutes, now: noon });
-  assert.deepEqual(parse(['ttl=1h']), { rest: ['ttl=1h'], bounds: {} });
+  // No limit means four hours, like for=4h.
+  assert.deepEqual(parse(['ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 240, maxRefreshes: 4 } });
+  assert.deepEqual(parse([], 4).bounds, { maxMinutes: 240, maxRefreshes: 60 });
+  assert.deepEqual(parse([], 25).bounds, parse(['for=4h'], 25).bounds);
   assert.deepEqual(parse(['rounds=5', 'ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 10080, maxRefreshes: 5 } });
   assert.deepEqual(parse(['rounds=500'], 4).bounds, { maxMinutes: 10080, maxRefreshes: 500 });
   assert.deepEqual(parse(['for=3h']).bounds, { maxMinutes: 180, maxRefreshes: 3 });
