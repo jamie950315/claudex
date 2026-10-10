@@ -206,6 +206,24 @@ test('a full ledger refuses new allocation; a new enrollment drops only its own 
   m = await load([...others(1500), { ...base, sessionId: other.sessionId, id: 'other-uncertain', state: 'uncertain' }]);
   await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'crowded-test' });
   assert.deepEqual((await m.list()).attempts.map(a => a.id), ['other-uncertain']);
+  // The uncertain record keeps its policy; without it the whole conversation is retired.
+  assert.equal((await m.list()).policies.length, 2);
+  state.policies[0].enabled = false;
+  state.requests = [{ requestId: 'other-old', sessionId: other.sessionId, generation: 1, payload: '{}' },
+    { requestId: 'own-old', sessionId: identity.sessionId, generation: 1, payload: '{}' }];
+  m = await load(others(1500));
+  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'retired-test' });
+  assert.deepEqual((await m.list()).policies.map(policy => policy.sessionId), [identity.sessionId]);
+  assert.equal((await m.list()).attemptCount, 0);
+  assert.deepEqual(JSON.parse(await readFile(path, 'utf8')).requests.map(r => r.requestId), ['own-old', 'retired-test']);
+  // Many stopped conversations are retired by count too; running and unexpired ones stay.
+  state.policies[0].enabled = false; state.requests = [];
+  const extra = Array.from({ length: 40 }, (_, i) => ({ ...other, sessionId: `ended-${i}` }));
+  state.policies.push(...extra, { ...other, sessionId: 'running', enabled: true }, { ...other, sessionId: 'unexpired', until: f.now() + 60000 });
+  m = await load([]);
+  await m.configure({ ...identity, provider: 'claude', enabled: true, requestId: 'count-test' });
+  assert.deepEqual((await m.list()).policies.map(policy => policy.sessionId).sort(), [identity.sessionId, 'running', 'unexpired'].sort());
+  state.policies.length = 2; state.requests = [];
   // A ledger that is not crowded keeps them for their status totals.
   state.policies[0].enabled = false;
   m = await load(others(10));

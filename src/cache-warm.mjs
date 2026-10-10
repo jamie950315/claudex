@@ -230,11 +230,25 @@ export class CacheWarmManager {
         return this.result(this.policy(saved.sessionId), { replayed: true });
       }
       if (stopped) throw error('CACHE_WARM_STOPPED', 'Claudex is stopped or resuming; warming cannot be enabled.');
-      if (input.requestId && this.state.requests.length >= MAX_ATTEMPTS)
-        throw error('CACHE_WARM_CAPACITY', 'Cache-warming request receipt capacity is exhausted.');
       const b = this.bindings.get(input.sessionId);
       if (input.enabled && (!b || b.cwd !== input.cwd || b.phase === 'ended'))
         throw error('CACHE_WARM_NOT_BOUND', 'Enable warming from an existing loaded native session.');
+      // Nothing here was ever removed, so every bound was a lifetime total.
+      // Once any of them is half used, a new enrollment retires the other
+      // conversations whose own enrollment is stopped and past its end time:
+      // their settled attempts, then the policy and its request receipts when
+      // no uncertain or unfinished attempt is left to keep as evidence.
+      if (input.enabled && (this.state.attempts.length > MAX_ATTEMPTS / 2 || this.state.requests.length > MAX_ATTEMPTS / 2
+          || this.state.policies.length > MAX_POLICIES / 2)) {
+        const finished = new Set(this.state.policies.filter(other => other.sessionId !== input.sessionId
+          && !other.enabled && other.until <= this.now()).map(other => other.sessionId));
+        this.state.attempts = this.state.attempts.filter(a => !finished.has(a.sessionId) || !SETTLED.has(a.state));
+        for (const a of this.state.attempts) finished.delete(a.sessionId);
+        this.state.policies = this.state.policies.filter(other => !finished.has(other.sessionId));
+        this.state.requests = this.state.requests.filter(r => !finished.has(r.sessionId));
+      }
+      if (input.requestId && this.state.requests.length >= MAX_ATTEMPTS)
+        throw error('CACHE_WARM_CAPACITY', 'Cache-warming request receipt capacity is exhausted.');
       let p = this.policy(input.sessionId);
       if (!p && this.state.policies.length >= MAX_POLICIES) throw error('CACHE_WARM_CAPACITY', 'Cache-warming policy capacity is exhausted.');
       if (input.enabled && this.pending(input.sessionId) && this.pending(input.sessionId).state !== 'reserved')
@@ -251,15 +265,8 @@ export class CacheWarmManager {
       // A new enrollment starts its own accounting. Settled attempts of this
       // conversation's earlier enrollments are dropped so long runs do not use
       // up the ledger; uncertain and unfinished ones stay as evidence.
-      // Once the ledger is half full, so are those of other conversations whose
-      // enrollment is both stopped and past its end time.
-      if (input.enabled) {
-        const crowded = this.state.attempts.length > MAX_ATTEMPTS / 2;
-        const finished = new Set(crowded ? this.state.policies.filter(other => other.sessionId !== input.sessionId
-          && !other.enabled && other.until <= this.now()).map(other => other.sessionId) : []);
-        this.state.attempts = this.state.attempts.filter(a => !SETTLED.has(a.state)
-          || (a.sessionId === input.sessionId ? a.generation >= value.generation : !finished.has(a.sessionId)));
-      }
+      if (input.enabled) this.state.attempts = this.state.attempts.filter(a => a.sessionId !== input.sessionId
+        || a.generation >= value.generation || !SETTLED.has(a.state));
       if (p && !input.enabled) Object.assign(p, { enabled: false, updatedAt: this.now(), reason: 'disabled' });
       else if (p) Object.assign(p, value); else { p = value; this.state.policies.push(p); }
       if (input.requestId) this.state.requests.push({ requestId: input.requestId, sessionId: p.sessionId, generation: p.generation, payload });
