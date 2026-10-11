@@ -2,7 +2,7 @@
 
 ## Current companion: 0.8.22
 
-Claudex.app 1.3.0 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.4.0 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
 Version 0.8.22 marks an `until=` limit as a fixed end, so a message of the
