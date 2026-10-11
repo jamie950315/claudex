@@ -27,6 +27,10 @@ async function fixture(t, outcome = 'accepted') {
         else if (request.method === 'thread-owner-discovery') response.result = { supportsUntrustedAppInput: true };
         else if (outcome === 'disconnect') { socket.destroy(); continue; }
         else if (outcome === 'busy') response = { ...response, resultType: 'error', error: 'App context must wait until the current turn finishes' };
+        else if (request.method === 'thread-follower-compact-thread') {
+          if (outcome === 'failed') response = { ...response, resultType: 'error', error: 'no-client-found' };
+          else response.result = { ok: outcome !== 'unconfirmed' };
+        }
         else response.result = { result: { turn: { id: 'native-turn' } } };
         const data = Buffer.from(JSON.stringify(response)), head = Buffer.alloc(4); head.writeUInt32LE(data.length);
         socket.write(head.subarray(0, 2)); socket.write(Buffer.concat([head.subarray(2), data]));
@@ -79,6 +83,31 @@ test('lost dispatch response is uncertain with no replay', async t => {
   const f = await fixture(t, 'disconnect'), handle = await preflightCodexChatWake({ sessionId, codexHome: f.codexHome });
   assert.equal((await handle.dispatch({ messageId: 'm', text: 'Peer text' })).status, 'uncertain');
   assert.equal(f.requests.filter(r => r.method === 'thread-follower-start-turn').length, 1);
+});
+
+test('compaction asks the exact owner once through its own follower request', async t => {
+  const f = await fixture(t), handle = await preflightCodexChatWake({ sessionId, codexHome: f.codexHome });
+  let fenced = 0;
+  assert.deepEqual(await handle.compact({ beforeDispatch: async () => {
+    fenced++; assert.equal(f.requests.filter(request => request.method === 'thread-owner-discovery').length, 2);
+  } }), { status: 'accepted' });
+  const request = f.requests.at(-1);
+  assert.equal(request.method, 'thread-follower-compact-thread'); assert.equal(request.version, 1);
+  assert.deepEqual(request.params, { conversationId: sessionId }); assert.equal(request.targetClientId, handle.ownerClientId);
+  assert.equal(fenced, 1);
+  // One request per handle, whichever it was.
+  await assert.rejects(handle.compact(), /already been used/);
+  await assert.rejects(handle.dispatch({ messageId: 'm', text: 'Peer text' }), /already been used/);
+  // An error, an unconfirmed answer and a lost one are all uncertain; a refused guard sends nothing.
+  for (const outcome of ['failed', 'unconfirmed', 'disconnect']) {
+    const other = await fixture(t, outcome);
+    assert.equal((await (await preflightCodexChatWake({ sessionId, codexHome: other.codexHome })).compact()).status, 'uncertain');
+    assert.equal(other.requests.filter(item => item.method === 'thread-follower-compact-thread').length, 1);
+  }
+  const guarded = await fixture(t);
+  const refused = await (await preflightCodexChatWake({ sessionId, codexHome: guarded.codexHome })).compact({ beforeDispatch: async () => { throw new Error('busy'); } });
+  assert.equal(refused.status, 'rejected');
+  assert.equal(guarded.requests.filter(item => item.method === 'thread-follower-compact-thread').length, 0);
 });
 
 test('public socket permissions are refused before connecting', async t => {

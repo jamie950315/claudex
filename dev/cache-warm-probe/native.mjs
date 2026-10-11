@@ -13,7 +13,7 @@ import { CollaborationHub } from '../../src/collaboration-hub.mjs';
 import { serveCollaborationSocket } from '../../src/collaboration-transport.mjs';
 import { createTokenLimitEvidence } from './token-limit-evidence.mjs';
 
-const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' }, 'ttl-sync': { type: 'boolean' } } });
+const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' }, 'ttl-sync': { type: 'boolean' }, compact: { type: 'boolean' }, 'native-context': { type: 'boolean' } } });
 assert(values.root && values.claude, 'Supply a new private --root and the native --claude executable.');
 assert(process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS === '1', 'An explicitly authorized process-only native Mod opt-in is required.');
 const root = await realpath(values.root), binary = await realpath(values.claude);
@@ -27,12 +27,12 @@ const staged = await stageClaudeMod({ output: join(root, 'stage'), stateRoot: ro
 const hub = await new CollaborationHub({ root: join(root, 'collaboration'), run: async () => { throw new Error('This acceptance broker cannot start workers.'); } }).initialize();
 const transport = await serveCollaborationSocket({ root: hub.root, dispatch: envelope => hub.dispatch(envelope) });
 const report = { model: 'claude-sonnet-5-5', effort: 'medium', processOnlyModOptIn: true,
-  native: [], commands: [], localOutputs: [], outcome: 'initializing', dispatchedUserMessages: 0 };
+  native: [], commands: [], localOutputs: [], compactBoundaries: [], outcome: 'initializing', dispatchedUserMessages: 0 };
 const emit = data => console.log(JSON.stringify({ at: new Date().toISOString(), ...data }));
 const evidence = createTokenLimitEvidence(), queue = [];
 const sessions = new Set(); let child, active, consume, pending, wake, ended = false, failure;
 const env = { ...process.env, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
-  CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_MAX_OUTPUT_TOKENS: '128', CLAUDE_CODE_EFFORT_LEVEL: 'medium' };
+  CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_MAX_OUTPUT_TOKENS: values.compact ? '4000' : '128', CLAUDE_CODE_EFFORT_LEVEL: 'medium' };
 for (const key of ['CLAUDEX_COLLABORATION_WORKER', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
   'CLAUDE_CODE_USE_FOUNDRY', 'ENABLE_PROMPT_CACHING_1H', 'FORCE_PROMPT_CACHING_5M', 'DISABLE_PROMPT_CACHING']) delete env[key];
@@ -65,11 +65,14 @@ try {
   } };
   active = query({ prompt, options: { cwd, pathToClaudeCodeExecutable: binary,
     model: report.model, effort: report.effort, persistSession: false, settingSources: [],
-    strictMcpConfig: true, mcpServers: {}, plugins: [{ type: 'local', path: staged.plugin }], tools: [],
-    permissionMode: 'dontAsk', maxTurns: 1, maxBudgetUsd: 0.25, includePartialMessages: true, env,
+    strictMcpConfig: true, mcpServers: {}, plugins: [{ type: 'local', path: staged.plugin }], ...(values['native-context'] ? {} : { tools: [] }),
+    permissionMode: 'dontAsk', maxTurns: 1, maxBudgetUsd: values.compact ? 1 : 0.25, includePartialMessages: true, env,
     extraArgs: { 'debug-file': join(root, 'native-debug.log') },
     settings: { remoteControlAtStartup: false, crossSessionInbound: 'refuse', enabledPlugins: {}, promptCacheTtl: '5m' },
-    systemPrompt: `Native cache acceptance ${randomUUID()}. Reply only OK to measurement prompts. Never call tools.`,
+    // --native-context keeps Claude Code's own system prompt and tool definitions, as an ordinary session has.
+    systemPrompt: values['native-context']
+      ? { type: 'preset', preset: 'claude_code', append: `Native cache acceptance ${randomUUID()}. Reply only OK to measurement prompts. Never call tools.` }
+      : `Native cache acceptance ${randomUUID()}. Reply only OK to measurement prompts. Never call tools.`,
     spawnClaudeCodeProcess: options => (child = spawn(options.command, options.args,
       { cwd: options.cwd, env: options.env, signal: options.signal, stdio: ['pipe', 'pipe', 'pipe'] })),
     stderr: text => { if (/hooks modules are turned off/.test(text)) failure = new Error('Native Mod refused to load.'); },
@@ -79,6 +82,11 @@ try {
       if (e.session_id) sessions.add(e.session_id);
       evidence.observe(e, pending ? report.dispatchedUserMessages : 'native-autonomous');
       if (e.type === 'system' && e.subtype === 'local_command_output') report.localOutputs.push({ content: e.content });
+      // Content-free: only that the native compaction boundary was reported, and its counts.
+      if (e.type === 'system' && e.subtype === 'compact_boundary') {
+        report.compactBoundaries.push({ at: Date.now(), metadata: e.compact_metadata ?? null });
+        emit({ kind: 'compact-boundary', metadata: e.compact_metadata ?? null });
+      }
       if (e.type !== 'result') continue;
       const receipt = { subtype: e.subtype, isError: e.is_error, turns: e.num_turns,
         usage: e.usage, modelUsage: e.modelUsage, cumulativeEstimatedUsd: e.total_cost_usd, text: e.result ?? null };
@@ -96,14 +104,17 @@ try {
     const commands = await active.supportedCommands();
     report.commands = commands.map(item => item.name);
     loaded = await hub.dispatch({ peer: 'claude', token: hub.controllerToken, method: 'mod_wake_status', params: {} });
-    if (loaded.liveObserverCount === 1) break;
+    if (loaded.liveObserverCount >= 1) break;
     assert(!failure, failure?.message);
     await delay(200);
   }
   report.loadedObserver = loaded;
-  assert.equal(loaded?.liveObserverCount, 1, 'The actual staged Mod did not finish native startup; no prompt sent.');
+  // Claude Code 2.1.295 was observed reporting this one session twice (its
+  // session-start and classic SessionStart paths); the count is self-reported
+  // and not a number of sessions. Every observer must be the staged version.
+  assert(loaded?.liveObserverCount >= 1, 'The actual staged Mod did not finish native startup; no prompt sent.');
   const stagedVersion = JSON.parse(await readFile(join(staged.plugin, '.claude-plugin/plugin.json'), 'utf8')).version;
-  assert(loaded.versions.some(item => item.version === stagedVersion && item.observers === 1), 'Loaded Mod version differs from the stage.');
+  assert(loaded.versions.length === 1 && loaded.versions[0].version === stagedVersion, 'Loaded Mod version differs from the stage.');
   const status = jsonReply(await send('/claudex warm status'));
   assert.equal(status.local.enabled, false);
   assert.equal(report.native.at(-1).turns, 0, 'Status must not invoke a model.');
@@ -148,6 +159,16 @@ try {
     const seed = Array.from({ length: 180 }, (_, i) => `Fixture ${i}: amber cedar lake north. This sentence is stable inert reference data.`).join('\n') + '\nReply only OK.';
     const first = await send(seed);
     assert(!first.receipt.isError && first.receipt.text?.trim() === 'OK');
+    if (values.compact) {
+      // Claude Code 2.1.295 was observed re-reading less than the whole prefix
+      // its first request of a session wrote (7,922 of 8,449 tokens), which the
+      // broker rightly refuses as a full-prefix hit. A second ordinary turn
+      // gives the schedule evidence from an established conversation.
+      await delay(1500);
+      const second = await send('Reply only OK again.');
+      assert(!second.receipt.isError && second.receipt.text?.trim() === 'OK');
+      report.secondSeedUsage = second.receipt.usage;
+    }
     // Native result frames can precede completion-hook settlement. Await the
     // independent broker evidence rather than racing that asynchronous boundary.
     let before;
@@ -175,12 +196,53 @@ try {
     report.finalBeforeClose = result;
     assert.equal(result?.attempts.length, 1);
     assert.equal(result.attempts[0].state, 'verified', JSON.stringify(result.attempts[0]));
-    assert(result.attempts[0].actual.cacheReadTokens >= result.attempts[0].requiredPrefixTokens);
+    // The broker's own rule decided `verified`; record which form of hit it was.
+    report.wholePrefixHit = result.attempts[0].actual.cacheReadTokens >= result.attempts[0].requiredPrefixTokens;
+    assert(report.wholePrefixHit || result.attempts[0].actual.cacheReadTokens > result.attempts[0].priorReadTokens);
     assert.equal(result.policies[0].reason, 'refresh-limit');
+    if (values.compact) {
+      // The limit is used up. Nothing more is sent: the loaded Mod alone must
+      // compact once, shortly before the warm request's cache window ends.
+      const compactAt = result.policies[0].compactAt, sent = report.dispatchedUserMessages;
+      assert.equal(result.policies[0].compactAtEnd, true);
+      assert(Number.isSafeInteger(compactAt) && compactAt > Date.now(), JSON.stringify(result.policies[0]));
+      report.compactAt = compactAt;
+      const limit = compactAt + 150000;
+      let compacted;
+      while (Date.now() < limit) {
+        assert(!failure, failure?.message);
+        await delay(Math.min(15000, Math.max(1, limit - Date.now())));
+        compacted = await hub.cacheWarm.list();
+        const attempt = compacted.attempts.find(item => item.kind === 'compact');
+        emit({ kind: 'waiting-compaction', secondsUntilDue: Math.ceil((compactAt - Date.now()) / 1000),
+          reason: compacted.policies[0]?.reason, attemptState: attempt?.state ?? null, boundaries: report.compactBoundaries.length });
+        if (attempt && !['reserved', 'dispatching'].includes(attempt.state)) break;
+      }
+      report.afterCompaction = compacted;
+      const attempt = compacted?.attempts.find(item => item.kind === 'compact');
+      assert(attempt, 'No compaction was attempted.');
+      assert.equal(attempt.state, 'verified', JSON.stringify(attempt));
+      assert(attempt.authorizedAt >= compactAt && attempt.authorizedAt < attempt.expiresAt, 'Compaction ran outside its cache window.');
+      assert.equal(compacted.policies[0].enabled, false); assert.equal(compacted.policies[0].reason, 'compacted');
+      assert.equal(compacted.policies[0].totals.refreshes, 1);
+      assert.equal(report.dispatchedUserMessages, sent, 'The harness must not have sent anything.');
+      await delay(2000);
+      assert.equal(report.compactBoundaries.length, 1, 'The native session did not report exactly one compaction boundary.');
+      // The session still answers afterwards, and warming stays off.
+      const after = await send('Reply only OK.');
+      assert(!after.receipt.isError && after.receipt.text?.trim() === 'OK');
+      report.afterCompactionUsage = after.receipt.usage;
+      await delay(1000);
+      report.afterOff = await hub.cacheWarm.list();
+      assert.equal(report.afterOff.policies[0].enabled, false);
+      assert.equal(report.afterOff.attempts.length, 2);
+      report.outcome = 'native-compaction-after-warming-verified';
+    } else {
     await send('/claudex warm off');
     report.afterOff = await hub.cacheWarm.list();
     assert.equal(report.afterOff.policies[0].enabled, false);
     report.outcome = 'native-cache-warming-verified';
+    }
   }
 } catch (error) {
   report.outcome = 'blocked-or-failed'; report.error = error.message; process.exitCode = 1;

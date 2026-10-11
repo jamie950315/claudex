@@ -169,29 +169,37 @@ export async function preflightCodexChatWake({ sessionId,
       throw new Error('Codex Desktop owner does not support verified untrusted input.');
     let used = false;
     const expires = setTimeout(() => ipc.close(), 30000); expires.unref?.();
+    // One request per handle, after the owner and endpoint are proved again.
+    const once = async (beforeDispatch, build, send) => {
+      if (used) throw new Error('Codex Desktop wake handle has already been used.');
+      used = true; clearTimeout(expires);
+      let dispatched = false;
+      try {
+        const payload = build();
+        const current = await privateSocket(codexHome);
+        if (current.dev !== endpoint.dev || current.ino !== endpoint.ino) throw new Error('Codex Desktop IPC endpoint changed.');
+        const proof = await ipc.request('thread-owner-discovery', { hostId: 'local', conversationId: sessionId },
+          { targetClientId: owner.handledByClientId });
+        if (proof.resultType !== 'success' || proof.handledByClientId !== owner.handledByClientId
+            || proof.result?.supportsUntrustedAppInput !== true) throw new Error('Codex Desktop owner changed.');
+        // An internal notification can expire or be stopped while native
+        // ownership is being rechecked. No callback comes from the wire.
+        if (beforeDispatch !== undefined) {
+          if (typeof beforeDispatch !== 'function') return { status: 'rejected', reason: 'invalid-dispatch-guard' };
+          try { await beforeDispatch(); }
+          catch { return { status: 'rejected', reason: 'dispatch-guard-refused' }; }
+        }
+        dispatched = true;
+        return await send(payload);
+      } catch (error) {
+        return { status: dispatched ? 'uncertain' : 'unavailable', reason: error.message };
+      } finally { ipc.close(); }
+    };
     return {
       status: 'ready', sessionId, ownerClientId: owner.handledByClientId,
       close() { used = true; clearTimeout(expires); ipc.close(); },
       async dispatch({ messageId, text, beforeDispatch }) {
-        if (used) throw new Error('Codex Desktop wake handle has already been used.');
-        used = true; clearTimeout(expires);
-        let dispatched = false;
-        try {
-          const payload = codexPeerTurn({ sessionId, messageId, text });
-          const current = await privateSocket(codexHome);
-          if (current.dev !== endpoint.dev || current.ino !== endpoint.ino) throw new Error('Codex Desktop IPC endpoint changed.');
-          const proof = await ipc.request('thread-owner-discovery', { hostId: 'local', conversationId: sessionId },
-            { targetClientId: owner.handledByClientId });
-          if (proof.resultType !== 'success' || proof.handledByClientId !== owner.handledByClientId
-              || proof.result?.supportsUntrustedAppInput !== true) throw new Error('Codex Desktop owner changed.');
-          // An internal notification can expire or be stopped while native
-          // ownership is being rechecked. No callback comes from the wire.
-          if (beforeDispatch !== undefined) {
-            if (typeof beforeDispatch !== 'function') return { status: 'rejected', reason: 'invalid-dispatch-guard' };
-            try { await beforeDispatch(); }
-            catch { return { status: 'rejected', reason: 'dispatch-guard-refused' }; }
-          }
-          dispatched = true;
+        return once(beforeDispatch, () => codexPeerTurn({ sessionId, messageId, text }), async payload => {
           const response = await ipc.request('thread-follower-start-turn', payload,
             { version: 2, targetClientId: owner.handledByClientId });
           if (response.resultType === 'error') {
@@ -204,9 +212,19 @@ export async function preflightCodexChatWake({ sessionId,
               || response.handledByClientId !== owner.handledByClientId || typeof turnId !== 'string' || !turnId)
             return { status: 'uncertain', reason: 'Native wake response did not identify its turn.' };
           return { status: 'accepted', turnId };
-        } catch (error) {
-          return { status: dispatched ? 'uncertain' : 'unavailable', reason: error.message };
-        } finally { ipc.close(); }
+        });
+      },
+      /** Ask the owner to compact its conversation: the Desktop request its own
+       * followers use (observed protocol v1, answered { ok: true }), after which
+       * the owner starts the native compaction. Acceptance is not completion. */
+      async compact({ beforeDispatch } = {}) {
+        return once(beforeDispatch, () => ({ conversationId: sessionId }), async payload => {
+          const response = await ipc.request('thread-follower-compact-thread', payload, { targetClientId: owner.handledByClientId });
+          if (response.resultType !== 'success' || response.method !== 'thread-follower-compact-thread'
+              || response.handledByClientId !== owner.handledByClientId || response.result?.ok !== true)
+            return { status: 'uncertain', reason: response.error ?? 'Native compaction request was not confirmed.' };
+          return { status: 'accepted' };
+        });
       },
     };
   } catch (error) { ipc.close(); throw error; }

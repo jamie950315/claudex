@@ -13,7 +13,7 @@ const add = (a, b) => Object.fromEntries(Object.keys(a).map(key => [key, a[key] 
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'codex-warm-'))); await chmod(root, 0o700);
   let now = 1000000, listener, connected = false, stopped = false, calls = 0, dispatches = 0, hook, preflightHook, stopHook, settingsReady = true, acceptsUnreported = false;
-  let total = initial;
+  let total = initial, compactions = 0, expecting = false, compactHook;
   const state = { sessionId: ID, cwd: '/fixture', model: 'fixture-model', effort: 'medium',
     fingerprint: 'fixture-fingerprint', ownerClientId: OWNER, phase: 'busy', nativeVersion: '0.160.0' };
   const timers = [];
@@ -25,11 +25,13 @@ async function fixture(t) {
         get settingsReady() { return settingsReady; },
         acceptUnreportedSettings() { if (acceptsUnreported) settingsReady = true; },
         listen() {}, async close() { connected = false; },
+        expectCompaction() { expecting = true; },
         async inspect() { return { ...state }; },
         async preflight() {
           await preflightHook?.();
           return { status: 'ready', ownerClientId: OWNER, close() {},
-            async dispatch(args) { await args.beforeDispatch(); dispatches++; return hook ? hook(args) : { status: 'accepted', turnId: 'warm' }; } };
+            async dispatch(args) { await args.beforeDispatch(); dispatches++; return hook ? hook(args) : { status: 'accepted', turnId: 'warm' }; },
+            async compact(args) { await args.beforeDispatch(); compactions++; return compactHook ? compactHook() : { status: 'accepted' }; } };
         } };
     },
   };
@@ -54,6 +56,7 @@ async function fixture(t) {
     timer.cancelled = true; now = timer.due + delay; timer.callback(); await service.serial;
   }
   return { service, root, state, timers, emit, usage, seed, enable, fire,
+    get compactions() { return compactions; }, get expecting() { return expecting; }, set compactHook(value) { compactHook = value; },
     get now() { return now; }, get connected() { return connected; }, get calls() { return calls; }, get dispatches() { return dispatches; },
     set hook(value) { hook = value; }, set preflightHook(value) { preflightHook = value; }, set stopped(value) { stopped = value; },
     set stopHook(value) { stopHook = value; }, set settingsReady(value) { settingsReady = value; }, set acceptsUnreported(value) { acceptsUnreported = value; } };
@@ -97,7 +100,7 @@ test('Codex accepts legacy read bounds without applying them and retains actual 
 });
 
 test('Codex timer dispatches once to the owner and verifies only completed native cache evidence', async t => {
-  const f = await fixture(t); await f.enable(); await f.seed();
+  const f = await fixture(t); await f.enable({ compact: false }); await f.seed();
   const scheduled = (await f.service.list()).policies[0];
   assert.equal(scheduled.refreshMinutes, 25);
   assert.equal(scheduled.nextAt, scheduled.sample.startedAt + 25 * 60000);
@@ -254,4 +257,74 @@ test('the reply to a Codex message of the user restarts the limit and its expiry
   assert.equal(after.until, after.restartedAt + 3600000);
   const live = f.timers.filter(timer => !timer.cancelled).map(timer => timer.due);
   assert.ok(live.includes(after.until)); assert.ok(!live.includes(before.until));
+});
+
+test('a Codex schedule that reached its limit asks the owner to compact once and follows its native turn', async t => {
+  const warmed = async (more = {}) => {
+    const f = await fixture(t); await f.enable(more); await f.seed();
+    await f.fire(); assert.equal(f.dispatches, 1);
+    await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });
+    await f.usage('warm', warm);
+    await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+    return f;
+  };
+  const policy = async f => (await f.service.list()).policies[0];
+  {
+    const f = await warmed();
+    const ended = await policy(f);
+    // The observer stays connected for the compaction, 25 minutes after the warm request started.
+    assert.equal(ended.reason, 'refresh-limit'); assert.equal(f.connected, true);
+    assert.equal(ended.compactAt, ended.sample.startedAt + 25 * 60000); assert.equal(ended.compactAtEnd, true);
+    // The limit's own end time does not end the schedule while the compaction is due.
+    const expiry = f.timers.filter(timer => !timer.cancelled).sort((a, b) => a.due - b.due);
+    assert.equal(expiry.at(-1).due, ended.until);
+    await f.fire(); assert.equal(f.compactions, 1); assert.equal(f.dispatches, 1); assert.equal(f.expecting, true);
+    let status = await f.service.list();
+    assert.equal(status.attempts.at(-1).kind, 'compact'); assert.equal(status.attempts.at(-1).state, 'dispatching');
+    // Acceptance is not completion: the native compaction turn must be seen whole.
+    await f.emit({ type: 'start', turnId: 'compaction', startedAt: f.now });
+    await f.emit({ type: 'usage', turnId: 'compaction', tokenUsage: { total: initial, last: initial }, at: f.now });
+    await f.emit({ type: 'compacted' });
+    assert.equal((await f.service.list()).attempts.at(-1).state, 'dispatching');
+    await f.emit({ type: 'complete', turnId: 'compaction', status: 'completed', completedAt: f.now });
+    status = await f.service.list();
+    assert.equal(status.attempts.at(-1).state, 'verified'); assert.equal(status.attempts.at(-1).reason, 'native-compacted');
+    assert.equal(status.policies[0].enabled, false); assert.equal(status.policies[0].reason, 'compacted');
+    assert.equal(status.policies[0].totals.refreshes, 1);
+    assert.equal(f.connected, false); await f.fire(); await f.fire(); assert.equal(f.compactions, 1);
+  }
+  // A turn that ends without the compaction, another failure or a lost answer is uncertain and never repeated.
+  for (const events of [
+    [{ type: 'start', turnId: 'c' }, { type: 'complete', turnId: 'c', status: 'completed' }],
+    [{ type: 'start', turnId: 'c' }, { type: 'compacted' }, { type: 'complete', turnId: 'c', status: 'failed' }],
+    [{ type: 'start', turnId: 'c' }, { type: 'invalidated', reason: 'disconnected' }]]) {
+    const f = await warmed(); await f.fire();
+    for (const e of events) await f.emit({ startedAt: f.now, completedAt: f.now, ...e });
+    assert.equal((await policy(f)).reason, 'native-uncertain'); assert.equal(f.connected, false);
+    assert.equal((await f.service.list()).attempts.at(-1).state, 'uncertain');
+    await f.fire(); assert.equal(f.compactions, 1);
+  }
+  {
+    const lost = await warmed(); lost.compactHook = () => ({ status: 'uncertain', reason: 'lost' }); await lost.fire();
+    assert.equal((await policy(lost)).reason, 'native-uncertain'); assert.equal(lost.connected, false);
+    const busy = await warmed(); busy.compactHook = () => ({ status: 'rejected', reason: 'busy' }); await busy.fire();
+    assert.equal((await policy(busy)).reason, 'compact-skipped'); assert.equal(busy.connected, false);
+    // No answer to an accepted request within ten minutes is uncertain too.
+    // The limit's end time passes first and changes nothing while the compaction is awaited.
+    const silent = await warmed(); await silent.fire(); await silent.fire();
+    assert.equal((await policy(silent)).enabled, true); assert.equal(silent.connected, true);
+    await silent.fire();
+    assert.equal((await policy(silent)).reason, 'native-uncertain'); assert.equal(silent.connected, false);
+  }
+  {
+    // Busy, changed or stopped at the compaction time: nothing is requested.
+    const f = await warmed(); f.state.phase = 'busy'; await f.fire();
+    assert.equal(f.compactions, 0); assert.equal(f.connected, false);
+    // The session's own choice and the expired window.
+    const off = await warmed({ compact: false });
+    assert.equal(off.connected, false); assert.equal((await policy(off)).compactAtEnd, false);
+    const late = await warmed(); await late.fire(6 * 60000);
+    assert.equal(late.compactions, 0); assert.equal(late.connected, false);
+  }
+  await assert.rejects((async () => (await fixture(t)).service.prepare({ sessionId: ID, cwd: '/fixture', bestEffort: true, compact: 'on' }, 'controller'))(), /compact/);
 });

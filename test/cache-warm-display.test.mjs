@@ -167,16 +167,15 @@ test('all nine catalogs render the same four-line contract with complete placeho
   assert.match(show({ policy: policy() }, { t: translator('zh-Hant') }), /^快取保溫：?[:]? 已啟用/);
 });
 
-test('a Claude policy shows whether, and when, it compacts at the end', () => {
+test('a policy shows whether, and when, it compacts at the end', () => {
   const policy = { provider: 'claude', sessionId: 's', cwd: '/p', enabled: true, reason: 'refresh-limit', maxRefreshes: 2,
     totals: { refreshes: 2 }, until: 9000, ttlPreference: '1h' };
   const last = more => formatWarmSummary({ policy: { ...policy, ...more } }, { sessionId: 's', cwd: '/p', formatTime: value => `time-${value}` }).split('\n').at(-1);
   assert.equal(last({ compactAtEnd: true, compactAt: 12000 }), 'Compact when warming ends: time-12000');
   assert.equal(last({ compactAtEnd: true, compactAt: null }), 'Compact when warming ends: On');
   assert.equal(last({ compactAtEnd: false, compactAt: null }), 'Compact when warming ends: Off');
-  // An older broker reports nothing, and Codex never compacts.
+  // An older broker reports nothing.
   assert.match(last({}), /^Limits:/);
-  assert.match(last({ provider: 'codex', compactAtEnd: false }), /^Limits:/);
   const done = formatWarmSummary({ policy: { ...policy, enabled: false, reason: 'compacted', compactAtEnd: true } }, { sessionId: 's', cwd: '/p' });
   assert.match(done, /Next warm: Limit reached; conversation compacted/);
 });

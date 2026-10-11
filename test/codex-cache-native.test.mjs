@@ -165,6 +165,23 @@ test('context changes and malformed usage invalidate without exposing native err
   }
 });
 
+test('a compaction this observer asked for is evidence and its turn stays observable', async () => {
+  const f = fixture(); const handle = await f.native.connect(target, event => f.events.push(event)); handle.listen();
+  handle.expectCompaction();
+  f.emit('turn/started', { turn: { id: 'compaction', startedAt: 200 } });
+  f.emit('item/started', { turnId: 'compaction', item: { type: 'contextCompaction', id: 'private-item' } });
+  f.emit('item/completed', { turnId: 'compaction', item: { type: 'contextCompaction', id: 'private-item' } });
+  f.emit('thread/compacted', { turnId: 'compaction' });
+  f.emit('turn/completed', { turn: { id: 'compaction', status: 'completed', completedAt: 201 } });
+  assert.deepEqual(f.events.map(event => event.type), ['start', 'compacted', 'compacted', 'compacted', 'complete']);
+  assert(!JSON.stringify(f.events).includes('private'));
+  // Every other invalidation still ends the observation.
+  f.emit('model/rerouted', {});
+  assert.deepEqual(f.events.at(-1), { type: 'invalidated', reason: 'model-rerouted' });
+  await handle.close();
+  assert.throws(() => handle.expectCompaction(), /unavailable/);
+});
+
 test('native disconnect invalidates while intentional close remains silent', async () => {
   const f = fixture(); const handle = await f.native.connect(target, event => f.events.push(event)); handle.listen();
   f.client.emit('disconnected');

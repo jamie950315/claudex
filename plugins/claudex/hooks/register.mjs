@@ -62,8 +62,9 @@ function api($, options, observer = null) {
     pluginName: $.plugin.name,
     readPrompt: () => $.prompt.read(),
     submitPrompt: args => $.prompt.submit(args),
-    // The call /compact makes, between turns; it rejects while a turn runs.
-    compact: () => $.session.compact(),
+    // /compact as the person would type it, run once the session is idle.
+    // $.session.compact() is refused in SDK sessions, which Desktop uses.
+    compact: () => $.command.run({ command: 'compact' }),
     readCacheTtl: () => nativeCacheTtlState($),
     // The startup TTL preference lives in the Claudex broker so the app can
     // show and change it. A preference an earlier Mod left in the plugin
@@ -166,6 +167,12 @@ export function register(on, options = {}) {
   on('tool.call', async ($, e, next) => cacheWarm.deniesTool(e)
     ? { deny: 'Tools are disabled for this explicitly authorized cache-warming turn. Reply only OK.' } : next(e));
   on('config.set', async ($, e, next) => { cacheWarm.invalidate(); return next(e); });
+  // The native result of a compaction is the evidence for the one Claudex asked for.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e);
+    cacheWarm.compactionResult(e, result);
+    return result;
+  });
   on('session.receive', async ($, e, next) => {
     if (!e.text.startsWith('CLAUDEX_SELF_INBOX_V1\n')) return next(e);
     // This prefix is a routing hint, never authority. Read the original peer text

@@ -87,13 +87,20 @@ test('one on command enables its exact chat over private Unix RPC without a seco
   } };
   const send = prompt => handleCodexWarmCommand({ ...context, prompt }, options);
   const enabled = await send('/claudex:warm on');
-  assert.equal(enabled.reason.split('\n').length, 5);
+  assert.equal(enabled.reason.split('\n').length, 6);
+  assert.match(enabled.reason, /Compact when warming ends: On$/);
   assert.doesNotMatch(enabled.reason, /"policy"|"sessionId"|confirmationId|\/fixture/);
   let status = await hub.codexCacheWarm.list();
   assert.equal(status.policies[0].refreshMinutes, 25); assert.equal(status.policies[0].enabled, true); assert.equal(connections, 1);
-  assert.equal((await send('/claudex:warm status')).reason.split('\n').length, 5);
+  assert.equal((await send('/claudex:warm status')).reason.split('\n').length, 6);
   assert.equal(status.policies.length, 1); assert.equal(status.policies[0].sessionId, ID);
-  assert.equal((await send('/claudex:warm off')).reason.split('\n').length, 5);
+  assert.equal((await send('/claudex:warm off')).reason.split('\n').length, 6);
+  // This chat's own choice reaches the broker; the shared setting stays as it was.
+  assert.match((await send('/claudex:warm on for=2h compact=off')).reason, /Compact when warming ends: Off$/);
+  assert.equal((await hub.codexCacheWarm.list()).policies[0].compact, false);
+  await send('/claudex:warm off');
+  assert.match((await send('/claudex:warm on compact=on compact=off')).reason, /Use \/claudex:warm on, off, or status/);
+  assert.match((await send('/claudex:warm on compact=maybe')).reason, /Use \/claudex:warm on, off, or status/);
   // The user's own limits reach the broker as its existing bounds.
   assert.match((await send('/claudex:warm on rounds=7')).reason, /Limits: 0\/7 warm requests/);
   status = await hub.codexCacheWarm.list();

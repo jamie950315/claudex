@@ -10,7 +10,7 @@ import { createLocalization } from '../plugins/claudex/hooks/localization.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const PREFIX = '/claudex:warm';
-const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}; without one it uses the default limit saved in Claudex (4 hours unless changed). Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
+const HELP = `Use /claudex:warm on, off, or status. On enables warming for this chat and accepts its best-effort limits; it may be followed by ${WARM_LIMIT_HELP}; without one it uses the default limit saved in Claudex (4 hours unless changed). compact=on or compact=off decides for this chat whether it is compacted once when the limit is reached. Codex has no configurable 5m/1h TTL. The refresh interval is 25 minutes.`;
 const block = text => {
   return { decision: 'block', reason: text, systemMessage: text };
 };
@@ -32,8 +32,12 @@ export function parseCodexWarmCommand(prompt, now = Date.now()) {
   if (action === 'on') {
     // Codex refreshes every 25 minutes; the user's limits become its bounds.
     const { rest, bounds } = parseWarmLimits(args, { intervalMinutes: 25, now });
+    // This chat's own choice for the compaction that follows the limit.
+    const compact = rest.filter(word => /^compact=(on|off)$/.test(word));
     // Without a limit word the handler applies the default saved in Claudex.
-    if (!rest.length) return { action, bounds, defaulted: !args.some(word => /^(rounds|for|until)=/.test(word)) };
+    if (compact.length <= 1 && rest.length === compact.length) return { action, bounds,
+      ...(compact.length ? { compact: compact[0] === 'compact=on' } : {}),
+      defaulted: !args.some(word => /^(rounds|for|until)=/.test(word)) };
   }
   if (action === 'confirm' && args.length === 2 && UUID.test(args[0]) && args[1] === 'accept-best-effort')
     return { action, confirmationId: args[0] };
@@ -83,7 +87,7 @@ export async function handleCodexWarmCommand(input, { root, worker = false, call
         const limit = defaultWarmLimit((await call(root, 'cache_warm_settings', {}))?.defaultLimit);
         ({ bounds } = parseWarmLimits([limit], { intervalMinutes: 25, now: Date.now() }));
       }
-      Object.assign(params, bounds);
+      Object.assign(params, bounds, command.compact === undefined ? {} : { compact: command.compact });
     }
     if (action === 'confirm') params.confirmationId = command.confirmationId;
     const method = `codex_cache_warm_${action === 'on' ? 'prepare' : action === 'status' ? 'list' : action}`;

@@ -60,7 +60,7 @@ function validate(state, provider) {
       && integer(p.maxRefreshes, 1, 500) && (p.maxReadTokens === null || integer(p.maxReadTokens, 1, 100000000))
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 10080)
       && (p.fixedEnd === undefined || p.fixedEnd === true) && (p.restartedAt === undefined || integer(p.restartedAt))
-      && (p.compact === undefined || provider === 'claude' && typeof p.compact === 'boolean')
+      && (p.compact === undefined || typeof p.compact === 'boolean')
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
       && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
       && (provider === 'codex'
@@ -78,7 +78,7 @@ function validate(state, provider) {
       && word(a.sampleId) && word(a.model) && word(a.effort)
       && ['reserved', 'dispatching', 'submitted', 'rejected', 'uncertain', 'revoked', 'verified', 'failed'].includes(a.state)
       && (a.authorizedAt === undefined || integer(a.authorizedAt))
-      && (a.kind === undefined || provider === 'claude' && a.kind === 'compact')
+      && (a.kind === undefined || a.kind === 'compact') && (a.priorReadTokens === undefined || integer(a.priorReadTokens))
       && (a.actual === undefined || ['cacheReadTokens', 'cacheWriteTokens', 'inputTokens', 'outputTokens'].every(key => integer(a.actual[key])))
       && (a.responseIds === undefined || Array.isArray(a.responseIds) && a.responseIds.length <= 64
         && a.responseIds.every(word) && new Set(a.responseIds).size === a.responseIds.length)
@@ -179,8 +179,8 @@ export class CacheWarmManager {
   // conversation once, shortly before the cache of its last request expires,
   // so the summary is made from a cached prefix. The session's own choice
   // wins over the shared setting, which is read here so it applies to running
-  // schedules. Claude only: Codex has no reviewed compaction route.
-  compactsAtEnd(p) { return this.provider === 'claude' && (p.compact ?? this.compactAfterWarm() !== false); }
+  // schedules.
+  compactsAtEnd(p) { return p.compact ?? this.compactAfterWarm() !== false; }
   /** When that compaction is due, or null. Never after the cache expired. */
   compaction(p, b) {
     if (this.closed || !p?.enabled || !this.compactsAtEnd(p) || !b || b.cwd !== p.cwd || b.phase !== 'idle'
@@ -231,8 +231,7 @@ export class CacheWarmManager {
     requireValue(!input.enabled || word(input.requestId), 'Enabling requires a unique requestId.');
     requireValue(input.requestId === undefined || word(input.requestId));
     requireValue(input.ttl === undefined || ['1h', '5m'].includes(input.ttl), 'Cache-warming ttl must be 1h or 5m.');
-    requireValue(input.compact === undefined || this.provider === 'claude' && typeof input.compact === 'boolean',
-      'Compaction after warming is a Claude Code choice of on or off.');
+    requireValue(input.compact === undefined || typeof input.compact === 'boolean', 'Compaction after warming is on or off.');
     if (this.provider === 'codex') {
       requireValue(!input.enabled || input.bestEffort === true, 'Codex warming requires explicit bestEffort acceptance.');
       requireValue(input.bestEffort === undefined || typeof input.bestEffort === 'boolean');
@@ -372,8 +371,16 @@ export class CacheWarmManager {
           a.actual = Object.fromEntries(['inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens']
             .map(k => [k, (a.actual?.[k] ?? 0) + sample[k]]));
           a.completedAt = sample.completedAt; a.responseId = sample.id;
-          const verified = a.state !== 'failed' && successful(sample) && sample.model === a.model && sample.effort === a.effort
-            && sample.cacheReadTokens >= a.requiredPrefixTokens;
+          // A hit covers the whole preceding prefix, or, in Claude, everything
+          // but the tail of that request: Claude Code 2.1.293 and 2.1.295 were
+          // observed never re-reading the last user message of the preceding
+          // request (49 to 528 tokens short of prefixes of 8,439 to 34,310).
+          // Reading more than that request itself read proves its own cache
+          // entries are still alive, and this request covers the prefix again.
+          const covers = sample.cacheReadTokens >= a.requiredPrefixTokens || this.provider === 'claude'
+            && a.priorReadTokens !== undefined && sample.cacheReadTokens > a.priorReadTokens
+            && prefix(sample) >= a.requiredPrefixTokens;
+          const verified = a.state !== 'failed' && successful(sample) && sample.model === a.model && sample.effort === a.effort && covers;
           if (this.provider === 'codex' && verified) {
             // Per-request cache hits are candidates only. The private service
             // drains every exact usage delta before publishing the own idle
@@ -445,6 +452,11 @@ export class CacheWarmManager {
       return this.result(p, { observed: true, bound: input.phase !== 'ended' });
     });
   }
+  /** For a scheduler that must not end a schedule whose compaction is still due. */
+  async compactionAt(input) {
+    bindingIdentity(input);
+    return this.transaction(() => this.compaction(this.policy(input.sessionId), this.binding(input)));
+  }
   async claim(input) {
     bindingIdentity(input); requireValue(integer(input.epoch) && (input.kind === undefined || input.kind === 'compact'));
     // The awaited app-stop read must not keep observations/revocation from
@@ -474,6 +486,8 @@ export class CacheWarmManager {
         epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: nextAt(b.sample, p),
         expiresAt: Math.min(expires(b.sample, p), p.until), sampleId: b.sample.id, model: b.sample.model, effort: b.sample.effort,
         state: 'reserved', requiredPrefixTokens: prefix(b.sample), reservedReadTokens: prefix(b.sample) + READ_OVERHEAD,
+        // What the preceding request itself re-read: older entries, not its own.
+        priorReadTokens: b.sample.cacheReadTokens,
         reservedOutputTokens: OUTPUT_RESERVATION };
       this.state.attempts.push(a); await this.save();
       return { claimed: true, attempt: { id: a.id, prompt: CACHE_WARM_PROMPT, nextAt: a.nextAt, expiresAt: a.expiresAt } };

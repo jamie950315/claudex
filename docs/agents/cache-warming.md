@@ -76,9 +76,27 @@ limit sets so its clock time stays; a tool step, a failed reply and a limit
 already out of time or requests restart nothing) or `stop` (that message ends
 the schedule with reason `user-message`). Both managers read it when the response arrives, so it
 applies to running schedules. By user decision the same record holds
-`compactAfterWarm` (boolean, default true; Claude Code only, labeled so in the
-app): a schedule that reached its limit compacts its conversation once through
-the Mod's native `$.session.compact()`, never a prompt or `/compact` text.
+`compactAfterWarm` (boolean, default true; both apps): a schedule that
+reached its limit compacts its conversation once, never through a prompt or
+`/compact` text. Claude runs the native command with
+`$.command.run({ command: 'compact' })` and takes the main conversation's
+`session.compact` hook result during that call as the outcome (messages:
+compacted, skip: skipped, none: uncertain); the command's own return proves
+nothing. Real 2.1.295 refuses `$.session.compact()` in SDK sessions ("not
+available in a headless (-p / SDK) session yet"), which Desktop uses, and
+refuses a `/`-prefixed `$.prompt.submit`. Codex
+asks the Desktop owner with its own follower request
+`thread-follower-compact-thread` (v1, `{ conversationId }`, answered
+`{ ok: true }`; read from the shipped Desktop bundle, where the owner then
+sends `thread/compact/start`) on the same one-use, re-proved owner handle as a
+warm turn. The observer calls `expectCompaction()` inside the final dispatch
+fence; from then `thread/compacted` and a `contextCompaction` item are
+`compacted` evidence instead of an invalidation, and only the native turn
+seen from its start to a `completed` completion with that evidence settles
+the attempt as compacted. Anything else, and ten minutes without a
+completion, is uncertain. No manager observation is sent while it runs. The
+limit's expiry timer must not end a schedule whose compaction is still due
+(`compactionAt`).
 The time is the last sample's next-refresh time (`compaction()` in the
 manager), offered as `compactAt` beside a null `nextAt`; it applies when the
 time or request limit is used up or the next request would fall after
@@ -86,16 +104,16 @@ time or request limit is used up or the next request would fall after
 on an `on` command is the session's own choice (`policy.compact`), cleared by
 the next enrollment; absent, the shared setting is read when the limit ends.
 Only a client that can compact claims with `kind: 'compact'`, so an older
-loaded Mod never receives one. The native compiler refuses `$.session.compact`
-read as a value; call it, never probe it. The attempt reuses the one-use
+loaded Mod never receives one. The native compiler refuses a `$` event read
+as a value; call it, never probe it with `typeof`. The attempt reuses the one-use
 reserve/check/receipt path with `kind: 'compact'`, is no warm request in
 totals, and ends the schedule on every outcome (`compacted`, `compact-skipped`,
 `native-uncertain`); it is never repeated. The client turns local warming off
 before the call because a compaction restarts the classic session hooks. A
 message of the user after the limit ran out ends the schedule with its limit
-reason instead of compacting. Codex has no reviewed compaction route. The
-summary adds a sixth line for a Claude policy whose broker reports
-`compactAtEnd`. The message is a response that is not a warm
+reason instead of compacting. The summary adds a sixth line for a policy whose
+broker reports `compactAtEnd`. The advanced Codex CLI has no flag and follows
+the shared setting. The message is a response that is not a warm
 request, in a later turn than the one that first gave the binding evidence;
 the first turn after enrollment only supplies evidence, and a turn start or a
 command that makes no model request never counts. Saving changes neither
@@ -129,7 +147,13 @@ and every native identity/lifecycle/no-replay check remain unchanged.
 `src/cache-warm.mjs` owns bounded durable policies and one-use attempts; the Mod's cache-warm client
 observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
-proof. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
+proof. A Claude warm request is a hit when it read the whole preceding prefix,
+or read more than the preceding request itself read (`priorReadTokens`, saved
+with the attempt) while its read plus write covers that prefix again: real
+2.1.293 and 2.1.295 sessions never re-read the last user message of the
+preceding request. Reading no more than was cached before that request is
+not a hit; an attempt without `priorReadTokens` and Codex keep the
+whole-prefix rule. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
 uncertain submission, read-only status and explicit bounded authorization. The
 Claude warming window defaults to one hour; users can choose
 `ttl=5m` or `ttl=1h` in the confirmed native command. Confirmation synchronizes

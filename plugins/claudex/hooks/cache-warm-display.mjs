@@ -151,8 +151,8 @@ export function formatWarmSummary(result = {}, { provider, sessionId, cwd, t = i
   // Shown only for a policy, so the user sees the limits they chose being used.
   const limits = policy && number(policy.maxRefreshes) ? [t('Limits: {used}/{max} warm requests · until {time}', {
     used: count(policy.totals?.refreshes), max: count(policy.maxRefreshes), time: time(policy.until) })] : [];
-  // Claude only, and only from a broker that reports the choice in effect.
-  const compact = policy && selectedProvider !== 'codex' && typeof policy.compactAtEnd === 'boolean'
+  // Only from a broker that reports the choice in effect.
+  const compact = policy && typeof policy.compactAtEnd === 'boolean'
     ? [t('Compact when warming ends: {state}', { state: timestamp(policy.compactAt) ? time(policy.compactAt) : t(policy.compactAtEnd ? 'On' : 'Off') })] : [];
   return [heading, tokens, history, t('Next warm: {next}', { next }), ...limits, ...compact].join('\n');
 }

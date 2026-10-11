@@ -122,9 +122,12 @@ function counts(value) {
   return Object.fromEntries(FIELDS.map(key => [key, value[key]]));
 }
 
-function notification(event, sessionId, now) {
+function notification(event, sessionId, now, compacting = false) {
   const p = event?.params;
   if (p?.threadId !== sessionId) return null;
+  // The compaction this observer asked for is evidence, not an invalidation.
+  if (compacting && (event.method === 'thread/compacted'
+    || ['item/started', 'item/completed'].includes(event.method) && p.item?.type === 'contextCompaction')) return { type: 'compacted' };
   if (INVALIDATIONS.has(event.method)) return { type: 'invalidated', reason: INVALIDATIONS.get(event.method) };
   if (event.method === 'thread/status/changed' && ['notLoaded', 'systemError'].includes(p.status?.type))
     return { type: 'invalidated', reason: 'native-thread-unavailable' };
@@ -210,6 +213,7 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
     if (typeof onEvent !== 'function') fail('event callback required');
     const connection = await client();
     let listening = false, closed = false, invalidated = false, buffered = [];
+    let compacting = false;
     let securitySettings = null, confirmedSettings = null, fullSettings = null, earlySettings = [], unreported = false;
     const emit = value => {
       if (!value || closed || invalidated) return;
@@ -241,7 +245,7 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         } catch { emit({ type: 'invalidated', reason: 'invalid-native-settings' }); }
         return;
       }
-      emit(notification(event, expected.sessionId, now));
+      emit(notification(event, expected.sessionId, now, compacting));
     };
     const disconnected = () => emit({ type: 'invalidated', reason: 'disconnected' });
     connection.on('notification', observe);
@@ -294,6 +298,11 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         acceptUnreportedSettings() {
           if (closed || invalidated) fail('observer unavailable');
           if (fullSettings === null) unreported = true;
+        },
+        /** Called immediately before this observer's own compaction request. */
+        expectCompaction() {
+          if (closed || invalidated) fail('observer unavailable');
+          compacting = true;
         },
         listen() {
           if (closed || listening) return;

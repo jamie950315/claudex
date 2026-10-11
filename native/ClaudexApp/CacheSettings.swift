@@ -1,10 +1,9 @@
 import Cocoa
 
 /// The cache settings window. Everything it edits is saved in the Claudex
-/// broker: the default warming limit (Claude Code and Codex) and the startup
-/// TTL preference and the compaction that follows a finished warm-up (Claude
-/// Code only). It also lists the conversations still
-/// being kept warm and can stop one. Opening, reloading and selecting never
+/// broker: the default warming limit and the compaction that follows a finished
+/// warm-up (Claude Code and Codex) and the startup TTL preference (Claude Code
+/// only). It also lists the conversations still being kept warm and can stop one. Opening, reloading and selecting never
 /// write; only Save and Stop do. Nothing here enables warming or starts model
 /// work.
 final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
@@ -115,14 +114,14 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         let third = separator()
         stack.addArrangedSubview(third)
 
-        stack.addArrangedSubview(heading("When warming ends", scope: "Claude Code only"))
+        stack.addArrangedSubview(heading("When warming ends", scope: "Claude Code and Codex"))
         compactPicker = picker("When warming ends")
         for (value, title) in zip([true, false], ["Compact the conversation", "Leave the conversation as it is"]) {
             compactPicker.addItem(withTitle: L(title))
             compactPicker.lastItem?.representedObject = value
         }
         stack.addArrangedSubview(compactPicker)
-        stack.addArrangedSubview(wrapping(L("What happens when a Claude Code warm-up reaches its limit. Compact: Claudex compacts that conversation once, shortly before the cache of its last request expires, so the summary is made while the conversation is still cached and your next message starts from a small context. Earlier messages are replaced by a summary, with one model request. A message of your own after the limit ran out cancels it. In a conversation, /claudex:warm on compact=on or compact=off decides for that session only. It applies to warm-ups already running too.")))
+        stack.addArrangedSubview(wrapping(L("What happens when a warm-up reaches its limit. Compact: Claudex compacts that conversation once, shortly before the cache of its last request expires, so the summary is made while the conversation is still cached and your next message starts from a small context. Earlier messages are replaced by a summary, with one model request. A message of your own after the limit ran out cancels it. In a conversation, /claudex:warm on compact=on or compact=off decides for that conversation only. It applies to warm-ups already running too.")))
         let fourth = separator()
         stack.addArrangedSubview(fourth)
 

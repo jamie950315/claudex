@@ -193,13 +193,13 @@ export class CollaborationHub extends EventEmitter {
     this.root = await privateDirectory(this.root);
     // Read when a message arrives, so a change applies to running schedules too.
     const onUserMessage = () => this.state?.warmOnUserMessage ?? 'continue';
-    this.cacheWarm = new CacheWarmManager({ root: this.root, onUserMessage,
-      compactAfterWarm: () => this.state?.compactAfterWarm ?? true, stopped: async () => {
+    const compactAfterWarm = () => this.state?.compactAfterWarm ?? true;
+    this.cacheWarm = new CacheWarmManager({ root: this.root, onUserMessage, compactAfterWarm, stopped: async () => {
       if (this.closed) return true;
       const state = await readAppStopState(dirname(this.root));
       return this.closed || state?.stopped === true || state?.resuming === true;
     } });
-    this.codexCacheWarm = new CodexCacheWarmer({ root: this.root, onUserMessage, ...this.codexCacheOptions, stopped: async () => {
+    this.codexCacheWarm = new CodexCacheWarmer({ root: this.root, onUserMessage, compactAfterWarm, ...this.codexCacheOptions, stopped: async () => {
       if (this.closed) return true;
       const state = await readAppStopState(dirname(this.root));
       return this.closed || state?.stopped === true || state?.resuming === true;
@@ -443,7 +443,7 @@ export class CollaborationHub extends EventEmitter {
       const action = method.slice('codex_cache_warm_'.length);
       const allowed = {
         list: ['sessionId', 'cwd'], off: ['sessionId', 'cwd'], confirm: ['confirmationId', 'bestEffort', 'sessionId', 'cwd'],
-        prepare: ['sessionId', 'cwd', 'bestEffort', 'refreshMinutes', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens', 'fixedEnd'],
+        prepare: ['sessionId', 'cwd', 'bestEffort', 'refreshMinutes', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens', 'fixedEnd', 'compact'],
       }[action];
       if (!allowed || Object.keys(params).some(key => !allowed.includes(key))) throw new Error('Unsupported Codex cache-warm fields.');
       if (this.closed && !['list', 'off'].includes(action)) throw new Error('Broker is stopping.');
@@ -458,7 +458,7 @@ export class CollaborationHub extends EventEmitter {
       if (action === 'settings') {
         const writes = ['defaultLimit', 'ttlPreference', 'ttlLastChoice', 'onUserMessage', 'compactAfterWarm'].filter(key => Object.hasOwn(params, key));
         if (Object.keys(params).some(key => !['sessionId', 'cwd', 'defaultLimit', 'ttlPreference', 'ttlLastChoice', 'onUserMessage', 'compactAfterWarm'].includes(key))) throw new Error('Unsupported cache-warm fields.');
-        // Claude Code only: whether a schedule that reached its limit compacts once.
+        // Whether a schedule that reached its limit compacts once, in either app.
         if (writes.includes('compactAfterWarm') && typeof params.compactAfterWarm !== 'boolean') throw new Error('compactAfterWarm must be true or false.');
         if (writes.includes('onUserMessage') && !['continue', 'stop'].includes(params.onUserMessage)) throw new Error('onUserMessage must be continue or stop.');
         if (writes.includes('defaultLimit') && typeof params.defaultLimit !== 'string') throw new Error('Default warming limit must be a limit word.');

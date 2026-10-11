@@ -1,6 +1,6 @@
 # Claude Mod integration: deployment handoff
 
-Current operational handoff: Claudex.app 1.4.1 and Mod 0.8.23. Version-scoped
+Current operational handoff: Claudex.app 1.4.2 and Mod 0.8.24. Version-scoped
 observations below retain their original review dates. The companion is integrated;
 do not reapply any historical downloaded patch. Read AGENTS.md, [the guide](claude-mod.md),
 [acceptance gates](claude-mod-acceptance.md) and [validation](claude-mod-validation.md).

@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.23
+# Claudex native companion, 0.8.24
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -13,11 +13,12 @@ remembered TTL choices, and off leaves the native TTL unchanged. The namespaced
 skill provides discovery; active Mod hooks answer locally without a model turn.
 
 A warm-up that reached its limit compacts its conversation once, shortly before
-the cache of its last request expires, through the native call `/compact` makes.
+the cache of its last request expires, by running the native `/compact` command.
 This is on by default. `/claudex warm compact on|off` (then the shown confirm
 command) or the Cache settings tab saves the shared choice in Claudex;
 `compact=on` or `compact=off` after `/claudex:warm on` decides for one session.
-A message of your own after the limit ran out cancels that compaction.
+A message of your own after the limit ran out cancels that compaction. The
+shared choice also applies to Codex warm-ups, which Claudex compacts itself.
 Without those hooks, its body refuses model/tool implementation. Codex retains
 its separate best-effort native command hook and CLI controls; this is a Claude Mod command.
 
@@ -100,7 +101,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.23-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.24-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

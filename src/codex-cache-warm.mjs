@@ -17,9 +17,10 @@ function bounds(p) {
     && (!Number.isSafeInteger(p.maxReadTokens) || p.maxReadTokens < 1 || p.maxReadTokens > 100000000))
     throw new Error('Invalid Codex cache-warm maxReadTokens.');
   if (p.fixedEnd !== undefined && p.fixedEnd !== true) throw new Error('Invalid Codex cache-warm fixedEnd.');
+  if (p.compact !== undefined && typeof p.compact !== 'boolean') throw new Error('Invalid Codex cache-warm compact.');
   const value = { refreshMinutes: p.refreshMinutes ?? 25, maxMinutes: p.maxMinutes ?? 60,
     maxRefreshes: p.maxRefreshes ?? 3, maxReadTokens: null, maxOutputTokens: p.maxOutputTokens ?? 256,
-    ...(p.fixedEnd ? { fixedEnd: true } : {}) };
+    ...(p.fixedEnd ? { fixedEnd: true } : {}), ...(p.compact === undefined ? {} : { compact: p.compact }) };
   for (const [key, max] of Object.entries({ refreshMinutes: 25, maxMinutes: 10080, maxRefreshes: 500, maxOutputTokens: 1000000 }))
     if (!Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > max) throw new Error(`Invalid Codex cache-warm ${key}.`);
   return value;
@@ -28,9 +29,9 @@ function bounds(p) {
 /** Broker-owned native observer and finite scheduler. No external usage reports
  * or dispatch claims are accepted. Status never starts a native connection. */
 export class CodexCacheWarmer {
-  constructor({ root, stopped = async () => false, onUserMessage, native = createCodexCacheNative({ syncRoot: dirname(root) }), now = Date.now,
+  constructor({ root, stopped = async () => false, onUserMessage, compactAfterWarm, native = createCodexCacheNative({ syncRoot: dirname(root) }), now = Date.now,
     after = (ms, callback) => { const timer = setTimeout(callback, ms); timer.unref?.(); return { cancel: () => clearTimeout(timer) }; } }) {
-    this.manager = new CacheWarmManager({ root, provider: 'codex', stopped, now, onUserMessage });
+    this.manager = new CacheWarmManager({ root, provider: 'codex', stopped, now, onUserMessage, compactAfterWarm });
     Object.assign(this, { stopped, native, now, after });
     this.bindings = new Map(); this.previews = new Map(); this.serial = Promise.resolve(); this.closed = false;
   }
@@ -151,7 +152,25 @@ export class CodexCacheWarmer {
       inputTokens: u.inputTokens, cacheReadTokens: u.cachedInputTokens, cacheWriteTokens: u.cacheWriteInputTokens,
       outputTokens: u.outputTokens, stopReason: 'end_turn', ...(b.attempt ? { attemptId: b.attempt.id } : {}) });
   }
+  // The schedule is over whatever the outcome; an uncertain compaction is never repeated.
+  async finishCompaction(b, attemptId, outcome) {
+    b.compacting = null; this.cancel(b); b.completion?.cancel(); b.completion = null;
+    b.enabled = false; b.reason = outcome === 'compacted' ? 'compacted' : outcome === 'rejected' ? 'compact-skipped' : 'native-uncertain';
+    try { await this.manager.receipt({ ...this.fields(b), attemptId, outcome }); }
+    finally { await this.detach(b); }
+  }
   async event(b, e) {
+    if (b.compacting) {
+      // Only this observer's own compaction is followed here: its native turn
+      // from start to completion, with the compaction itself reported in between.
+      const c = b.compacting;
+      if (e.type === 'compacted') c.seen = true;
+      else if (e.type === 'invalidated') await this.finishCompaction(b, c.attemptId, 'uncertain');
+      else if (e.type === 'start') { if (c.turnId === undefined) c.turnId = e.turnId; else await this.finishCompaction(b, c.attemptId, 'uncertain'); }
+      else if (e.type === 'complete') await this.finishCompaction(b, c.attemptId,
+        e.turnId === c.turnId && e.status === 'completed' && c.seen ? 'compacted' : 'uncertain');
+      return;
+    }
     if (e.type === 'invalidated') return this.fail(b, e.reason, true);
     if (e.type === 'start') {
       if (b.turn?.id === e.turnId && b.phase === 'busy') {
@@ -196,15 +215,21 @@ export class CodexCacheWarmer {
     b.attempt = null; b.warmTurnId = null; b.turn = null; b.samples = [];
     b.enabled = b.enabled && reply.policy?.enabled === true;
     b.reason = reply.reason;
-    if (!b.enabled || !Number.isFinite(reply.nextAt)) { await this.detach(b); return; }
+    // With no further warm request, the one compaction at the end may be due.
+    const at = Number.isFinite(reply.nextAt) ? reply.nextAt : reply.compactAt;
+    if (!b.enabled || !Number.isFinite(at)) { await this.detach(b); return; }
     // A message of the user's own may have restarted the limit.
     if (reply.policy.until !== b.until) this.expire(b, reply.policy.until);
-    this.schedule(b, reply.nextAt);
+    this.schedule(b, at);
   }
   expire(b, until) {
     b.expiry?.cancel(); b.until = until;
     b.expiry = this.after(Math.max(0, until - this.now()), () => {
-      void this.enqueue(() => this.valid(b) && this.fail(b, 'duration-limit', false)).catch(() => { this.closed = true; });
+      void this.enqueue(async () => {
+        // The compaction that follows the limit can be due after its end time.
+        if (!this.valid(b) || b.compacting || await this.manager.compactionAt(this.fields(b)) !== null) return;
+        return this.fail(b, 'duration-limit', false);
+      }).catch(() => { this.closed = true; });
     });
   }
   schedule(b, nextAt) {
@@ -223,7 +248,12 @@ export class CodexCacheWarmer {
     if (!this.valid(b) || !b.enabled) return;
     if (state.phase !== 'idle' || state.fingerprint !== b.fingerprint) return this.fail(b, 'native-busy-or-configuration-changed');
     const claim = await this.manager.claim(this.fields(b));
-    if (!claim.claimed) { if (claim.reason === 'not-due' && claim.nextAt) this.schedule(b, claim.nextAt); else await this.fail(b, claim.reason); return; }
+    if (!claim.claimed) {
+      if (Number.isFinite(claim.compactAt)) { if (this.now() >= claim.compactAt) await this.compact(b, state); else this.schedule(b, claim.compactAt); }
+      else if (claim.reason === 'not-due' && claim.nextAt) this.schedule(b, claim.nextAt);
+      else await this.fail(b, claim.reason);
+      return;
+    }
     b.attempt = claim.attempt;
     let owner, outcome = 'rejected';
     try {
@@ -249,6 +279,40 @@ export class CodexCacheWarmer {
       owner?.close?.();
       await this.manager.receipt({ ...this.fields(b), attemptId: claim.attempt.id, outcome });
       if (outcome !== 'submitted') { b.attempt = null; await this.fail(b, `native-${outcome}`); }
+    }
+  }
+  // The limit is used up: ask the Desktop owner to compact once while the
+  // last request's assumed cache window still holds. Not a prompt or a turn of ours.
+  async compact(b, state) {
+    const claim = await this.manager.claim({ ...this.fields(b), kind: 'compact' });
+    if (!claim.claimed) return this.fail(b, claim.reason);
+    const attemptId = claim.attempt.id;
+    let owner, outcome = 'rejected';
+    try {
+      owner = await b.handle.preflight();
+      if (owner.status !== 'ready' || owner.ownerClientId !== state.ownerClientId) throw new Error('native-owner-unavailable');
+      const checked = await this.manager.check({ ...this.fields(b), attemptId });
+      if (!checked.ready) throw new Error(checked.reason);
+      outcome = 'uncertain';
+      const result = await owner.compact({ beforeDispatch: async () => {
+        const fresh = await b.handle.inspect();
+        const stopped = await this.stopped();
+        if (!this.valid(b) || !b.enabled || stopped || this.now() >= checked.expiresAt
+          || fresh.phase !== 'idle' || fresh.fingerprint !== b.fingerprint) throw new Error('native-dispatch-fence');
+        // From here the native compaction is this observer's own evidence.
+        b.handle.expectCompaction(); b.compacting = { attemptId };
+      } });
+      if (result.status === 'accepted') {
+        outcome = 'accepted';
+        b.completion = this.after(600000, () => {
+          void this.enqueue(() => this.valid(b) && b.compacting?.attemptId === attemptId
+            && this.finishCompaction(b, attemptId, 'uncertain')).catch(() => { this.closed = true; });
+        });
+      } else if (['busy', 'rejected', 'unavailable'].includes(result.status)) outcome = 'rejected';
+    } catch { /* The outcome set before the failing step stands. */ }
+    finally {
+      owner?.close?.();
+      if (outcome !== 'accepted') await this.finishCompaction(b, attemptId, outcome);
     }
   }
   async close() {

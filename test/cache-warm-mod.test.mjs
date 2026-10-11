@@ -13,8 +13,10 @@ async function fixture() {
   let now = 1000, context = { sessionId: ID, cwd: '/fixture' }, fingerprint = 'sonnet-medium-5m';
   let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h', preference, warmLimit, compactAfterWarm;
   const native = { compactions: 0, compact: async () => ({ messages: [] }) };
+  let client;
   const lastChoices = new Map();
-  const timers = [], calls = [], client = createCacheWarmClient();
+  const timers = [], calls = [];
+  client = createCacheWarmClient();
   const hooks = {};
   const host = {
     pluginName: 'claudex', worker: async () => worker, context: async () => ({ ...context }), now: async () => now,
@@ -49,7 +51,13 @@ async function fixture() {
       if (request.action === 'check') return { ready: enabled };
       return {};
     },
-    async compact() { native.compactions++; return native.compact(); },
+    // The native command resolves to its printed text; its result reaches the session.compact hook.
+    async compact() {
+      native.compactions++;
+      const result = await native.compact();
+      if (result !== undefined) client.compactionResult({ trigger: 'manual' }, result);
+      return {};
+    },
     async submitPrompt(args) {
       submits++;
       if (hooks.submit) return hooks.submit(args);
@@ -739,6 +747,15 @@ test('the client compacts natively once after the last warm request, with the re
     await failed.f.fire();
     assert.equal((await failed.manager.list()).policies[0].reason, 'native-uncertain');
     assert.equal((await failed.manager.list()).attempts.at(-1).state, 'uncertain');
+    // A command that returns without any native compaction result, or only a subagent's or a precomputed one, proves nothing.
+    for (const stray of [undefined, { agentId: 'agent-1' }, { trigger: 'precompute' }]) {
+      const silent = await start();
+      silent.f.native.compact = async () => { if (stray) silent.f.client.compactionResult({ trigger: 'manual', ...stray }, { messages: [] }); };
+      await silent.f.fire();
+      assert.equal((await silent.manager.list()).policies[0].reason, 'native-uncertain');
+    }
+    // A result outside Claudex's own request is ignored.
+    failed.f.client.compactionResult({ trigger: 'manual' }, { messages: [] });
     await failed.f.fire(); assert.equal(failed.f.native.compactions, 1);
   }
   {

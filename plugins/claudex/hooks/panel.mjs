@@ -159,7 +159,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       Select({ key: 'cache-compact', label: t('Compact when warming ends'), value: state.cacheForm.compact,
         options: [{ value: 'on', label: t('On') }, { value: 'off', label: t('Off') }],
         onSelect: value => { if (controller.state === state) controller.cacheEdit(host(), 'compact', value); } }),
-      muted(t('When a warm-up reaches its limit, Claudex compacts that Claude Code conversation once, shortly before the cache of its last request expires. Saved in Claudex; compact=on or compact=off on /claudex:warm on decides for one session.')),
+      muted(t('When a warm-up reaches its limit, Claudex compacts that conversation once, shortly before the cache of its last request expires. Saved in Claudex and shared with Codex; compact=on or compact=off on /claudex:warm on decides for one conversation.')),
       button('cache-preview-compact', t('Preview compaction setting'), () => controller.cachePrepare(host(), 'compact')),
     ]));
     if (state.cachePending) body.push(section(t('Review cache change'), [

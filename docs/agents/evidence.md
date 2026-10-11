@@ -13,6 +13,7 @@ Authorized Desktop 0.160.0 backend acceptance after native trust verified seven 
 
 Authorized 1.2.6 native acceptance verified a 25-minute same-owner OK refresh (36,096 cached input / 5 output tokens), exact accounting and the one-refresh limit. At about 31 minutes both warmed and untouched controls still hit; retain the inconclusive extension result, not a guaranteed native TTL claim. Detailed version-scoped evidence is in docs/claude-mod-validation.md.
 
+Authorized 1.4.2 native acceptance (Claude Code 2.1.295, Sonnet 5.5 medium, staged Mod 0.8.24, isolated root, `dev/cache-warm-probe/native.mjs --run --compact --native-context`) verified one warm request under the prior-read rule (read 34,261, prior read 29,858, required prefix 34,310), compaction authorized 144 ms after its due time and 240 seconds after the warm request started, one `compact_boundary` with trigger `manual` (34,422 to 1,728 tokens, 6.7 seconds), the policy ending `compacted` with one refresh, and a normal reply afterwards. Earlier runs in the same series recorded the two defects this fixed: `$.session.compact()` refused in SDK sessions, and whole-prefix verification failing 49 to 528 tokens short after plain replies on 2.1.293 and 2.1.295. No real Codex compaction has been run.
 
 ## From collaboration.md
 

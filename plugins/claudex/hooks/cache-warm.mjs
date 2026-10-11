@@ -68,7 +68,7 @@ export function parseCacheWarmBounds(words = []) {
 }
 
 export function createCacheWarmClient() {
-  let binding = null, generation = 0, confirmation = null;
+  let binding = null, generation = 0, confirmation = null, compacting = null;
   const cancel = b => { b?.timer?.cancel(); if (b) b.timer = null; };
   const current = (b, epoch = b?.epoch) => binding === b && b?.epoch === epoch && !b.ended;
   const call = (b, action, params = {}) => b.host.bridge({ version: 1, op: 'cache-warm', action,
@@ -174,7 +174,8 @@ export function createCacheWarmClient() {
     }
   }
   // The limit is used up: compact once while the last request's cache still
-  // holds. This is the native call /compact makes, not a prompt or a turn.
+  // holds, by running the native /compact command. Its own native result,
+  // seen by the session.compact hook, is the evidence; the command's return is not.
   async function compactOnce(b, epoch, fingerprint) {
     const claim = await call(b, 'claim', { ...fields(b), kind: 'compact' });
     // A refused compaction is not asked for again.
@@ -193,9 +194,11 @@ export function createCacheWarmClient() {
       // schedule is over either way; a compaction restarts the native session
       // hooks, and that must not be reported as competing activity.
       outcome = 'uncertain'; b.enabled = false;
-      const result = await b.host.compact();
-      if (typeof result?.skip === 'string') outcome = 'rejected';
-      else if (Array.isArray(result?.messages)) outcome = 'compacted';
+      const own = compacting = { result: null };
+      try { await b.host.compact(); }
+      finally { if (compacting === own) compacting = null; }
+      if (own.result === 'skipped') outcome = 'rejected';
+      else if (own.result === 'compacted') outcome = 'compacted';
     } catch { if (outcome !== 'rejected') outcome = 'uncertain'; }
     finally {
       try { await call(b, 'receipt', { instanceId: b.instanceId, epoch, attemptId: attempt.id, outcome }); }
@@ -320,7 +323,7 @@ export function createCacheWarmClient() {
         confirmation = { id: token(), b, epoch: b.epoch, expiresAt: await host.now() + 120000, compact, compactOnly: true, sessionOnly };
         return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
           compactAfterWarm: compact, previousCompactAfterWarm: previous,
-          effects: 'Save, in Claudex, whether a Claude Code warm-up that reached its limit compacts its conversation once, shortly before the cache of its last request expires. It applies to running warm-ups that did not choose compact=on or compact=off themselves, and to future ones. Compaction replaces earlier messages with a summary and makes one model request. It changes neither the native TTL nor a limit, and never enables warming.',
+          effects: 'Save, in Claudex, for Claude and Codex alike, whether a warm-up that reached its limit compacts its conversation once, shortly before the cache of its last request expires. It applies to running warm-ups that did not choose compact=on or compact=off themselves, and to future ones. Compaction replaces earlier messages with a summary and makes one model request. It changes neither the native TTL nor a limit, and never enables warming.',
           expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
       }
       if (words[0] === 'on' || words[0] === 'preference' || words[0] === 'ttl') {
@@ -528,6 +531,11 @@ export function createCacheWarmClient() {
       }
       if (b.enabled || turn.attemptId) { try { await observe(b, b.sample); } catch { fault(b, 'observation-unavailable'); } }
       if (b.turn === turn) b.turn = null;
+    },
+    /** The main conversation's compaction result while Claudex's own request runs. */
+    compactionResult(e, result) {
+      if (!compacting || e?.agentId || e?.trigger === 'precompute') return;
+      compacting.result = typeof result?.skip === 'string' ? 'skipped' : Array.isArray(result?.messages) ? 'compacted' : null;
     },
     deniesTool(e) { return !e.agentId && Boolean(binding?.turn?.attemptId); },
   };

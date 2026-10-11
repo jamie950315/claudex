@@ -94,16 +94,37 @@ test('unrelated activity after native authorization preserves uncertainty and st
   assert.equal(list.attempts[0].state, 'uncertain'); assert.equal(list.policies[0].enabled, false);
 });
 
-test('fresh but partial cache hit, native max_tokens, or model change cannot certify warming', async t => {
-  for (const change of [{ cacheReadTokens: 5999 }, { stopReason: 'max_tokens' }, { model: 'different-model' }]) {
-    const f = await fixture(t); await f.seed();
+test('a hit that proves nothing new, native max_tokens, or model change cannot certify warming', async t => {
+  // The preceding request re-read 3,000 tokens of older entries and wrote 3,000 of its own.
+  const run = async change => {
+    const f = await fixture(t);
+    await f.observe({ sample: f.sample({ cacheReadTokens: 3000, cacheWriteTokens: 3000 }) }); await f.enable(); f.tick(239000);
     const { attempt } = await f.claim(); await f.check(attempt.id);
+    assert.equal((await f.manager.list()).attempts[0].priorReadTokens, 3000);
     f.tick(1000);
     const result = await f.observe({ epoch: 1, attemptId: attempt.id,
       sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 80, ...change }) });
-    assert.equal(result.policy.enabled, false);
-    assert.equal((await f.manager.list()).attempts[0].state, 'failed');
+    return { result, attempt: (await f.manager.list()).attempts[0] };
+  };
+  // Only what was cached before that request, or a prefix this request does not cover again.
+  for (const change of [{ cacheReadTokens: 3000 }, { cacheReadTokens: 2999, cacheWriteTokens: 3100 }, { cacheReadTokens: 5000, cacheWriteTokens: 900 },
+    { stopReason: 'max_tokens' }, { model: 'different-model' }]) {
+    const { result, attempt } = await run(change);
+    assert.equal(result.policy.enabled, false, JSON.stringify(change));
+    assert.equal(attempt.state, 'failed');
   }
+  // Claude Code re-reads all but the tail of the preceding request: its own entries are alive.
+  for (const change of [{}, { cacheReadTokens: 5949, cacheWriteTokens: 155 }, { cacheReadTokens: 3001, cacheWriteTokens: 2999 }]) {
+    const { result, attempt } = await run(change);
+    assert.equal(attempt.state, 'verified', JSON.stringify(change)); assert.equal(result.policy.enabled, true);
+  }
+  // A journal written before this evidence was recorded keeps the whole-prefix rule.
+  const f = await fixture(t); await f.seed();
+  const { attempt } = await f.claim(); await f.check(attempt.id);
+  const saved = JSON.parse(await readFile(join(f.root, 'cache-warm.json'), 'utf8')); delete saved.attempts[0].priorReadTokens;
+  f.manager.state.attempts[0] = saved.attempts[0]; f.tick(1000);
+  await f.observe({ epoch: 1, attemptId: attempt.id, sample: f.sample({ cacheReadTokens: 5999, cacheWriteTokens: 80 }) });
+  assert.equal((await f.manager.list()).attempts[0].state, 'failed');
 });
 
 test('enable request idempotency never resets duration, counts, or budgets', async t => {
@@ -800,7 +821,4 @@ test('a schedule that reached its limit compacts once before its last cache wind
     await other.f.observe({ phase: 'busy', epoch: 2 });
     assert.deepEqual(await other.f.check(reserved.attempt.id, { epoch: 1 }), { ready: false, reason: 'attempt-already-consumed' });
   }
-  // Codex has no compaction route.
-  const codex = await new CacheWarmManager({ root: (await fixture(t)).root, provider: 'codex', now: () => 1000000 }).initialize();
-  await assert.rejects(codex.configure({ sessionId: 'fixture-session', cwd: '/fixture/project', provider: 'codex', enabled: false, compact: true }), /Claude Code/);
 });

@@ -188,6 +188,16 @@ checks the one-hour cache-creation bucket, then confirms 5m and checks the
 five-minute bucket with one more request. Local commands must use zero model
 turns, off must preserve the selected TTL, and no automatic attempt may occur.
 This is exactly two explicit model requests, not a one-hour retention experiment.
+
+`native.mjs --run --compact --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
+verifies the compaction that follows a finished warm-up. It sends two ordinary
+seed turns, waits for the one timer-triggered warm turn, then sends nothing
+and requires the loaded Mod to compact once inside that request's cache
+window: a verified `compact` attempt, a policy ended as `compacted`, exactly
+one native `compact_boundary`, and one more ordinary reply afterwards. It
+raises the output cap to 4,000 tokens and the estimated budget to $1 for the
+summary request, and takes about nine minutes at the 5m TTL. `--root` must be
+short: the broker's Unix socket path lives beneath it.
 It uses the same separately authorized process-only function-hooks option.
 
 The native initialization catalog can precede dynamic command registration, so
