@@ -128,6 +128,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       field(t('Saved startup mode'), modes[cache?.ttlPreference?.mode] ?? t('Unknown')),
       ...(cache?.ttlPreference?.ttl ? [field(t('Saved TTL'), cache.ttlPreference.ttl)] : []),
       field(t('Default warming limit'), cache?.defaultLimit),
+      field(t('Compact when warming ends'), cache ? cache.compactAfterWarm === false ? t('Off') : t('On') : t('Unknown')),
       field(t('Cache warming'), cache ? cache.local?.enabled ? t('Enabled') : t('Disabled') : t('Unknown')),
       ...(cache?.local?.ttlRestore?.state === 'failed' ? [text(cache.local.ttlRestore.error)] : []),
       button('cache-refresh', t('Refresh status'), () => controller.cacheRefresh(host())),
@@ -154,6 +155,13 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       muted(t('Used when /claudex:warm on is given no limit. Saved in Claudex and shared with Codex; a running warm-up is unchanged.')),
       button('cache-preview-limit', t('Preview default limit'), () => controller.cachePrepare(host(), 'limit')),
     ]));
+    body.push(section(t('Compact when warming ends'), [
+      Select({ key: 'cache-compact', label: t('Compact when warming ends'), value: state.cacheForm.compact,
+        options: [{ value: 'on', label: t('On') }, { value: 'off', label: t('Off') }],
+        onSelect: value => { if (controller.state === state) controller.cacheEdit(host(), 'compact', value); } }),
+      muted(t('When a warm-up reaches its limit, Claudex compacts that Claude Code conversation once, shortly before the cache of its last request expires. Saved in Claudex; compact=on or compact=off on /claudex:warm on decides for one session.')),
+      button('cache-preview-compact', t('Preview compaction setting'), () => controller.cachePrepare(host(), 'compact')),
+    ]));
     if (state.cachePending) body.push(section(t('Review cache change'), [
       field(t('Session ID'), state.cachePending.sessionId), field(t('Directory'), state.cachePending.cwd),
       // Always retain the complete confirmation, including scope and effects.
@@ -163,7 +171,8 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
     ]));
     if (state.cacheResult) body.push(section(t('Cache change result'), [
       text(state.cacheResult.state === 'disabled' ? t('Disabled') : state.cacheResult.state === 'limit-saved'
-        ? t('Default limit saved. Warming is unchanged.') : t('Settings updated. Warming remains off.')), details('cache-result', state.cacheResult),
+        ? t('Default limit saved. Warming is unchanged.') : state.cacheResult.state === 'compact-saved'
+        ? t('Compaction setting saved. Warming is unchanged.') : t('Settings updated. Warming remains off.')), details('cache-result', state.cacheResult),
     ]));
     body.push(button('cache-off', t('Stop cache warming'), () => controller.cacheOff(host())));
   } else if (state.tab === 'tasks') {

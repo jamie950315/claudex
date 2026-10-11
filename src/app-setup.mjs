@@ -195,8 +195,12 @@ export class AppSetup {
    * Claude Code startup TTL preference and the enrollments still running.
    * Saving changes no enrollment and starts no model work. The list is a
    * bounded, content-free summary of the two status lists. */
-  async warmSettings({ defaultLimit, ttlMode, ttl, onUserMessage } = {}) {
+  async warmSettings({ defaultLimit, ttlMode, ttl, onUserMessage, compactAfterWarm } = {}) {
     const params = {};
+    if (compactAfterWarm !== undefined) {
+      if (!['on', 'off'].includes(compactAfterWarm)) throw new Error('Compaction after warming is on or off.');
+      params.compactAfterWarm = compactAfterWarm === 'on';
+    }
     if (onUserMessage !== undefined) params.onUserMessage = onUserMessage;
     if (defaultLimit !== undefined) params.defaultLimit = defaultLimit;
     if (ttlMode !== undefined) {
@@ -212,6 +216,7 @@ export class AppSetup {
     const startupTtl = !preference || preference.mode === 'session' ? null
       : preference.mode === 'remember' && last?.revision === preference.revision ? last.ttl : preference.ttl;
     return { defaultLimit: settings.defaultLimit, saved: settings.saved, onUserMessage: settings.onUserMessage ?? 'continue',
+      compactAfterWarm: settings.compactAfterWarm !== false,
       ttlMode: preference?.mode ?? null, startupTtl, ...await this.warmEnrollments() };
   }
 

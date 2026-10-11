@@ -703,3 +703,104 @@ test('the reply to a message of the user starts the whole limit over, unless the
   }
   await assert.rejects((async () => { const f = await fixture(t); await f.observe(); return f.enable({ fixedEnd: false }); })());
 });
+
+test('a schedule that reached its limit compacts once before its last cache window ends', async t => {
+  const warm = async (f, epoch) => {
+    const claimed = await f.claim({ epoch }); assert.equal(claimed.claimed, true, claimed.reason);
+    await f.check(claimed.attempt.id, { epoch });
+    await f.observe({ phase: 'busy', epoch: epoch + 1, attemptId: claimed.attempt.id }); await f.receipt(claimed.attempt.id, 'submitted');
+    f.tick(1000);
+    return f.observe({ epoch: epoch + 1, attemptId: claimed.attempt.id,
+      sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0, attemptId: claimed.attempt.id }) });
+  };
+  const ended = async (options = {}, enable = {}) => {
+    const f = await fixture(t, options);
+    await f.observe({ sample: f.sample() }); await f.enable({ maxMinutes: 60, maxRefreshes: 1, ...enable });
+    f.tick(239000);
+    return { f, last: await warm(f, 0) };
+  };
+  {
+    const { f, last } = await ended();
+    // The last request's five-minute window started one second before its reply.
+    const due = f.now() - 1000 + 240000;
+    assert.equal(last.reason, 'refresh-limit'); assert.equal(last.nextAt, null);
+    assert.equal(last.compactAt, due); assert.equal(last.policy.compactAtEnd, true); assert.equal(last.policy.compact, undefined);
+    // Not before it is due, and an ordinary claim never becomes a compaction.
+    assert.deepEqual(await f.claim({ epoch: 1, kind: 'compact' }), { claimed: false, reason: 'not-due' });
+    f.tick(239000);
+    const refused = await f.claim({ epoch: 1 });
+    assert.equal(refused.claimed, false); assert.equal(refused.reason, 'refresh-limit'); assert.equal(refused.compactAt, due);
+    const claimed = await f.claim({ epoch: 1, kind: 'compact' });
+    assert.equal(claimed.claimed, true); assert.equal(claimed.attempt.kind, 'compact'); assert.equal(claimed.attempt.prompt, undefined);
+    assert.equal(claimed.attempt.expiresAt, due + 60000);
+    assert.equal((await f.claim({ epoch: 1, kind: 'compact' })).claimed, false);
+    assert.equal((await f.check(claimed.attempt.id, { epoch: 1 })).ready, true);
+    // A warm receipt cannot settle a compaction, nor the reverse.
+    await assert.rejects(f.receipt(claimed.attempt.id, 'submitted'), /does not match/);
+    const done = await f.receipt(claimed.attempt.id, 'compacted');
+    assert.equal(done.state, 'verified'); assert.equal(done.reason, 'native-compacted');
+    const policy = (await f.manager.list()).policies[0];
+    assert.equal(policy.enabled, false); assert.equal(policy.reason, 'compacted'); assert.equal(policy.compactAt, null);
+    // It is not a warm request, and the journal with it is valid.
+    assert.equal(policy.totals.refreshes, 1);
+    await new CacheWarmManager({ root: f.root, now: f.now }).initialize();
+    assert.equal((await f.claim({ epoch: 1, kind: 'compact' })).reason, 'compact-unavailable');
+  }
+  // A skipped or uncertain compaction also ends the schedule and is never repeated.
+  for (const [outcome, reason] of [['rejected', 'compact-skipped'], ['uncertain', 'native-uncertain']]) {
+    const { f } = await ended(); f.tick(239000);
+    const claimed = await f.claim({ epoch: 1, kind: 'compact' }); await f.check(claimed.attempt.id, { epoch: 1 });
+    assert.equal((await f.receipt(claimed.attempt.id, outcome)).state, outcome);
+    const policy = (await f.manager.list()).policies[0];
+    assert.equal(policy.enabled, false); assert.equal(policy.reason, reason);
+    assert.equal((await f.claim({ epoch: 1, kind: 'compact' })).claimed, false);
+  }
+  {
+    // Never from an expired cache: the summary would be a full-price read.
+    const { f } = await ended(); f.tick(300000);
+    assert.equal((await f.claim({ epoch: 1, kind: 'compact' })).reason, 'compact-unavailable');
+    assert.equal((await f.manager.list()).policies[0].compactAt, null);
+  }
+  {
+    // The shared setting is read when the limit ends; the session's own choice wins over it.
+    let setting = false;
+    const { f, last } = await ended({ compactAfterWarm: () => setting });
+    assert.equal(last.compactAt, null); assert.equal(last.policy.compactAtEnd, false);
+    setting = true; assert.ok((await f.manager.list()).policies[0].compactAt);
+    const off = await ended({ compactAfterWarm: () => true }, { compact: false });
+    assert.equal(off.last.compactAt, null); assert.equal(off.last.policy.compact, false);
+    off.f.tick(239000); assert.equal((await off.f.claim({ epoch: 1, kind: 'compact' })).claimed, false);
+    const on = await ended({ compactAfterWarm: () => false }, { compact: true });
+    assert.ok(on.last.compactAt); assert.equal(on.last.policy.compactAtEnd, true);
+    // A new enrollment without the word follows the shared setting again.
+    assert.equal((await on.f.enable({ requestId: 'again' })).policy.compact, undefined);
+    await assert.rejects(on.f.enable({ requestId: 'bad', compact: 'on' }), /on or off/);
+  }
+  {
+    // A message of the user after the limit ran out cancels the compaction.
+    const { f } = await ended();
+    f.tick(60000); await f.observe({ phase: 'busy', epoch: 2 }); f.tick(1000);
+    const late = await f.observe({ epoch: 2, sample: f.sample({ cacheReadTokens: 6000, cacheWriteTokens: 0 }) });
+    assert.equal(late.policy.enabled, false); assert.equal(late.reason, 'refresh-limit'); assert.equal(late.compactAt, null);
+    f.tick(239000); assert.equal((await f.claim({ epoch: 2, kind: 'compact' })).claimed, false);
+  }
+  {
+    // A time limit the next request would overrun ends with the compaction too, after its end time.
+    const f = await fixture(t);
+    await f.observe({ sample: f.sample() }); await f.enable({ maxMinutes: 5, maxRefreshes: 3 });
+    f.tick(239000); const last = await warm(f, 0);
+    assert.equal(last.reason, 'scheduled'); assert.equal(last.compactAt, last.nextAt); assert.ok(last.compactAt > last.policy.until);
+    f.tick(239000);
+    assert.equal((await f.claim({ epoch: 1 })).reason, 'duration-limit');
+    const claimed = await f.claim({ epoch: 1, kind: 'compact' }); assert.equal(claimed.claimed, true);
+    assert.equal((await f.check(claimed.attempt.id, { epoch: 1 })).ready, true);
+    // Native activity before the call revokes the reservation instead.
+    const other = await ended(); other.f.tick(239000);
+    const reserved = await other.f.claim({ epoch: 1, kind: 'compact' });
+    await other.f.observe({ phase: 'busy', epoch: 2 });
+    assert.deepEqual(await other.f.check(reserved.attempt.id, { epoch: 1 }), { ready: false, reason: 'attempt-already-consumed' });
+  }
+  // Codex has no compaction route.
+  const codex = await new CacheWarmManager({ root: (await fixture(t)).root, provider: 'codex', now: () => 1000000 }).initialize();
+  await assert.rejects(codex.configure({ sessionId: 'fixture-session', cwd: '/fixture/project', provider: 'codex', enabled: false, compact: true }), /Claude Code/);
+});

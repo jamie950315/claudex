@@ -68,7 +68,11 @@ test('cache panel edits preview without mutation, confirms once and retains edit
   await f.controller.cacheRefresh(f.api);
   f.controller.cacheEdit(f.api, 'ttl', '5m'); f.controller.cacheEdit(f.api, 'mode', 'default');
   await f.controller.cacheRefresh(f.api);
-  assert.deepEqual(f.controller.state.cacheForm, { ttl: '5m', mode: 'default', limit: 'for=4h' });
+  assert.deepEqual(f.controller.state.cacheForm, { ttl: '5m', mode: 'default', limit: 'for=4h', compact: 'on' });
+  // The shared compaction choice is previewed through the same native command path.
+  f.controller.cacheEdit(f.api, 'compact', 'maybe'); assert.equal(f.controller.state.cacheForm.compact, 'on');
+  f.controller.cacheEdit(f.api, 'compact', 'off'); await f.controller.cachePrepare(f.api, 'compact');
+  assert.deepEqual(seen.at(-1), ['compact', 'off']);
   await f.controller.cachePrepare(f.api, 'preference');
   assert.deepEqual(seen.at(-1), ['preference', 'default', 'ttl=5m']);
   assert.ok(!seen.some(words => words[0] === 'confirm'));

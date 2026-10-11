@@ -62,6 +62,8 @@ function api($, options, observer = null) {
     pluginName: $.plugin.name,
     readPrompt: () => $.prompt.read(),
     submitPrompt: args => $.prompt.submit(args),
+    // The call /compact makes, between turns; it rejects while a turn runs.
+    compact: () => $.session.compact(),
     readCacheTtl: () => nativeCacheTtlState($),
     // The startup TTL preference lives in the Claudex broker so the app can
     // show and change it. A preference an earlier Mod left in the plugin

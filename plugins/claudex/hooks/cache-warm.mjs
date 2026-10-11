@@ -54,10 +54,12 @@ export function parseCacheWarmBounds(words = []) {
       if (seen.has('ttl') || !['1h', '5m'].includes(value)) throw new Error('Use ttl=1h or ttl=5m exactly once.');
       seen.add('ttl'); result.ttl = value; continue;
     }
+    // This session's own choice for the compaction that follows the limit.
+    if (/^compact=(on|off)$/.test(word) && !seen.has('compact')) { seen.add('compact'); result.compact = word === 'compact=on'; continue; }
     // Set only by an until= limit: its end is a clock time a restart keeps.
     if (word === 'fixedEnd=true' && !seen.has('fixedEnd')) { seen.add('fixedEnd'); result.fixedEnd = true; continue; }
     const match = /^(maxMinutes|maxRefreshes|maxOutputTokens)=([1-9][0-9]*)$/.exec(word);
-    if (!match || seen.has(match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new Error('Use unique maxMinutes, maxRefreshes, maxOutputTokens positive integer bounds.');
+    if (!match || seen.has(match[1]) || !Number.isSafeInteger(Number(match[2]))) throw new Error('Use unique maxMinutes, maxRefreshes, maxOutputTokens positive integer bounds, and compact=on|off at most once.');
     seen.add(match[1]); result[match[1]] = Number(match[2]);
   }
   if (result.maxMinutes > 10080 || result.maxRefreshes > 500 || result.maxOutputTokens > 100000)
@@ -86,11 +88,12 @@ export function createCacheWarmClient() {
     return last?.revision === preference.revision ? { ...preference, ttl: last.ttl } : preference;
   }
   // The default limit lives in the Claudex broker, shared with Codex and the app.
-  const limitSetting = async (host, params = {}) => {
-    const result = await host.bridge({ version: 1, op: 'cache-warm', action: 'settings', context: await host.context(), params });
-    return defaultWarmLimit(result?.defaultLimit, await host.now());
-  };
+  const settings = async (host, params = {}) => await host.bridge({ version: 1, op: 'cache-warm', action: 'settings',
+    context: await host.context(), params }) ?? {};
+  const limitSetting = async (host, params = {}) => defaultWarmLimit((await settings(host, params)).defaultLimit, await host.now());
   const readLimit = host => limitSetting(host);
+  // The shared choice is on unless it was saved off.
+  const compactSetting = async (host, params = {}) => (await settings(host, params)).compactAfterWarm !== false;
   async function savePreference(host, preference) {
     await host.writeTtlPreference(preference);
     if (!preferenceEqual(await readPreference(host), preference)) throw new Error('Cache TTL preference readback failed; the saved preference may have changed.');
@@ -106,11 +109,13 @@ export function createCacheWarmClient() {
     if (!current(b, epoch) || b.suspended || b.configuring) return;
     cancel(b); b.reason = reply?.reason ?? null;
     if (Object.hasOwn(reply ?? {}, 'policy')) b.enabled = reply.policy?.enabled === true;
-    if (!b.enabled || b.phase !== 'idle' || !b.sample || !Number.isFinite(reply?.nextAt)) return;
+    // With no further warm request, the one compaction at the end may be due.
+    const at = Number.isFinite(reply?.nextAt) ? reply.nextAt : reply?.compactAt;
+    if (!b.enabled || b.phase !== 'idle' || !b.sample || !Number.isFinite(at)) return;
     const now = await b.host.now();
     if (!current(b, epoch)) return;
     // No sleep catch-up: even an overdue timer must pass the broker's expiry gate.
-    b.timer = b.host.after(Math.max(0, reply.nextAt - now), async () => {
+    b.timer = b.host.after(Math.max(0, at - now), async () => {
       try { await tick(b); } catch { fault(b, 'transport-unavailable'); }
     });
   }
@@ -135,7 +140,11 @@ export function createCacheWarmClient() {
     const epoch = b.epoch, fingerprint = b.sampleFingerprint;
     if (!await admissible(b, epoch, fingerprint)) { if (current(b, epoch)) b.reason = 'native-busy-draft-or-configuration-changed'; return; }
     const claim = await call(b, 'claim', fields(b));
-    if (claim?.claimed !== true) { await schedule(b, claim, epoch); return; }
+    if (claim?.claimed !== true) {
+      if (Number.isFinite(claim?.compactAt) && await b.host.now() >= claim.compactAt) await compactOnce(b, epoch, fingerprint);
+      else await schedule(b, claim, epoch);
+      return;
+    }
     const attempt = claim.attempt;
     if (!attempt || typeof attempt.id !== 'string' || typeof attempt.prompt !== 'string'
       || !attempt.prompt.trim() || attempt.prompt.length > 4096 || !Number.isFinite(attempt.expiresAt)) {
@@ -162,6 +171,36 @@ export function createCacheWarmClient() {
       try { await call(b, 'receipt', { instanceId: b.instanceId, epoch, attemptId: attempt.id, outcome }); }
       catch { outcome = 'uncertain'; }
       if (outcome !== 'submitted') { b.pending = null; fault(b, outcome); }
+    }
+  }
+  // The limit is used up: compact once while the last request's cache still
+  // holds. This is the native call /compact makes, not a prompt or a turn.
+  async function compactOnce(b, epoch, fingerprint) {
+    const claim = await call(b, 'claim', { ...fields(b), kind: 'compact' });
+    // A refused compaction is not asked for again.
+    if (claim?.claimed !== true) { if (current(b, epoch)) b.reason = claim?.reason ?? 'compact-unavailable'; return; }
+    const attempt = claim.attempt;
+    if (!attempt || typeof attempt.id !== 'string' || attempt.kind !== 'compact' || !Number.isFinite(attempt.expiresAt)) {
+      fault(b, 'invalid-claim'); return;
+    }
+    let outcome = 'rejected';
+    try {
+      if (!await admissible(b, epoch, fingerprint)) return;
+      const checked = await call(b, 'check', { ...fields(b), attemptId: attempt.id });
+      if (checked?.ready !== true || !await admissible(b, epoch, fingerprint)
+        || await b.host.now() >= attempt.expiresAt || !current(b, epoch)) return;
+      // Set uncertainty before crossing the native call. Never retry it. The
+      // schedule is over either way; a compaction restarts the native session
+      // hooks, and that must not be reported as competing activity.
+      outcome = 'uncertain'; b.enabled = false;
+      const result = await b.host.compact();
+      if (typeof result?.skip === 'string') outcome = 'rejected';
+      else if (Array.isArray(result?.messages)) outcome = 'compacted';
+    } catch { if (outcome !== 'rejected') outcome = 'uncertain'; }
+    finally {
+      try { await call(b, 'receipt', { instanceId: b.instanceId, epoch, attemptId: attempt.id, outcome }); }
+      catch { outcome = 'uncertain'; }
+      cancel(b); b.enabled = false; b.reason = outcome === 'compacted' ? 'compacted' : outcome === 'rejected' ? 'compact-skipped' : 'uncertain';
     }
   }
   return {
@@ -221,7 +260,7 @@ export function createCacheWarmClient() {
     async sessionCommand(host, words, origin) {
       if (!words.length) words = ['status'];
       if (!['status', 'on', 'off', 'confirm'].includes(words[0]))
-        throw new Error(`Use /claudex:warm on [5m|1h] [${WARM_LIMIT_HELP}], off, status, or confirm TOKEN.`);
+        throw new Error(`Use /claudex:warm on [5m|1h] [${WARM_LIMIT_HELP}] [compact=on|off], off, status, or confirm TOKEN.`);
       // This shortcut never changes the shared startup preference, including
       // remember-last. Preserve the native origin; do not manufacture a user.
       words = words.map((word, index) => index > 0 && words[0] === 'on' && ['5m', '1h'].includes(word) ? `ttl=${word}` : word);
@@ -258,7 +297,7 @@ export function createCacheWarmClient() {
       if (!b) throw new Error('Native session context is unavailable.');
       if (expectedContext && !same(b.context, expectedContext)) throw new Error('Native panel context changed; reopen the cache settings.');
       if ((words[0] === 'status' || words[0] === 'preference') && words.length === 1) return { local: this.snapshot(),
-        ttlPreference: await readPreference(host), defaultLimit: await readLimit(host),
+        ttlPreference: await readPreference(host), defaultLimit: await readLimit(host), compactAfterWarm: await compactSetting(host),
         nativeCache: await host.readCacheTtl(), ...await call(b, 'list') };
       // Never let model/plugin-authored commands opt another session into inference.
       if (!['composer', 'bridge', 'sdk', 'claudex-panel'].includes(origin?.kind)) throw new Error('Cache warming requires an explicit native user command.');
@@ -273,6 +312,15 @@ export function createCacheWarmClient() {
         return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
           defaultLimit: limit, previousDefaultLimit: previous,
           effects: 'Save the limit that /claudex:warm on uses when it is given none, in Claudex, for Claude and Codex alike. It changes neither the native TTL nor a running warm-up, and never enables model work.',
+          expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
+      }
+      if (words[0] === 'compact' && words.length === 2) {
+        if (!['on', 'off'].includes(words[1])) throw new Error('Use warm compact on|off.');
+        const compact = words[1] === 'on', previous = await compactSetting(host);
+        confirmation = { id: token(), b, epoch: b.epoch, expiresAt: await host.now() + 120000, compact, compactOnly: true, sessionOnly };
+        return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
+          compactAfterWarm: compact, previousCompactAfterWarm: previous,
+          effects: 'Save, in Claudex, whether a Claude Code warm-up that reached its limit compacts its conversation once, shortly before the cache of its last request expires. It applies to running warm-ups that did not choose compact=on or compact=off themselves, and to future ones. Compaction replaces earlier messages with a summary and makes one model request. It changes neither the native TTL nor a limit, and never enables warming.',
           expiresAt: confirmation.expiresAt, confirm: `/claudex warm confirm ${confirmation.id}` };
       }
       if (words[0] === 'on' || words[0] === 'preference' || words[0] === 'ttl') {
@@ -293,6 +341,8 @@ export function createCacheWarmClient() {
         else if (!words.slice(1).some(word => word.startsWith('ttl='))) bounds.ttl = preferenceBefore.ttl ?? '1h';
         confirmation = null;
         const nativeBefore = bounds.ttl ? await host.checkCacheTtl(bounds.ttl) : await host.readCacheTtl();
+        // Read before the confirmation exists: nothing is awaited between preparing it and returning it.
+        const compactAtEnd = !preferenceOnly && !ttlOnly && (bounds.compact ?? await compactSetting(host));
         confirmation = { id: token(), b, epoch: b.epoch, expiresAt: now + 120000, bounds, preference, preferenceBefore, settingsOnly: preferenceOnly || ttlOnly, sessionOnly };
         if (ttlOnly) return { state: 'confirmation-required', sessionId: b.context.sessionId, cwd: b.context.cwd,
           ttl: bounds.ttl, ttlPreference: preferenceBefore, nativeBefore: nativeBefore.value,
@@ -309,10 +359,11 @@ export function createCacheWarmClient() {
           nativeCacheChange: { scope: 'current-process', before: nativeBefore.value, after: bounds.ttl,
             variable: 'CLAUDE_CODE_PROMPT_CACHE_TTL', affectsSubagentTtl: false, writesGlobalSettings: false },
           observedCachedPrefixTokens: b.sample ? b.sample.cacheReadTokens + b.sample.cacheWriteTokens : null,
-          nativeOutputCapUnchanged: true,
+          nativeOutputCapUnchanged: true, compactAtEnd,
           savesTtlPreference: !sessionOnly && preferenceBefore.mode === 'remember',
           effects: 'Confirming sets the real native main-cache TTL for this process and future children, then enables real plugin-origin OK turns that consume quota and remain in history. '
             + (sessionOnly ? 'This session-only command never changes saved startup preferences or remembered TTL choices. Other running sessions are unchanged. ' : 'Remember mode also saves this TTL for future sessions; default mode keeps its fixed startup TTL. ')
+            + (compactAtEnd ? 'When the limit is reached, the conversation is compacted once, shortly before the cache of the last request expires: earlier messages are replaced by a summary, with one model request; compact=off skips it. ' : '')
             + 'One-hour cache writes can cost more than five-minute writes. Global settings and the subagent TTL variable are unchanged. Model and effort are inherited. Token bounds stop future refreshes, not a hard per-request cap. Turning warming off does not undo the native TTL choice.',
           expiresAt: confirmation.expiresAt, confirm: `${sessionOnly ? '/claudex:warm' : '/claudex warm'} confirm ${confirmation.id}` };
       }
@@ -324,6 +375,12 @@ export function createCacheWarmClient() {
           if (await host.now() >= prepared.expiresAt || !await safeContext(b, prepared.epoch)) throw new Error('Cache warming confirmation expired or its native context changed.');
           if (await limitSetting(host, { defaultLimit: prepared.limit }) !== prepared.limit || await readLimit(host) !== prepared.limit) throw new Error('Default warming limit readback failed; the saved limit may have changed.');
           return { state: 'limit-saved', defaultLimit: prepared.limit, local: this.snapshot() };
+        }
+        if (prepared.compactOnly) {
+          if (await host.now() >= prepared.expiresAt || !await safeContext(b, prepared.epoch)) throw new Error('Cache warming confirmation expired or its native context changed.');
+          if (await compactSetting(host, { compactAfterWarm: prepared.compact }) !== prepared.compact || await compactSetting(host) !== prepared.compact)
+            throw new Error('Compaction setting readback failed; the saved setting may have changed.');
+          return { state: 'compact-saved', compactAfterWarm: prepared.compact, local: this.snapshot() };
         }
         if (b.phase !== 'idle' || b.pending || b.dispatch || b.checking || b.configuring || b.restoring || b.turn?.attemptId)
           throw new Error('Wait for the current native turn before changing the native cache TTL.');
@@ -395,7 +452,7 @@ export function createCacheWarmClient() {
         } finally { b.configuring = false; }
         await observe(b, b.sample); return { ...reply, nativeCacheSync: nativeSync, local: this.snapshot() };
       }
-      throw new Error('Use /claudex warm status|ttl 1h|5m|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|limit rounds=N|for=4h|until=HH:MM|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxOutputTokens=N]|confirm TOKEN|off.');
+      throw new Error('Use /claudex warm status|ttl 1h|5m|preference [session|remember ttl=1h|5m|default ttl=1h|5m]|limit rounds=N|for=4h|until=HH:MM|compact on|off|on [ttl=1h|5m maxMinutes=N maxRefreshes=N maxOutputTokens=N compact=on|off]|confirm TOKEN|off.');
     },
     async prompt(e) {
       const b = binding; if (!b) return null;

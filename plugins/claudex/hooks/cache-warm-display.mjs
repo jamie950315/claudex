@@ -84,6 +84,9 @@ const reasons = {
   'native-configuration-changed': 'Settings changed',
   'native-activity-changed': 'Activity changed',
   'native-uncertain': 'Delivery uncertain; stopped',
+  compacted: 'Limit reached; conversation compacted',
+  'compact-skipped': 'Limit reached; compaction skipped',
+  'compact-unavailable': 'Limit reached; compaction no longer possible',
   uncertain: 'Delivery uncertain; stopped',
 };
 const terminal = new Set(['duration-limit', 'refresh-limit', 'user-message', 'read-budget', 'output-budget', 'actual-budget-exceeded',
@@ -148,7 +151,10 @@ export function formatWarmSummary(result = {}, { provider, sessionId, cwd, t = i
   // Shown only for a policy, so the user sees the limits they chose being used.
   const limits = policy && number(policy.maxRefreshes) ? [t('Limits: {used}/{max} warm requests · until {time}', {
     used: count(policy.totals?.refreshes), max: count(policy.maxRefreshes), time: time(policy.until) })] : [];
-  return [heading, tokens, history, t('Next warm: {next}', { next }), ...limits].join('\n');
+  // Claude only, and only from a broker that reports the choice in effect.
+  const compact = policy && selectedProvider !== 'codex' && typeof policy.compactAtEnd === 'boolean'
+    ? [t('Compact when warming ends: {state}', { state: timestamp(policy.compactAt) ? time(policy.compactAt) : t(policy.compactAtEnd ? 'On' : 'Off') })] : [];
+  return [heading, tokens, history, t('Next warm: {next}', { next }), ...limits, ...compact].join('\n');
 }
 
 export const DEFAULT_WARM_LIMIT = 'for=4h';

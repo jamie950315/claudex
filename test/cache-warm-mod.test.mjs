@@ -11,7 +11,8 @@ const PROMPT = 'Cache-retention measurement only. Reply with exactly OK. Do not 
 const usage = { model: 'claude-sonnet-5-5', input_tokens: 2, cache_read_input_tokens: 6000, cache_creation_input_tokens: 20, output_tokens: 4 };
 async function fixture() {
   let now = 1000, context = { sessionId: ID, cwd: '/fixture' }, fingerprint = 'sonnet-medium-5m';
-  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h', preference, warmLimit;
+  let draft = '', worker = false, enabled = false, sequence = 0, submits = 0, nativeTtl = '1h', preference, warmLimit, compactAfterWarm;
+  const native = { compactions: 0, compact: async () => ({ messages: [] }) };
   const lastChoices = new Map();
   const timers = [], calls = [], client = createCacheWarmClient();
   const hooks = {};
@@ -36,7 +37,8 @@ async function fixture() {
       // The shared default limit is a broker setting; reading it is not session traffic.
       if (request.action === 'settings') {
         if (request.params.defaultLimit !== undefined) warmLimit = request.params.defaultLimit;
-        return { defaultLimit: warmLimit ?? 'for=4h', saved: warmLimit !== undefined };
+        if (request.params.compactAfterWarm !== undefined) compactAfterWarm = request.params.compactAfterWarm;
+        return { defaultLimit: warmLimit ?? 'for=4h', saved: warmLimit !== undefined, compactAfterWarm: compactAfterWarm ?? true };
       }
       calls.push(request);
       if (hooks[request.action]) return hooks[request.action](request);
@@ -47,6 +49,7 @@ async function fixture() {
       if (request.action === 'check') return { ready: enabled };
       return {};
     },
+    async compact() { native.compactions++; return native.compact(); },
     async submitPrompt(args) {
       submits++;
       if (hooks.submit) return hooks.submit(args);
@@ -74,7 +77,7 @@ async function fixture() {
     timer.cancelled = true; now = timer.due; await timer.callback();
     for (let i = 0; i < 8; i++) await new Promise(resolve => setImmediate(resolve));
   }
-  return { client, host, calls, timers, hooks, seed, enable, fire,
+  return { client, host, calls, timers, hooks, seed, enable, fire, native,
     get submits() { return submits; }, set draft(value) { draft = value; }, set worker(value) { worker = value; },
     set fingerprint(value) { fingerprint = value; }, set context(value) { context = value; },
     get now() { return now; }, set now(value) { now = value; } };
@@ -666,4 +669,93 @@ test('an aborted main turn retires successful busy-step evidence instead of sche
   assert.equal(status.policies[0].reason, 'awaiting-evidence');
   assert.equal(status.policies[0].nextAt, null);
   await f.fire(); assert.equal(f.submits, 0);
+});
+
+test('the shared compaction choice is saved through preview and confirm, and one session can choose its own', async () => {
+  const f = await fixture(), origin = { kind: 'composer' };
+  assert.equal((await f.client.command(f.host, ['status'], origin)).compactAfterWarm, true);
+  const preview = await f.client.command(f.host, ['compact', 'off'], origin);
+  assert.equal(preview.state, 'confirmation-required'); assert.equal(preview.compactAfterWarm, false); assert.equal(preview.previousCompactAfterWarm, true);
+  // A preview writes nothing and enables nothing.
+  assert.equal((await f.client.command(f.host, ['status'], origin)).compactAfterWarm, true);
+  const saved = await f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin);
+  assert.equal(saved.state, 'compact-saved'); assert.equal(saved.compactAfterWarm, false);
+  await assert.rejects(f.client.command(f.host, ['confirm', preview.confirm.split(' ').at(-1)], origin), /expired|changed/);
+  assert.equal((await f.client.command(f.host, ['status'], origin)).compactAfterWarm, false);
+  assert.equal(f.client.snapshot().enabled, false);
+  assert.ok(!f.calls.some(call => call.action === 'configure'));
+  await assert.rejects(f.client.command(f.host, ['compact', 'maybe'], origin), /compact on\|off/);
+  await assert.rejects(f.client.command(f.host, ['compact', 'on'], { kind: 'plugin' }), /explicit native user/);
+  // The preview states what will happen at the end; only the session's own word reaches the broker.
+  const configured = () => f.calls.findLast(call => call.action === 'configure' && call.params.enabled).params;
+  const quiet = await f.client.command(f.host, ['on'], origin);
+  assert.equal(quiet.compactAtEnd, false); assert.doesNotMatch(quiet.effects, /compacted once/);
+  await f.client.sessionCommand(f.host, ['on'], origin);
+  assert.equal(Object.hasOwn(configured(), 'compact'), false);
+  const loud = await f.client.command(f.host, ['on', 'compact=on'], origin);
+  assert.equal(loud.compactAtEnd, true); assert.match(loud.effects, /compacted once/);
+  await f.client.sessionCommand(f.host, ['on', '5m', 'rounds=2', 'compact=on'], origin);
+  assert.equal(configured().compact, true);
+  await f.client.sessionCommand(f.host, ['on', 'compact=off'], origin);
+  assert.equal(configured().compact, false);
+  assert.throws(() => parseCacheWarmBounds(['compact=on', 'compact=off']), /at most once/);
+  assert.throws(() => parseCacheWarmBounds(['compact=yes']), /at most once/);
+});
+
+test('the client compacts natively once after the last warm request, with the real policy ledger', async t => {
+  const start = async (more = {}) => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-compact-')));
+    await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
+    const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now, ...more }).initialize();
+    for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
+    await f.seed(); await f.enable(['maxRefreshes=1']);
+    await f.fire(); assert.equal(f.submits, 1);
+    const ticket = await f.client.stepStart({ turnId: 'warm-0', index: 0, effort: 'medium' });
+    f.now += 1000;
+    await f.client.stepEnd(ticket, { usage: { ...usage, cache_read_input_tokens: 6020 }, stopReason: 'end_turn' });
+    await f.client.turnComplete({ turnId: 'warm-0', reason: 'answer' });
+    return { f, manager };
+  };
+  {
+    const { f, manager } = await start();
+    const policy = (await manager.list()).policies[0];
+    assert.equal(policy.reason, 'refresh-limit'); assert.ok(policy.compactAt > f.now);
+    // The timer waits for the compaction time, then makes the native call, not a prompt.
+    assert.equal(f.timers.findLast(timer => !timer.cancelled).due, policy.compactAt);
+    await f.fire();
+    assert.equal(f.native.compactions, 1); assert.equal(f.submits, 1);
+    const status = await manager.list();
+    assert.equal(status.policies[0].enabled, false); assert.equal(status.policies[0].reason, 'compacted');
+    assert.equal(status.attempts.at(-1).kind, 'compact'); assert.equal(status.attempts.at(-1).state, 'verified');
+    assert.deepEqual([f.client.snapshot().enabled, f.client.snapshot().reason], [false, 'compacted']);
+    assert.equal(f.timers.filter(timer => !timer.cancelled).length, 0);
+  }
+  {
+    // A veto is a skip; a failed or unreadable call is uncertain. Neither is repeated.
+    const skipped = await start(); skipped.f.native.compact = async () => ({ skip: 'A hook declined.' });
+    await skipped.f.fire();
+    assert.equal((await skipped.manager.list()).policies[0].reason, 'compact-skipped');
+    const failed = await start(); failed.f.native.compact = async () => { throw new Error('A turn is running.'); };
+    await failed.f.fire();
+    assert.equal((await failed.manager.list()).policies[0].reason, 'native-uncertain');
+    assert.equal((await failed.manager.list()).attempts.at(-1).state, 'uncertain');
+    await failed.f.fire(); assert.equal(failed.f.native.compactions, 1);
+  }
+  {
+    // A draft and the setting turned off each compact nothing.
+    const typing = await start(); typing.f.draft = 'half a thought';
+    await typing.f.fire(); assert.equal(typing.f.native.compactions, 0);
+    assert.equal((await typing.manager.list()).attempts.some(attempt => attempt.kind === 'compact'), false);
+    const off = await start({ compactAfterWarm: () => false });
+    assert.equal(off.f.timers.filter(timer => !timer.cancelled).length, 0);
+    await off.f.fire(); assert.equal(off.f.native.compactions, 0);
+  }
+  {
+    // The user's own prompt before the compaction time cancels the timer and the compaction.
+    const { f, manager } = await start();
+    await f.client.prompt({ text: 'Back at work', origin: { kind: 'composer' } });
+    await f.seed('later', { ...usage, cache_read_input_tokens: 6040 });
+    assert.equal((await manager.list()).policies[0].enabled, false);
+    await f.fire(); assert.equal(f.native.compactions, 0);
+  }
 });

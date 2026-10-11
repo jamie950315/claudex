@@ -193,7 +193,8 @@ export class CollaborationHub extends EventEmitter {
     this.root = await privateDirectory(this.root);
     // Read when a message arrives, so a change applies to running schedules too.
     const onUserMessage = () => this.state?.warmOnUserMessage ?? 'continue';
-    this.cacheWarm = new CacheWarmManager({ root: this.root, onUserMessage, stopped: async () => {
+    this.cacheWarm = new CacheWarmManager({ root: this.root, onUserMessage,
+      compactAfterWarm: () => this.state?.compactAfterWarm ?? true, stopped: async () => {
       if (this.closed) return true;
       const state = await readAppStopState(dirname(this.root));
       return this.closed || state?.stopped === true || state?.resuming === true;
@@ -233,6 +234,8 @@ export class CollaborationHub extends EventEmitter {
     if (Object.hasOwn(this.state, 'cacheTtlPreference')) cacheTtlPreference(this.state.cacheTtlPreference);
     if (Object.hasOwn(this.state, 'warmOnUserMessage') && !['continue', 'stop'].includes(this.state.warmOnUserMessage))
       throw new Error('Malformed warming message setting.');
+    if (Object.hasOwn(this.state, 'compactAfterWarm') && typeof this.state.compactAfterWarm !== 'boolean')
+      throw new Error('Malformed compaction-after-warming setting.');
     if (this.state.nativeWakeRoute !== undefined && !['mod', 'mod-self', 'renderer'].includes(this.state.nativeWakeRoute))
       throw new Error('Malformed Claude native wake route.');
     if (Object.hasOwn(this.state, 'defaultPermission') && permissionRank(this.state.defaultPermission) < 0)
@@ -453,8 +456,10 @@ export class CollaborationHub extends EventEmitter {
       // The limit an on command uses when it is given none: one saved choice
       // for Claude, Codex and the app. Saving it changes no enrollment.
       if (action === 'settings') {
-        const writes = ['defaultLimit', 'ttlPreference', 'ttlLastChoice', 'onUserMessage'].filter(key => Object.hasOwn(params, key));
-        if (Object.keys(params).some(key => !['sessionId', 'cwd', 'defaultLimit', 'ttlPreference', 'ttlLastChoice', 'onUserMessage'].includes(key))) throw new Error('Unsupported cache-warm fields.');
+        const writes = ['defaultLimit', 'ttlPreference', 'ttlLastChoice', 'onUserMessage', 'compactAfterWarm'].filter(key => Object.hasOwn(params, key));
+        if (Object.keys(params).some(key => !['sessionId', 'cwd', 'defaultLimit', 'ttlPreference', 'ttlLastChoice', 'onUserMessage', 'compactAfterWarm'].includes(key))) throw new Error('Unsupported cache-warm fields.');
+        // Claude Code only: whether a schedule that reached its limit compacts once.
+        if (writes.includes('compactAfterWarm') && typeof params.compactAfterWarm !== 'boolean') throw new Error('compactAfterWarm must be true or false.');
         if (writes.includes('onUserMessage') && !['continue', 'stop'].includes(params.onUserMessage)) throw new Error('onUserMessage must be continue or stop.');
         if (writes.includes('defaultLimit') && typeof params.defaultLimit !== 'string') throw new Error('Default warming limit must be a limit word.');
         const limit = writes.includes('defaultLimit') ? defaultWarmLimit(params.defaultLimit) : null;
@@ -470,6 +475,7 @@ export class CollaborationHub extends EventEmitter {
           if (this.actor(envelope, state).task) throw new Error('Only an external controller or its native Mod may manage cache warming.');
           if (limit !== null) state.defaultWarmLimit = limit;
           if (writes.includes('onUserMessage')) state.warmOnUserMessage = params.onUserMessage;
+          if (writes.includes('compactAfterWarm')) state.compactAfterWarm = params.compactAfterWarm;
           if (preference) { state.cacheTtlPreference = preference; if (state.cacheTtlLastChoice?.revision !== preference.revision) delete state.cacheTtlLastChoice; }
           if (writes.includes('ttlLastChoice')) {
             // A remembered choice belongs to the saved preference revision only.
@@ -478,15 +484,15 @@ export class CollaborationHub extends EventEmitter {
             state.cacheTtlLastChoice = { revision: last.revision, ttl: last.ttl };
           }
           return { defaultLimit: state.defaultWarmLimit ?? DEFAULT_WARM_LIMIT, saved: state.defaultWarmLimit !== undefined,
-            onUserMessage: state.warmOnUserMessage ?? 'continue',
+            onUserMessage: state.warmOnUserMessage ?? 'continue', compactAfterWarm: state.compactAfterWarm ?? true,
             ttlPreference: copy(state.cacheTtlPreference ?? null), ttlLastChoice: copy(state.cacheTtlLastChoice ?? null) };
         });
       }
       const allowed = {
         list: ['sessionId', 'cwd'],
-        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'ttl', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens', 'fixedEnd'],
+        configure: ['provider', 'sessionId', 'cwd', 'instanceId', 'enabled', 'requestId', 'ttl', 'maxMinutes', 'maxRefreshes', 'maxReadTokens', 'maxOutputTokens', 'fixedEnd', 'compact'],
         observe: ['sessionId', 'cwd', 'instanceId', 'sequence', 'phase', 'epoch', 'sample', 'attemptId'],
-        claim: ['sessionId', 'cwd', 'instanceId', 'epoch'],
+        claim: ['sessionId', 'cwd', 'instanceId', 'epoch', 'kind'],
         check: ['sessionId', 'cwd', 'instanceId', 'epoch', 'attemptId'],
         receipt: ['sessionId', 'cwd', 'instanceId', 'epoch', 'attemptId', 'outcome'],
       }[action];

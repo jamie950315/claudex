@@ -60,6 +60,7 @@ function validate(state, provider) {
       && integer(p.maxRefreshes, 1, 500) && (p.maxReadTokens === null || integer(p.maxReadTokens, 1, 100000000))
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 10080)
       && (p.fixedEnd === undefined || p.fixedEnd === true) && (p.restartedAt === undefined || integer(p.restartedAt))
+      && (p.compact === undefined || provider === 'claude' && typeof p.compact === 'boolean')
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
       && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
       && (provider === 'codex'
@@ -77,6 +78,7 @@ function validate(state, provider) {
       && word(a.sampleId) && word(a.model) && word(a.effort)
       && ['reserved', 'dispatching', 'submitted', 'rejected', 'uncertain', 'revoked', 'verified', 'failed'].includes(a.state)
       && (a.authorizedAt === undefined || integer(a.authorizedAt))
+      && (a.kind === undefined || provider === 'claude' && a.kind === 'compact')
       && (a.actual === undefined || ['cacheReadTokens', 'cacheWriteTokens', 'inputTokens', 'outputTokens'].every(key => integer(a.actual[key])))
       && (a.responseIds === undefined || Array.isArray(a.responseIds) && a.responseIds.length <= 64
         && a.responseIds.every(word) && new Set(a.responseIds).size === a.responseIds.length)
@@ -96,8 +98,9 @@ function validate(state, provider) {
 /** Broker-owned bounded intent ledger. Native observations are ephemeral and
  * never restore a dispatch lease after restart. No method performs inference. */
 export class CacheWarmManager {
-  constructor({ root, provider = 'claude', now = Date.now, stopped = async () => false, onUserMessage = () => 'continue' }) {
-    this.onUserMessage = onUserMessage;
+  constructor({ root, provider = 'claude', now = Date.now, stopped = async () => false, onUserMessage = () => 'continue',
+    compactAfterWarm = () => true }) {
+    this.onUserMessage = onUserMessage; this.compactAfterWarm = compactAfterWarm;
     requireValue(typeof root === 'string' && isAbsolute(root) && resolve(root) === root);
     requireValue(['claude', 'codex'].includes(provider), 'Unsupported cache-warming provider.');
     this.provider = provider;
@@ -149,7 +152,8 @@ export class CacheWarmManager {
   totals(p) {
     // A message of the user's own restarts the limit: only attempts made
     // since then count against it.
-    const rows = this.attempts(p.sessionId, p.generation).filter(a => a.createdAt >= (p.restartedAt ?? 0));
+    // The one compaction at the end is not a warm request.
+    const rows = this.attempts(p.sessionId, p.generation).filter(a => a.createdAt >= (p.restartedAt ?? 0) && a.kind !== 'compact');
     return { refreshes: rows.length,
       readTokens: rows.reduce((sum, a) => sum + (a.actual?.cacheReadTokens ?? (['rejected', 'revoked'].includes(a.state) ? 0 : a.reservedReadTokens)), 0),
       outputTokens: rows.reduce((sum, a) => sum + (a.actual?.outputTokens ?? (['rejected', 'revoked'].includes(a.state) ? 0 : a.reservedOutputTokens)), 0) };
@@ -171,6 +175,21 @@ export class CacheWarmManager {
     if (due && this.now() < nextAt(b.sample, p)) return 'not-due';
     return null;
   }
+  // By user decision a schedule that reached its limit compacts the
+  // conversation once, shortly before the cache of its last request expires,
+  // so the summary is made from a cached prefix. The session's own choice
+  // wins over the shared setting, which is read here so it applies to running
+  // schedules. Claude only: Codex has no reviewed compaction route.
+  compactsAtEnd(p) { return this.provider === 'claude' && (p.compact ?? this.compactAfterWarm() !== false); }
+  /** When that compaction is due, or null. Never after the cache expired. */
+  compaction(p, b) {
+    if (this.closed || !p?.enabled || !this.compactsAtEnd(p) || !b || b.cwd !== p.cwd || b.phase !== 'idle'
+      || !b.sample || !successful(b.sample) || !prefix(b.sample) || this.pending(p.sessionId)) return null;
+    const at = nextAt(b.sample, p);
+    // The limit is used up, or the next request would fall after its end.
+    const ended = this.now() >= p.until || this.totals(p).refreshes >= p.maxRefreshes || at >= p.until;
+    return ended && this.now() < expires(b.sample, p) ? at : null;
+  }
   presentation(p) {
     const b = this.bindings.get(p.sessionId), reason = this.reason(p, b);
     // Derived from native response evidence, never from a reservation, timer or
@@ -183,12 +202,13 @@ export class CacheWarmManager {
       phase: b?.phase ?? null, native: { phase: b?.phase ?? 'unbound' }, totals: this.totals(p),
       sample: b?.sample ? clone(b.sample) : null,
       nextAt: !reason && b?.sample ? nextAt(b.sample, p) : null,
+      compactAtEnd: this.compactsAtEnd(p), compactAt: this.compaction(p, b),
       effectiveTtlMs: b?.sample ? windowMs(b.sample, p) : null,
       budgetKind: 'admission-reservation-not-a-native-token-cap' };
   }
   result(p, more = {}) {
     const policy = p ? this.presentation(p) : null;
-    return { policy, nextAt: policy?.nextAt ?? null, reason: policy?.reason ?? 'disabled', ...more };
+    return { policy, nextAt: policy?.nextAt ?? null, compactAt: policy?.compactAt ?? null, reason: policy?.reason ?? 'disabled', ...more };
   }
   async list() {
     return this.transaction(() => {
@@ -211,6 +231,8 @@ export class CacheWarmManager {
     requireValue(!input.enabled || word(input.requestId), 'Enabling requires a unique requestId.');
     requireValue(input.requestId === undefined || word(input.requestId));
     requireValue(input.ttl === undefined || ['1h', '5m'].includes(input.ttl), 'Cache-warming ttl must be 1h or 5m.');
+    requireValue(input.compact === undefined || this.provider === 'claude' && typeof input.compact === 'boolean',
+      'Compaction after warming is a Claude Code choice of on or off.');
     if (this.provider === 'codex') {
       requireValue(!input.enabled || input.bestEffort === true, 'Codex warming requires explicit bestEffort acceptance.');
       requireValue(input.bestEffort === undefined || typeof input.bestEffort === 'boolean');
@@ -228,7 +250,7 @@ export class CacheWarmManager {
       requireValue(!this.closed || !input.enabled, 'Cache-warming broker is stopping.');
       const payload = JSON.stringify({ provider: this.provider, sessionId: input.sessionId, cwd: input.cwd, enabled: input.enabled,
         maxMinutes, maxRefreshes, maxReadTokens, maxOutputTokens, ...(input.ttl === undefined ? {} : { ttl: input.ttl }),
-        ...(input.fixedEnd ? { fixedEnd: true } : {}),
+        ...(input.fixedEnd ? { fixedEnd: true } : {}), ...(input.compact === undefined ? {} : { compact: input.compact }),
         ...(this.provider === 'codex' ? { bestEffort: input.bestEffort === true, refreshMinutes: input.refreshMinutes ?? 25 } : {}) });
       const saved = input.requestId && this.state.requests.find(r => r.requestId === input.requestId);
       if (saved) {
@@ -266,6 +288,8 @@ export class CacheWarmManager {
         maxMinutes, maxRefreshes, maxReadTokens: null, maxOutputTokens,
         // An until= limit ends at its clock time; a restart never moves it.
         ...(input.fixedEnd ? { fixedEnd: true } : {}),
+        // This session's own choice; absent, the shared setting decides.
+        ...(input.compact === undefined ? {} : { compact: input.compact }),
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
       // Disabling revokes authorization without erasing this enrollment's
@@ -276,7 +300,7 @@ export class CacheWarmManager {
       if (input.enabled) this.state.attempts = this.state.attempts.filter(a => a.sessionId !== input.sessionId
         || a.generation >= value.generation || !SETTLED.has(a.state));
       if (p && !input.enabled) Object.assign(p, { enabled: false, updatedAt: this.now(), reason: 'disabled' });
-      else if (p) { delete p.fixedEnd; delete p.restartedAt; Object.assign(p, value); }
+      else if (p) { delete p.fixedEnd; delete p.restartedAt; delete p.compact; Object.assign(p, value); }
       else { p = value; this.state.policies.push(p); }
       if (input.requestId) this.state.requests.push({ requestId: input.requestId, sessionId: p.sessionId, generation: p.generation, payload });
       await this.save(); return this.result(p, { replayed: false });
@@ -394,6 +418,10 @@ export class CacheWarmManager {
           if (this.state.attempts.length > MAX_ATTEMPTS / 2)
             this.state.attempts = this.state.attempts.filter(a => a.sessionId !== input.sessionId
               || a.createdAt >= p.restartedAt || !SETTLED.has(a.state));
+        } else if (sample.stopReason !== 'tool_use' && successful(sample) && this.compactsAtEnd(p)) {
+          // The limit had already run out and the user is back at work: the
+          // compaction that would have followed the last warm request is off.
+          p.enabled = false; p.reason = this.now() >= p.until ? 'duration-limit' : 'refresh-limit'; changed = true;
         }
       }
       // A normal coding turn may make several tool-use requests before its
@@ -418,14 +446,29 @@ export class CacheWarmManager {
     });
   }
   async claim(input) {
-    bindingIdentity(input); requireValue(integer(input.epoch));
+    bindingIdentity(input); requireValue(integer(input.epoch) && (input.kind === undefined || input.kind === 'compact'));
     // The awaited app-stop read must not keep observations/revocation from
     // running. Revalidate inside the serialized transaction after it returns.
     const stopped = await this.stopped();
     return this.transaction(async () => {
       const p = this.policy(input.sessionId), b = this.binding(input);
+      const bound = !stopped && b && b.epoch === input.epoch;
+      if (input.kind === 'compact') {
+        // Only a client that can compact asks for this; a refusal offers no
+        // further time, so it is never asked again in a loop.
+        const at = bound ? this.compaction(p, b) : null;
+        if (at === null || this.now() < at) return { claimed: false, reason: stopped ? 'app-stopped' : at === null ? 'compact-unavailable' : 'not-due' };
+        if (this.state.attempts.length >= MAX_ATTEMPTS) throw error('CACHE_WARM_CAPACITY', 'Cache-warming attempt capacity is exhausted.');
+        const a = { id: randomUUID(), kind: 'compact', sessionId: p.sessionId, cwd: p.cwd, instanceId: b.instanceId,
+          epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: at,
+          expiresAt: expires(b.sample, p), sampleId: b.sample.id, model: b.sample.model, effort: b.sample.effort,
+          state: 'reserved', requiredPrefixTokens: prefix(b.sample), reservedReadTokens: prefix(b.sample) + READ_OVERHEAD,
+          reservedOutputTokens: OUTPUT_RESERVATION };
+        this.state.attempts.push(a); await this.save();
+        return { claimed: true, attempt: { id: a.id, kind: 'compact', expiresAt: a.expiresAt } };
+      }
       const reason = stopped ? 'app-stopped' : !b || b.epoch !== input.epoch ? 'native-binding-changed' : this.reason(p, b, true);
-      if (reason) return { claimed: false, reason, nextAt: p ? this.presentation(p).nextAt : null };
+      if (reason) return { claimed: false, reason, nextAt: p ? this.presentation(p).nextAt : null, compactAt: bound ? this.compaction(p, b) : null };
       if (this.state.attempts.length >= MAX_ATTEMPTS) throw error('CACHE_WARM_CAPACITY', 'Cache-warming attempt capacity is exhausted.');
       const a = { id: randomUUID(), sessionId: p.sessionId, cwd: p.cwd, instanceId: b.instanceId,
         epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: nextAt(b.sample, p),
@@ -447,19 +490,30 @@ export class CacheWarmManager {
       const reason = this.closed ? 'broker-stopping' : stopped ? 'app-stopped'
         : !p?.enabled || p.generation !== a.generation ? 'policy-changed'
           : !b || b.epoch !== a.epoch || input.epoch !== a.epoch || b.phase !== 'idle' || b.sample?.id !== a.sampleId ? 'native-activity-changed'
-            : this.now() >= a.expiresAt || this.now() >= p.until ? 'attempt-expired' : null;
+            // The compaction follows the end of the limit, so only its cache window bounds it.
+            : this.now() >= a.expiresAt || a.kind !== 'compact' && this.now() >= p.until ? 'attempt-expired' : null;
       if (reason) { a.state = 'revoked'; a.reason = reason; await this.save(); return { ready: false, reason }; }
       a.state = 'dispatching'; a.authorizedAt = this.now(); await this.save();
       return { ready: true, attemptId: a.id, expiresAt: a.expiresAt };
     });
   }
   async receipt(input) {
-    bindingIdentity(input); requireValue(word(input.attemptId) && ['submitted', 'rejected', 'uncertain'].includes(input.outcome));
+    bindingIdentity(input); requireValue(word(input.attemptId) && ['submitted', 'compacted', 'rejected', 'uncertain'].includes(input.outcome));
     return this.transaction(async () => {
       const a = this.state.attempts.find(a => a.id === input.attemptId);
       requireValue(a && a.sessionId === input.sessionId && a.cwd === input.cwd && a.instanceId === input.instanceId, 'Cache-warming receipt identity changed.');
       if (a.state === input.outcome || ['verified', 'failed', 'uncertain', 'revoked', 'rejected'].includes(a.state)) return clone(a);
       requireValue(a.state === 'dispatching' || a.state === 'reserved' && input.outcome === 'rejected', 'Cache-warming attempt was not authorized.');
+      requireValue((input.outcome === 'compacted') === (a.kind === 'compact') || !['submitted', 'compacted'].includes(input.outcome),
+        'Cache-warming receipt does not match its attempt.');
+      if (a.kind === 'compact') {
+        // The native call has returned, so this is final: the schedule is over
+        // whatever the outcome, and an uncertain compaction is never repeated.
+        const done = input.outcome === 'compacted', p = this.policy(a.sessionId);
+        a.state = done ? 'verified' : input.outcome; a.reason = done ? 'native-compacted' : `compact-${input.outcome}`; a.receivedAt = this.now();
+        p.enabled = false; p.reason = done ? 'compacted' : input.outcome === 'rejected' ? 'compact-skipped' : 'native-uncertain';
+        await this.save(); return clone(a);
+      }
       a.state = input.outcome; a.receivedAt = this.now();
       if (input.outcome !== 'submitted') { const p = this.policy(a.sessionId); p.enabled = false; p.reason = `native-${input.outcome}`; }
       await this.save(); return clone(a);

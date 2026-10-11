@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.4.0 and Claude Mod 0.8.22 provide bounded, per-conversation cache warming.
+Claudex 1.4.1 and Claude Mod 0.8.23 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.22 companion and
+Use the intended existing conversation with a freshly loaded 0.8.23 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -76,6 +76,50 @@ again from the reply to your message: `for=4h` runs four more hours and
 `rounds=3` allows three more requests. An `until=` limit keeps its clock time
 and only its request count starts again. A limit that has already run out is
 not started again; a reply that ends in an error leaves the limit as it was.
+
+### Compaction when warming ends (Claude Code only)
+
+A Claude warm-up that reached its limit compacts its conversation once. This
+is **on by default**. Warming stops refreshing the cache at the limit, so the
+cached conversation is about to become a full-price read; compacting while it
+is still cached makes the summary from cached tokens and leaves a small
+context for your next message.
+
+- **When**: at the time the next warm request would have been due, which is
+  5 minutes before the last request's cache window ends at a 1h TTL and
+  1 minute before at 5m. With `for=4h` at 1h that is 55 minutes after the
+  fourth request, so it can be later than the limit's own end time.
+- **How**: the Mod makes the native call `/compact` makes
+  (`$.session.compact()`), with no instructions. It is not a prompt and not a
+  turn. It replaces earlier messages with a summary, makes one model request
+  whose output is not counted against the warming output bound, and stays in
+  history like any compaction.
+- **Not when**: the cache window has already expired, the composer holds a
+  draft, the conversation is busy, the model, effort or TTL changed, or
+  Claudex is stopped. A message of your
+  own after the limit ran out also cancels it: the schedule then simply ends.
+  A message before the limit ran out starts the limit over as usual, and the
+  compaction follows the new end.
+- **Once**: a compaction that a hook vetoed ends as `compact-skipped`, one
+  whose result is unknown as uncertain. Neither is tried again. Warming is off
+  afterwards in every case; `/claudex:warm on` starts a new warm-up.
+- A warm-up stopped by `/claudex:warm off`, by your message (when that is the
+  chosen setting) or by a failure compacts nothing.
+
+Three places choose it. The shared setting is read when the limit ends, so it
+applies to warm-ups already running:
+
+- Claudex.app: **Cache settings…** has **When warming ends** (Claude Code
+  only): compact the conversation, or leave it as it is.
+- The Mod pane's Cache settings tab has **Compact when warming ends**, with
+  the preview and confirmation of its other settings; `/claudex warm compact
+  on` or `off` (then the shown `confirm` command) does the same.
+- `/claudex:warm on compact=off` (or `compact=on`) decides for that session
+  only and saves nothing. The session's own choice wins over the shared one
+  until the next `/claudex:warm on`.
+
+`/claudex:warm status` shows `Compact when warming ends:` with On, Off or the
+time it is due. Codex warm-ups are never compacted by Claudex.
 
 The default limit applies only when `/claudex:warm on` is given no limit, and changes
 neither the TTL nor a warm-up already running. A saved limit that does not fit

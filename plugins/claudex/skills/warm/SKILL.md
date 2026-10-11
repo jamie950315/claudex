@@ -1,7 +1,7 @@
 ---
 name: warm
 description: Control cache warming in this Claude Code session through the loaded Claudex Mod.
-argument-hint: on [5m|1h] [rounds=N | for=3h | until=18:30] | off | status
+argument-hint: on [5m|1h] [rounds=N | for=3h | until=18:30] [compact=on|off] | off | status
 disable-model-invocation: true
 ---
 
@@ -24,6 +24,10 @@ Supported human commands:
   `until=HH:MM` / `until=DD:HH:MM` after `on` chooses how many warm requests, how
   long or until what local time. Only one of them may be given; without one,
   warming lasts four hours.
+- `compact=on` or `compact=off` after `on` decides, for this session only,
+  whether the conversation is compacted once when the limit is reached, shortly
+  before the last cached window expires. Without it the setting saved in
+  Claudex applies, which is on by default.
 - No second confirmation command is needed.
 - `/claudex:warm off` stops warming, leaving this session's native TTL unchanged.
 - `/claudex:warm status` (or no arguments) inspects without enabling anything.

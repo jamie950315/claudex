@@ -2,7 +2,8 @@ import Cocoa
 
 /// The cache settings window. Everything it edits is saved in the Claudex
 /// broker: the default warming limit (Claude Code and Codex) and the startup
-/// TTL preference (Claude Code only). It also lists the conversations still
+/// TTL preference and the compaction that follows a finished warm-up (Claude
+/// Code only). It also lists the conversations still
 /// being kept warm and can stop one. Opening, reloading and selecting never
 /// write; only Save and Stop do. Nothing here enables warming or starts model
 /// work.
@@ -14,6 +15,7 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
     private var content: NSView!
     private var limitPicker: NSPopUpButton!
     private var messagePicker: NSPopUpButton!
+    private var compactPicker: NSPopUpButton!
     private var modePicker: NSPopUpButton!
     private var ttlPicker: NSPopUpButton!
     private var legacy: NSTextField!
@@ -113,6 +115,17 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         let third = separator()
         stack.addArrangedSubview(third)
 
+        stack.addArrangedSubview(heading("When warming ends", scope: "Claude Code only"))
+        compactPicker = picker("When warming ends")
+        for (value, title) in zip([true, false], ["Compact the conversation", "Leave the conversation as it is"]) {
+            compactPicker.addItem(withTitle: L(title))
+            compactPicker.lastItem?.representedObject = value
+        }
+        stack.addArrangedSubview(compactPicker)
+        stack.addArrangedSubview(wrapping(L("What happens when a Claude Code warm-up reaches its limit. Compact: Claudex compacts that conversation once, shortly before the cache of its last request expires, so the summary is made while the conversation is still cached and your next message starts from a small context. Earlier messages are replaced by a summary, with one model request. A message of your own after the limit ran out cancels it. In a conversation, /claudex:warm on compact=on or compact=off decides for that session only. It applies to warm-ups already running too.")))
+        let fourth = separator()
+        stack.addArrangedSubview(fourth)
+
         stack.addArrangedSubview(heading("Startup cache TTL", scope: "Claude Code only"))
         let ttlRow = NSStackView()
         ttlRow.orientation = .horizontal
@@ -167,7 +180,7 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             content.widthAnchor.constraint(equalToConstant: width),
         ])
-        for line in [first, second, third] { line.widthAnchor.constraint(equalToConstant: width - 44).isActive = true }
+        for line in [first, second, third, fourth] { line.widthAnchor.constraint(equalToConstant: width - 44).isActive = true }
         rows.widthAnchor.constraint(equalToConstant: width - 44).isActive = true
         window.contentView = content
         show(nil)
@@ -192,6 +205,7 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
             if value == limit { limitPicker.select(limitPicker.lastItem) }
         }
         messagePicker.selectItem(at: WarmSettings.messageModes.firstIndex(of: loaded?.onUserMessage ?? "continue") ?? 0)
+        compactPicker.selectItem(at: loaded?.compactAfterWarm == false ? 1 : 0)
         modePicker.selectItem(at: WarmSettings.ttlModes.firstIndex(of: loaded?.ttlMode ?? "session") ?? 0)
         ttlPicker.selectItem(at: WarmSettings.ttls.firstIndex(of: loaded?.startupTtl ?? "1h") ?? 0)
         legacy.isHidden = loaded == nil || loaded?.ttlMode != nil
@@ -231,6 +245,8 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
     private var chosenTtl: String { ttlPicker.selectedItem?.representedObject as? String ?? "1h" }
     private var chosenMessage: String { messagePicker.selectedItem?.representedObject as? String ?? "continue" }
     private var messageChanged: Bool { settings != nil && chosenMessage != (settings?.onUserMessage ?? "continue") }
+    private var chosenCompact: Bool { compactPicker.selectedItem?.representedObject as? Bool ?? true }
+    private var compactChanged: Bool { settings != nil && chosenCompact != (settings?.compactAfterWarm ?? true) }
     private var limitChanged: Bool { chosenLimit != nil && chosenLimit != settings?.defaultLimit }
     private var ttlChanged: Bool {
         guard let settings else { return false }
@@ -245,21 +261,22 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         limitPicker.isEnabled = editable
         modePicker.isEnabled = editable
         messagePicker.isEnabled = editable
+        compactPicker.isEnabled = editable
         ttlPicker.isEnabled = editable && chosenMode != "session"
-        saveButton.isEnabled = editable && (limitChanged || ttlChanged || messageChanged)
+        saveButton.isEnabled = editable && (limitChanged || ttlChanged || messageChanged || compactChanged)
         reloadButton.isEnabled = !busy && !stopping
         for case let row as NSStackView in rows.arrangedSubviews {
             for case let button as NSButton in row.arrangedSubviews { button.isEnabled = editable }
         }
     }
 
-    private func load(limit: String? = nil, mode: String? = nil, ttl: String? = nil, onMessage: String? = nil, stop: WarmSettings.Enrollment? = nil) {
+    private func load(limit: String? = nil, mode: String? = nil, ttl: String? = nil, onMessage: String? = nil, compactAfter: Bool? = nil, stop: WarmSettings.Enrollment? = nil) {
         guard !busy && !stopping else { return }
-        let saving = limit != nil || mode != nil || onMessage != nil
+        let saving = limit != nil || mode != nil || onMessage != nil || compactAfter != nil
         busy = true
         message.stringValue = L(stop != nil ? "Stopping warming…" : saving ? "Saving cache settings…" : "Loading cache settings…")
         updateControls()
-        runner.warmSettings(defaultLimit: limit, ttlMode: mode, ttl: ttl, onMessage: onMessage, stop: stop) { [weak self] result in
+        runner.warmSettings(defaultLimit: limit, ttlMode: mode, ttl: ttl, onMessage: onMessage, compactAfter: compactAfter, stop: stop) { [weak self] result in
             guard let self else { return }
             self.busy = false
             switch result {
@@ -301,8 +318,9 @@ final class CacheSettingsWindowController: NSObject, NSWindowDelegate {
         if let limit, !WarmSettings.valid(limit) { return }
         let mode = ttlChanged ? chosenMode : nil
         let onMessage = messageChanged ? chosenMessage : nil
-        guard limit != nil || mode != nil || onMessage != nil else { return }
-        load(limit: limit, mode: mode, ttl: mode == nil || mode == "session" ? nil : chosenTtl, onMessage: onMessage)
+        let compactAfter = compactChanged ? chosenCompact : nil
+        guard limit != nil || mode != nil || onMessage != nil || compactAfter != nil else { return }
+        load(limit: limit, mode: mode, ttl: mode == nil || mode == "session" ? nil : chosenTtl, onMessage: onMessage, compactAfter: compactAfter)
     }
     @objc private func stop(_ sender: NSButton) {
         guard writable, let warming = settings?.warming, warming.indices.contains(sender.tag) else { return }

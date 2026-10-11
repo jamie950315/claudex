@@ -126,7 +126,7 @@ test('cache settings read the shared record, list only running enrollments and s
     return { policy: { enabled: false } };
   };
   const read = await setup.warmSettings();
-  assert.deepEqual({ ...read, warming: read.warming.length }, { defaultLimit: 'for=4h', saved: false, onUserMessage: 'continue', ttlMode: null, startupTtl: null,
+  assert.deepEqual({ ...read, warming: read.warming.length }, { defaultLimit: 'for=4h', saved: false, onUserMessage: 'continue', compactAfterWarm: true, ttlMode: null, startupTtl: null,
     active: { claude: 1, codex: null }, warming: 1 });
   assert.deepEqual(read.warming[0], { provider: 'claude', sessionId: 's1', cwd: '/p/one', ttl: '1h', used: 1, max: 4, until: later, nextAt: later - 1000 });
   const fixed = await setup.warmSettings({ defaultLimit: 'rounds=5', ttlMode: 'default', ttl: '5m' });
@@ -138,6 +138,9 @@ test('cache settings read the shared record, list only running enrollments and s
   assert.equal((await setup.warmSettings({ ttlMode: 'session' })).startupTtl, null);
   await setup.warmSettings({ onUserMessage: 'stop' });
   assert.deepEqual(requests.findLast(request => request.method === 'cache_warm_settings').params, { onUserMessage: 'stop' });
+  await setup.warmSettings({ compactAfterWarm: 'off' });
+  assert.deepEqual(requests.findLast(request => request.method === 'cache_warm_settings').params, { compactAfterWarm: false });
+  await assert.rejects(setup.warmSettings({ compactAfterWarm: 'yes' }), /on or off/);
   for (const bad of [{ ttlMode: 'default' }, { ttlMode: 'session', ttl: '1h' }, { ttl: '1h' }, { ttlMode: 'always', ttl: '1h' }])
     await assert.rejects(setup.warmSettings(bad), /session|TTL/);
   await setup.warmStop({ provider: 'claude', sessionId: 's1', cwd: '/p/one' });

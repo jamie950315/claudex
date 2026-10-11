@@ -75,7 +75,27 @@ that reply plus maxMinutes unless the policy is `fixedEnd`, which an `until=`
 limit sets so its clock time stays; a tool step, a failed reply and a limit
 already out of time or requests restart nothing) or `stop` (that message ends
 the schedule with reason `user-message`). Both managers read it when the response arrives, so it
-applies to running schedules. The message is a response that is not a warm
+applies to running schedules. By user decision the same record holds
+`compactAfterWarm` (boolean, default true; Claude Code only, labeled so in the
+app): a schedule that reached its limit compacts its conversation once through
+the Mod's native `$.session.compact()`, never a prompt or `/compact` text.
+The time is the last sample's next-refresh time (`compaction()` in the
+manager), offered as `compactAt` beside a null `nextAt`; it applies when the
+time or request limit is used up or the next request would fall after
+`until`, and never once that sample's cache window has expired. `compact=on|off`
+on an `on` command is the session's own choice (`policy.compact`), cleared by
+the next enrollment; absent, the shared setting is read when the limit ends.
+Only a client that can compact claims with `kind: 'compact'`, so an older
+loaded Mod never receives one. The native compiler refuses `$.session.compact`
+read as a value; call it, never probe it. The attempt reuses the one-use
+reserve/check/receipt path with `kind: 'compact'`, is no warm request in
+totals, and ends the schedule on every outcome (`compacted`, `compact-skipped`,
+`native-uncertain`); it is never repeated. The client turns local warming off
+before the call because a compaction restarts the classic session hooks. A
+message of the user after the limit ran out ends the schedule with its limit
+reason instead of compacting. Codex has no reviewed compaction route. The
+summary adds a sixth line for a Claude policy whose broker reports
+`compactAtEnd`. The message is a response that is not a warm
 request, in a later turn than the one that first gave the binding evidence;
 the first turn after enrollment only supplies evidence, and a turn start or a
 command that makes no model request never counts. Saving changes neither

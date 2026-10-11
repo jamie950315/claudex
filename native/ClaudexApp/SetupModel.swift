@@ -197,6 +197,8 @@ struct WarmSettings: Decodable {
     let startupTtl: String?
     /// What a message of the user's own does to a running schedule.
     let onUserMessage: String?
+    /// Whether a Claude Code warm-up that reached its limit compacts once; nil from an older engine.
+    let compactAfterWarm: Bool?
     let active: Active?
     let warming: [Enrollment]?
 
@@ -312,6 +314,7 @@ final class SetupRunner {
     }
 
     func warmSettings(defaultLimit: String? = nil, ttlMode: String? = nil, ttl: String? = nil, onMessage: String? = nil,
+                      compactAfter: Bool? = nil,
                       stop: WarmSettings.Enrollment? = nil, completion: @escaping (Result<WarmSettings, SetupProcessError>) -> Void) {
         var arguments = ["warm-settings"]
         if let stop { arguments = ["warm-stop", "--provider", stop.provider, "--session", stop.sessionId, "--cwd", stop.cwd] }
@@ -319,6 +322,7 @@ final class SetupRunner {
         if let ttlMode { arguments += ["--ttl-mode", ttlMode] }
         if let ttl { arguments += ["--ttl", ttl] }
         if let onMessage { arguments += ["--on-message", onMessage] }
+        if let compactAfter { arguments += ["--compact-after", compactAfter ? "on" : "off"] }
         DispatchQueue.global(qos: .userInitiated).async {
             let result = self.executeData(arguments).flatMap { data -> Result<WarmSettings, SetupProcessError> in
                 do { return .success(try WarmSettings.parse(data)) }
