@@ -42,14 +42,7 @@ The generated fixed-Node shim configures CODEX_CLI_PATH without changing or
 restarting the app. The watcher reapplies its exact override at login and waits
 for a private verified shared-backend manifest. Never silently start another
 stdio writer. CLI status selects the configured ledger. `desktop uninstall`
-preserves transcripts and ledgers; it is not a reverse migration. The launcher
-is activated on the real Codex Desktop backend. Automatic native enrollment and
-Claude Remote Control registration of real conversations are verified. Both real
-mirrored conversations render in the Claude Desktop sidebar and their history
-opens through Remote Control. Real dual-Desktop alternation acceptance now
-passes, including native retirement of the oldest of three generated Codex
-snapshots: one current and one archived previous remain. The original source
-is preserved. Do not remove dependency guards for retirement.
+preserves transcripts and ledgers; it is not a reverse migration. Do not remove dependency guards for retirement.
 
 The pinned Desktop CUA and Browser Use helpers invoke exactly
 `app-server --listen stdio://`. CUA inherits the app-tools pipe; Browser Use
@@ -65,9 +58,7 @@ installing shell's process.execPath. The app's native peer authorizer checks
 the peer, parent and grandparent signing identities. A Homebrew/ad-hoc wrapper
 breaks codex_app startup and browser policy verification despite a signed leaf
 runtime. The installer verifies the bundled Node signature and journals exact
-owned-runtime upgrades. An isolated signed-wrapper native startup exposes the
-47 app tools without changing the verifier. A normal user-initiated app restart
-activated the signed wrapper and restored the live app-tools path. Never
+owned-runtime upgrades. Never
 disable peer checks or substitute an unsigned client. Stdio close does not
 schedule immediate reconnect; next-request recovery is not proof that killing
 an active backend is safe.

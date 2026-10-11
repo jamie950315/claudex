@@ -203,18 +203,10 @@ Recognized commands return blocking output on success or failure, with a
 25-second handler deadline before the 30-second native timeout. Native startup
 failure or untrusted/disabled hooks can still skip interception; document that
 limit. Ordinary input is a no-op. CLI controls remain unchanged; Codex TTL is not
-configurable. Authorized Desktop 0.160.0 backend acceptance after native trust
-verified seven blocked local command turns (status/on/confirm/off), native
-hook-time primary/turn checks, structured output and no token-usage events or
-assistant/tool history items. The test policy ended disabled/unbound with zero
-refresh attempts and no timer. Keep the manual `codex-command.mjs` probe outside
+configurable. Keep the manual `codex-command.mjs` probe outside
 automated tests; it submits literal native input, never the wrapped app-origin
 wake payload, and stops on uncertainty or model activity. Composer keystrokes,
 autocomplete and rendered pixels remain unverified; do not promote native
 backend/output evidence into visual UI or cache-retention proof.
-Authorized 1.2.6 native acceptance verified a 25-minute same-owner OK refresh
-(36,096 cached input / 5 output tokens), exact accounting and the one-refresh
-limit. At about 31 minutes both warmed and untouched controls still hit; retain
-the inconclusive extension result, not a guaranteed native TTL claim. Detailed
-version-scoped evidence is in docs/claude-mod-validation.md. Mid-turn enrollment
+Mid-turn enrollment
 with no native settings snapshot waits without a dispatch timer.

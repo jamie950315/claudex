@@ -102,17 +102,7 @@ Keep write-ahead notification intents, absolute expiry through awaited preflight
 and the final native dispatch fence. Interrupted/unknown dispatch never retries.
 Coalesce undispatched terminal revisions and cap retained sends at 16/task and
 16/origin/minute. App-stop release is event-driven, not a polling loop. Status/wait
-remains the result authority. Fresh authorized native acceptance verifies both
-origin providers, queue-only Codex receipt and automatic Claude mod-self receipt
-with real Stop ACK. Additional installed acceptance on Codex 0.159.0-alpha.12.1
-verified a persistent exec-origin main idle before its read-only Claude worker
-completed, one automatic native-owner completion wake, exact status/result read
-and real Stop ACK. The earlier unbound and uncertain exec canaries remain intact;
-source/catalog fixes never bind or replay them manually. This is separate from
-the earlier Claude Mod route and does not certify every runtime or host timeout.
-Preserve the earlier unbound and expired records without
-replay. This is bounded evidence for the reviewed installation, not a new
-synchronization-runtime allowlist or blanket acceptance of other versions/routes.
+remains the result authority.
 
 `collaboration` is an explicit inference-capable work protocol, separate from
 the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable
@@ -202,10 +192,7 @@ cache filename; preserve earlier resource originals and receipts. It starts at
 module load, independently of folder/sidebar
 subscriptions; a sidebar resource existing on disk is not proof of a running
 consumer. Keep bounded lifecycle/wait-reason diagnostics without message content.
-Authorized native acceptance on an earlier pinned resource verified an idle
-original Claude chat waking through its existing Desktop owner, rendering the
-requested reply and acknowledging once under the same UI/CLI identities. No
-manual prompt or acknowledgement was submitted. Every new graph requires separate
+Every new graph requires separate
 live reception acceptance; a cache installation or native account check is
 insufficient. This does not revalidate other frontend presentation adapters
 against the same vendor update.
@@ -332,23 +319,3 @@ Codex collaboration supports explicitly selected non-Git directories using
 Only an exact no-stdout, no-session pre-execution Git refusal with a closed process
 group is a known startup failure; unknown exits retain uncertainty safeguards.
 
-Separately authorized live CLI acceptance verifies Codex-to-Claude and
-Claude-to-Codex child delegation with exact result return, plus two consecutive
-owner transfers under one logical task ID. The tested runtimes are Codex CLI
-0.158.0-alpha.2.1 and Claude Code 2.1.283. Seven model executions completed in an
-isolated read-only workspace; test files stayed unchanged and owned process
-groups exited. A separate authorized writable run on the same versions verifies
-both directions of child file editing and parent yield/resumption, plus sequential
-Codex-to-Claude-to-Codex edits under one task ID. Nine native executions completed;
-exact final bytes and recorded serial ownership boundaries were checked. Only a
-temporary broker enabled writes and it was stopped afterward. The installed
-service retained its then-current read-only default. This is historical bounded
-collaboration file-editing evidence, not a new synchronization version allowlist entry, generic build/test
-execution in Claude, or proof of Desktop UI chat transfer.
-
-Claudex 1.1.1 cooperative-follow-up acceptance also verifies both real
-supervisor/child directions: a proactive follow-up sent after work started was
-received, acknowledged and completed by the child in generation one, without a
-prior blocker or question. See docs/collaboration.md for exact native versions
-and verification scope. This is cooperative check-in/MCP-return delivery, not
-instantaneous interruption, external idle wake or synchronization certification.

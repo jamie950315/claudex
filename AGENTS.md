@@ -102,6 +102,10 @@ keep this file to project-wide rules and this index, and add a row for a new gui
 | [collaboration.md](docs/agents/collaboration.md) | `src/collaboration-hub.mjs`, `bin/claudex-collaboration.mjs`, MCP work tools, chat mailbox and native wake, worker permissions, observability, notifications, uncertain work |
 | [claude-mod.md](docs/agents/claude-mod.md) | `plugins/claudex`, `bin/claudex-mod.mjs`, Mod staging/validation, nativeWake/selfWake routes, own-inbox delivery |
 
+Past authorized acceptance runs are recorded in
+[evidence.md](docs/agents/evidence.md). It holds no rules; read it only when a
+task asks what was verified, and add new acceptance records there.
+
 Rules that hold everywhere, whatever the guide: never resend an uncertain native
 write or invocation; never edit native transcripts, registries or databases;
 recover a pending transaction, never drop or replay it outside its documented

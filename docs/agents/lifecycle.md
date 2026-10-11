@@ -194,10 +194,7 @@ relaxed ordinary retirement guards are implied.
 Claude projections use canonical project paths and owned rollback storage.
 The append helper is for controlled fixtures, not runtime concurrent writes.
 
-The native watcher, six synthetic roundtrips, real Claude rendering, and desktop
-task-reading integration are verified without inference. Separately authorized
-real Desktop acceptance verifies two model-authored roundtrips, history-based
-nonce recall on both sides, and automatic delivery. Do not
+Do not
 claim production readiness for opaque/dependent compaction, external asset dependencies,
 unverified project relocations, or unsigned reasoning replay. Verified project
 moves use the explicit relocation protocols above. Visible reasoning is labeled

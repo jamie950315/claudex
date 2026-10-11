@@ -46,23 +46,10 @@ original route. The same loaded recipient Mod can receive with both opt-ins and
 mod-self; no second Mod, sender session or SendMessage tool is required for that
 route. Closed/unloaded recipients wait for normal native resume, not a new owner.
 Never flip an unvalidated installation's route until native activation acceptance
-passes. The reviewed Mac has App 1.2.13 and Mod 0.8.10 installed through normal
-Quit/reopen and app-owned Mod management; both native configuration identities'
-receiver opt-ins were retained. Existing Claude sessions were not restarted;
-installation is verified but existing Desktop sessions can retain older loaded
-Mod code until a normal new session/reload. Isolated native 0.8.7 direct-on
-acceptance passed without model turns; it does not prove those existing sessions reloaded.
-The earlier reviewed 0.7.1 installation used route=mod-self. Earlier acceptance after a normal Claude
-restart verified that one Desktop native session and one waiter delivered
-a newly authorized message to the same session, with a Sonnet 5.5 reply and real
-Stop ACK. Native UI evidence retained the unsent draft. Explicit native hold and
-refuse passed in isolated tools:[] sessions with zero model turns. Preserve the
-earlier failed submitted/no-ACK message; success used a new message, never replay.
-Keep exact evidence in docs/claude-mod-validation.md. Isolated CLI rollout refusal
+passes. Isolated CLI rollout refusal
 does not invalidate a loaded Desktop Mod and must not be overridden to pass a
 test. New installations still default off; keep the Traditional Chinese bundle.
-Verified broker stop/start retained mod-self and one waiter without replay; the
-same native Claude process and unsent draft remained. Open the installed Claudex
+Open the installed Claudex
 app by its exact /Applications/Claudex.app path, not a same-named test bundle.
 Each loaded eligible session makes one bounded event-backed broker wait, never a
 history sweep. The retained mod route requires another loaded sender and checks
@@ -102,13 +89,7 @@ Malformed/private storage blocks rather than being discarded. Unavailable target
 metadata must not starve other recipients. Keep existing MCP, hooks, renderer
 adapters, version policy and live runtimes; no permission approval, native store
 editing or automatic app restart is introduced.
-Bounded authorized automatic nativeWake acceptance on 2.1.286/Sonnet 5.5 verifies
-SDK-owned and Desktop-owned senders, exact claim, real session.send acceptance,
-recipient reply and actual Stop ACK. The final Desktop-owned case passed after
-normal broker/Claude restarts, with one reply and no pending outbox receipt.
-Busy delivery accepted a second message before the first ACK; both ACKs arrived.
-Offline rejection stayed rejected after reopening/restarts without replay. Native
-pixels verify the unsubmitted draft remained and all five 0.2.3 tabs fit two rows.
+
 Keep the two-row layout for narrow panes. This is not every button flow or policy
 denial scenario or new synchronization-runtime acceptance. Own-inbox acceptance
 does not certify renderer/cache readiness; preserve its independent diagnostics.

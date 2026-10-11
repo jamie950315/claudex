@@ -31,9 +31,7 @@ DesktopBridge and desktop-watch integrate all-project discovery, stable Claude
 owners, bounded Codex snapshots and recovery. Completed-prefix readers withhold
 active tails. Verified dead locks are reclaimed; live/malformed locks block.
 
-The real integrated coordinator/SDK/Desktop check verifies initial import, a
-restart, delta delivery, same Remote Control identity, exact canonical history,
-and recovery without resend. CLI 2.1.281 inserts a zero-usage synthetic assistant
+CLI 2.1.281 inserts a zero-usage synthetic assistant
 `No response requested.` after a resumed no-query tail. The owned decoder
 excludes only that exact placeholder immediately after an authenticated packet;
 real replies remain history. SDK-owned packets from another state root are
@@ -63,10 +61,7 @@ preserved original or compare it to the newer canonical checkpoint. Recovery
 also rechecks a replaced destination after a durable native apply, before
 promotion, so concurrent work cannot be silently left behind.
 
-Fresh user-authorized Desktop acceptance verifies same-title deliveries across
-two Codex generations, automatic original archival with exact bytes preserved,
-one visible current entry, one archived generated predecessor, a stable Claude
-owner and equal canonical history. Existing dependent originals are not migrated
+Existing dependent originals are not migrated
 by force. The preserved original remains a separate fixed copy, not a backup
 that grows on every synchronization round.
 
@@ -97,10 +92,7 @@ Visual-only replacement of an already managed Codex snapshot does not acquire a
 new archival intent for a legacy preserved original; its checkpoint is unchanged.
 Preflight and retirement still verify the managed target's independence, and
 superseded-original content/activity guards remain global.
-Fresh native vision acceptance verifies PNG and JPEG pictures in both directions,
-including a new large image attached after a Codex handoff. The receiving models
-identify visible details and retain earlier codes; canonical image hashes and
-original prefixes remain exact. Native apps can resize uploads before persistence;
+Native apps can resize uploads before persistence;
 do not label their persisted model-input bytes as unresized uploaded originals.
 Archive chunk loading overlaps at most four independent read-only operations,
 retaining every file/directory identity, permission, byte and hash check and
@@ -140,24 +132,9 @@ maintenance/recovery or explicit wake restarts it with the same Remote Control
 identity. Verification stays process-free while closed; its Desktop
 entry is not connected, like any other owner that has not been started.
 
-The integrated real SDK/coordinator proof preserves four canonical messages
-through a cold migration, restart and then a six-message next-delta checkpoint;
-the v2 delta and archive path render in the same Claude Desktop entry. Native
-receipts report zero inference. The live watcher has also migrated both real
-conversations without changing their Remote Control identities or canonical
-digests. The large history's real Desktop context fell from over-capacity to
-41.1k/1M while complete portable content remained in the archive. This native
-context migration does not erase the older cloud display history. User-authorized
-model-generated acceptance verifies two full alternating continuations from a
-real source containing compaction and history_base, followed by a final Claude
-recall and automatic bounded snapshot collection. Both logical histories match.
-
 Pinned no-query receipts have zero num_turns and duration_api_ms, but
 total_cost_usd/modelUsage are cumulative across real replies and resume. Require
 finite nonnegative cumulative cost, not absolute zero; preserve success, exact
 single input UUID, session identity and native persistence checks. Report this
 field as cumulativeCost, never as measured append cost. The native /clear
-receipt still requires zero cost after its ledger reset. Recovery of the
-observed old false-positive block verified exact persisted SDK/no-query input,
-authenticated canonical history, no later authored rows and an exited writer;
-it preserved the pending intent and did not resend or invent a lost receipt.
+receipt still requires zero cost after its ledger reset.
