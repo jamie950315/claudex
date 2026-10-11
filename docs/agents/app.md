@@ -1,0 +1,161 @@
+# macOS app and status display
+
+Contributor rules moved out of AGENTS.md; they are binding. Scope: Claudex.app setup, Mod installation ownership, window layout, localization, menu bar, Quit, and the CLI-only status display.
+
+## macOS app setup
+
+The graphical app now owns Mod installation and updates, by explicit product
+decision. Setup and normal startup maintain only its bundled Claudex Mod through
+the official native plugin manager and a private app-mod installation journal;
+inspection/status timers never install, configure or start model work. Preserve
+legacy verified sources, previous versions, other plugins, both configuration
+identities and explicit disabled/wake preferences. Use same-name marketplace add
+for verified source migration; never marketplace remove, which deletes native
+plugin state. Newer installed versions are not downgraded. Explicit receiver or
+enable requests must not report success if newer-version preservation refused them.
+Missing management capabilities use a separately pinned, integrity-checked Mod
+manager, not replacement of an existing inference CLI. Its bootstrap disables
+package scripts and selects the exact native platform package, not the wrapper's
+postinstall placeholder. Bundled source/runtime and the signed app bundle/executable
+may be owned by the current user or root, protected from foreign writes. Private
+state, login files and plugin caches must remain owned by the current user. Empty
+npm user/global configuration files must be distinct and protected; do not inherit credentials
+or a provider directory's npm settings. Native runtime guards and accounts remain.
+Show installed payload/version and fresh loaded-Mod self-report separately.
+mod_wake_status is controller-only, bounded and content-free, never a dispatch
+lease or delivery proof. Old/expired observers cannot certify current activation.
+App receiver controls require explicit confirmation, preserve per-task opt-in,
+and never change native routes/policy or restart Claude. Existing SDK sessions may
+retain old plugin roots; a new ordinary session loads the installed update.
+
+The main window uses one outer scroll view, with a width-constrained natural-height
+document. Never restore fixed-height nested checklist/diagnostic panes. Healthy
+operation shows only Codex/Claude prerequisite summaries; actual missing/login/
+blocked components automatically expose setup actions. The full checklist and
+technical details stay in an explicitly expanded advanced section. A prerequisite
+summary is not proof that messages have synced. Resize smoke checks must verify
+viewport growth, natural content width, a single scroll view, and compact ready mode.
+Fit window height to natural document height (including its padding) when opening,
+changing content or toggling advanced diagnostics. Preserve width and the top edge
+where possible; cap height to the current screen's visible frame and retain the
+outer scroll view for overflow. Do not resize fullscreen or during live dragging.
+Runtime history/ownership blocks offer diagnostics, not setup retries. Show the
+global setup retry only for actionable installation/account requirements or a
+failed setup operation; keep the instructions consistent with available actions.
+Mod installation, enablement and loaded-session waiting use their scoped actions.
+Show Mod activation waits in the main window without implying a setup retry or
+restarting existing sessions; keep installed and loaded versions distinct.
+Initial verification reports unique checked/total conversations and the known
+current conversation with elapsed seconds. A ten-second status-only heartbeat
+keeps long native operations observable; it must never publish archival intents,
+inspect histories concurrently, advance checkpoints, or imply synchronization
+completion. Stop and drain the heartbeat before leaving the operation.
+Keep initialSweepCompletedAt separate from foregroundCompletedAt: completing the
+foreground queue must not hide initial verification of the cold backlog.
+
+Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
+requirements request user action, while normal runtime waits need no setup retry.
+Predecessor archival without a verified idle replacement owner (including an
+evicted owner) is a typed `owner_not_idle` wait after archive intents are revoked,
+not a history conflict or an actionable setup failure. Keep idle verification
+mandatory and do not start owners just to archive; real identity errors still block.
+Keep bounded per-pass waitingContexts with exact known conversation identity,
+title and reason. The main window shows reasons and next steps without opening
+details, and orders non-ready setup rows first. Never infer a missing identity,
+hide a real conflict, or change synchronization semantics for a friendlier status.
+
+Claudex.app localizes presentation using complete English-keyed JSON catalogs
+under native/ClaudexApp/Locales for en, zh-Hant, zh-Hans, ja, ko, es, de, fr and it.
+Keep key and %@ placeholder parity; the builder rejects incomplete catalogs.
+System-language selection distinguishes Chinese scripts and regions. Runtime
+switches rebuild presentation only, never run setup or restart services. Raw
+unknown native diagnostics remain verbatim with a translated diagnostic label.
+Read-only/synthetic modes must not persist language or onboarding preferences.
+
+The graphical app owns the sole menu bar item, a combined setup/health window, and
+notifications. It reuses the bounded native status model and an icon-only,
+square-width menu bar button with the bidirectional-arrow
+template symbol; never restore a visible app name or status suffix. Keep health
+details in the tooltip, accessibility label, menu and window. Its owned login item
+launches the same bundle in background inspection mode, not setup. Migrate only
+the verified legacy status-display login item and native display process; preserve
+its recoverable artifacts and never restart service or native conversation owners.
+CLI-only installations may retain the standalone status display.
+The approved app artwork is native/ClaudexApp/Assets/AppIcon.png. The app builder
+derives standard 1x/2x icon sizes and packages Claudex.icns with CFBundleIconFile;
+keep this raster app icon separate from the monochrome menu bar symbol.
+The combined window contains setup retries and account actions; menus expose Open Claudex,
+not a separate retry action. First launch automatically presents the main window and
+starts setup, including a fresh background launch. Subsequent login starts stay
+quiet; prior setup reports preserve existing-install behavior. Read-only and
+synthetic UI modes must not mark onboarding as presented or run setup.
+Live health appears above setup, with timestamps, recovery, notifications and
+diagnostics under advanced diagnostics. Notification clicks open the same window;
+the status controller must never create a separate window.
+Graphical Quit (menu, Command-Q and native termination) now stops the owned sync
+and collaboration services and exits only after read-only native ownership/process
+checks confirm shutdown. Keep the UI responsive while draining; never kill user
+native work or report a merely unloaded launchd job as fully stopped.
+applicationShouldTerminate returns terminateLater and replies once the stop is
+verified (false on failure); never terminateCancel a first request, which aborts
+a logout or restart. The runtime closes idle Claude owners concurrently; a busy
+owner still refuses after the idle ones are closed. Failures
+remain visible in the app. Closing the window still only hides it. Persist the
+private app-stop.json hold before stopping; hooks must not record events while
+held. Reopening resumes only exact installed owned services, using a recoverable
+resuming marker for partial starts, and clears the hold after successful starts.
+Do not delete native data, credentials, or login definitions. Inspect/smoke and
+duplicate-instance exits must never stop services. CLI-only status display Quit
+retains its display-only behavior.
+
+`native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
+who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
+replace those apps. Reuse native CLIs or fill missing CLI components from pinned
+official npm packages in the private root. Keep normal native credential
+namespaces, never copy credentials, and do not auto-start model work during setup.
+Private state and status reads use non-blocking, no-follow file descriptors and
+reject non-regular files before reading. Read-only AppSetup inspection refuses
+setup, account, service and model-setting mutations before any native operation.
+Service control verifies the loaded launchd job's definition path, program and
+exact arguments against the owned installation before reporting readiness or
+starting, stopping or removing it; a matching on-disk plist alone is insufficient.
+Completion-event history holds have no scheduled retry countdown. Only actual
+supervisor backoff supplies the next recovery time in that scheduler.
+The app profile enables all projects and task-scoped writes; explicit read-only
+requests and child permission bounds remain strict. Do not loosen existing
+writer, version, resource, account or macOS guards to report a ready checklist.
+An active or incompatible existing deployment must be preserved and explained.
+By user decision, Claude.app is accepted with the official Anthropic team or
+as a locally patched build: official bundle identifier, ad-hoc signature, no
+team, and a passing strict deep verification; it is labeled as a local build.
+Codex keeps its vendor-only check. Any other publisher blocks only its own
+desktop-integration row; never skip to another copy or show unrelated
+prerequisites as missing.
+Package portable Node/npm and production dependencies so end users need no Git,
+Node installation, compiler or terminal setup. Build with an explicit file
+allowlist, probe the supplied Node binary's Zstandard/CRC32 APIs before staging,
+and verify nested signatures. Reject incompatible runtime distributions before
+producing an app. Development signing is not notarized
+public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
+checks native layout with synthetic data, not installed service acceptance.
+The 20-second setup inspection runs only while the window is visible or a
+setup/login flow is active. Clear that activity after failures or when no provider
+installation/sign-in follow-up remains. Stop the inspection timer when neither
+condition applies and recreate it when needed. By user decision, report inspection
+may reuse a successful deep desktop-app signature verification recorded in the private
+app-signatures.json for at most one hour, keyed by the expected publisher and
+nanosecond identities of the bundle, Contents, Info.plist, MacOS and the code
+seal. Setup and sign-in always verify again; failures and bundles that changed
+during verification are never recorded; `--read-only` (used by --inspect-only)
+never writes it. The cache is a scheduling optimization, not publisher proof.
+
+For CLI-only installations, `status-app install|status` manages a separately signed macOS menu-bar app in
+the private root, with independent login startup. It only reads bounded private
+status files, distinguishes readiness from liveness/stale data, and reports
+waiting, paused, recovering or offline states. Its status window exposes
+diagnostics and notification permission/test feedback. Persistent issues are
+debounced 15 seconds and deduplicated with a 60-second minimum notice interval;
+recovery generates a notice too. Notifications contain no transcript or paths.
+Graphical installations use the unified Claudex app instead; standalone display
+installation is blocked after graphical login migration. Quit stops only the display. Signed, journaled upgrades require the old UI to
+exit and preserve one previous artifact. No built bundles belong in Git.
