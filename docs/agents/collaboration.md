@@ -274,6 +274,15 @@ Worker instructions prioritize that single-token response over
 normal final-report formatting; put handoff context in the request before it.
 Do not treat these text tokens as proof of native completion or release a writer
 before successful native completion and process-group exit.
+Native quota failures follow the same terminal-receipt and process-exit proofs as
+other failures. Preserve bounded readable terminal error text from Codex
+`turn.failed.error.message` and Claude error `result.errors` or `result.result`
+in the task error and parent child-result. Never serialize arbitrary event objects,
+partial answers or stderr as failure detail. Diagnostic events, including Claude
+`rate_limit_event`, do not independently prove a failed invocation. Do not add
+quota-reset scheduling, provider/model substitution or automatic failed-task replay.
+Native chat delivery receipts prove dispatch or acknowledgement only; they do not
+observe a recipient's subsequent model quota failure or work completion.
 Status presentation keeps legacy result intact but labels phase, terminal,
 resultRole/resultFinal/resultGeneration and cancelPending. Completed work reopened
 by send is not resultFinal even before its generation advances. Terminal includes

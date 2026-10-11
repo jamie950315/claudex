@@ -687,6 +687,55 @@ test('child admission observes worker capacity and cannot escalate write permiss
   await until(async () => (await status(hub, started.taskId)).status === 'completed');
 });
 
+test('a quota-failed child resumes its waiting parent with the error and is never restarted', async t => {
+  for (const [parentProvider, childProvider] of [['codex', 'claude'], ['claude', 'codex']]) {
+    const gate = pending(), tokens = new Map(), calls = [];
+    const detail = 'Usage limit reached; try again after 14:00 UTC.';
+    let hub, childId;
+    const fixture = await setup(t, async ({ provider, prompt }) => {
+      calls.push(provider);
+      if (calls.length === 1) {
+        const child = await hub.dispatch(request(parentProvider, 'start', {
+          provider: childProvider, cwd: fixture.root, prompt: 'Child work', requestId: 'quota-child',
+        }, tokens.get(parentProvider)));
+        childId = child.taskId;
+        return { text: 'Waiting for child.' };
+      }
+      if (provider === childProvider) {
+        await gate.promise;
+        throw Object.assign(new Error(`Native ${provider} execution failed with a terminal receipt. ${detail}`),
+          { executionUncertain: false });
+      }
+      assert.ok(prompt.includes(detail));
+      assert.match(prompt, /\\"status\\":\\"failed\\"/);
+      const child = await hub.dispatch(request(parentProvider, 'wait', {
+        taskId: childId, timeoutMs: 0, view: 'summary',
+      }, tokens.get(parentProvider)));
+      assert.equal(child.status, 'failed');
+      assert.ok(child.error.includes(detail));
+      assert.equal(child.resultFinal, false);
+      return { text: 'Reported the child quota failure.' };
+    }, { mcp: async ({ provider, token }) => { tokens.set(provider, token); return {}; } });
+    hub = fixture.hub;
+    const started = await hub.dispatch(controller(hub, parentProvider, 'start', {
+      provider: parentProvider, cwd: fixture.root, prompt: 'Delegate work', requestId: 'quota-parent',
+    }));
+    await until(() => hub.state.tasks[started.taskId]?.status === 'waiting' && calls.length === 2);
+    gate.resolve();
+    const done = await until(async () => {
+      const value = await status(hub, started.taskId);
+      return value.status === 'completed' && value;
+    });
+    assert.equal(done.messages.filter(item => item.kind === 'child-result').length, 1);
+    assert.deepEqual(calls, [parentProvider, childProvider, parentProvider]);
+    const failed = await status(hub, childId);
+    await assert.rejects(hub.dispatch(controller(hub, parentProvider, 'send', {
+      taskId: childId, revision: failed.revision, message: 'Retry', requestId: 'quota-retry',
+    })), /cannot be implicitly restarted/);
+    assert.deepEqual(calls, [parentProvider, childProvider, parentProvider]);
+  }
+});
+
 test('writable child runs concurrently with its parent and delivers a durable result', async t => {
   const order = [];
   const childGate = pending();

@@ -416,6 +416,25 @@ the current task. Legacy `result` remains intact for compatibility and can be an
 older generation, a yield boundary, or output retained during cancellation.
 Sending a follow-up makes an old result non-final even before generation advances.
 
+When a native worker reaches its account usage limit and returns a failure receipt,
+Claudex marks the task `failed` after verifying process exit. Its `error` retains
+bounded native terminal error text, including a reset time when the CLI includes
+one. Child failure is delivered to the parent as a child-result; a waiting parent
+resumes once all its children are terminal. The parent must decide how to handle
+the failed work. Claudex does not switch models/providers, wait for quota reset or
+automatically retry a failed task. A quota warning or diagnostic alone is not a
+terminal receipt; missing/conflicting completion evidence remains `uncertain`.
+While the native CLI is still running (for example, handling its own retries),
+the task stays `running`. Claudex has no execution deadline; a `wait` timeout
+ends only the caller's wait and does not cancel the worker.
+
+This differs from `chat_send` to an existing native chat: delivery status tracks
+dispatch and recipient ACK, not the recipient's subsequent inference result.
+If the native chat accepts a message and then cannot answer because of its quota,
+Claudex has no automatic quota-failure report to the sender. An ambiguous wake
+dispatch remains uncertain and is never automatically resent. Read `chat_status`
+for delivery and verify the reply separately.
+
 `cancel` reports `cancelAccepted`, `cancelPending`, `cancelRequested`, and
 `terminal`. Acceptance does not prove native process exit. Wait for settlement;
 an unverified shutdown may remain uncertain. Cancelling an already completed,

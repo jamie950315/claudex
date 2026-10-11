@@ -309,6 +309,52 @@ test('Claude explicit result error is known; missing receipt remains uncertain',
     (error) => error.executionUncertain === true);
 });
 
+test('native terminal failures preserve quota reasons without retrying either provider', async () => {
+  const detail = "You've hit your usage limit. Try again after 14:00 UTC.";
+  for (const [provider, events] of [
+    ['codex', [{ type: 'turn.failed', error: { message: detail } }]],
+    ['claude', [{ type: 'result', subtype: 'error_during_execution', is_error: true, errors: [detail] }]],
+    ['claude', [{ type: 'result', is_error: true, result: detail }]],
+  ]) {
+    const fake = fakeSpawn(events, 1);
+    await assert.rejects(runner(fake)({ provider, cwd: process.cwd(), prompt: 'Check quota failure.' }), error => {
+      assert.equal(error.executionUncertain, false);
+      assert.ok(error.message.includes(detail));
+      return true;
+    });
+    assert.equal(fake.calls.length, 1);
+  }
+});
+
+test('native failure detail is bounded text from terminal fields only', async () => {
+  const fake = fakeSpawn([{ type: 'result', is_error: true,
+    errors: [{ prompt: 'PRIVATE PAYLOAD' }, 'Quota\u0000 exhausted\n' + 'x'.repeat(4000)],
+    result: 'PRIVATE PARTIAL ANSWER' }], 1, 'PRIVATE STDERR');
+  await assert.rejects(runner(fake)({ provider: 'claude', cwd: process.cwd(), prompt: 'Check bounded error.' }), error => {
+    assert.equal(error.executionUncertain, false);
+    assert.match(error.message, /Quota  exhausted /);
+    assert.ok(error.message.length <= 2048);
+    assert.ok(!error.message.includes('PRIVATE'));
+    assert.ok(!/[\u0000-\u001f\u007f]/u.test(error.message));
+    return true;
+  });
+  const split = fakeSpawn([{ type: 'turn.failed', error: { message: 'x'.repeat(1535) + '\u{1f600}' } }], 1);
+  await assert.rejects(runner(split)({ provider: 'codex', cwd: process.cwd(), prompt: 'Check cut boundary.' }), error => {
+    assert.ok(error.message.isWellFormed());
+    assert.ok(error.message.endsWith('x'));
+    return true;
+  });
+});
+
+test('quota diagnostics without a terminal receipt do not prove native failure', async () => {
+  for (const provider of ['codex', 'claude']) {
+    const fake = fakeSpawn([{ type: 'error', message: 'Usage limit reached.' }], 1);
+    await assert.rejects(runner(fake)({ provider, cwd: process.cwd(), prompt: 'Check absent receipt.' }),
+      error => error.executionUncertain === true);
+    assert.equal(fake.calls.length, 1);
+  }
+});
+
 test('invalid requests do not launch a model', async () => {
   let launches = 0;
   const run = createNativeCollaborationRunner({ spawnImpl: () => { launches++; throw new Error('launched'); },

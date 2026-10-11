@@ -129,6 +129,16 @@ export function normalizeNativeUsage(provider, raw, reportedCostUsd) {
   return usage;
 }
 
+// Only native terminal error text is suitable for the work record. Do not
+// serialize arbitrary event objects, partial answers or stderr as diagnostics.
+function failureDetail(values) {
+  // A cut must not leave half of a surrogate pair in the saved record.
+  const bounded = value => value.slice(0, 1536).replace(/[\ud800-\udbff]$/, '');
+  return bounded(values.filter(value => typeof value === 'string' && value.trim())
+    .slice(0, 4).map(value => bounded(value).replace(/[\u0000-\u001f\u007f]/gu, ' ').trim())
+    .join('; '));
+}
+
 function decodeEvent(provider, event, result) {
   if (provider === 'codex') {
     if (event.type === 'thread.started') result.sessionId = event.thread_id;
@@ -140,6 +150,7 @@ function decodeEvent(provider, event, result) {
     if (event.type === 'turn.failed') {
       if (result.terminal && result.terminal !== 'failed') result.conflictingReceipt = true;
       result.terminal = 'failed';
+      result.failureDetail = failureDetail([event.error?.message]);
     }
   } else {
     if (event.session_id && typeof event.session_id === 'string') result.sessionId = event.session_id;
@@ -147,6 +158,10 @@ function decodeEvent(provider, event, result) {
       const terminal = event.is_error ? 'failed' : 'success';
       if (result.terminal && result.terminal !== terminal) result.conflictingReceipt = true;
       result.terminal = terminal;
+      if (event.is_error) {
+        result.failureDetail = failureDetail(Array.isArray(event.errors) ? event.errors : [])
+          || failureDetail([event.result]);
+      }
       if (typeof event.result === 'string') result.text = event.result;
       result.usage = event.usage; result.costUsd = event.total_cost_usd;
     }
@@ -481,7 +496,7 @@ export function createNativeCollaborationRunner({
           return;
         }
         if (result.terminal === 'failed') {
-          reject(failure(`Native ${provider} execution failed with a terminal receipt.`, { uncertain: false }));
+          reject(failure(`Native ${provider} execution failed with a terminal receipt.${result.failureDetail ? ` ${result.failureDetail}` : ''}`, { uncertain: false }));
           return;
         }
         if (provider === 'codex' && code === 1 && !processSignal && stdoutBytes === 0 && !result.sessionId
