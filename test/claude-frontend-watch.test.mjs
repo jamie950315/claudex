@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { openState, regress, runQueue, submit } from '../dev/frontend-watch/watch.mjs';
+import { openState, regress, runQueue, sightings, submit } from '../dev/frontend-watch/watch.mjs';
 
 const passed = (asset, hash = 'a'.repeat(64)) => ({ status: 'passed', asset, sourceSHA256: hash });
 const report = (entry, overrides = {}) => ({ version: 1, entry, passed: true, adapters: { folders: passed('f.js'), chatWake: passed('c.js'),
@@ -72,4 +72,18 @@ test('regression accepts a repaired entry and refuses a changed or lost passing 
   assert.equal(lost.ok, false);
   const offline = await regress(paths, { check: async ({ entry }) => ({ entry, unavailable: 'Download failed', passed: false }) });
   assert.equal(offline.ok, false);
+});
+
+test('the first report of each source is kept for every entry, in any state', async t => {
+  const paths = await state(t), at = minutes => () => new Date(Date.UTC(2026, 9, 12, 10, minutes));
+  await submit(paths, { entry: 'index-aaa.js', source: 'mac', now: at(0) });
+  await submit(paths, { entry: 'index-aaa.js', source: 'mac', now: at(5) });
+  await runQueue(paths, { check: async ({ entry }) => report(entry) });
+  await submit(paths, { entry: 'index-aaa.js', source: 'windows', now: at(42) });
+  await submit(paths, { entry: 'index-bbb.js', source: 'windows', now: at(50) });
+  assert.deepEqual(await sightings(paths), [
+    { entry: 'index-aaa.js', firstSeenAt: '2026-10-12T10:00:00.000Z', sources: {
+      mac: { at: '2026-10-12T10:00:00.000Z', delayMinutes: 0 }, windows: { at: '2026-10-12T10:42:00.000Z', delayMinutes: 42 } } },
+    { entry: 'index-bbb.js', firstSeenAt: '2026-10-12T10:50:00.000Z', sources: { windows: { at: '2026-10-12T10:50:00.000Z', delayMinutes: 0 } } },
+  ]);
 });

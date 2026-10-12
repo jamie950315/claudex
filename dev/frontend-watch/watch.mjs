@@ -6,6 +6,7 @@
 //   run      check every queued entry once and keep its report
 //   regress  recheck every reported entry with the current checkout and
 //            compare each adapter's result with the saved report
+//   sightings  list when each source first reported each entry
 //
 // Entry names come only from real Claude Desktop installations. This service
 // never asks claude.ai for one. Its state directory holds vendor code and
@@ -17,7 +18,7 @@ import { promisify } from 'node:util';
 import { checkPublishedEntry } from '../check-claude-frontend-entry.mjs';
 
 const run = promisify(execFile), adapters = ['folders', 'chatWake', 'ownerWake', 'commands'];
-const usage = 'Usage: node dev/frontend-watch/watch.mjs <submit|run|regress> --state DIR [--entry index-<hash>.js] [--source NAME]';
+const usage = 'Usage: node dev/frontend-watch/watch.mjs <submit|run|regress|sightings> --state DIR [--entry index-<hash>.js] [--source NAME]';
 const entryName = value => typeof value === 'string' && /^index-[A-Za-z0-9_-]{1,64}\.js$/.test(value);
 const sourceName = value => typeof value === 'string' && /^[A-Za-z0-9._-]{1,64}$/.test(value);
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
@@ -29,7 +30,7 @@ async function save(path, value) {
 const names = async directory => (await readdir(directory)).filter(name => entryName(name.replace(/\.json$/, '')) && name.endsWith('.json')).sort();
 
 export async function openState(state) {
-  const root = resolve(state), paths = { root, queue: join(root, 'queue'), reports: join(root, 'reports'), store: join(root, 'store') };
+  const root = resolve(state), paths = { root, queue: join(root, 'queue'), reports: join(root, 'reports'), store: join(root, 'store'), sightings: join(root, 'sightings') };
   for (const path of Object.values(paths)) await mkdir(path, { recursive: true, mode: 0o700 });
   return paths;
 }
@@ -37,6 +38,10 @@ export async function openState(state) {
 /** Idempotent: a reported or already queued entry is not queued again. */
 export async function submit(paths, { entry, source = 'unknown', now = () => new Date() }) {
   if (!entryName(entry) || !sourceName(source)) throw new Error(usage);
+  // The first time each source reports an entry is kept, whatever the entry's
+  // state, so sources can be compared by how soon they see a new frontend.
+  const seenPath = join(paths.sightings, `${entry}.json`), seen = await optional(seenPath) ?? { version: 1, entry, sources: {} };
+  if (!seen.sources[source]) { seen.sources[source] = now().toISOString(); await save(seenPath, seen); }
   const report = await optional(join(paths.reports, `${entry}.json`));
   if (report) return { entry, state: report.passed ? 'passed' : 'failed' };
   const path = join(paths.queue, `${entry}.json`);
@@ -96,15 +101,28 @@ export async function regress(paths, { check = checkPublishedEntry } = {}) {
   return { rows, ok: rows.every(row => row.state === 'passed' || row.state === 'failed' && !row.wasPassing) };
 }
 
+/** One row per entry, oldest first, with each source's delay behind the first. */
+export async function sightings(paths) {
+  const rows = [];
+  for (const name of await names(paths.sightings)) {
+    const { entry, sources } = await json(join(paths.sightings, name));
+    const first = Math.min(...Object.values(sources).map(time => Date.parse(time)));
+    rows.push({ entry, firstSeenAt: new Date(first).toISOString(),
+      sources: Object.fromEntries(Object.entries(sources).map(([source, time]) => [source, { at: time, delayMinutes: Math.round((Date.parse(time) - first) / 60000) }])) });
+  }
+  return rows.sort((a, b) => a.firstSeenAt.localeCompare(b.firstSeenAt));
+}
+
 async function main(argv) {
   const [command, ...rest] = argv, options = {};
   for (let i = 0; i < rest.length; i += 2) {
     if (!['--state', '--entry', '--source'].includes(rest[i]) || !rest[i + 1]) throw new Error(usage);
     options[rest[i].slice(2)] = rest[i + 1];
   }
-  if (!options.state || !['submit', 'run', 'regress'].includes(command)) throw new Error(usage);
+  if (!options.state || !['submit', 'run', 'regress', 'sightings'].includes(command)) throw new Error(usage);
   const paths = await openState(options.state);
   if (command === 'submit') return { exit: 0, output: await submit(paths, options) };
+  if (command === 'sightings') return { exit: 0, output: await sightings(paths) };
   if (command === 'regress') { const result = await regress(paths); return { exit: result.ok ? 0 : 1, output: result }; }
   // An executable named here is started once per failed entry with the entry
   // name and its report path. It decides how to notify or draft a repair.

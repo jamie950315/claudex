@@ -326,7 +326,8 @@ checks every queued entry and keeps one report per entry, and `regress`
 rechecks every reported entry with the current checkout: an adapter that
 passed must pass again with the same vendor file and hash, while an entry that
 failed may now pass. An unavailable graph stays queued and is never reported
-as a failure. Entry names come only from real Claude Desktop installations
+as a failure. `sightings` lists when each source first reported each entry, so
+sources can be compared by how soon they see a new frontend. Entry names come only from real Claude Desktop installations
 (observed identical on macOS and Windows for one build); the service never
 requests one from claude.ai. A failed entry starts the executable named in
 CLAUDEX_FRONTEND_ON_FAILURE once. on-failure.sh notifies, then lets Claude
