@@ -335,3 +335,11 @@ in a separate worktree. It never pushes, changes versions or touches the
 checkout the service runs from; a maintainer reviews the branch and verifies
 it in a real Claude Desktop before release. Host names, paths, schedules and
 notification settings are deployment details and stay out of tracked files.
+dev/frontend-watch/read-windows-entry.ps1 reads the newest entry name from a
+Windows Claude Desktop, read-only. Windows keeps its HTTP cache in the
+blockfile format, where the entry was not found by name after an app update
+(2026-10-12, Claude 2.31226.1: 1,003 module keys, none of the entry or the
+modules it loads statically). The script code cache beside it uses the
+simple-cache v5 header with keys of the form `_key<URL> \n<top origin>`, and
+holds the entry Claude Desktop evaluated. Compare its magic as bytes: Windows
+PowerShell reads the 64-bit literal as a negative number.
