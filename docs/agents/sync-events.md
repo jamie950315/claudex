@@ -62,7 +62,13 @@ bounded polling harness, not a production fallback.
   contradiction, and the projected command must still equal the API item.
   Rollouts readable by others are accepted; group or world write access is
   refused, as for the empty-turn reader. Keep image positions bound to
-  exact native item identities. Rollover segments, overlapping lifecycles,
+  exact native item identities. A rollover (the same thread continuing in a
+  new segment, as after an edited message) is read through its declared
+  history_base chain: every inherited segment passes the same stable read, is
+  located only by its exact identity, contributes exactly the rows before its
+  referenced ordinal with the byte offset inside the adjoining row, and joins
+  the others by contiguous native ordinals, so a boundary and its completion
+  may lie in different segments. Forked histories, overlapping lifecycles,
   redacted command text, non-command late items and real history edits still
   block. Never drop a late result, rebase a checkpoint or repair native
   transcripts to clear a block.

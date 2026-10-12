@@ -298,3 +298,37 @@ test('a real earlier prefix change remains a conflict even with exact late prove
   await assert.rejects(exportNativeHistory({ client: client(source.native), threadId, cwd, completedPrefix: true,
     resolveLateItems: source.resolver, checkpoint }), /does not match the verified canonical checkpoint/);
 });
+
+test('a late completion is proven through the rollout a rollover continues', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'cldx-native-late-')));
+  await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
+  const segmentId = '00000000-0000-4000-8000-000000000009', editedId = '00000000-0000-4000-8000-000000000008';
+  // The earlier rollout keeps rows written after the prefix the rollover inherits.
+  const earlier = [...rows(), start(editedId, 300), context(editedId, 300)], kept = rows().length;
+  const earlierText = encode(earlier), prefix = earlierText.split('\n').slice(0, kept).join('\n') + '\n';
+  const base = join(root, `rollout-a-${threadId}.jsonl`), path = join(root, `rollout-b-${threadId}_${segmentId}.jsonl`);
+  const header = history_base => frame('session_meta', { id: threadId, session_id: threadId, cwd, history_mode: 'paginated', history_base }, 400000);
+  const current = history_base => [header(history_base), start(laterId, 401), context(laterId, 401)]
+    .map((row, index) => JSON.stringify({ ...row, ordinal: kept + index })).join('\n') + '\n';
+  const reference = { thread_id: threadId, end_ordinal_exclusive: kept, end_byte_offset: Buffer.byteLength(prefix) };
+  await writeFile(base, earlierText, { mode: 0o600 }); await writeFile(path, current(reference), { mode: 0o600 });
+  const locate = async id => { assert.equal(id, threadId); return base; };
+  const resolver = createNativeLateItemResolver({ path, threadId, cwd, locateRollout: locate });
+  const proof = await resolver(snapshot(), { threadId });
+  assert.deepEqual(proof.placements, [{ turnId, itemId: 'exec-synthetic', afterTurnId: afterId, itemDigest: nativeItemDigest(apiCommand()) }]);
+  const initial = snapshot(); initial.turns[0].items.pop();
+  const previous = convertNativeTurns(initial, { threadId, cwd }), checkpoint = { count: previous.messages.length, digest: fingerprint(previous) };
+  const exported = await exportNativeHistory({ client: client(snapshot()), threadId, cwd, completedPrefix: true, resolveLateItems: resolver, checkpoint });
+  assert.equal(fingerprint(exported.common, checkpoint.count), checkpoint.digest);
+  // Without the earlier rollout nothing is placed, and nothing is guessed.
+  await assert.rejects(createNativeLateItemResolver({ path, threadId, cwd })(snapshot(), { threadId }), /earlier rollout/);
+  await writeFile(path, current({ ...reference, end_byte_offset: 3 }));
+  await assert.rejects(resolver(snapshot(), { threadId }), /byte offset/);
+  await writeFile(path, current({ ...reference, end_ordinal_exclusive: kept - 1 }));
+  await assert.rejects(resolver(snapshot(), { threadId }), /byte offset|continue its earlier rollout/);
+  // A fork inherits another thread's rows; its late commands stay unplaced.
+  await writeFile(path, current(reference));
+  await writeFile(base, earlierText.replace(`"id":"${threadId}"`, `"id":"${editedId}"`));
+  await assert.rejects(resolver(snapshot(), { threadId }), /earlier rollout is not proven/);
+  assert.equal(await readFile(path, 'utf8'), current(reference));
+});

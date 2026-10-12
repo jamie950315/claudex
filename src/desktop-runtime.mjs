@@ -601,7 +601,8 @@ export class DesktopRuntime {
         if (verifiedCheckpoint && (data.common.messages.length < record.checkpoint.count
           || fingerprint(data.common, record.checkpoint.count) !== record.checkpoint.digest)) {
           imageEvidence = undefined;
-          data = await exportHistory(createNativeLateItemResolver({ path, threadId: nativeId, cwd }));
+          data = await exportHistory(createNativeLateItemResolver({ path, threadId: nativeId, cwd,
+            locateRollout: createCodexRolloutLocator(this.codexHome) }));
           if (data.common.messages.length < record.checkpoint.count
             || fingerprint(data.common, record.checkpoint.count) !== record.checkpoint.digest)
             throw new Error('Codex native history diverged before the verified canonical checkpoint; synchronization paused.');

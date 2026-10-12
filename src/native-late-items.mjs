@@ -4,6 +4,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { nativeItemDigest } from './native-history-order.mjs';
+import { resolveRolloutHistoryBase } from './native-local-images.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
@@ -150,18 +151,53 @@ function boundaryProof(state, api, source, cwd, { ranCommand = false } = {}) {
       || reply !== api.items[lastAgent].text) fail('native boundary lacks its exact final assistant response.');
 }
 
+// A rollover continues the same thread in a new segment whose header names
+// the previous one and the row prefix it inherits. The inherited rows are
+// read through the same stable reader and joined by their contiguous native
+// ordinals, so a boundary and its late completion may lie in different
+// segments. A fork inherits another thread's rows and is not joined.
+async function readHistory(path, threadId, locateRollout, maxBytes) {
+  const current = await readSource(path, maxBytes), base = current.rows[0]?.payload?.history_base;
+  if (base == null) return { ...current, starts: new Set([0]) };
+  if (typeof locateRollout !== 'function') fail('source continues an earlier rollout that this reader was not given.');
+  let chain;
+  try { chain = await resolveRolloutHistoryBase({ path, threadId, locate: locateRollout }); }
+  catch (error) { fail(`earlier rollout is not proven: ${error.message}`); }
+  const rows = [], lines = [], digests = [], starts = new Set();
+  let budget = maxBytes - Buffer.byteLength(current.lines.join('\n'));
+  for (const link of chain.toReversed()) {
+    if (link.threadId !== threadId) fail('source inherits a forked history; its late commands are not placed.');
+    if (budget < 1) fail('combined rollout sources exceed their byte limit.');
+    const segment = await readSource(link.path, budget), count = link.prefix.endOrdinal - link.prefix.startOrdinal;
+    if (rows.length !== link.prefix.startOrdinal || segment.rows.length < count) fail('earlier rollout does not cover its referenced rows.');
+    // Observed offsets can land a few bytes inside an adjacent row.
+    let bytes = 0;
+    for (let index = 0; index < count - 1; index++) bytes += Buffer.byteLength(segment.lines[index]) + 1;
+    const last = Buffer.byteLength(segment.lines[count - 1]) + 1;
+    const next = segment.lines[count] === undefined ? 0 : Buffer.byteLength(segment.lines[count]) + 1;
+    if (link.prefix.endByte <= bytes || link.prefix.endByte > bytes + last + next) fail('earlier rollout byte offset does not match its row boundary.');
+    budget -= bytes + last; starts.add(rows.length);
+    rows.push(...segment.rows.slice(0, count)); lines.push(...segment.lines.slice(0, count));
+    digests.push({ sourceDigest: segment.sourceDigest, sourceIdentity: segment.sourceIdentity, ...link.prefix });
+  }
+  if (rows.length !== current.rows[0].ordinal) fail('source does not continue its earlier rollout.');
+  starts.add(rows.length);
+  return { rows: [...rows, ...current.rows], lines: [...lines, ...current.lines], starts, sourceIdentity: current.sourceIdentity,
+    sourceDigest: nativeItemDigest({ sourceDigest: current.sourceDigest, inherited: digests }) };
+}
+
 /** Prove append arrival for completed commands backfilled into a closed turn.
  * Native turns and items stay intact; the caller uses placements only for the
  * portable order and still verifies the whole saved canonical checkpoint.
  */
-export function createNativeLateItemResolver({ path, threadId, cwd, maxBytes = 480 * 1024 * 1024 }) {
+export function createNativeLateItemResolver({ path, threadId, cwd, locateRollout, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd) || resolve(cwd) !== cwd
     || !integer(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024) fail('invalid source identity or byte limit.');
   return async (snapshot, { threadId: expectedThreadId }) => {
     if (expectedThreadId !== threadId || !Array.isArray(snapshot?.turns)) fail('source and API identities differ.');
     if (!snapshot.turns.some(turn => turn.items?.some(item => item.type === 'commandExecution'))) return null;
-    const source = await readSource(path, maxBytes), { rows } = source;
+    const source = await readHistory(path, threadId, locateRollout, maxBytes), { rows } = source;
     const states = new Map(), seenItems = new Map(), candidates = [], closed = [];
     let active = null, latest = null, lifecycleError = false;
     for (const row of rows) {
@@ -188,11 +224,13 @@ export function createNativeLateItemResolver({ path, threadId, cwd, maxBytes = 4
     }
     if (!candidates.length) return null;
     if (lifecycleError) fail('native lifecycle has an invalid, repeated or unmatched boundary.');
-    const header = rows[0]; exactFrame(header, source.lines[0]);
-    if (header.type !== 'session_meta' || !object(header.payload)
-      || header.payload.id !== threadId || header.payload.cwd !== cwd || header.payload.history_mode !== 'paginated'
-      || header.payload.session_id !== threadId || rows.slice(1).some(row => row?.type === 'session_meta')
-      || rows.some((row, index) => row?.ordinal !== index)) fail('source header or ordinal chain differs from the exact native identity.');
+    // Every segment opens with the header of this exact thread; no other
+    // row is one.
+    for (const index of source.starts) exactFrame(rows[index], source.lines[index]);
+    if (rows.some((row, index) => row?.ordinal !== index || (row.type === 'session_meta') !== source.starts.has(index)
+      || source.starts.has(index) && (!object(row.payload) || row.payload.id !== threadId || row.payload.cwd !== cwd
+        || row.payload.history_mode !== 'paginated' || row.payload.session_id !== threadId)))
+      fail('source header or ordinal chain differs from the exact native identity.');
     const turns = new Map();
     for (const [index, turn] of snapshot.turns.entries()) {
       if (!UUID.test(turn?.id) || turns.has(turn.id) || !Array.isArray(turn.items)) fail('API turn identity is ambiguous.');
