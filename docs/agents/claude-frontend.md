@@ -319,3 +319,19 @@ difference between the cached and the published target of one build is a
 defect in the selection, not noise. Its store holds vendor code: keep it
 outside the repository and publish only metadata reports. It proves selection
 and transform, never installation into a real cache or live reception.
+
+dev/frontend-watch/watch.mjs is the maintainer service around that check, for a
+machine without Claude Desktop. `submit` queues an entry name once, `run`
+checks every queued entry and keeps one report per entry, and `regress`
+rechecks every reported entry with the current checkout: an adapter that
+passed must pass again with the same vendor file and hash, while an entry that
+failed may now pass. An unavailable graph stays queued and is never reported
+as a failure. Entry names come only from real Claude Desktop installations
+(observed identical on macOS and Windows for one build); the service never
+requests one from claude.ai. A failed entry starts the executable named in
+CLAUDEX_FRONTEND_ON_FAILURE once. on-failure.sh notifies, then lets Claude
+Code draft a repair from repair-prompt.md on a `frontend-repair/<entry>` branch
+in a separate worktree. It never pushes, changes versions or touches the
+checkout the service runs from; a maintainer reviews the branch and verifies
+it in a real Claude Desktop before release. Host names, paths, schedules and
+notification settings are deployment details and stay out of tracked files.

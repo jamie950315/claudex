@@ -156,24 +156,33 @@ export async function checkPublishedGraph({ modules, entry, temporary }) {
   return results;
 }
 
-async function main() {
-  const options = parseArguments(process.argv.slice(2));
+/** The complete report for one entry. A graph that cannot be obtained is
+ * reported as unavailable, never as failed adapters.
+ */
+export async function checkPublishedEntry({ entry, store, fetchSource }) {
+  if (!assetName(entry) || !/^index-/.test(entry)) throw unavailable(usage);
   const temporary = await mkdtemp(join(tmpdir(), 'claudex-frontend-entry-'));
-  const report = { version: 1, entry: options.entry, scope: 'published-graph', staticOnly: true, checkedAt: new Date().toISOString() };
+  const report = { version: 1, entry, scope: 'published-graph', staticOnly: true, checkedAt: new Date().toISOString() };
   try {
-    const store = options.store ? resolve(options.store) : join(temporary, 'store');
-    await mkdir(store, { recursive: true, mode: 0o700 });
-    const graph = await loadPublishedGraph({ entry: options.entry, store });
-    if (!graph.modules.get(FRONTEND_ASSET_ROOT + options.entry).source.includes('document.getElementById("root")'))
+    const directory = store ? resolve(store) : join(temporary, 'store');
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const graph = await loadPublishedGraph({ entry, store: directory, ...(fetchSource ? { fetchSource } : {}) });
+    if (!graph.modules.get(FRONTEND_ASSET_ROOT + entry).source.includes('document.getElementById("root")'))
       throw unavailable('Entry bootstrap anchor is absent: not a frontend entry');
     Object.assign(report, { modules: graph.modules.size, bytes: graph.bytes, fetched: graph.fetched,
       outsideReaderBounds: [...graph.modules.values()].filter(m => m.oversized || !m.canonical).map(m => m.name) });
-    report.adapters = await checkPublishedGraph({ modules: graph.modules, entry: options.entry, temporary });
+    report.adapters = await checkPublishedGraph({ modules: graph.modules, entry, temporary });
     report.passed = adapters.every(adapter => report.adapters[adapter].status === 'passed');
   } catch (error) {
     if (!error.unavailable) throw error;
     report.unavailable = error.message; report.passed = false;
   } finally { await rm(temporary, { recursive: true, force: true }); }
+  return report;
+}
+
+async function main() {
+  const options = parseArguments(process.argv.slice(2));
+  const report = await checkPublishedEntry(options);
   if (options.report) {
     const path = resolve(options.report);
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
