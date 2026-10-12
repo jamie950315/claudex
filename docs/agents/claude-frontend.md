@@ -131,6 +131,14 @@ distinguishes the observed August shortcut-help reads from its session action;
 missing or competing action proofs remain skipped. For the 2026-10-08 build,
 the target is the folder resource, so the shared combined recipe applies. Folder
 bootstrap no longer embeds another chat-wake consumer.
+The chat wake starts when its module is evaluated, so only modules the entry
+loads through static imports and re-exports are candidates; a module reached
+only through import() is never one, cached or not. From 2026-10-08 the lazily
+loaded keyboard shortcuts dialog carries all three markers and passes the
+proof. It enters a cache once the dialog has been opened and, before this
+rule, then replaced the real target while still reporting installed. In all 21
+saved builds (2026-09-24 to 2026-10-10) the correct target is in that static
+closure of 61 to 68 modules, and the rule changes no other selection.
 The observed August owner component is wrapped by the uniquely imported public
 React.memo with exactly one component argument and no comparator. Only that
 wrapper exposes the component to the existing identity/send/client proofs;
@@ -296,3 +304,18 @@ only metadata reports survive. List exact missing assets and explicit failures.
 Obsolete shared Chat/Cowork owner-wake pins are not equivalent to the required
 Code/attached-stdio design: report their refusal/comparison failure and preserve
 them, never restore directMcpCallTool or the wrong component to pass acceptance.
+
+dev/check-claude-frontend-entry.mjs checks one named entry without Claude
+Desktop: it downloads the entry's complete published import graph from the
+public asset origin and runs resolveClaudeFrontendAdapters, the production
+transforms, node --check and the wiring contracts on static copies. Exit status
+0 means every adapter passed, 1 an adapter failed, 2 the graph was unavailable;
+never treat 2 as an adapter failure. The entry name must come from a real
+Claude Desktop (renderer status `entry.asset`): the page naming it sits behind a
+browser check, which must not be circumvented. A published graph is a superset
+of any cache (2,558 to 2,919 modules against about 1,200 cached), so it shows
+selections that depend on which lazy chunks a user happened to load; a
+difference between the cached and the published target of one build is a
+defect in the selection, not noise. Its store holds vendor code: keep it
+outside the repository and publish only metadata reports. It proves selection
+and transform, never installation into a real cache or live reception.

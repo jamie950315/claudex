@@ -4,7 +4,7 @@ import { basename, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { inspectFolderCache, sha256 } from './claude-folder-cache.mjs';
 import { snapshotClaudeCache, validateClaudeCacheManifest } from './claude-folder-install.mjs';
-import { assetImports, folderAnchors, folderConsumerAnchors, commandCatalogAnchors, chatAnchors, ownerAnchors, unique, syntax } from './claude-frontend-anchors.mjs';
+import { assetImports, eagerAssetImports, folderAnchors, folderConsumerAnchors, commandCatalogAnchors, chatAnchors, ownerAnchors, unique, syntax } from './claude-frontend-anchors.mjs';
 
 export const FRONTEND_ASSET_ROOT = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/';
 export const claudeCacheDirectory = (home = homedir()) => join(home, 'Library', 'Application Support', 'Claude', 'Cache', 'Cache_Data');
@@ -119,6 +119,72 @@ async function originalEntry(root, name, current, targetURL) {
   return { ...entry, originalBytes: current.bytes };
 }
 
+/** Adapter selection over an already collected module map (URL to a module
+ * carrying its url and vendor source). It reads no cache and no file, so the
+ * same proofs apply to a cached graph and to one fetched by a developer check.
+ */
+export function resolveClaudeFrontendAdapters(modules, entryURL) {
+  const adapters = {};
+  // The chat wake starts when its module is evaluated, so that module must
+  // load with the entry: reachable through static imports and re-exports,
+  // never only through import(). From 2026-10-08 the lazily loaded keyboard
+  // shortcuts dialog carries all three markers and the capability read; it
+  // enters a cache only once opened and would then replace the real target.
+  const eager = new Set(), pending = [entryURL];
+  while (pending.length) {
+    const url = pending.pop(), module = modules.get(url);
+    if (!module || eager.has(module)) continue;
+    eager.add(module);
+    for (const spec of eagerAssetImports(module)) pending.push(new URL(spec, url).href);
+  }
+  for (const [adapter, probe, plausible, byProof] of [
+    ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('repoInfo') && s.includes('environmentId')],
+    ['chatWake', chatAnchors, s => s.includes('forkSession') && s.includes('amber_tributary_lantern_overview_toggle') && s.includes('reopenClosed'),
+      // The 2026-10-08 build moved the shortcut and reopen handlers out of the
+      // session-action module. When no module carries all three markers, its
+      // identity is the structural proof alone: exactly one reachable module
+      // may pass it. Builds that still carry the markers keep that selection,
+      // because several of their modules pass the proof.
+      s => s.includes('forkSession')],
+    ['ownerWake', ownerAnchors, s => s.includes('submitMessage') && s.includes('getComposerSnapshot') && s.includes('initialSessionId')],
+    ['commands', commandCatalogAnchors, s => s.includes('empty slash-command list (cold CLI bridge)') && s.includes('trustedSelectedFolder') && s.includes('getSupportedCommands')],
+  ]) {
+    try {
+      const imports = module => ({ get: path => modules.get(new URL(path, module.url).href) });
+      const proven = module => { try { probe(module.source, imports(module)); return true; } catch { return false; } };
+      const pool = adapter === 'chatWake' ? [...eager] : [...modules.values()];
+      const marked = pool.filter(m => plausible(m.source));
+      // Markers shortlist modules. Competing folders and owner components
+      // require their complete grouping/key or identity/send/client proof.
+      const selected = ['ownerWake', 'folders'].includes(adapter) && marked.length > 1 ? marked.filter(proven) : marked;
+      let candidates = marked.length || !byProof ? selected
+        : pool.filter(m => byProof(m.source) && proven(m));
+      if (adapter === 'chatWake' && !marked.length && candidates.length > 1)
+        candidates = candidates.filter(m => probe(m.source, imports(m)).forkAction);
+      const target = unique(candidates, `${adapter} target module`);
+      const graph = imports(target);
+      const bindings = probe(target.source, graph);
+      if (adapter === 'ownerWake') bindings.search.moduleCandidates = marked.length;
+      let consumer;
+      if (adapter === 'folders' && bindings.pure) {
+        const consumers = [];
+        for (const module of modules.values()) {
+          if (!module.source.includes(basename(target.url))) continue;
+          for (const imp of syntax(module.source).body.filter(n => n.type === 'ImportDeclaration'
+            && new URL(n.source.value, module.url).href === target.url
+            && n.specifiers.some(s => s.imported?.name === bindings.groupingExport))) {
+            consumers.push({ target: module, bindings: folderConsumerAnchors(module.source,
+              { get: path => modules.get(new URL(path, module.url).href) }, bindings, imp.source.value) });
+          }
+        }
+        consumer = unique(consumers, 'folder grouping consumer module');
+      }
+      adapters[adapter] = { status: 'matched', target, bindings, ...(consumer ? { consumer } : {}) };
+    } catch (error) { adapters[adapter] = { status: 'skipped', reason: String(error.message).slice(0, 240) }; }
+  }
+  return adapters;
+}
+
 /** Read-only graph discovery. Cache recency identifies the latest fetched entry,
  * not proof of the graph a live renderer has already evaluated. Missing lazy
  * chunks remain explicit; adapters require their own complete reachable proof.
@@ -166,51 +232,7 @@ export async function discoverClaudeFrontend({ root, home = homedir() }) {
   if (before.dev !== after.dev || before.ino !== after.ino) fail('cache directory identity changed');
   for (const module of modules.values()) if (!same(module.identity, await nativeCacheRead(() => lstat(module.path, { bigint: true })))) fail('graph changed during discovery');
   if (!same(entry.snapshot.info, await nativeCacheRead(() => lstat(entry.path, { bigint: true })))) fail('entry changed during discovery');
-  const adapters = {};
-  for (const [adapter, probe, plausible, byProof] of [
-    ['folders', folderAnchors, s => s.includes('disambiguationText') && s.includes('hasActiveSessions') && s.includes('repoInfo') && s.includes('environmentId')],
-    ['chatWake', chatAnchors, s => s.includes('forkSession') && s.includes('amber_tributary_lantern_overview_toggle') && s.includes('reopenClosed'),
-      // The 2026-10-08 build moved the shortcut and reopen handlers out of the
-      // session-action module. When no module carries all three markers, its
-      // identity is the structural proof alone: exactly one reachable module
-      // may pass it. Builds that still carry the markers keep that selection,
-      // because several of their modules pass the proof.
-      s => s.includes('forkSession')],
-    ['ownerWake', ownerAnchors, s => s.includes('submitMessage') && s.includes('getComposerSnapshot') && s.includes('initialSessionId')],
-    ['commands', commandCatalogAnchors, s => s.includes('empty slash-command list (cold CLI bridge)') && s.includes('trustedSelectedFolder') && s.includes('getSupportedCommands')],
-  ]) {
-    try {
-      const imports = module => ({ get: path => modules.get(new URL(path, module.url).href) });
-      const proven = module => { try { probe(module.source, imports(module)); return true; } catch { return false; } };
-      const marked = [...modules.values()].filter(m => plausible(m.source));
-      // Markers shortlist modules. Competing folders and owner components
-      // require their complete grouping/key or identity/send/client proof.
-      const selected = ['ownerWake', 'folders'].includes(adapter) && marked.length > 1 ? marked.filter(proven) : marked;
-      let candidates = marked.length || !byProof ? selected
-        : [...modules.values()].filter(m => byProof(m.source) && proven(m));
-      if (adapter === 'chatWake' && !marked.length && candidates.length > 1)
-        candidates = candidates.filter(m => probe(m.source, imports(m)).forkAction);
-      const target = unique(candidates, `${adapter} target module`);
-      const graph = imports(target);
-      const bindings = probe(target.source, graph);
-      if (adapter === 'ownerWake') bindings.search.moduleCandidates = marked.length;
-      let consumer;
-      if (adapter === 'folders' && bindings.pure) {
-        const consumers = [];
-        for (const module of modules.values()) {
-          if (!module.source.includes(basename(target.url))) continue;
-          for (const imp of syntax(module.source).body.filter(n => n.type === 'ImportDeclaration'
-            && new URL(n.source.value, module.url).href === target.url
-            && n.specifiers.some(s => s.imported?.name === bindings.groupingExport))) {
-            consumers.push({ target: module, bindings: folderConsumerAnchors(module.source,
-              { get: path => modules.get(new URL(path, module.url).href) }, bindings, imp.source.value) });
-          }
-        }
-        consumer = unique(consumers, 'folder grouping consumer module');
-      }
-      adapters[adapter] = { status: 'matched', target, bindings, ...(consumer ? { consumer } : {}) };
-    } catch (error) { adapters[adapter] = { status: 'skipped', reason: String(error.message).slice(0, 240) }; }
-  }
+  const adapters = resolveClaudeFrontendAdapters(modules, entry.url);
   return { entry: { asset: basename(entry.url), cacheFilename: entry.name, fetchedAt: new Date(Number((newest - 11644473600000000n) / 1000n)).toISOString() },
     modules, missing: missing.size, adapters };
 }

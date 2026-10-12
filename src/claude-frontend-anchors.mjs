@@ -115,9 +115,18 @@ export function assetImports(source, module) {
   // Reuse the syntax pass already required for graph discovery, retaining only
   // compact binding provenance. The weak key and exact source bind its lifetime
   // to this immutable module snapshot; there is no cross-generation AST cache.
-  if (module && module.source === source) dependencyIndexes.set(module, { source,
+  if (module && module.source === source) dependencyIndexes.set(module, { source, eager: eagerSpecifiers(ast),
     index: bindingIndex(ast, { getters: discovered.filter(publicGetter) }) });
   return [...new Set(discovered.map(n => n.source?.value).filter(v => typeof v === 'string'))];
+}
+const eagerSpecifiers = ast => [...new Set(ast.body.filter(n => n.source && ['ImportDeclaration', 'ExportNamedDeclaration',
+  'ExportAllDeclaration'].includes(n.type)).map(n => n.source.value).filter(v => typeof v === 'string'))];
+/** What evaluating a module always loads: its static imports and re-exports,
+ * never import(). Reuses the pass assetImports made for the same snapshot.
+ */
+export function eagerAssetImports(module) {
+  const observed = dependencyIndexes.get(module);
+  return observed?.source === module.source ? observed.eager : eagerSpecifiers(syntax(module.source));
 }
 function exportedName(ast, local) {
   return unique(nodes(ast, n => n.type === 'ExportSpecifier' && id(n.local) === local).map(n => id(n.exported)), 'exported binding');

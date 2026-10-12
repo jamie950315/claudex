@@ -537,7 +537,9 @@ exactly; other hosts, calls and additional expressions are refused. Older folder
 keys can retain their exact local-or-CLI cwd helper, and nested cold catalogues
 retain the same request/routing proof with enclosing lexical shadows refused.
 When August shortcut-help reads compete with the session action, require one
-exact native fork alias, null guard and awaited request. The observed owner
+exact native fork alias, null guard and awaited request. Only modules the entry
+loads through static imports are chat-wake candidates, so a lazily loaded
+dialog with the same markers cannot take its place once it has been opened. The observed owner
 component's public React.memo wrapper must retain a single argument and no
 comparator; its native identity/send/client proofs still apply. A retained ref
 may be read through `.current` any number of times; a bare use, an update, a

@@ -604,6 +604,27 @@ test('a session-action module without its former markers is selected by its uniq
   assert.equal(selected.adapters.chatWake.target.url,resources.chatWake.url);
 });
 
+test('a lazily loaded dialog carrying the markers never replaces the module the entry evaluates',async t=>{
+  // The 2026-10-08 layout: the keyboard shortcuts dialog is fetched by import()
+  // only once opened, carries all three markers and passes the same proof.
+  for (const cached of [false,true]) {
+    const build=frontendBuild('a',11,{moved:true});
+    if (cached) {
+      build.names.dialog='dialog-a.js';
+      build.sources.dialog=`import{Nativea as La}from"./${build.names.native}";function dialoga(){let enabled=La?.forkSession!==void 0;shortcut("amber_tributary_lantern_overview_toggle");return enabled?"reopenClosed":null}`;
+    }
+    build.sources.entry+=`;const dialog=()=>import("./dialog-a.js");`;
+    const base=await realpath(await mkdtemp(join(tmpdir(),'claudex-frontend-')));t.after(()=>rm(base,{recursive:true,force:true}));
+    const root=join(base,'state'),home=join(base,'home');await mkdir(root,{mode:0o700});await mkdir(home,{mode:0o700});
+    const resources=await writeFrontend(home,build),graph=await discoverClaudeFrontend({root,home});
+    assert.equal(graph.missing,cached?0:1);
+    assert.equal(graph.adapters.chatWake.target.url,resources.chatWake.url);
+    const result=await ensureClaudeRendererAdapters({root,home});
+    assert.equal(result.adapters.chatWake.asset,build.names.chatWake);
+    if (cached) assert.deepEqual(await readFile(resources.dialog.path),resources.dialog.bytes);
+  }
+});
+
 test('compiler memo helper calls are recognized for the send callback, its reader and the folder consumer',async t=>{
   const f=await fixture(t,'a',{split:true,helpers:true}),graph=await discoverClaudeFrontend(f);
   assert.ok(Object.values(graph.adapters).every(a=>a.status==='matched'),JSON.stringify(Object.values(graph.adapters).map(a=>a.reason)));
