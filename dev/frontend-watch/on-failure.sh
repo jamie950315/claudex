@@ -16,7 +16,10 @@ case $entry in index-*.js) ;; *) echo "Not an entry name" >&2; exit 64 ;; esac
 name=${entry%.js}
 notify() { [ -z "${CLAUDEX_FRONTEND_NOTIFY:-}" ] || "$CLAUDEX_FRONTEND_NOTIFY" "$1" || echo "Notification failed" >&2; }
 
-notify "Claudex: Claude frontend $entry failed the adapter check. Report: $report"
+# Messages may leave this machine: they carry the entry and adapter names only,
+# never a path, a host name or report contents.
+failed=$(node -e 'const r=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.stdout.write(Object.entries(r.adapters).filter(([,a])=>a.status!=="passed").map(([n])=>n).join(", "))' "$report" 2>/dev/null || true)
+notify "Claudex: Claude frontend $entry failed the adapter check${failed:+ ($failed)}."
 [ "${CLAUDEX_FRONTEND_REPAIR:-1}" = 1 ] || exit 0
 
 mkdir -p "$state/repairs"
@@ -30,5 +33,5 @@ status=0
   --allowedTools "Read,Edit,Write,Glob,Grep,Bash(node:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git log:*)") \
   > "$summary" 2>&1 || status=$?
 commits=$(git -C "$worktree" rev-list --count origin/main..HEAD)
-notify "Claudex: repair draft for $entry finished (exit $status, $commits commit(s)) on branch frontend-repair/$name. Summary: $summary"
+notify "Claudex: repair draft for $entry finished (exit $status, $commits commit(s)) on branch frontend-repair/$name."
 exit "$status"
