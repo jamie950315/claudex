@@ -2,7 +2,7 @@
 
 ## Current companion: 0.8.24
 
-Claudex.app 1.4.5 installs, updates and checks its bundled Mod automatically;
+Claudex.app 1.4.6 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
 Version 0.8.24 runs the native `/compact` command through `$.command.run` and
