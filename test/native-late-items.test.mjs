@@ -207,6 +207,48 @@ test('a command arriving after a boundary that is not exported yet waits for tha
   assert.equal(continued.common.messages.length, 8);
 });
 
+test('a late sub-agent notification is placed at its arrival like a late command', async t => {
+  const raw = () => ({ type: 'SubAgentActivity', id: 'subagent-completed-synthetic', kind: 'completed',
+    agent_thread_id: '00000000-0000-4000-8000-000000000009', agent_path: '/root/synthetic_agent' });
+  const api = { type: 'subAgentActivity', id: 'subagent-completed-synthetic', kind: 'completed',
+    agentThreadId: '00000000-0000-4000-8000-000000000009', agentPath: '/root/synthetic_agent' };
+  // The notification is instantaneous: it starts when it arrives, after its turn closed.
+  const notice = ms => { const row = completion(raw(), turnId, ms); row.payload.started_at_ms = ms; return row; };
+  const idle = await fixture(t, (source, native) => { source.push(notice(203000)); native.turns[0].items.push(api); });
+  const proof = await prove(idle);
+  assert.deepEqual(proof.placements.map(placement => placement.itemId), ['exec-synthetic', 'subagent-completed-synthetic']);
+  assert.equal(proof.placements[1].itemDigest, nativeItemDigest(api));
+  assert.deepEqual(nativeHistoryEntries({ ...idle.native, lateItemEvidence: proof }).slice(-2).map(entry => entry.item.id),
+    ['exec-synthetic', 'subagent-completed-synthetic']);
+  const running = await fixture(t, (source, native) => { source.pop(); native.turns[0].items.pop();
+    source.push(...laterTurn(), notice(300500)); native.turns[0].items.push(api); });
+  assert.deepEqual((await prove(running)).placements.map(placement => [placement.itemId, placement.afterTurnId]),
+    [['subagent-completed-synthetic', afterId]]);
+  for (const mutate of [
+    (source, native) => { native.turns[0].items.at(-1).agentPath = '/root/other_agent'; },
+    source => { delete source.at(-1).payload.item.agent_thread_id; },
+    source => { source.at(-1).payload.started_at_ms = 203001; },
+    source => { source.at(-1).payload.item.type = 'Reasoning'; },
+  ]) {
+    const changed = await fixture(t, (source, native) => { source.push(notice(203000)); native.turns[0].items.push(structuredClone(api)); mutate(source, native); });
+    await assert.rejects(prove(changed), /Native Codex late item/);
+  }
+});
+
+test('a late item of a closed turn that is not exported yet is left for that turn', async t => {
+  // A failed turn after the last reply is outside the exported prefix.
+  const failed = () => { const row = stop(laterId, 300); row.payload.error = { message: 'Synthetic failure.' };
+    row.payload.last_agent_message = null; return [...laterTurn(), row]; };
+  const pending = () => completion({ ...rawCommand(), id: 'exec-pending' }, laterId, 302000);
+  const tail = await fixture(t, raw => { raw.push(...failed(), pending()); });
+  assert.deepEqual((await prove(tail)).placements.map(placement => placement.itemId), ['exec-synthetic']);
+  const only = await fixture(t, (raw, native) => { raw.pop(); native.turns[0].items.pop(); raw.push(...failed(), pending()); });
+  assert.equal(await prove(only), null);
+  // Inside the exported range an unknown parent is still a contradiction.
+  const unknown = await fixture(t, (raw, native) => { raw.push(...failed(), pending()); native.turns[0].id = '00000000-0000-4000-8000-000000000006'; });
+  await assert.rejects(prove(unknown), /Native Codex late item/);
+});
+
 test('a checkpoint that already holds earlier late commands in native order still authenticates', async t => {
   const second = () => ({ ...rawCommand(), id: 'exec-second' });
   const source = await fixture(t, (raw, native) => {

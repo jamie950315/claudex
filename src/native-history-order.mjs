@@ -46,7 +46,7 @@ export function nativeHistoryEntries(snapshot, { arrivalOrder = snapshot?.native
       const identity = key(placement.turnId, placement.itemId), item = items.get(identity);
       if (!parent || exported !== Boolean(boundary) || exported && (boundary.index < parent.index || boundary.index < previousBoundary
           || !['completed', 'interrupted', 'failed'].includes(boundary.turn.status))
-        || !item || item.type !== 'commandExecution' || !['completed', 'failed'].includes(item.status)
+        || !item || !(item.type === 'subAgentActivity' || item.type === 'commandExecution' && ['completed', 'failed'].includes(item.status))
         || placed.has(identity) || placement.itemDigest !== nativeItemDigest(item)) fail('late item identity or completed boundary differs from the API.');
       if (exported) previousBoundary = boundary.index;
       placed.add(identity);

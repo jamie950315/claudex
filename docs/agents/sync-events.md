@@ -47,19 +47,26 @@ bounded polling harness, not a production fallback.
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
 - Claude uses native resumable session projections with pinned `txcript` codecs.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
-- Late native command completions are rendered at their proven arrival boundary
+- Late native command completions and sub-agent notifications (a
+  `SubAgentActivity` row native records on the turn that spawned the agent,
+  whenever it arrives) are rendered at their proven arrival boundary
   without changing native turn grouping: the newest turn already closed when
   the completion row was written, idle or while a later turn was running. Closed
   means completed (also compaction-only, without a reply), failed with its
   error, or interrupted. A boundary not exported yet withholds the command until
-  it is; a proven empty turn is skipped. Require an exact stable raw/API item
+  it is; a proven empty turn is skipped. A late item whose own closed turn
+  lies after the last exported turn (a failed or interrupted tail) is outside
+  that export and is proven when its turn is exported; an unknown turn inside
+  the exported range still blocks. Require an exact stable raw/API item
   match and lifecycle proof, then authenticate the entire existing portable
   checkpoint. The checkpoint selects the representation: all native, all at
   their boundary, or the first arrivals native and the rest at their boundary.
   Row position is the arrival evidence; a completion time may precede its row
   but never follow it. Compare only fields the proof uses: unknown fields of
   any record are ignored, a time the rollout did not record is not a
-  contradiction, and the projected command must still equal the API item.
+  contradiction, and the projected item must still equal the API item. A
+  command starts inside its turn; a notification has no duration and starts
+  when it arrives.
   Rollouts readable by others are accepted; group or world write access is
   refused, as for the empty-turn reader. Keep image positions bound to
   exact native item identities. A rollover (the same thread continuing in a
@@ -69,7 +76,7 @@ bounded polling harness, not a production fallback.
   referenced ordinal with the byte offset inside the adjoining row, and joins
   the others by contiguous native ordinals, so a boundary and its completion
   may lie in different segments. Forked histories, overlapping lifecycles,
-  redacted command text, non-command late items and real history edits still
+  redacted command text, late items of any other type and real history edits still
   block. Never drop a late result, rebase a checkpoint or repair native
   transcripts to clear a block.
   Request this extra proof only after normal API export fails its whole verified

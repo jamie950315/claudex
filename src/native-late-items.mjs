@@ -81,6 +81,15 @@ function projectCommand(item) {
     durationMs: item.duration.secs * 1000 + Math.floor(item.duration.nanos / 1e6) };
 }
 
+// A sub-agent notification is recorded on the turn that spawned the agent,
+// whenever it arrives; the API reports the same fields in camel case.
+function projectSubAgent(item) {
+  if (!object(item) || typeof item.id !== 'string' || !item.id || typeof item.kind !== 'string' || !item.kind
+    || typeof item.agent_thread_id !== 'string' || !item.agent_thread_id || typeof item.agent_path !== 'string')
+    fail('late sub-agent activity has an unsupported native schema.');
+  return { type: 'subAgentActivity', id: item.id, kind: item.kind, agentThreadId: item.agent_thread_id, agentPath: item.agent_path };
+}
+
 async function readSource(path, maxBytes) {
   if (await realpath(dirname(path)) !== dirname(path)) fail('source parent is not canonical.');
   const named = await lstat(path, { bigint: true });
@@ -186,7 +195,8 @@ async function readHistory(path, threadId, locateRollout, maxBytes) {
     sourceDigest: nativeItemDigest({ sourceDigest: current.sourceDigest, inherited: digests }) };
 }
 
-/** Prove append arrival for completed commands backfilled into a closed turn.
+/** Prove append arrival for completed commands and sub-agent notifications
+ * backfilled into a closed turn.
  * Native turns and items stay intact; the caller uses placements only for the
  * portable order and still verifies the whole saved canonical checkpoint.
  */
@@ -196,7 +206,7 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
     || !integer(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024) fail('invalid source identity or byte limit.');
   return async (snapshot, { threadId: expectedThreadId }) => {
     if (expectedThreadId !== threadId || !Array.isArray(snapshot?.turns)) fail('source and API identities differ.');
-    if (!snapshot.turns.some(turn => turn.items?.some(item => item.type === 'commandExecution'))) return null;
+    if (!snapshot.turns.some(turn => turn.items?.some(item => ['commandExecution', 'subAgentActivity'].includes(item.type)))) return null;
     const source = await readHistory(path, threadId, locateRollout, maxBytes), { rows } = source;
     const states = new Map(), seenItems = new Map(), candidates = [], closed = [];
     let active = null, latest = null, lifecycleError = false;
@@ -244,6 +254,10 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
       const { row, active: activeAtArrival, latest, prior } = candidate, payload = row.payload;
       exactFrame(row, source.lines[row.ordinal]);
       const parent = turns.get(payload.turn_id), state = states.get(payload.turn_id), newest = states.get(latest);
+      // A closed turn the API does not export yet lies after everything it
+      // does; its late items are proven when that turn is exported.
+      if (!parent && state?.stop && Number.isSafeInteger(exportedEnd) && state.start.ordinal > exportedEnd) continue;
+      const subAgent = payload.item?.type === 'SubAgentActivity';
       let position = candidate.closed;
       while (position > 1 && empty.has(closed[position - 1])) position--;
       const afterTurnId = closed[position - 1], boundary = states.get(afterTurnId), after = turns.get(afterTurnId);
@@ -259,8 +273,10 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
         // Earlier native versions record no start time for the command.
         || !needs(payload, ['type', 'thread_id', 'turn_id', 'item', 'completed_at_ms'])
         || payload.thread_id !== threadId || !integer(payload.completed_at_ms)
+        // A command starts inside its turn; a notification has no duration.
         || payload.started_at_ms !== undefined && (!integer(payload.started_at_ms)
-          || payload.started_at_ms < time(state.start) || payload.started_at_ms > time(state.stop))
+          || (subAgent ? payload.started_at_ms > payload.completed_at_ms
+            : payload.started_at_ms < time(state.start) || payload.started_at_ms > time(state.stop)))
         // The row is written at or after the completion it records; its
         // position in the file, not its clock, is the arrival evidence.
         || payload.completed_at_ms > time(row) || payload.completed_at_ms <= time(state.stop)
@@ -273,19 +289,21 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
       let settled = gap.length;
       while (running && settled && gap[settled - 1].type === 'event_msg' && gap[settled - 1].payload?.type === 'thread_settings_applied') settled--;
       if (gap.slice(0, settled).some(entry => entry.type !== 'event_msg' || entry.payload?.type !== 'item_completed'
-        || entry.payload.item?.type !== 'CommandExecution'))
+        || !['CommandExecution', 'SubAgentActivity'].includes(entry.payload.item?.type)))
         fail('late arrival is separated from its closed boundary by unrecognized native activity.');
       boundaryProof(state, parent.turn, source, cwd, { ranCommand: true });
       if (after) boundaryProof(boundary, after.turn, source, cwd);
-      const projected = projectCommand(payload.item), matches = parent.turn.items.filter(item => item.id === projected.id);
+      const projected = subAgent ? projectSubAgent(payload.item) : projectCommand(payload.item);
+      const matches = parent.turn.items.filter(item => item.id === projected.id);
       // The full API reports a command without output as null.
       if (projected.aggregatedOutput === '' && matches[0]?.aggregatedOutput === null) projected.aggregatedOutput = null;
       if (matches.length !== 1 || snapshot.turns.some(turn => turn.id !== parent.turn.id && turn.items.some(item => item.id === projected.id))
-        || selected.has(projected.id) || !isDeepStrictEqual(projected, matches[0])) fail('complete native command differs from the full API item.');
+        || selected.has(projected.id) || !isDeepStrictEqual(projected, matches[0])) fail('complete native item differs from the full API item.');
       selected.add(projected.id); previousBoundary = boundary.stop.ordinal;
       (after ? placements : withheld).push({ turnId: parent.turn.id, itemId: projected.id, afterTurnId, itemDigest: nativeItemDigest(matches[0]) });
     }
-    // A command whose boundary is not exported yet stays out of this export
+    if (!placements.length && !withheld.length) return null;
+    // An item whose boundary is not exported yet stays out of this export
     // and appears with that boundary; it never moves ahead of it.
     return { placements, ...(withheld.length ? { withheld } : {}), sourceIdentity: source.sourceIdentity,
       evidenceDigest: nativeItemDigest({ sourceDigest: source.sourceDigest, placements, ...(withheld.length ? { withheld } : {}) }) };
