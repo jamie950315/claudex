@@ -32,6 +32,10 @@ these baselines. New graphical installations use `warn` unless an existing polic
 was explicitly selected. `versionPolicy: "warn"` attempts newer or otherwise
 unvalidated runtimes without version-only blocking or warnings. Both tools retain
 their own authentication and permission settings.
+A Claude conversation continued from Codex starts in the permission mode set by
+`permissions.defaultMode` in your Claude Code user or local settings, as a session
+you start yourself would; a project's committed settings cannot raise it. The mode
+is read when Claudex starts that conversation's Claude process.
 
 ## Desktop integration
 

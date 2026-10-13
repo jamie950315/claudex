@@ -127,6 +127,34 @@ test('owner preserves identities, uses no-query appends, and deduplicates across
   await owner.close();
 });
 
+test('owner starts in the permission mode the user configured, never one escalated by a project file', async () => {
+  const start = async (sources, { effective = {}, options } = {}) => {
+    const f = await fixture(), requests = [];
+    const owner = await ClaudeOwner.open({ ...f.config, ...(options ? { options } : {}),
+      settingsResolver: async request => { requests.push(request); return { effective, sources }; } });
+    await owner.close();
+    const { permissionMode, allowDangerouslySkipPermissions } = f.calls.options[0];
+    return { permissionMode, allowDangerouslySkipPermissions, requests };
+  };
+  const tier = (source, defaultMode) => ({ source, settings: { permissions: { defaultMode } } });
+  const bypass = await start([tier('user', 'bypassPermissions')]);
+  assert.deepEqual([bypass.permissionMode, bypass.allowDangerouslySkipPermissions], ['bypassPermissions', true]);
+  assert.deepEqual(bypass.requests[0].settingSources, ['user', 'project', 'local']);
+  // A home-directory project resolves the user's file a second time as the project tier.
+  const home = await start([tier('user', 'bypassPermissions'), tier('project', 'bypassPermissions')]);
+  assert.deepEqual([home.permissionMode, home.allowDangerouslySkipPermissions], ['bypassPermissions', true]);
+  const committed = await start([tier('user', 'plan'), tier('project', 'bypassPermissions')]);
+  assert.deepEqual([committed.permissionMode, committed.allowDangerouslySkipPermissions], ['plan', undefined]);
+  const local = await start([tier('user', 'bypassPermissions'), tier('local', 'acceptEdits')]);
+  assert.deepEqual([local.permissionMode, local.allowDangerouslySkipPermissions], ['acceptEdits', undefined]);
+  const disabled = await start([tier('user', 'bypassPermissions')],
+    { effective: { permissions: { disableBypassPermissionsMode: 'disable' } } });
+  assert.equal(disabled.permissionMode, undefined);
+  assert.equal((await start([{ source: 'user', settings: {} }])).permissionMode, undefined);
+  const explicit = await start([tier('user', 'bypassPermissions')], { options: { permissionMode: 'plan' } });
+  assert.deepEqual([explicit.permissionMode, explicit.requests.length], ['plan', 0]);
+});
+
 test('an unexpected native session identity never turns an old idle level into shutdown authority', async () => {
   const f = await fixture(), owner = await ClaudeOwner.open(f.config);
   try {

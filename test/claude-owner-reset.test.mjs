@@ -299,7 +299,8 @@ test('cold maintenance disables normal extensions, verifies policy and MCP absen
   assert.deepEqual(actual.tools, []); assert.deepEqual(actual.hooks, {});
   assert.equal(actual.settings.disableAllHooks, true); assert.deepEqual(actual.settings.enabledPlugins, {});
   assert.deepEqual(originalOptions.tools, ['Read']); assert.equal(originalOptions.strictMcpConfig, false);
-  assert.equal(f.calls.mcpStatus, 1); assert.deepEqual(f.calls.policy[0].settingSources, []);
+  assert.equal(f.calls.mcpStatus, 1); assert.deepEqual(f.calls.policy.at(-1).settingSources, []);
+  assert.equal(actual.permissionMode, undefined);
   assert.equal(owner.status().maintenanceOnly, true); assert.equal(owner.status().deferRemoteConnection, true);
   await owner.close();
 });

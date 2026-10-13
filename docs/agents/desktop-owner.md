@@ -17,6 +17,20 @@ No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
 path. Store the owner handle before start() so startup failures
 during user work retain the live owner instead of interrupting it.
 
+The CLI started through the SDK ignores `permissions.defaultMode` from settings
+(observed with CLI 2.1.283: user and flag tiers both start in `default`) and has
+no local prompt surface, so tools that would ask are denied in a Desktop turn.
+A normal owner therefore resolves the same setting sources it passes and gives
+the SDK the configured mode explicitly; `bypassPermissions` also sets
+`allowDangerouslySkipPermissions`. The highest tier that names a mode decides,
+except that the project tier cannot supply `bypassPermissions`, `auto` or
+`acceptEdits` (a home-directory cwd resolves the user file as the project tier
+too, so the SDK's whole-key `filterEscalatingDefaultMode` is not used). Bypass is
+not requested when policy disables it or the process is root. An explicit
+`permissionMode` owner option wins, maintenance owners never receive a mode, and
+a different settings namespace is not resolved. Claudex never chooses a mode the
+user did not configure.
+
 Context packets preserve portable semantic messages as authenticated labeled
 native text/images. DesktopBridge persists a private key, canonical prefix,
 single pending transaction and bounded audit. Native history export uses full paginated API reads with a stable

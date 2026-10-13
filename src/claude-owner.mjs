@@ -24,6 +24,7 @@ export const CLAUDE_OWNER_CLI_VERSION = '2.1.281';
 const execute = promisify(execFile);
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const REMOTE_ID = /^cse_[A-Za-z0-9_-]+$/;
+const ESCALATING_PERMISSION_MODES = new Set(['bypassPermissions', 'auto', 'acceptEdits']);
 
 export async function resolveClaudeOwnerExecutable(command, env = process.env, cwd = process.cwd()) {
   const candidates = isAbsolute(command) || command.includes('/') || command.includes('\\')
@@ -332,8 +333,10 @@ export class ClaudeOwner {
       await this.loadRuntime();
       const runtimeEnv = await claudeOwnerEnvironment(this.claudeHome, this.options.env);
       if (this.deferRemoteConnection) await this.verifyMaintenancePolicy(runtimeEnv);
+      const settingSources = this.options.settingSources ?? ['user', 'project', 'local'];
       this.query = this.queryFactory({ prompt: this.input, options: {
-        settingSources: ['user', 'project', 'local'], systemPrompt: { type: 'preset', preset: 'claude_code' },
+        settingSources, systemPrompt: { type: 'preset', preset: 'claude_code' },
+        ...await this.configuredPermissionMode(runtimeEnv, settingSources),
         ...this.options, cwd: this.cwd, title: this.state.displayTitle ?? this.title, persistSession: true,
         // Maintenance is a separate, input-isolated process profile. Do not
         // load normal user/project extensions or mutate persistent settings.
@@ -401,6 +404,27 @@ export class ClaudeOwner {
     // An unfamiliar version is not a compatibility failure. Native protocol,
     // ownership and history checks remain the source of operational errors.
     this.versionWarning = null;
+  }
+
+  // A native CLI started through the SDK ignores permissions.defaultMode from
+  // settings and starts in "default"; with no local prompt surface, whatever
+  // would have asked is denied. Pass the user's own configured mode instead.
+  // Like the CLI, a repo-committed project file cannot escalate the mode.
+  async configuredPermissionMode(runtimeEnv, settingSources) {
+    if (this.deferRemoteConnection || this.options.permissionMode !== undefined) return {};
+    if (typeof this.settingsResolver !== 'function') return {};
+    // resolveSettings reads this process's settings namespace only.
+    if (!this.injectedSettingsResolver && runtimeEnv.CLAUDE_CONFIG_DIR !== process.env.CLAUDE_CONFIG_DIR) return {};
+    const resolved = await this.settingsResolver({ cwd: this.cwd, settingSources });
+    const mode = (Array.isArray(resolved?.sources) ? resolved.sources : []).toReversed()
+      .map(source => ({ tier: source?.source, mode: source?.settings?.permissions?.defaultMode }))
+      .find(entry => typeof entry.mode === 'string' && entry.mode
+        && !(entry.tier === 'project' && ESCALATING_PERMISSION_MODES.has(entry.mode)))?.mode;
+    if (!mode || mode === 'default') return {};
+    if (mode !== 'bypassPermissions') return { permissionMode: mode };
+    // The CLI refuses to start in bypass mode as root, and policy can disable it.
+    if (resolved.effective?.permissions?.disableBypassPermissionsMode === 'disable' || process.getuid?.() === 0) return {};
+    return { permissionMode: mode, allowDangerouslySkipPermissions: true };
   }
 
   async verifyMaintenancePolicy(runtimeEnv) {
