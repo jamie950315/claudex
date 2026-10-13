@@ -198,6 +198,9 @@ export class SyncEventInbox {
   }
 
   async wakeConsumer() {
+    // This process is the consumer: its own busy event loop must not turn
+    // the delivery deadline for another process into a failure.
+    if (this.server) { this.notifyWaiters(); return; }
     try {
       const stat = await lstat(this.socketPath);
       if (!stat.isSocket() || !owned(stat) || (stat.mode & 0o777) !== 0o600 || stat.nlink !== 1)

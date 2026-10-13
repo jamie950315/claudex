@@ -33,6 +33,8 @@ Completion-before-flush gets at most three event-scoped follow-ups at 250/1000/3
 ms and a completion-armed exact-file notification; started disarms streaming files.
 Never infer completion from a hook alone or resend uncertain native input.
 Socket notifications are primary: macOS fs.watch registration can lose events.
+The consumer wakes itself directly for events it publishes; the socket's
+delivery deadline is for other processes, and a busy consumer cannot meet it.
 Use one OS watcher per parent directory with subscriber fanout; filesystem signals
 are hints, never checkpoint or mutation evidence. Release retired subscribers and
 recheck lifecycle after awaited path inspections. Anonymous directory signals use

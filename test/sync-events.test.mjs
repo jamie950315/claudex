@@ -108,6 +108,16 @@ test('private socket wakes immediately after listener readiness even without fil
   assert.equal((await next).length, 1);
 });
 
+test('the consumer wakes itself for its own events without a delivery deadline', async t => {
+  const inbox = await fixture(t);
+  await inbox.startListening();
+  // A busy consumer cannot answer its socket within the deadline.
+  inbox.server.prependListener('connection', () => { const until = Date.now() + 400; while (Date.now() < until); });
+  const pending = inbox.wait({ timeoutMs: 5000 }), completed = event();
+  await inbox.publish(completed);
+  assert.equal((await pending)[0].nativeId, completed.nativeId);
+});
+
 test('listener ownership prevents a second consumer and teardown preserves foreign evidence', async t => {
   const inbox = await fixture(t);
   await inbox.startListening();
