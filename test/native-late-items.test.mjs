@@ -143,6 +143,17 @@ test('a command that finishes while a later turn runs is placed after the newest
   assert.equal(nativeHistoryEntries({ ...source.native, lateItemEvidence: proof }).at(-1).item.id, 'exec-synthetic');
 });
 
+test('a turn its runtime left open does not hide earlier arrivals and is never a boundary', async t => {
+  const nextId = '00000000-0000-4000-8000-000000000005';
+  const restarted = raw => raw.push(...laterTurn(), start(nextId, 400), context(nextId, 400));
+  const source = await fixture(t, restarted);
+  assert.deepEqual((await prove(source)).placements.map(placement => placement.afterTurnId), [afterId]);
+  // A second arrival after the open turn has no closed turn directly before it.
+  const second = () => { const row = lateAt(400500); row.payload.item.id = 'exec-second'; return row; };
+  await assert.rejects(prove(await fixture(t, raw => { restarted(raw); raw.push(second()); })), /unrecognized native activity/);
+  await assert.rejects(prove(await fixture(t, raw => { restarted(raw); raw.push(stop(laterId, 300)); })), /invalid, repeated or unmatched boundary/);
+});
+
 test('observed native variants of one late completion are the same proof', async t => {
   for (const mutate of [
     raw => { raw.at(-1).timestamp = new Date(202014).toISOString(); },

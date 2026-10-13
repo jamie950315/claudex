@@ -213,9 +213,10 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
     for (const row of rows) {
       const payload = row?.payload;
       if (row?.type === 'event_msg' && payload?.type === 'task_started') {
-        if (!UUID.test(payload.turn_id) || active !== null || states.has(payload.turn_id)) {
-          lifecycleError = true; continue;
-        }
+        if (!UUID.test(payload.turn_id) || states.has(payload.turn_id)) { lifecycleError = true; continue; }
+        // A runtime that stops mid-turn writes no closing record, so the next
+        // start follows a turn that is still open. That turn stays open: it
+        // is never a boundary, and a later record closing it is an overlap.
         states.set(payload.turn_id, { start: row, stop: null, contexts: [] }); active = payload.turn_id;
       } else if (row?.type === 'turn_context') {
         states.get(payload?.turn_id)?.contexts.push(row);

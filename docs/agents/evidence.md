@@ -56,3 +56,8 @@ The native watcher, six synthetic roundtrips, real Claude rendering, and desktop
 The launcher is activated on the real Codex Desktop backend. Automatic native enrollment and Claude Remote Control registration of real conversations are verified. Both real mirrored conversations render in the Claude Desktop sidebar and their history opens through Remote Control. Real dual-Desktop alternation acceptance now passes, including native retirement of the oldest of three generated Codex snapshots: one current and one archived previous remain. The original source is preserved.
 
 An isolated signed-wrapper native startup exposes the 47 app tools without changing the verifier. A normal user-initiated app restart activated the signed wrapper and restored the live app-tools path.
+
+
+## From sync-events.md
+
+Late-item proof with a turn its runtime left open (2026-10-14, Codex 0.162.0-alpha.17.2): a backend restart ended a running turn without a closing record in three tracked threads. Across 1,635 local rollouts, 485 starts follow a still-open turn (most inside inherited fork prefixes); one names that turn afterwards, with a completion record, and remains a refused overlap. Replayed read-only through the shared backend against saved checkpoints: the affected thread with six earlier late arrivals was refused before the change and matches its whole 2,871-message checkpoint after it; six other tracked threads containing such a turn match their checkpoints both before and after. The API reported the open turn in progress in the three threads with a later running turn and interrupted, without a completion time, in idle threads.

@@ -75,7 +75,14 @@ bounded polling harness, not a production fallback.
   located only by its exact identity, contributes exactly the rows before its
   referenced ordinal with the byte offset inside the adjoining row, and joins
   the others by contiguous native ordinals, so a boundary and its completion
-  may lie in different segments. Forked histories, overlapping lifecycles,
+  may lie in different segments. A runtime that stops mid-turn (a backend
+  restart) writes no closing record, so the next start follows a turn that is
+  still open. That is not an overlap: the turn stays open, is never a
+  boundary, and does not hide arrivals proven before it. The API reports it
+  in progress while a later turn runs and interrupted once the thread is
+  idle. An arrival whose newest closed turn lies before the open one, a late
+  item of the open turn and any record closing it afterwards still block.
+  Forked histories, overlapping lifecycles,
   redacted command text, late items of any other type and real history edits still
   block. Never drop a late result, rebase a checkpoint or repair native
   transcripts to clear a block.
