@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, link, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -87,6 +87,22 @@ test('exact late completion preserves every item and the complete earlier checkp
   assert.equal(nativeHistoryEntries({ ...source.native, lateItemEvidence: proof }).at(-1).item.id, 'exec-synthetic');
   assert.deepEqual(source.native, snapshot());
   assert.equal(await readFile(source.path, 'utf8'), source.text);
+});
+
+test('a recorded working-directory alias proves the same directory, and only that directory', async t => {
+  const recordAs = alias => (raw) => { for (const row of raw) if (row.payload?.cwd === cwd) row.payload.cwd = alias; };
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-native-late-alias-')));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const project = join(base, 'project'), other = join(base, 'other');
+  await mkdir(project); await mkdir(other);
+  await symlink(project, join(base, 'alias')); await symlink(other, join(base, 'elsewhere'));
+  // Codex records the alias it was started in; the runtime passes the canonical directory.
+  const aliased = await fixture(t, recordAs(join(base, 'alias')));
+  const resolver = createNativeLateItemResolver({ path: aliased.path, threadId, cwd: project });
+  assert.equal((await resolver(aliased.native, { threadId })).placements.length, 1);
+  const foreign = await fixture(t, recordAs(join(base, 'elsewhere')));
+  await assert.rejects(createNativeLateItemResolver({ path: foreign.path, threadId, cwd: project })(foreign.native, { threadId }),
+    /source header or ordinal chain differs/);
 });
 
 test('native shell quoting and file URI conversion are exact historical projections', async t => {

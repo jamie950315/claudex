@@ -5,7 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { nativeItemDigest } from './native-history-order.mjs';
 import { resolveRolloutHistoryBase } from './native-local-images.mjs';
-import { decompressRollout, isCompressedRollout, physicalRolloutPath } from './codex-rollout-file.mjs';
+import { decompressRollout, isCompressedRollout, physicalRolloutPath, recordedDirectories } from './codex-rollout-file.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
@@ -132,7 +132,7 @@ function exactFrame(row, line) {
 // compaction-only turn has none), failed with its error, or interrupted.
 // Only the fields this proof relies on are compared; native adds metadata to
 // context rows between versions, and none of it orders a late command.
-function boundaryProof(state, api, source, cwd, { ranCommand = false } = {}) {
+function boundaryProof(state, api, source, directories, { ranCommand = false } = {}) {
   const stopped = state?.stop?.payload;
   const status = stopped?.type === 'turn_aborted' ? 'interrupted' : stopped?.error === undefined ? 'completed' : 'failed';
   if (!api || api.status !== status || (api.error != null) !== (status === 'failed') || api.itemsView !== 'full'
@@ -151,7 +151,7 @@ function boundaryProof(state, api, source, cwd, { ranCommand = false } = {}) {
     || stop.payload.completed_at !== undefined && stop.payload.completed_at !== api.completedAt
     || Math.floor(time(start) / 1000) !== api.startedAt || Math.floor(time(stop) / 1000) !== api.completedAt
     || stop.payload.duration_ms !== undefined && !integer(stop.payload.duration_ms) || stop.payload.time_to_first_token_ms !== undefined && !integer(stop.payload.time_to_first_token_ms)
-    || state.contexts.some(context => context.payload.cwd !== cwd || context.ordinal <= start.ordinal || context.ordinal >= stop.ordinal
+    || state.contexts.some(context => !directories.has(context.payload.cwd) || context.ordinal <= start.ordinal || context.ordinal >= stop.ordinal
       || time(context) < time(start) || time(context) > time(stop))) fail('native boundary or context differs from the full API.');
   if (status !== 'completed') return;
   const lastUser = api.items.findLastIndex(item => item.type === 'userMessage');
@@ -241,8 +241,9 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
     // Every segment opens with the header of this exact thread; no other
     // row is one.
     for (const index of source.starts) exactFrame(rows[index], source.lines[index]);
+    const directories = await recordedDirectories(rows, cwd);
     if (rows.some((row, index) => row?.ordinal !== index || (row.type === 'session_meta') !== source.starts.has(index)
-      || source.starts.has(index) && (!object(row.payload) || row.payload.id !== threadId || row.payload.cwd !== cwd
+      || source.starts.has(index) && (!object(row.payload) || row.payload.id !== threadId || !directories.has(row.payload.cwd)
         || row.payload.history_mode !== 'paginated' || row.payload.session_id !== threadId)))
       fail('source header or ordinal chain differs from the exact native identity.');
     const turns = new Map();
@@ -295,8 +296,8 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
       if (gap.slice(0, settled).some(entry => entry.type !== 'event_msg' || entry.payload?.type !== 'item_completed'
         || !['CommandExecution', 'SubAgentActivity'].includes(entry.payload.item?.type)))
         fail('late arrival is separated from its closed boundary by unrecognized native activity.');
-      boundaryProof(state, parent.turn, source, cwd, { ranCommand: true });
-      if (after) boundaryProof(boundary, after.turn, source, cwd);
+      boundaryProof(state, parent.turn, source, directories, { ranCommand: true });
+      if (after) boundaryProof(boundary, after.turn, source, directories);
       const projected = subAgent ? projectSubAgent(payload.item) : projectCommand(payload.item);
       const matches = parent.turn.items.filter(item => item.id === projected.id);
       // The full API reports a command without output as null.

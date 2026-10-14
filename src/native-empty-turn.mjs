@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { hash, snapshot } from './storage.mjs';
-import { physicalRolloutPath } from './codex-rollout-file.mjs';
+import { physicalRolloutPath, recordedDirectories } from './codex-rollout-file.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
@@ -91,7 +91,8 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
       // keys must not disappear behind JSON.parse's last-key-wins behavior.
       if (JSON.stringify(rows[index]) !== lines[index]) fail('source record serialization is ambiguous.');
     };
-    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId || rows[0].payload?.cwd !== cwd
+    const directories = await recordedDirectories(rows, cwd);
+    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId || !directories.has(rows[0].payload?.cwd)
       || (rows[0].payload.session_id != null && rows[0].payload.session_id !== threadId)
       || rows.slice(1).some(row => row?.type === 'session_meta')) fail('source header differs from the exact native identity.');
     exactRow(0);
@@ -119,7 +120,7 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
           completed = row; completionIndex = index; break;
         }
         if (row?.type === 'turn_context') {
-          if (row.payload?.turn_id !== turn.id || row.payload.cwd !== cwd) fail('empty turn context differs from the API.');
+          if (row.payload?.turn_id !== turn.id || !directories.has(row.payload.cwd)) fail('empty turn context differs from the API.');
         } else if (activity(row)) fail('empty turn has model, tool or authored-input records.');
         else {
           const owner = row.payload.internal_chat_message_metadata_passthrough?.turn_id ?? row.payload.turn_id;

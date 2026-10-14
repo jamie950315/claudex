@@ -2,7 +2,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { hash, snapshot } from './storage.mjs';
-import { physicalRolloutPath } from './codex-rollout-file.mjs';
+import { physicalRolloutPath, recordedDirectories } from './codex-rollout-file.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE } from './codex-delegation.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -87,7 +87,8 @@ export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes 
     if (data.bytes > maxBytes || ['dev', 'ino', 'uid', 'mode', 'nlink'].some(key => data.fileIdentity[key] !== String(info[key])))
       fail('source changed before its stable read.');
     const rows = data.rows;
-    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId || rows[0].payload?.cwd !== cwd
+    const directories = await recordedDirectories(rows, cwd);
+    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId || !directories.has(rows[0].payload?.cwd)
       || rows.slice(1).some(row => row.type === 'session_meta')) fail('source header differs from the exact native identity.');
     const start = rows.findIndex(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
     if (start < 0 || rows[start].payload.turn_id !== turn.id || rows[start].payload.root_turn_id !== turn.id
@@ -106,7 +107,7 @@ export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes 
       if (row.type === 'event_msg' && payload?.type === 'thread_goal_updated' && !context)
         fail('initial goal changed before its persisted request.');
       if (row.type === 'turn_context') {
-        if (payload?.turn_id !== turn.id || payload.cwd !== cwd) fail('goal turn context differs from the source.');
+        if (payload?.turn_id !== turn.id || !directories.has(payload.cwd)) fail('goal turn context differs from the source.');
         contextTurn = payload.turn_id;
       }
       if (row.type === 'response_item' && payload?.type === 'message' && payload.role === 'user'

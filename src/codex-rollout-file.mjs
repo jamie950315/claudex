@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
-import { lstat, open } from 'node:fs/promises';
+import { lstat, open, realpath } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { zstdDecompressSync } from 'node:zlib';
 
 // Codex compresses a rollout left unchanged for seven days to <name>.jsonl.zst
@@ -31,6 +32,20 @@ export async function statRollout(path, stat = lstat) {
     try { return { path: compressed, info: await stat(compressed) }; }
     catch (compressedError) { if (compressedError.code === 'ENOENT') throw error; throw compressedError; }
   }
+}
+
+/** The working-directory strings in rollout headers and turn contexts that
+ * name the canonical directory cwd. Codex records the path it was started
+ * with, which can be an alias (symlink) of that directory, while its API may
+ * report either form; the proof compares the directory, not the spelling. */
+export async function recordedDirectories(rows, cwd) {
+  const accepted = new Set([cwd]);
+  const recorded = new Set(rows.filter(row => row?.type === 'session_meta' || row?.type === 'turn_context')
+    .map(row => row.payload?.cwd));
+  for (const value of recorded)
+    if (typeof value === 'string' && value !== cwd && isAbsolute(value) && resolve(value) === value
+      && await realpath(value).catch(() => null) === cwd) accepted.add(value);
+  return accepted;
 }
 
 /** Whether neither representation of a logical rollout path exists. */

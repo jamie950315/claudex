@@ -11,6 +11,10 @@ proves identity on that physical file and reads the decompressed bytes; byte
 offsets, sizes, digests and limits apply to the decompressed content. A rollout
 is unavailable only when neither representation exists. A representation change
 between checks is a changed source, never a silent switch.
+Raw rollout proofs (empty-turn, goal, late-item) compare the working directory,
+not its spelling: Codex records the path it was started in, which may be an
+alias (symlink) of the canonical directory, and its API may report either form.
+A recorded string is accepted only when it resolves to that exact directory.
 
 Reject unresolved Codex history_base references without a self-contained readable
 summary; do not silently export only their local tail. Earlier readable originals
