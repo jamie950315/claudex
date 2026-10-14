@@ -210,7 +210,9 @@ export class DesktopBridge {
           if (common.meta.cwd !== relocated.cwd || !matches(common, conversation.canonical)
             || !isDeepStrictEqual(record.checkpoint, conversation.canonical))
             throw relocationGuard(`${label} relocation does not preserve the synchronized history prefix.`);
-          if (candidate.incompleteTail)
+          // A Codex tail of closed turns cannot complete by waiting; it stays in
+          // the native history and synchronizes once a later turn completes.
+          if (candidate.incompleteTail && !(record.side === 'codex' && candidate.closedTail === true))
             throw new Error(`${label} relocation has an in-progress turn; wait for a complete assistant turn.`);
           return common;
         };

@@ -452,6 +452,7 @@ test('a rollout Codex compressed while cold is read under its logical path and s
   const compressed = await runtime.inspect(record);
   assert.equal(compressed.path, f.path);
   assert.equal(compressed.digest, plain.digest);
+  assert.equal(compressed.bytes, plain.bytes);
   assert.deepEqual(compressed.common, plain.common);
   const discovered = await discoverSources({ codexHome: f.codexHome, claudeHome: f.claudeHome, allProjects: true, since: 0 });
   assert.deepEqual(discovered, [{ side: 'codex', path: f.path }]);

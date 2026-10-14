@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdtemp, mkdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -18,7 +18,8 @@ const apiTurn = (index, content, answer) => ({ id: `turn-${index}`, status: 'com
 
 async function fixture(t, { managed = false, text = 'Complete source answer', count = 1, ...options } = {}) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-runtime-limits-')));
-  const root = join(base, 'state'), codexHome = join(base, 'codex'), claudeHome = join(base, 'claude'), cwd = join(base, 'project');
+  const root = join(base, 'state'), codexHome = join(base, 'codex'), claudeHome = join(base, 'claude');
+  let cwd = join(base, 'project');
   await Promise.all([codexHome, claudeHome, cwd].map(path => mkdir(path)));
   const nativeId = randomUUID(), conversationId = randomUUID(), path = join(codexHome, 'sessions', `rollout-${nativeId}.jsonl`);
   await mkdir(join(codexHome, 'sessions'));
@@ -50,7 +51,9 @@ async function fixture(t, { managed = false, text = 'Complete source answer', co
   } else turns.push(apiTurn(0, common.messages[0].content, text));
   for (let index = 1; index < count; index++) turns.push(apiTurn(index, [{ type: 'text', text: `Request ${index}` }], `Answer ${index}`));
   const record = { side: 'codex', nativeId, conversationId, path, cwd, managed, kind: managed ? 'snapshot' : 'original' };
-  return { runtime, record, common, turns, calls };
+  // Rename the project and leave its saved path as an alias of the new one.
+  const aliasProject = async () => { const moved = join(base, 'moved-project'); await rename(cwd, moved); await symlink(moved, cwd); return moved; };
+  return { runtime, record, common, turns, calls, aliasProject };
 }
 
 test('Desktop native history defaults retain 16 MiB and 100-turn pages on both export paths', async t => {
@@ -115,6 +118,26 @@ test('a verified prefix mismatch invokes strict late proof and preserves native 
     assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 3);
     assert.deepEqual(await readFile(f.record.path), before);
     assert.deepEqual(f.record.checkpoint, { count: baseline.common.messages.length, digest: baseline.digest });
+  }
+});
+
+test('an owned snapshot keeps its saved directory alias while Codex reports it; an original reports the move', async t => {
+  for (const managed of [true, false]) {
+    const f = await fixture(t, { managed });
+    const saved = f.record.cwd, moved = await f.aliasProject();
+    assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, managed ? saved : moved);
+  }
+});
+
+test('a tail of closed turns is reported apart from an in-progress one', async t => {
+  for (const status of ['failed', 'inProgress']) {
+    const f = await fixture(t);
+    const tail = apiTurn(1, [{ type: 'text', text: 'Unanswered request' }], 'unused');
+    tail.items.pop(); tail.status = status; if (status === 'failed') tail.error = { message: 'Synthetic failure' };
+    f.turns.push(tail);
+    const data = await f.runtime.inspect(f.record);
+    assert.equal(data.incompleteTail, true);
+    assert.equal(data.closedTail, status === 'failed');
   }
 });
 

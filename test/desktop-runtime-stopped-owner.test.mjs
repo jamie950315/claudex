@@ -272,6 +272,8 @@ test('stopped readers restore bound original images without editing native previ
   await writeFile(f.record.path, rows.map(row => JSON.stringify(row)).join('\n') + '\n');
   const before = await readFile(f.record.path), data = await f.runtime.inspect(f.record);
   assert.equal(data.digest, fingerprint({ messages: f.messages })); assert.equal(f.calls.starts.length, 0);
+  // An owner held by an aliased directory is read from disk the same way.
+  assert.equal((await f.runtime.inspectRetiredOwner(f.record)).digest, data.digest);
   await f.runtime.owner(f.record.conversationId, f.cwd, f.record.title, { forceNormal: true });
   assert.equal((await f.runtime.inspect(f.record)).digest, data.digest);
   assert.deepEqual(await readFile(f.record.path), before);

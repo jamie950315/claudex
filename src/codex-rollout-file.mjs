@@ -35,16 +35,16 @@ export async function statRollout(path, stat = lstat) {
 }
 
 /** The working-directory strings in rollout headers and turn contexts that
- * name the canonical directory cwd. Codex records the path it was started
+ * name the same directory as cwd. Codex records the path it was started
  * with, which can be an alias (symlink) of that directory, while its API may
  * report either form; the proof compares the directory, not the spelling. */
 export async function recordedDirectories(rows, cwd) {
-  const accepted = new Set([cwd]);
+  const accepted = new Set([cwd]), directory = await realpath(cwd).catch(() => null);
   const recorded = new Set(rows.filter(row => row?.type === 'session_meta' || row?.type === 'turn_context')
     .map(row => row.payload?.cwd));
   for (const value of recorded)
     if (typeof value === 'string' && value !== cwd && isAbsolute(value) && resolve(value) === value
-      && await realpath(value).catch(() => null) === cwd) accepted.add(value);
+      && directory !== null && await realpath(value).catch(() => null) === directory) accepted.add(value);
   return accepted;
 }
 

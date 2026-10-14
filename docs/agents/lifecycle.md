@@ -44,7 +44,12 @@ alone so unmoved conversations never contact the backend; only after that
 conversation's own read reports another working directory does its sync ask
 for a thorough proof, which also follows a move whose saved directory still
 exists, such as into a worktree), the complete history must keep
-the saved prefix and two reads must agree. The managed Claude owner must be
+the saved prefix and two reads must agree. A Codex tail of closed turns (failed
+or interrupted without a reply, in both reads) does not hold the move: it cannot
+complete by waiting and stays in the native history; an in-progress tail waits.
+A Claudex-owned Codex snapshot, like a Claude read, keeps its saved directory
+string while Codex still reports exactly it, even once that directory is an
+alias; only an unmanaged original follows a Codex project move. The managed Claude owner must be
 idle and unchanged. Claude owners are per conversation and bound to their cwd,
 so the move retires the old owner: close it at an idle boundary, move its state
 to owners/retired/<hash>-<sessionId>.json and mark its record retired-owner (kept
@@ -60,7 +65,8 @@ the directory must still resolve, and any other recorded cwd is canonicalized.
 An owner is bound to its saved cwd string: once that directory is an alias of
 another, starting it is a per-conversation CLAUDEX_TRACKED_CWD_UNAVAILABLE hold
 (never a worker crash), and the move proof reads it from disk like a retired
-owner, requiring its state lock to be absent.
+owner, requiring its state lock to be absent. That disk read restores bound image
+originals before authenticating packets, exactly like a running owner's view.
 
 A native transcript file changing between successful handoff inspections is a
 revoked, deferred Desktop archival attempt, not a synchronization failure. Return

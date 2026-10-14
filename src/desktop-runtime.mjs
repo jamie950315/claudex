@@ -10,6 +10,7 @@ import { createInterface } from 'node:readline';
 import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
 import { CodexWebSocketClient, inspectCodexSocket, MAX_FRAME_BYTES } from './codex-websocket.mjs';
 import { ClaudeOwner } from './claude-owner.mjs';
+import { restoreImageAssets } from './claude-image-assets.mjs';
 import { decodeClaude, sessionPath } from './claude.mjs';
 import { readAppStopState } from './app-stop-state.mjs';
 import { FORK_REJECTED, assertClaudeForkPrefix, claudeForkParent } from './claude-fork.mjs';
@@ -296,6 +297,12 @@ export class DesktopRuntime {
     return plainRolloutPath(physical);
   }
 
+  // A rollout counts its logical bytes in either representation, so a size
+  // stays comparable with its raw proofs after Codex compresses it.
+  async rolloutBytes(path, info) {
+    return isCompressedRollout(path) ? (await snapshot(path)).bytes : info.size;
+  }
+
   async snapshotBytes(nativeId, currentPath) {
     let bytes = 0; const seen = new Set(); let foundCurrent = false;
     // Every managed Codex read counts the whole dated rollout tree. Visit each
@@ -330,7 +337,7 @@ export class DesktopRuntime {
       const row = await header(path);
       if (row.type !== 'session_meta' || row.payload?.id !== nativeId) continue;
       const info = await lstat(path); const identity = `${info.dev}:${info.ino}`;
-      if (!seen.has(identity)) { bytes += info.size; seen.add(identity); }
+      if (!seen.has(identity)) { bytes += await this.rolloutBytes(path, info); seen.add(identity); }
       if (plainRolloutPath(path) === currentPath) foundCurrent = true;
     }
     if (!foundCurrent || !Number.isSafeInteger(bytes)) throw new Error('Owned rollout storage could not be counted safely.');
@@ -487,10 +494,14 @@ export class DesktopRuntime {
       throw new Error('Retired Claude owner state is missing or does not match its record.');
     const path = await this.safePath(record.path, this.claudeHome);
     const data = await snapshot(path);
+    // As in a running owner's read view, lossless image originals replace the
+    // native resized previews before packets are authenticated.
+    const rows = await restoreImageAssets({ root: this.root, rows: data.rows, bindings: retired.imageBindings ?? {} });
+    const text = rows === data.rows ? data.text : rows.map(row => JSON.stringify(row)).join('\n') + '\n';
     const resolveArchive = await prepareArchiveResolver({ root: this.root,
-      contents: data.rows.filter(row => row.type === 'user').map(row => row.message?.content),
+      contents: rows.filter(row => row.type === 'user').map(row => row.message?.content),
       conversationId: record.conversationId, targetSessionId: record.nativeId, key: this.key });
-    const parsed = decodeCompletedOwnedClaudeHistory({ text: data.text, conversationId: record.conversationId, sessionId: record.nativeId,
+    const parsed = decodeCompletedOwnedClaudeHistory({ text, conversationId: record.conversationId, sessionId: record.nativeId,
       key: this.key, resolveArchive, resetBootstrap: retired.lastReset ?? undefined, versionPolicy: this.versionPolicy });
     assertComplete(parsed.common);
     // Like originals, the saved directory string is kept even when it is an alias.
@@ -584,7 +595,11 @@ export class DesktopRuntime {
       const client = await this.codex();
       const metadata = (await client.request('thread/read', { threadId: nativeId, includeTurns: false })).thread;
       if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
-      const cwd = await this.nativeWorkingDirectory(metadata.cwd, { ...record, nativeId });
+      const resolvedCwd = await this.nativeWorkingDirectory(metadata.cwd, { ...record, nativeId });
+      // Like a Claude read, a Claudex-owned snapshot keeps its saved directory
+      // string while Codex still reports exactly it, even when that directory
+      // was renamed and left as an alias. Originals follow a Codex project move.
+      const cwd = record.managed === true && metadata.cwd === record.cwd ? record.cwd : resolvedCwd;
       const path = await this.safeRolloutPath(metadata.path);
       const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
       const failImageEvidence = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
@@ -666,7 +681,8 @@ export class DesktopRuntime {
         throw new Error(`${error.message} [Codex thread ${nativeId}]`, { cause: error });
       }
       data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
-      return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(await physicalRolloutPath(path))).size, digest: fingerprint(data.common) };
+      const physical = await physicalRolloutPath(path);
+      return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : await this.rolloutBytes(physical, await lstat(physical)), digest: fingerprint(data.common) };
     }
     // contextReset survives promotion; only an explicit retained-source
     // recovery read needs to start an owner. Pending writes recover separately.

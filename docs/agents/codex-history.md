@@ -8,7 +8,8 @@ Codex (0.162+) compresses a rollout left unchanged for seven days to
 records and history_base lookups keep the logical `.jsonl` path. Every rollout
 reader resolves the present representation through `src/codex-rollout-file.mjs`,
 proves identity on that physical file and reads the decompressed bytes; byte
-offsets, sizes, digests and limits apply to the decompressed content. A rollout
+offsets, sizes, digests, limits and reported storage bytes apply to the
+decompressed content. A rollout
 is unavailable only when neither representation exists. A representation change
 between checks is a changed source, never a silent switch.
 Raw rollout proofs (empty-turn, goal, late-item) compare the working directory,

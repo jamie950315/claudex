@@ -189,10 +189,13 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
   if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
   const incompleteTailCount = turns.length - exported.length;
+  // A tail of closed turns (failed or interrupted without a reply) is not
+  // published, but no native writer is still producing it.
+  const closedTail = incompleteTailCount > 0 && turns.slice(exported.length).every(turn => turn.status !== 'inProgress');
   const snapshot = { turns: exported, initialGoal, digest: initialGoal === null ? canonicalDigest(exported)
     : canonicalDigest(JSON.parse(serialize({ turns: exported, initialGoal: initialGoal.request }))),
     itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),
-    bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount, emptyTurnEvidence,
+    bytes, pages, completedPrefix, incompleteTail: incompleteTailCount > 0, incompleteTailCount, closedTail, emptyTurnEvidence,
     emptyControlTurnCount: emptyTurnEvidence.reduce((sum, entry) => sum + entry.proof.turnIds.length, 0) };
   if (resolveLateItems) {
     const proof = await resolveLateItems({ ...snapshot, threadId }, { threadId });
@@ -339,7 +342,7 @@ export async function readStableNativeHistory({ client, threadId, limits: inputL
     || serialize(first.lateItemEvidence ?? null) !== serialize(second.lateItemEvidence ?? null)
     || serialize(first.initialGoal?.prefixHashAlternatives ?? null) !== serialize(second.initialGoal?.prefixHashAlternatives ?? null))
     fail('source history changed between complete reads; synchronization paused.');
-  return { ...first, threadId, turnCount: first.turns.length };
+  return { ...first, threadId, turnCount: first.turns.length, closedTail: first.closedTail && second.closedTail };
 }
 
 function validateSource(threadId, cwd, suppliedTimestamp) {
@@ -380,7 +383,7 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
   try { encoded = JSON.stringify(common); } catch { fail('invalid JSON history.'); }
   if (Buffer.byteLength(encoded) > limits.maxBytes) fail('converted byte limit exceeded; no partial export is returned.');
   return { common, digest: first.digest, turnCount: first.turns.length, itemCount: first.itemCount, bytes: first.bytes, pages: first.pages,
-    incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount,
+    incompleteTail: first.incompleteTail, incompleteTailCount: first.incompleteTailCount, closedTail: first.closedTail,
     emptyControlTurnCount: first.emptyControlTurnCount,
     nativeMessageOffset: first.initialGoal === null ? 0 : 1,
     nativeImagePositions: nativeImagePositions(selected) };
