@@ -10,7 +10,7 @@ import { createClaudeDesktopHandoffPublisher } from './claude-desktop-handoff.mj
 import { homedir } from 'node:os';
 import { RECONNECT_ID } from './sync-event-source.mjs';
 import { activeDesktopState, activeDesktopConversationIds, isDesktopTracked } from './desktop-enrollment.mjs';
-import { handleClaudeOwnerWake } from './claude-owner-wake.mjs';
+import { handleClaudeOwnerWake, wakeClaudeOwnerInLock } from './claude-owner-wake.mjs';
 import { syncEventKey } from './sync-events.mjs';
 import { startClaudeRendererMaintenance } from './claude-renderer-maintenance.mjs';
 import { claudeCacheDirectory } from './claude-frontend-graph.mjs';
@@ -307,8 +307,45 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       && (!foldersEnabled || folderProjection?.state === 'ready')) lastEmptyPresentationKey = key;
     return writeProgress();
   };
+  const countOwnerWake = result => {
+    ownerWake = { handled: ownerWake.handled + 1, woken: ownerWake.woken + (result.woken ? 1 : 0),
+      ignored: ownerWake.ignored + (result.woken ? 0 : 1), lastReason: result.ignored ?? null };
+  };
+  // An opened conversation shows as disconnected until its owner starts, and
+  // one delivery can hold the coordinator for a minute. Start requested owners
+  // at the boundaries of a running pass as well: between its operations, and
+  // inside one where the bridge reports a boundary under its own lock (then
+  // with that ledger, and never for the conversation being worked on).
+  // A hint served at the start of a pass stays in the inbox until that pass
+  // ends; one owner has one key, so this never outgrows the owners.
+  const servedOwnerWakes = new Map();
+  let ownerWakeCheckedAt = null;
+  const serveOwnerWakes = async (state, callerId) => {
+    if (!events?.peek || signal?.aborted || ownerWakeCheckedAt !== null && Math.abs(now() - ownerWakeCheckedAt) < 250) return;
+    ownerWakeCheckedAt = now();
+    try {
+      let batch = (await events.peek()).filter(event => event.kind === 'owner-wake'
+        && servedOwnerWakes.get(eventKey(event)) !== event.revision);
+      if (!batch.length) return;
+      batch = await events.current?.(batch) ?? batch;
+      for (const event of batch) {
+        let result;
+        try {
+          result = state
+            ? await wakeClaudeOwnerInLock({ root, state, runtime, event, blocked, blockedConversations, exclude: callerId })
+            : await handleClaudeOwnerWake({ root, bridge, runtime, event, blocked, blockedConversations });
+        } catch (error) { result = { ignored: reason(error) }; }
+        if (result.deferred) continue;
+        countOwnerWake(result);
+        servedOwnerWakes.set(eventKey(event), event.revision);
+        await events.acknowledge([event]);
+      }
+    } catch { /* The hint stays in the inbox; the pass reports an event source failure itself. */ }
+  };
   return withLock(join(root, 'watch.lock'), async () => {
     let rendererMaintenance;
+    const priorInterlude = bridge.interlude;
+    bridge.interlude = serveOwnerWakes;
     try {
       if (autoRenderers) rendererMaintenance = await startRendererMaintenance({ root,
         folders: config.folderProjection?.enabled === true, signal,
@@ -349,8 +386,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             let result;
             try { result = await handleClaudeOwnerWake({ root, bridge, runtime, event, blocked, blockedConversations }); }
             catch (error) { result = { ignored: reason(error) }; }
-            ownerWake = { handled: ownerWake.handled + 1, woken: ownerWake.woken + (result.woken ? 1 : 0),
-              ignored: ownerWake.ignored + (result.woken ? 0 : 1), lastReason: result.ignored ?? null };
+            countOwnerWake(result);
+            servedOwnerWakes.set(eventKey(event), event.revision);
           }
           ownerWakeOnly = wakes.length > 0 && wakes.length === eventBatch.length;
         }
@@ -377,6 +414,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           };
           const sync = async id => {
             if (blockedConversations.has(id) && now() < blockedConversations.get(id).retryAt && !events) return { blocked: true };
+            await serveOwnerWakes();
             try {
               const state = await bridge.status();
               if (state.pending) { clearHints(); await bridge.recover(); return { recovered: true }; }
@@ -908,6 +946,6 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
       // A busy ClaudeOwner must keep its live handle; closing it can interrupt user work.
       throw error;
-    } finally { await rendererMaintenance?.close(); }
+    } finally { bridge.interlude = priorInterlude; await rendererMaintenance?.close(); }
   }, { recoverDead: true });
 }

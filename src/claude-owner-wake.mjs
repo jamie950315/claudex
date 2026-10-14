@@ -49,19 +49,28 @@ export function createClaudeOwnerWakePublisher({ root, inbox = new SyncEventInbo
 export async function handleClaudeOwnerWake({ root, bridge, runtime, event, blocked, blockedConversations = new Map() }) {
   event = validateSyncEvent(event);
   if (event.kind !== 'owner-wake') throw new Error('Expected a Claude owner wake event.');
-  return bridge.locked(async state => {
-    if ((await readAppStopState(root))?.stopped) return { ignored: 'application stopped' };
-    if (blocked) return { ignored: 'coordinator is blocked' };
-    const target = await inspectClaudeOwnerWake({ root, state, remoteId: event.remoteId });
-    if (target.ignored) return { ignored: target.ignored };
-    const { record } = target;
-    if (record.nativeId.toLowerCase() !== event.nativeId) return { ignored: 'native owner identity changed' };
-    if (blockedConversations.has(record.conversationId)
-      || [...blockedConversations.values()].some(value => value.conversationId === record.conversationId))
-      return { ignored: 'conversation is blocked' };
-    await target.recheck();
-    if ((await readAppStopState(root))?.stopped) return { ignored: 'application stopped' };
-    const result = await runtime.wakeClaudeOwner(record, target.owner);
-    return result?.ignored ? result : { woken: true, conversationId: record.conversationId };
-  });
+  return bridge.locked(state => wakeClaudeOwnerInLock({ root, state, runtime, event, blocked, blockedConversations }));
+}
+
+/** The same activation for a caller that already holds the coordinator lock
+ * and passes the ledger it loaded there. `exclude` names the conversation whose
+ * own operation is running: its hint is left for the watcher, never consumed.
+ */
+export async function wakeClaudeOwnerInLock({ root, state, runtime, event, blocked, blockedConversations = new Map(), exclude }) {
+  event = validateSyncEvent(event);
+  if (event.kind !== 'owner-wake') throw new Error('Expected a Claude owner wake event.');
+  if ((await readAppStopState(root))?.stopped) return { ignored: 'application stopped' };
+  if (blocked) return { ignored: 'coordinator is blocked' };
+  const target = await inspectClaudeOwnerWake({ root, state, remoteId: event.remoteId });
+  if (target.ignored) return { ignored: target.ignored };
+  const { record } = target;
+  if (record.nativeId.toLowerCase() !== event.nativeId) return { ignored: 'native owner identity changed' };
+  if (exclude && record.conversationId === exclude) return { deferred: true };
+  if (blockedConversations.has(record.conversationId)
+    || [...blockedConversations.values()].some(value => value.conversationId === record.conversationId))
+    return { ignored: 'conversation is blocked' };
+  await target.recheck();
+  if ((await readAppStopState(root))?.stopped) return { ignored: 'application stopped' };
+  const result = await runtime.wakeClaudeOwner(record, target.owner);
+  return result?.ignored ? result : { woken: true, conversationId: record.conversationId };
 }

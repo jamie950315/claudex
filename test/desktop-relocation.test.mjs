@@ -195,3 +195,15 @@ test('pending handoffs never discover a new source path or alter preserved pendi
   assert.deepEqual(await f.bridge.status(), before);
   assert.equal(f.calls.relocations, 0);
 });
+
+test('a delivery reports boundaries only while nothing is pending and names its own conversation', async () => {
+  const f = await fixture({ paired: false }), calls = [];
+  f.bridge.interlude = async (state, callerId) => { calls.push({ pending: state.pending, callerId }); };
+  assert.equal((await f.bridge.sync(f.conversationId)).changed, true);
+  assert.ok(calls.length >= 2);
+  assert.deepEqual([...new Set(calls.map(call => JSON.stringify(call)))], [JSON.stringify({ pending: null, callerId: f.conversationId })]);
+  const count = calls.length;
+  await f.bridge.collect();
+  assert.ok(calls.length > count);
+  assert.equal(calls.at(-1).callerId, undefined);
+});

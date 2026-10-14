@@ -129,7 +129,7 @@ for (const phase of ['started', 'completed']) {
   });
 }
 
-test('startup leaves control events pending and discovers an unmapped completion revision only once', async () => {
+test('startup leaves control events pending, serves an owner wake and discovers an unmapped completion revision only once', async () => {
   const f = await fixture();
   for (let index = 0; index < 4; index++) await f.add(`cold-${index}`, true);
   const unknown = { side: 'claude', nativeId: randomUUID() };
@@ -144,7 +144,8 @@ test('startup leaves control events pending and discovers an unmapped completion
     await f.run();
     assert.deepEqual(f.calls, ['cold-0', 'cold-1', 'cold-2', 'cold-3']);
     assert.deepEqual(f.discoveries, [null, [`claude:${unknown.nativeId}`]]);
-    assert.equal(f.acknowledgements.length, 0);
-    assert.equal((await f.inbox.list()).length, 5);
+    // Only the owner wake is consumed at the next boundary of the sweep.
+    assert.deepEqual(f.acknowledgements.map(batch => batch.map(event => event.kind)), [['owner-wake']]);
+    assert.equal((await f.inbox.list()).length, 4);
   } finally { await f.events.close(); await rm(f.root, { recursive: true, force: true }); }
 });

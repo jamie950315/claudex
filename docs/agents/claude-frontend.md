@@ -70,8 +70,19 @@ or native initializer payloads. Parse the exact helper/lookup definition only
 when its body supplies proof; release the graph after normal installation.
 The publisher reads the ledger without the coordinator lock, so it normally
 sees another conversation's delivery in flight. It still publishes the durable
-hint (every other check applies); the watcher handles it under the lock after
-that delivery and keeps refusing a transaction that is really left pending.
+hint (every other check applies); the watcher handles it under the lock and
+keeps refusing a transaction that is really left pending.
+An opened conversation shows as disconnected until its owner starts, and one
+delivery can hold the coordinator for a minute, so a hint is not left until the
+pass ends. The watcher also serves hints between the operations of a pass, and
+the bridge reports boundaries inside a long locked operation (`boundary`, the
+watcher's `interlude`): every native read so far is complete, nothing is pending
+and no write is in flight. A hint served there runs under that same lock with
+the ledger loaded there and every guard above, sequentially, never beside the
+operation. The conversation the operation is working on is excluded: its hint
+stays in the inbox for the watcher. A hint served there is acknowledged at once;
+the other control events still wait for the pass. Never start an owner outside
+the coordinator lock, and never report a boundary while a transaction is pending.
 
 src/claude-frontend-graph.mjs discovers the latest fetched index entry from the
 private HTTP cache using verified Chromium HttpResponseInfo response timestamps,

@@ -123,6 +123,7 @@ normally but does not repeat full reads or broad discovery because streaming fil
 metadata changed. Between startup checks, inspect bounded durable event metadata
 and service at most one exact completion/session target, with fair ordering and
 revision rechecks. Only consumed revisions are acknowledged; started, control and
-newer events survive. Unknown-source discovery is exact-key and revision-bounded.
+newer events survive, except an owner wake, which is served and acknowledged at
+the next boundary (see the frontend guide). Unknown-source discovery is exact-key and revision-bounded.
 Retain the old activity-interleaved scheduler only for the injected non-event
 harness. Do not defer all new completions until a long cold sweep finishes.

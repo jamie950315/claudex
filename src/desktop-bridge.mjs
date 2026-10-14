@@ -84,6 +84,15 @@ export class DesktopBridge {
     return withLock(join(this.root, 'desktop-operation.lock'), async () => fn(await this.load()), { recoverDead: true });
   }
   status() { return this.load(); }
+  /** A boundary inside a long locked operation: every native read so far is
+   * complete, nothing is pending and no write is in flight. The watcher uses
+   * it (`interlude`) to start a Claude owner the user just opened instead of
+   * leaving that until this operation ends. It runs under this lock with the
+   * ledger loaded here and may not change the ledger.
+   */
+  async boundary(state, callerId) {
+    if (this.interlude && !state.pending) await this.interlude(state, callerId);
+  }
   /** Stop only enrollment, without changing any native session. Manual calls
    * need no cwd inspection; automatic calls verify the saved directory below.
    * The outer watcher lock belongs to CLI callers.
@@ -446,6 +455,7 @@ export class DesktopBridge {
         await this.reconcileOriginalRelocations(state, id, undefined, true);
         readings = await read();
       }
+      await this.boundary(state, id);
       const changed = readings.filter(({ data }) => data.common.messages.length > conversation.canonical.count);
       if (changed.length > 1) throw new Error('Both sides changed; no history was replaced.');
       const maintenance = [];
@@ -760,8 +770,10 @@ export class DesktopBridge {
       return true;
     };
     this.collectionHolds = holds;
+    await this.boundary(state, callerId);
     await this.reconcileOriginalRelocations(state, undefined, hold);
     for (const id of await this.frozenConversations(state)) frozen.add(id);
+    await this.boundary(state, callerId);
     await this.assertOriginalsUnchanged(state, undefined, frozen, hold);
     const snapshots = state.records.filter(record => record.managed && record.kind === 'snapshot');
     const retainedConversations = new Set(snapshots.map(record => record.conversationId)
@@ -773,6 +785,7 @@ export class DesktopBridge {
     for (const current of state.records.filter(record => record.status === 'current'
       && retainedConversations.has(record.conversationId))) {
       if (frozen.has(current.conversationId)) continue;
+      await this.boundary(state, callerId);
       try {
         const data = await this.inspect(current);
         if (!readingMatches(data, current.checkpoint)) throw new Error('Current history changed; prior snapshots were preserved.');
@@ -804,6 +817,7 @@ export class DesktopBridge {
     }
     for (const record of previous) {
       if (frozen.has(record.conversationId)) continue;
+      await this.boundary(state, callerId);
       try {
         if (!await this.preserveDependentSnapshot(state, record, undefined, prepared?.get(record.id))) {
           const data = await this.assertUnchanged(record);

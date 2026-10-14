@@ -10,7 +10,8 @@ import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { hash } from '../src/storage.mjs';
 import { sessionPath } from '../src/claude.mjs';
 import { inspectClaudeOwnerWake, publishClaudeFolderMap } from '../src/claude-folder-map.mjs';
-import { createClaudeOwnerWakePublisher, handleClaudeOwnerWake, validateClaudeOwnerWakeRequest } from '../src/claude-owner-wake.mjs';
+import { createClaudeOwnerWakePublisher, handleClaudeOwnerWake, validateClaudeOwnerWakeRequest, wakeClaudeOwnerInLock } from '../src/claude-owner-wake.mjs';
+import { createSyncEventSource } from '../src/sync-event-source.mjs';
 import { SyncEventInbox } from '../src/sync-events.mjs';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 
@@ -160,6 +161,52 @@ test('watcher handles a wake before its unavailable Codex prerequisite without s
   const active = statuses.filter(value => value.running).at(-1);
   assert.equal(active.ownerWake.woken, 1); assert.equal(active.eventSyncCount, 0);
   assert.match(active.waiting, /Codex Desktop backend is not ready/);
+});
+
+test('a running operation starts a requested owner at its boundary, except for its own conversation', async () => {
+  const f = await fixture(), inbox = new SyncEventInbox({ root: f.root });
+  const other = randomUUID(), otherPath = join(f.root, 'other.jsonl');
+  await writeFile(otherPath, 'Synthetic original history\n', { mode: 0o600 });
+  f.state.conversations[other] = { id: other, cwd: f.cwd, title: 'Synthetic other' };
+  f.state.records.push({ id: randomUUID(), conversationId: other, nativeId: randomUUID(), side: 'claude', cwd: f.cwd,
+    path: otherPath, managed: false, verified: true, kind: 'original', status: 'current' });
+  await f.save();
+  const state = await f.bridge.status();
+  assert.deepEqual(await wakeClaudeOwnerInLock({ root: f.root, state, runtime: f.runtime, event: f.event,
+    exclude: f.record.conversationId }), { deferred: true });
+  assert.equal(f.calls.start, 0);
+  const runtime = { async codex() { return {}; }, async ownedNativeIds() { return new Set(); },
+    wakeClaudeOwner: (record, saved) => f.runtime.wakeClaudeOwner(record, saved) };
+  const events = await createSyncEventSource({ root: f.root, runtime, inbox, settleMs: 60_000 });
+  const acknowledged = [], statuses = [], seen = [];
+  const acknowledge = events.acknowledge;
+  events.acknowledge = async batch => { acknowledged.push(...batch); return acknowledge(batch); };
+  let clock = 0;
+  const bridge = { status: () => f.bridge.status(), locked: fn => f.bridge.locked(fn), async collect() {},
+    async recover() { throw new Error('Unexpected recovery.'); },
+    async sync(id) {
+      clock += 1000;
+      const before = { acknowledged: acknowledged.length, connect: f.calls.connect };
+      await inbox.publish(f.event);
+      await bridge.interlude(await f.bridge.status(), id);
+      if (id === other) {
+        // The owner is connected before this operation returns.
+        assert.equal(f.calls.start, 1);
+        assert.equal(acknowledged.length, before.acknowledged + 1);
+      } else assert.deepEqual({ acknowledged: acknowledged.length, connect: f.calls.connect }, before);
+      await bridge.interlude({ ...await f.bridge.status(), pending: {} }, id);
+      seen.push(id);
+      return { changed: false, incompleteTail: false };
+    } };
+  try {
+    await runDesktopWatch({ root: f.root, bridge, runtime, config: {}, events, now: () => clock, maxPasses: 1,
+      discover: async () => [], writeStatus: async (_path, value) => statuses.push(structuredClone(value)),
+      sleep: async () => { throw new Error('Completion-event mode must not poll.'); } });
+    assert.deepEqual(seen.sort(), [other, f.record.conversationId].sort());
+    assert.equal(f.calls.start, 1); assert.equal(f.calls.codex, 0);
+    assert.equal(bridge.interlude, undefined);
+    assert.ok(statuses.filter(value => value.running).at(-1).ownerWake.woken >= 1);
+  } finally { await events.close(); }
 });
 
 test('broker accepts owner hints only through the Claude controller and rejects content and workers', async t => {
