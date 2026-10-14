@@ -297,13 +297,14 @@ test('refuses source aliases, foreign-writable modes, byte overflow and malforme
   const resolver = path => createNativeEmptyTurnResolver({ path, threadId, cwd });
   const alias = join(source.root, 'alias');
   await symlink(source.path, alias);
-  await assert.rejects(resolver(alias)([turn()], { threadId }), /owned single-link/);
+  await assert.rejects(resolver(alias)([turn()], { threadId }), /owned regular/);
   await rm(alias);
   await symlink(source.root, alias);
   await assert.rejects(resolver(join(alias, 'rollout.jsonl'))([turn()], { threadId }), /canonical/);
   await rm(alias);
+  // Another reader may hard-link a rollout; the stable read still proves it.
   await link(source.path, alias);
-  await assert.rejects(run(source), /owned single-link/);
+  await run(source);
   await rm(alias);
   await chmod(source.path, 0o622);
   await assert.rejects(run(source), /foreign writes/);

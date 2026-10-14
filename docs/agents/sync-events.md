@@ -70,7 +70,9 @@ bounded polling harness, not a production fallback.
   command starts inside its turn; a notification has no duration and starts
   when it arrives.
   Rollouts readable by others are accepted; group or world write access is
-  refused, as for the empty-turn reader. Keep image positions bound to
+  refused, as for the empty-turn reader. An extra hard link (another reader,
+  such as a usage cache, may link rollouts) is accepted by every rollout
+  proof reader: the stable read proves the exact inode. Keep image positions bound to
   exact native item identities. A rollover (the same thread continuing in a
   new segment, as after an edited message) is read through its declared
   history_base chain: every inherited segment passes the same stable read, is

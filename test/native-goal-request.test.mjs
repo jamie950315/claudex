@@ -188,7 +188,7 @@ test('goal provenance refuses source replacement and prefix rewrites between nat
   }
 });
 
-test('goal provenance refuses symlinks, hardlinks and oversized sources', async t => {
+test('goal provenance refuses symlinks and oversized sources but reads hard-linked rollouts', async t => {
   const source = await fixture(t);
   await assert.rejects(run(source, { resolveInitialGoal: createNativeGoalRequestResolver({ path: source.path, threadId, cwd, maxBytes: 1 }) }), /bounded file/);
   const alias = join(source.root, 'alias.jsonl');
@@ -196,7 +196,7 @@ test('goal provenance refuses symlinks, hardlinks and oversized sources', async 
   await assert.rejects(run(source, { resolveInitialGoal: createNativeGoalRequestResolver({ path: alias, threadId, cwd }) }), /owned regular/);
   await rm(alias);
   await link(source.path, alias);
-  await assert.rejects(run(source), /owned regular/);
+  await run(source);
 });
 
 test('initial goal cannot establish a completed reply without a native final response', async t => {

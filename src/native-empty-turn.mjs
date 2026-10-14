@@ -79,8 +79,8 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
     const source = await physicalRolloutPath(path);
     const info = await lstat(source, { bigint: true });
     if (!info.isFile() || info.isSymbolicLink() || info.uid !== BigInt(process.getuid())
-      || info.nlink !== 1n || (info.mode & 0o022n) !== 0n || info.size > BigInt(maxBytes))
-      fail('source must be an owned single-link regular bounded file without foreign writes.');
+      || (info.mode & 0o022n) !== 0n || info.size > BigInt(maxBytes))
+      fail('source must be an owned regular bounded file without foreign writes.');
     const data = await snapshot(source);
     if (data.bytes > maxBytes || IDENTITY.some(key => data.fileIdentity[key] !== String(info[key])))
       fail('source changed before its stable read.');

@@ -82,7 +82,7 @@ export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes 
     const source = await physicalRolloutPath(path);
     const info = await lstat(source, { bigint: true });
     if (!info.isFile() || info.isSymbolicLink() || info.uid !== BigInt(process.getuid())
-      || info.nlink !== 1n || info.size > BigInt(maxBytes)) fail('source must be an owned regular bounded file.');
+      || info.size > BigInt(maxBytes)) fail('source must be an owned regular bounded file.');
     const data = await snapshot(source);
     if (data.bytes > maxBytes || ['dev', 'ino', 'uid', 'mode', 'nlink'].some(key => data.fileIdentity[key] !== String(info[key])))
       fail('source changed before its stable read.');

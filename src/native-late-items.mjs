@@ -95,8 +95,10 @@ async function readSource(logicalPath, maxBytes) {
   if (await realpath(dirname(logicalPath)) !== dirname(logicalPath)) fail('source parent is not canonical.');
   const path = await physicalRolloutPath(logicalPath), compressed = isCompressedRollout(path);
   const named = await lstat(path, { bigint: true });
-  if (!named.isFile() || named.uid !== BigInt(process.getuid()) || named.nlink !== 1n
-    || (named.mode & 0o022n) !== 0n || named.size > BigInt(maxBytes)) fail('source must be an owned, single-link bounded regular file without group or world write access.');
+  // Another reader (a usage cache) may hard-link the rollout; the stable read
+  // below proves the exact inode, so an extra link is not a refusal.
+  if (!named.isFile() || named.uid !== BigInt(process.getuid())
+    || (named.mode & 0o022n) !== 0n || named.size > BigInt(maxBytes)) fail('source must be an owned, bounded regular file without group or world write access.');
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await file.stat({ bigint: true });

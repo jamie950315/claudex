@@ -114,7 +114,7 @@ test('a verified prefix mismatch invokes strict late proof and preserves native 
     const baseline = await f.runtime.inspect(f.record), before = await readFile(f.record.path);
     Object.assign(f.record, { verified: true, checkpoint: { count: baseline.common.messages.length, digest: baseline.digest } });
     command.aggregatedOutput = 'Changed historical output'; f.calls.length = 0;
-    await assert.rejects(f.runtime.inspect(f.record), /Native Codex late item: source must be an owned, single-link bounded regular file without group or world write access/);
+    await assert.rejects(f.runtime.inspect(f.record), /Native Codex late item: source must be an owned, bounded regular file without group or world write access/);
     assert.equal(f.calls.filter(call => call.method === 'thread/turns/list').length, 3);
     assert.deepEqual(await readFile(f.record.path), before);
     assert.deepEqual(f.record.checkpoint, { count: baseline.common.messages.length, digest: baseline.digest });

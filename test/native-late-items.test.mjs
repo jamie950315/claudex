@@ -341,7 +341,8 @@ test('source aliases, foreign permissions, bounds and ambiguous serialized frame
   const source = await fixture(t), alias = join(source.root, 'alias');
   await symlink(source.path, alias);
   await assert.rejects(createNativeLateItemResolver({ path: alias, threadId, cwd })(source.native, { threadId }), /regular file/);
-  await rm(alias); await link(source.path, alias); await assert.rejects(prove(source), /single-link/); await rm(alias);
+  // Another reader may hard-link a rollout; the stable read still proves it.
+  await rm(alias); await link(source.path, alias); assert.equal((await prove(source)).placements.length, 1); await rm(alias);
   // Native writes rollouts readable by others; only write access is refused.
   await chmod(source.path, 0o644); assert.equal((await prove(source)).placements.length, 1);
   for (const mode of [0o660, 0o602]) { await chmod(source.path, mode); await assert.rejects(prove(source), /group or world write/); }
