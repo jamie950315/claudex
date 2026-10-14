@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, rename, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -112,4 +112,20 @@ test('native Claude adapter refuses retirement of desktop-adopted transcripts', 
     await assert.rejects(native.drivers.claude.hide({ nativeId: id }), /Claude Desktop owns/);
     await assert.rejects(native.drivers.claude.remove({ nativeId: id }), /Claude Desktop owns/);
   } finally { await native.close(); }
+});
+
+test('a mapping lookup rescans when Desktop replaces an unrelated record during the scan', async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-desktop-guard-')));
+  const record = { cwd: '/tmp', title: 'Native title', lastActivityAt: 100, isArchived: false };
+  const write = (path, desktopId, cliSessionId) => writeFile(path,
+    JSON.stringify({ ...record, sessionId: `local_${desktopId}`, cliSessionId }), { mode: 0o600 });
+  const desktopId = randomUUID(), cliId = randomUUID(), otherId = randomUUID(), otherCli = randomUUID();
+  await write(join(root, `local_${desktopId}.json`), desktopId, cliId);
+  await write(join(root, `local_${otherId}.json`), otherId, otherCli);
+  for (let i = 0; i < 400; i++) { const id = randomUUID(); await write(join(root, `local_${id}.json`), id, randomUUID()); }
+  await write(join(root, 'replacement.tmp'), otherId, otherCli);
+  // The lookup has already taken the directory identity when the rename runs.
+  const lookup = readDesktopSessionMappings(root, [cliId]);
+  await rename(join(root, 'replacement.tmp'), join(root, `local_${otherId}.json`));
+  assert.equal((await lookup).get(cliId).sessionId, `local_${desktopId}`);
 });

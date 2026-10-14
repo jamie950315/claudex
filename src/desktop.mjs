@@ -9,6 +9,8 @@ const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nl
 const sameFile = (a, b) => IDENTITY.every(key => a[key] === b[key]);
 // Preserve the legacy Stats millisecond representation; guards use exact ns.
 const milliseconds = ns => Number(ns / 1_000_000_000n) * 1000 + Number(ns % 1_000_000_000n) / 1e6;
+const REGISTRY_CHANGED = 'CLAUDEX_DESKTOP_REGISTRY_CHANGED';
+const registryChanged = message => Object.assign(new Error(message), { code: REGISTRY_CHANGED });
 
 async function readRecord(path, expected) {
   const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -26,7 +28,7 @@ async function readRecord(path, expected) {
     }
     if (BigInt(length) !== before.size || !sameFile(before, await file.stat({ bigint: true }))
       || !sameFile(before, await lstat(path, { bigint: true })))
-      throw new Error('Desktop session registry changed while being read.');
+      throw registryChanged('Desktop session registry changed while being read.');
     let record;
     try { record = JSON.parse(bytes.subarray(0, length).toString('utf8')); }
     catch { throw new Error('Malformed Desktop session registry; ownership cannot be established safely.'); }
@@ -108,10 +110,10 @@ export async function readDesktopTitleMappings(root, nativeIds) {
 async function readMappings(root, nativeIds, metadataErrors) {
   if (!Array.isArray(nativeIds) || nativeIds.length > 4096 || nativeIds.some(id => typeof id !== 'string' || !UUID.test(id)))
     throw new Error('Invalid Desktop session mapping identities.');
-  const wanted = new Set(nativeIds.map(id => id.toLowerCase())), result = new Map();
-  if (!root || !wanted.size) return result;
+  const wanted = new Set(nativeIds.map(id => id.toLowerCase()));
+  if (!root || !wanted.size) return new Map();
   if (!isAbsolute(root) || resolve(root) !== root) throw new Error('Desktop registry root must be canonical.');
-  let scanned = 0;
+  let scanned = 0, result;
   async function visit(path, depth) {
     let before;
     try { before = await lstat(path, { bigint: true }); }
@@ -153,8 +155,15 @@ async function readMappings(root, nativeIds, metadataErrors) {
           } });
       } else if (entry.isDirectory() && depth < 2) await visit(target, depth + 1);
     }
-    if (!sameFile(before, await lstat(path, { bigint: true }))) throw new Error('Desktop session storage changed during mapping lookup.');
+    if (!sameFile(before, await lstat(path, { bigint: true }))) throw registryChanged('Desktop session storage changed during mapping lookup.');
   }
-  await visit(root, 0);
-  return result;
+  // Desktop rewrites the records of its running sessions at any time, so a
+  // scan can overlap a write to a session nobody asked about. A result still
+  // comes only from one scan that saw no change; repeat the scan a few times
+  // before reporting the registry as changing.
+  for (let attempt = 1; ; attempt++) {
+    scanned = 0; result = new Map();
+    try { await visit(root, 0); return result; }
+    catch (error) { if (error.code !== REGISTRY_CHANGED || attempt === 3) throw error; }
+  }
 }

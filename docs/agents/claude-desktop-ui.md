@@ -21,6 +21,11 @@ Remote Control spawn that never ran). A record with the exact filename identity
 and an absent or null cliSessionId maps to no native transcript and is skipped;
 its filename still protects that Desktop identity. A present but invalid CLI
 identity or a mismatched sessionId remains ambiguous and fails the whole lookup.
+Desktop rewrites the records of its running sessions at any time. A mapping
+lookup that overlaps such a write (a record or directory identity changed during
+the scan) repeats the whole scan, at most three times; a result always comes
+from one scan that saw no change. Never accept a partly changed scan, and never
+let a write to an unrelated session hold the conversation being looked up.
 Returning from Codex creates a separate managed Remote Control entry with the
 same logical title, without a `[Claudex]` prefix. The opt-in native Local handoff
 archives the verified Local predecessor so the ordinary same-title entry is the
