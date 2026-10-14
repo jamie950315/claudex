@@ -47,7 +47,8 @@ exists, such as into a worktree), the complete history must keep
 the saved prefix and two reads must agree. A Codex tail of closed turns (failed
 or interrupted without a reply, in both reads) does not hold the move: it cannot
 complete by waiting and stays in the native history; an in-progress tail waits.
-A Claudex-owned Codex snapshot, like a Claude read, keeps its saved directory
+A Claudex-owned Codex snapshot or preserved superseded Codex original, like a
+Claude read, keeps its saved directory
 string while Codex reports that same directory in either spelling (Codex later
 reports the canonical one), even once that directory is an alias; only an
 unmanaged original follows a Codex project move. Dependency anchors compare the

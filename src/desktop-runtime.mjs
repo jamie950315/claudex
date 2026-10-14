@@ -603,11 +603,12 @@ export class DesktopRuntime {
       const metadata = (await client.request('thread/read', { threadId: nativeId, includeTurns: false })).thread;
       if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
       const resolvedCwd = await this.nativeWorkingDirectory(metadata.cwd, { ...record, nativeId });
-      // Like a Claude read, a Claudex-owned snapshot keeps its saved directory
-      // string while Codex reports that same directory, in either spelling,
-      // after it was renamed and left as an alias. Originals follow a Codex
-      // project move.
-      const cwd = record.managed === true && await this.sameDirectory(record.cwd, resolvedCwd) ? record.cwd : resolvedCwd;
+      // Like a Claude read, a Claudex-owned snapshot or a preserved superseded
+      // original keeps its saved directory string while Codex reports that same
+      // directory, in either spelling, after it was renamed and left as an
+      // alias. Only a current unmanaged original follows a Codex project move.
+      const followsMoves = record.managed !== true && record.status === 'current';
+      const cwd = !followsMoves && await this.sameDirectory(record.cwd, resolvedCwd) ? record.cwd : resolvedCwd;
       const path = await this.safeRolloutPath(metadata.path);
       const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
       const failImageEvidence = message => { throw new Error(`Native Codex local image recovery: ${message}`); };

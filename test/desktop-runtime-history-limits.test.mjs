@@ -121,14 +121,15 @@ test('a verified prefix mismatch invokes strict late proof and preserves native 
   }
 });
 
-test('an owned snapshot keeps its saved directory alias while Codex reports that directory; an original reports the move', async t => {
-  for (const managed of [true, false]) {
+test('owned snapshots and preserved originals keep a saved directory alias; a current original reports the move', async t => {
+  for (const [managed, status, keeps] of [[true, 'current', true], [false, 'original', true], [false, 'current', false]]) {
     const f = await fixture(t, { managed });
+    f.record.status = status;
     const saved = f.record.cwd, moved = await f.aliasProject();
-    assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, managed ? saved : moved);
+    assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, keeps ? saved : moved);
     // Codex can later report the canonical spelling of the same directory.
     f.reportCwd(moved);
-    assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, managed ? saved : moved);
+    assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, keeps ? saved : moved);
   }
 });
 
