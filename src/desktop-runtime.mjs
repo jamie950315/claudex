@@ -249,6 +249,13 @@ export class DesktopRuntime {
 
   async owner(conversationId, cwd, title, { forceNormal = false, reconcileTitle = true } = {}) {
     let entry = this.owners.get(conversationId);
+    // A process whose Remote Control setup explicitly failed is replaced at
+    // its next use once idle; its saved registration was already reset.
+    if (entry && !entry.error && entry.owner.status().restartRequired && this.idleOwner(entry)) {
+      await entry.owner.close();
+      if (this.owners.get(conversationId) === entry) this.owners.delete(conversationId);
+      entry = undefined;
+    }
     if (entry) {
       entry.usedAt = this.clock();
       if (entry.error) throw entry.error;

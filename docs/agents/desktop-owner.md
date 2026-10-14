@@ -10,7 +10,13 @@ and unarchive can race an external append. Keep the Desktop-owned write guard.
 Desktop SDK path: `ClaudeOwner` is the sole native writer; Desktop views it
 through Remote Control. Actual native/desktop tests verify shouldQuery:false,
 zero-inference receipts, same remote ID after restart, exact UUID/content
-persistence, and duplicate suppression. SDK0.3.281/CLI2.1.281 are validated baselines
+persistence, and duplicate suppression. A first registration is saved as
+registering before the call; an outcome without a native bridge-session row
+stays unknown and never registers again. Only an explicit CLI error answer
+(SDK errorClass control_request_failed) to a first registration resets it to
+unregistered and replaces that process at its next idle use, which may register
+once more (such failures were observed transiently after many registrations).
+SDK0.3.281/CLI2.1.281 are validated baselines
 enforced only in strict policy. Preserve
 the default OAuth namespace by omitting CLAUDE_CONFIG_DIR for standard ~/.claude.
 No credential extraction/copy is allowed. The opt-in Desktop watcher uses this

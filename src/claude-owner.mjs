@@ -265,7 +265,7 @@ export class ClaudeOwner {
       coldResetEligible: this.coldStartVerified && !this.everConnected && this.activityRevision === 0
         && this.nativeState === 'idle' && !this.backgroundTasks.length && !this.blocked
         && !this.closed && !this.closing && !this.appendBusy && !this.resetBusy && !this.waiting,
-      blocked: this.blocked, closed: this.closed };
+      blocked: this.blocked, closed: this.closed, restartRequired: this.restartRequired === true };
   }
 
   async emit(event) {
@@ -588,8 +588,20 @@ export class ClaudeOwner {
     const previous = this.state.remoteId;
     // A name is chosen only for the first registration. Reattachment must not
     // overwrite the native/cloud title, including an explicit user UI rename.
-    const response = await this.query.enableRemoteControl(true, previous ? undefined : this.state.displayTitle ?? this.title,
-      { keepSessionOnExit: true, ...(previous ? { reattachSessionId: previous } : {}) });
+    let response;
+    try {
+      response = await this.query.enableRemoteControl(true, previous ? undefined : this.state.displayTitle ?? this.title,
+        { keepSessionOnExit: true, ...(previous ? { reattachSessionId: previous } : {}) });
+    } catch (error) {
+      // The running CLI answered that its setup produced no Remote Control
+      // session. That process keeps its failed bridge, so it is replaced at the
+      // next use and the registration returns to unregistered. A transport or
+      // process failure gives no such answer and leaves the outcome unknown.
+      if (!previous && error?.errorClass === 'control_request_failed') {
+        delete this.state.registration; await this.save(); this.restartRequired = true;
+      }
+      throw error;
+    }
     if (!REMOTE_ID.test(response?.bridge_session_id) || previous && response.bridge_session_id !== previous) {
       this.blocked = 'Remote Control did not preserve the owned conversation identity.';
       throw new Error(this.blocked);

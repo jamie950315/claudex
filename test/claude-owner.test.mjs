@@ -46,7 +46,7 @@ test('owner resolves a PATH command to the same absolute executable it will vali
 });
 
 async function fixture({ receipt = true, persist = true, receiptMutator, beforeReceipt, persistRow,
-  directoryPrefix = 'claudex-owner-', remoteFailure = false, initializationFailure = false } = {}) {
+  directoryPrefix = 'claudex-owner-', remoteFailure = false, initializationFailure = false, remoteVerdict = () => false } = {}) {
   const root = await mkdtemp(join(tmpdir(), directoryPrefix));
   const claudeHome = join(root, 'claude'); await mkdir(claudeHome);
   const calls = { appends: [], remote: [], options: [] }, events = [];
@@ -66,6 +66,8 @@ async function fixture({ receipt = true, persist = true, receiptMutator, beforeR
       },
       async enableRemoteControl(enabled, title, settings) {
         calls.remote.push({ enabled, title, settings });
+        // The SDK marks an explicit CLI error answer to a control request.
+        if (remoteVerdict()) throw Object.assign(new Error('Remote Control initialization failed'), { errorClass: 'control_request_failed' });
         const remoteId = settings.reattachSessionId ?? `cse_${randomUUID().replaceAll('-', '')}`;
         await mkdir(join(path, '..'), { recursive: true });
         await appendFile(path, JSON.stringify({ type: 'bridge-session', sessionId: id, bridgeSessionId: remoteId }) + '\n');
@@ -451,6 +453,21 @@ test('remote registration crash recovers native bridge identity rather than allo
   await assert.rejects(ClaudeOwner.open(f.config), /Synthetic connection loss/);
   assert.equal(f.calls.remote.at(-1).settings.reattachSessionId, remoteId);
   assert.equal(JSON.parse(await readFile(savedPath)).remoteId, remoteId);
+});
+
+test('an explicit Remote Control setup failure resets registration so a new process registers once', async () => {
+  let failing = true;
+  const f = await fixture({ remoteVerdict: () => failing }), owner = await ClaudeOwner.open(f.config);
+  await assert.rejects(owner.append({ operationId: 'a', content: 'Synthetic handoff' }), /initialization failed/);
+  assert.equal(JSON.parse(await readFile(owner.statePath)).registration, undefined);
+  assert.equal(owner.status().restartRequired, true);
+  await owner.close(); failing = false;
+  const next = await ClaudeOwner.open(f.config);
+  await next.append({ operationId: 'a', content: 'Synthetic handoff' });
+  assert.match(next.status().remoteId, /^cse_/);
+  assert.equal(f.calls.remote.length, 2);
+  assert.equal(f.calls.remote.at(-1).settings.reattachSessionId, undefined);
+  await next.close();
 });
 
 test('tampered native UUID content prevents crash recovery', async () => {
