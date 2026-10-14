@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname, basename, resolve, sep, isAbsolute } from 'node:path';
 import { lstat, realpath, readFile, access, readdir, open, mkdir, rename } from 'node:fs/promises';
 import { createReadStream, constants } from 'node:fs';
+import { pipeline, Readable } from 'node:stream';
+import { createZstdDecompress } from 'node:zlib';
 import { createInterface } from 'node:readline';
 import { hash, privateDirectory, publishExclusive, readJSON, snapshot, withLock } from './storage.mjs';
 import { CodexWebSocketClient, inspectCodexSocket, MAX_FRAME_BYTES } from './codex-websocket.mjs';
@@ -20,6 +22,7 @@ import { createNativeEmptyTurnResolver } from './native-empty-turn.mjs';
 import { createNativeLateItemResolver } from './native-late-items.mjs';
 import { createCodexRolloutLocator, createCodexLocalImageResolver } from './native-local-images.mjs';
 import { createNativeGoalRequestResolver } from './native-goal-request.mjs';
+import { decompressRollout, isCompressedRollout, isRolloutFileName, physicalRolloutPath, plainRolloutPath, rolloutAbsent } from './codex-rollout-file.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket, hasProjectedImages, MAX_CONTEXT_PACKET_BYTES } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
@@ -87,8 +90,12 @@ function assertNotImportedOriginalWrite(record) {
   if (importedClaudeOriginal(record)) throw new Error('Imported Claude originals are read-only to Claudex; only their native Desktop owner may write them.');
 }
 
-async function header(path) {
-  const stream = createReadStream(path, { encoding: 'utf8' });
+async function header(logicalPath) {
+  const path = await physicalRolloutPath(logicalPath);
+  const raw = createReadStream(path);
+  // pipeline destroys every stage with a read or decode failure.
+  const stream = isCompressedRollout(path) ? pipeline(raw, createZstdDecompress(), () => {}) : raw;
+  stream.setEncoding('utf8');
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   try { for await (const line of lines) { try { return JSON.parse(line); } catch { throw new Error('Malformed native session header.'); } } }
   finally { lines.close(); stream.destroy(); }
@@ -282,6 +289,13 @@ export class DesktopRuntime {
     return join(parent, basename(path));
   }
 
+  // A Codex rollout keeps its logical .jsonl path while either representation
+  // is on disk; the present file is the one validated.
+  async safeRolloutPath(path) {
+    const physical = await this.safePath(await physicalRolloutPath(path), this.codexHome);
+    return plainRolloutPath(physical);
+  }
+
   async snapshotBytes(nativeId, currentPath) {
     let bytes = 0; const seen = new Set(); let foundCurrent = false;
     // Every managed Codex read counts the whole dated rollout tree. Visit each
@@ -308,15 +322,16 @@ export class DesktopRuntime {
       for (const { directory, entries } of listings) for (const entry of entries) {
         const path = join(directory, entry.name);
         if (entry.isDirectory()) directories.push(path);
-        else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.includes(nativeId) && entry.name.endsWith('.jsonl')) candidates.push(path);
+        else if (entry.isFile() && isRolloutFileName(entry.name) && entry.name.includes(nativeId)) candidates.push(path);
       }
     }
-    for (const path of candidates) {
+    // As in Codex, a plain rollout hides its compressed sibling.
+    for (const path of candidates.filter(path => !isCompressedRollout(path) || !candidates.includes(plainRolloutPath(path)))) {
       const row = await header(path);
       if (row.type !== 'session_meta' || row.payload?.id !== nativeId) continue;
       const info = await lstat(path); const identity = `${info.dev}:${info.ino}`;
       if (!seen.has(identity)) { bytes += info.size; seen.add(identity); }
-      if (path === currentPath) foundCurrent = true;
+      if (plainRolloutPath(path) === currentPath) foundCurrent = true;
     }
     if (!foundCurrent || !Number.isSafeInteger(bytes)) throw new Error('Owned rollout storage could not be counted safely.');
     return bytes;
@@ -524,7 +539,7 @@ export class DesktopRuntime {
         try { await lstat(path); return false; }
         catch (checkError) { if (['ENOENT', 'ENOTDIR'].includes(checkError.code)) return true; throw checkError; }
       };
-      if (await absent(record.path)) {
+      if (record.side === 'codex' ? await rolloutAbsent(record.path) : await absent(record.path)) {
         throw Object.assign(new Error(`Tracked ${record.side} history ${record.nativeId} is unavailable at its saved path; synchronization is paused.`, { cause: error }), {
           code: 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE', side: record.side, nativeId: record.nativeId,
           savedPath: record.path, conversationId: record.conversationId,
@@ -560,7 +575,7 @@ export class DesktopRuntime {
     if (record.side === 'codex') {
       let nativeId = record.nativeId;
       if (!nativeId) {
-        await this.safePath(record.path, this.codexHome);
+        await this.safeRolloutPath(record.path);
         const row = await header(record.path);
         if (row.type !== 'session_meta') throw new Error('Missing Codex session metadata.');
         nativeId = row.payload?.id;
@@ -570,7 +585,7 @@ export class DesktopRuntime {
       const metadata = (await client.request('thread/read', { threadId: nativeId, includeTurns: false })).thread;
       if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
       const cwd = await this.nativeWorkingDirectory(metadata.cwd, { ...record, nativeId });
-      const path = await this.safePath(metadata.path, this.codexHome);
+      const path = await this.safeRolloutPath(metadata.path);
       const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
       const failImageEvidence = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
       const verifiedCheckpoint = record.verified === true && Number.isSafeInteger(record.checkpoint?.count)
@@ -585,7 +600,7 @@ export class DesktopRuntime {
       const resolveLocalImages = createCodexLocalImageResolver({ path, threadId: nativeId, retainedRollouts, retainedPath,
         locateRollout: createCodexRolloutLocator(this.codexHome),
         onResolved: evidence => { imageEvidence = evidence; },
-        validateRetainedPath: sourcePath => this.safePath(sourcePath, this.codexHome) });
+        validateRetainedPath: sourcePath => this.safeRolloutPath(sourcePath) });
       try {
         const exportHistory = async resolveLateItems => record.managed
           ? await exportOwnedCodexHistory({ client, targetSessionId: nativeId, conversationId: record.conversationId, cwd, key: this.key,
@@ -651,7 +666,7 @@ export class DesktopRuntime {
         throw new Error(`${error.message} [Codex thread ${nativeId}]`, { cause: error });
       }
       data.common.meta.title = metadata.name ?? metadata.title ?? metadata.preview?.split('\n')[0].slice(0, 100) ?? data.common.meta.title;
-      return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(path)).size, digest: fingerprint(data.common) };
+      return { ...data, nativeId, path, bytes: record.managed ? await this.snapshotBytes(nativeId, path) : (await lstat(await physicalRolloutPath(path))).size, digest: fingerprint(data.common) };
     }
     // contextReset survives promotion; only an explicit retained-source
     // recovery read needs to start an owner. Pending writes recover separately.
@@ -873,9 +888,9 @@ export class DesktopRuntime {
       if (applied && !this.owners.get(record.conversationId)?.maintenanceOnly) await owner.connect();
       return applied;
     }
-    if (!await exists(record.path)) return false;
-    await this.safePath(record.path, this.codexHome);
-    const data = await decodeOwnedCodexHistoryWithArchives({ text: (await snapshot(record.path)).text, conversationId: record.conversationId,
+    if (await rolloutAbsent(record.path)) return false;
+    await this.safeRolloutPath(record.path);
+    const data = await decodeOwnedCodexHistoryWithArchives({ text: (await snapshot(await physicalRolloutPath(record.path))).text, conversationId: record.conversationId,
       targetSessionId: record.nativeId, key: this.key, archiveRoot: this.root });
     if (data.operationId !== pending.operationId || data.bootstrapDigest !== pending.checkpoint.digest) throw new Error('Existing projection does not match the durable handoff intent.');
     // Registration may have been interrupted after exclusive file publication.
@@ -960,18 +975,22 @@ export class DesktopRuntime {
       throw dependencyAnchorGuard('Dependency anchor requires a verified owned Codex snapshot and canonical checkpoint.');
   }
   async dependencyAnchorRawProof(path, record) {
-    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const source = await physicalRolloutPath(path);
+    const file = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const sameStat = (a, b) => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink'].every(key => a[key] === b[key]);
     try {
       const before = await file.stat({ bigint: true });
       if (!before.isFile() || before.uid !== BigInt(process.getuid()) || before.nlink !== 1n
           || before.size > 64n * 1024n * 1024n) throw dependencyAnchorGuard('Dependency anchor transcript is not a bounded owned regular file.');
+      // A compressed rollout proves its decompressed bytes.
+      const content = isCompressedRollout(source) ? decompressRollout(await file.readFile(), 64 * 1024 * 1024) : null;
+      const size = content ? BigInt(content.length) : before.size;
       const digest = createHash('sha256'), chunks = [];
       let originalDigest = null, labelDigest = null, labelBytes = 0;
       let length = 0, headerLength = 0, endedHeader = false, lastByte = null;
-      for await (const chunk of file.createReadStream({ autoClose: false })) {
+      for await (const chunk of content ? Readable.from([content]) : file.createReadStream({ autoClose: false })) {
         length += chunk.length;
-        if (length > before.size) throw dependencyAnchorGuard('Dependency anchor transcript grew during verification.');
+        if (length > size) throw dependencyAnchorGuard('Dependency anchor transcript grew during verification.');
         digest.update(chunk); lastByte = chunk.at(-1);
         if (endedHeader) { originalDigest?.update(chunk); labelDigest?.update(chunk); }
         else {
@@ -990,17 +1009,17 @@ export class DesktopRuntime {
           }
         }
       }
-      const after = await file.stat({ bigint: true }), current = await lstat(path, { bigint: true });
-      if (!sameStat(before, after) || !sameStat(after, current) || BigInt(length) !== before.size || lastByte !== 10)
+      const after = await file.stat({ bigint: true }), current = await lstat(source, { bigint: true });
+      if (!sameStat(before, after) || !sameStat(after, current) || BigInt(length) !== size || lastByte !== 10)
         throw dependencyAnchorGuard('Dependency anchor transcript changed during verification.');
       let row;
       try { row = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw dependencyAnchorGuard('Dependency anchor transcript header is malformed.'); }
       if (row.type !== 'session_meta' || row.payload?.id !== record.nativeId || row.payload?.cwd !== record.cwd)
         throw dependencyAnchorGuard('Dependency anchor transcript identity or working directory changed.');
-      return { path, hash: digest.digest('hex'), bytes: Number(before.size),
+      return { path, hash: digest.digest('hex'), bytes: Number(size),
         ...(originalDigest ? { originalSerializationHash: originalDigest.digest('hex') } : {}),
-        ...(labelDigest ? { labelFree: { hash: labelDigest.digest('hex'), bytes: Number(before.size) + labelBytes } } : {}) };
+        ...(labelDigest ? { labelFree: { hash: labelDigest.digest('hex'), bytes: Number(size) + labelBytes } } : {}) };
     } finally { await file.close(); }
   }
   async dependencyAnchorSnapshot(record) {
@@ -1012,7 +1031,7 @@ export class DesktopRuntime {
         throw dependencyAnchorGuard('Dependency anchor native identity or working directory changed.');
       if (!['idle', 'notLoaded'].includes(thread.status?.type))
         throw dependencyAnchorGuard('Dependency anchor parent is active or its idle state is unverified.');
-      return this.safePath(thread.path, this.codexHome);
+      return this.safeRolloutPath(thread.path);
     };
     const path = await readMetadata();
     if (path !== record.path) throw dependencyAnchorGuard('Dependency anchor native transcript path changed.');
@@ -1140,10 +1159,10 @@ export class DesktopRuntime {
         throw new Error('Codex original identity or working directory changed; it was not archived.');
       if (!['idle', 'notLoaded'].includes(thread.status?.type))
         throw new Error('Codex original is active or its idle state is unverified; it was not archived.');
-      return { thread, path: await this.safePath(thread.path, this.codexHome) };
+      return { thread, path: await this.safeRolloutPath(thread.path) };
     };
     const initial = await readMetadata();
-    const before = await snapshot(initial.path);
+    const before = await snapshot(await physicalRolloutPath(initial.path));
     if (before.rows[0]?.type !== 'session_meta' || before.rows[0].payload?.id !== record.nativeId)
       throw new Error('Codex original transcript identity changed; it was not archived.');
     const data = await this.inspect(record);
@@ -1151,7 +1170,7 @@ export class DesktopRuntime {
         || data.incompleteTail || data.common.messages.length !== record.checkpoint.count || data.digest !== record.checkpoint.digest)
       throw new Error('Codex original history changed or has an unfinished turn; it was not archived.');
     const latest = await readMetadata();
-    if (latest.path !== initial.path || (await snapshot(latest.path)).hash !== before.hash)
+    if (latest.path !== initial.path || (await snapshot(await physicalRolloutPath(latest.path))).hash !== before.hash)
       throw new Error('Codex original changed during archive preflight; it was not archived.');
     return { path: latest.path, hash: before.hash };
   }
@@ -1192,7 +1211,7 @@ export class DesktopRuntime {
     if (!['0.155.0-alpha.16.4', '0.158.0-alpha.2.1', '0.159.2'].includes(this.codexNativeVersion))
       throw originalArchiveGuard('Preserved original archive requires a validated native cascade-archive version.');
     return snapshotOriginalArchiveTree({ client, codexHome: this.codexHome, parentId: record.nativeId, cwd: record.cwd,
-      safePath: path => this.safePath(path, this.codexHome) });
+      safePath: path => this.safeRolloutPath(path) });
   }
   async prepareOriginalArchiveTree(record) {
     const original = await this.originalArchiveSnapshot(record);

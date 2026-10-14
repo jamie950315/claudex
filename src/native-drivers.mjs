@@ -9,6 +9,7 @@ import { CodexClient } from './codex.mjs';
 import { createCodexProjection, codexProjectionPath, encodeCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 import { createClaudeSession, decodeClaude, encodeClaude, sessionPath } from './claude.mjs';
 import { snapshot, privateDirectory } from './storage.mjs';
+import { physicalRolloutPath } from './codex-rollout-file.mjs';
 import { assertComplete, fingerprint } from './history.mjs';
 import { codexCompaction, provenance } from './compaction.mjs';
 import { isSupportedCodexVersion } from './codex-versions.mjs';
@@ -78,10 +79,14 @@ export async function nativeDrivers({ root, codexHome, claudeHome, binary = 'cod
     }
     return cachedClient;
   }
+  // A Codex rollout is read from whichever representation is present.
   async function located(record) {
-    if (await exists(record.path)) return record.path;
+    const present = async path => record.side !== 'codex' ? (await exists(path) ? path : null)
+      : physicalRolloutPath(path).catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+    const current = await present(record.path);
+    if (current) return current;
     const alternative = record.side === 'codex' ? join(codexHome, 'archived_sessions', basename(record.path)) : join(vault, `${record.nativeId}.jsonl`);
-    return await exists(alternative) ? alternative : record.path;
+    return await present(alternative) ?? record.path;
   }
   async function inspect(record) {
     const path = await located(record);

@@ -14,6 +14,7 @@ import { handleClaudeOwnerWake, wakeClaudeOwnerInLock } from './claude-owner-wak
 import { syncEventKey } from './sync-events.mjs';
 import { startClaudeRendererMaintenance } from './claude-renderer-maintenance.mjs';
 import { claudeCacheDirectory } from './claude-frontend-graph.mjs';
+import { physicalRolloutPath, rolloutAbsent } from './codex-rollout-file.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Forked Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)(?: \[Codex thread [a-f0-9-]+\])?$/i;
@@ -58,9 +59,10 @@ async function activeActivityHint(state, id) {
   for (const record of records) {
     if (typeof record.path !== 'string' || !isAbsolute(record.path)) return null;
     try {
-      const info = await lstat(record.path, { bigint: true });
-      if (!info.isFile() || await realpath(record.path) !== resolve(record.path)) return null;
-      files.push([record.path, ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink']
+      const path = record.side === 'codex' ? await physicalRolloutPath(record.path) : record.path;
+      const info = await lstat(path, { bigint: true });
+      if (!info.isFile() || await realpath(path) !== resolve(path)) return null;
+      files.push([path, ...['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'mode', 'uid', 'nlink']
         .map(key => info[key].toString())]);
     } catch { return null; }
   }
@@ -625,10 +627,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                     // after discovery listed it. Skip only a source whose exact
                     // discovered file is now absent; it has nothing to enroll.
                     if (typeof source.path === 'string' && isAbsolute(source.path)
-                      && await lstat(source.path).then(() => false, lstatError => {
-                        if (['ENOENT', 'ENOTDIR'].includes(lstatError.code)) return true;
-                        throw lstatError;
-                      })) return deletedSource;
+                      && await rolloutAbsent(source.path)) return deletedSource;
                     if (/not found|no rollout/i.test(reason(error))) throw new Error('Referenced Codex history is unavailable.');
                     throw error;
                   });

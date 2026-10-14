@@ -2,6 +2,7 @@ import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { hash, snapshot } from './storage.mjs';
+import { physicalRolloutPath } from './codex-rollout-file.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE } from './codex-delegation.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -78,10 +79,11 @@ export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes 
   return async (turn, { threadId: expectedThreadId }) => {
     if (expectedThreadId !== threadId || !UUID.test(turn.id)) fail('source and API identities differ.');
     if (await realpath(dirname(path)) !== dirname(path)) fail('source parent must be canonical.');
-    const info = await lstat(path, { bigint: true });
+    const source = await physicalRolloutPath(path);
+    const info = await lstat(source, { bigint: true });
     if (!info.isFile() || info.isSymbolicLink() || info.uid !== BigInt(process.getuid())
       || info.nlink !== 1n || info.size > BigInt(maxBytes)) fail('source must be an owned regular bounded file.');
-    const data = await snapshot(path);
+    const data = await snapshot(source);
     if (data.bytes > maxBytes || ['dev', 'ino', 'uid', 'mode', 'nlink'].some(key => data.fileIdentity[key] !== String(info[key])))
       fail('source changed before its stable read.');
     const rows = data.rows;

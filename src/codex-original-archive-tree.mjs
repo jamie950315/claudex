@@ -3,6 +3,8 @@ import { constants } from 'node:fs';
 import { join, sep } from 'node:path';
 import { createHash } from 'node:crypto';
 import { hash } from './storage.mjs';
+import { Readable } from 'node:stream';
+import { decompressRollout, isCompressedRollout, physicalRolloutPath } from './codex-rollout-file.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -47,17 +49,21 @@ async function inventory(client, parentId) {
 }
 
 async function fileProof(path, nativeId, budget) {
-  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const source = await physicalRolloutPath(path);
+  const file = await open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const before = await file.stat();
     if (!before.isFile() || before.uid !== process.getuid() || before.nlink !== 1) fail('transcript is not an owned regular file.');
-    budget.bytes += before.size;
-    if (before.size > 512 * 1024 * 1024 || budget.bytes > 512 * 1024 * 1024) fail('tree exceeds its byte limit.');
+    // A compressed rollout proves its decompressed bytes.
+    const content = isCompressedRollout(source) ? decompressRollout(await file.readFile(), 512 * 1024 * 1024) : null;
+    const size = content ? content.length : before.size;
+    budget.bytes += size;
+    if (size > 512 * 1024 * 1024 || budget.bytes > 512 * 1024 * 1024) fail('tree exceeds its byte limit.');
     const digest = createHash('sha256'), headerChunks = [];
     let length = 0, headerLength = 0, endedHeader = false, lastByte = null;
-    for await (const chunk of file.createReadStream({ autoClose: false })) {
+    for await (const chunk of content ? Readable.from([content]) : file.createReadStream({ autoClose: false })) {
       length += chunk.length;
-      if (length > before.size) fail('transcript grew during verification.');
+      if (length > size) fail('transcript grew during verification.');
       digest.update(chunk); lastByte = chunk.at(-1);
       if (!endedHeader) {
         const newline = chunk.indexOf(10), part = newline < 0 ? chunk : chunk.subarray(0, newline);
@@ -66,13 +72,13 @@ async function fileProof(path, nativeId, budget) {
         headerChunks.push(part); endedHeader = newline >= 0;
       }
     }
-    const after = await file.stat(), current = await lstat(path);
-    if (!sameStat(before, after) || !sameStat(after, current) || length !== before.size || lastByte !== 10)
+    const after = await file.stat(), current = await lstat(source);
+    if (!sameStat(before, after) || !sameStat(after, current) || length !== size || lastByte !== 10)
       fail('transcript changed during verification.');
     let header;
     try { header = JSON.parse(Buffer.concat(headerChunks).toString('utf8')); } catch { fail('transcript header is malformed.'); }
     if (header.type !== 'session_meta' || header.payload?.id !== nativeId) fail('transcript identity changed.');
-    return { hash: digest.digest('hex'), bytes: before.size };
+    return { hash: digest.digest('hex'), bytes: size };
   } finally { await file.close(); }
 }
 

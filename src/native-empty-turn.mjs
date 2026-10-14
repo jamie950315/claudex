@@ -1,6 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { hash, snapshot } from './storage.mjs';
+import { physicalRolloutPath } from './codex-rollout-file.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
@@ -75,11 +76,12 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
         fail('API empty turn has inconsistent timing evidence.');
     }
     if (await realpath(dirname(path)) !== dirname(path)) fail('source parent must be canonical.');
-    const info = await lstat(path, { bigint: true });
+    const source = await physicalRolloutPath(path);
+    const info = await lstat(source, { bigint: true });
     if (!info.isFile() || info.isSymbolicLink() || info.uid !== BigInt(process.getuid())
       || info.nlink !== 1n || (info.mode & 0o022n) !== 0n || info.size > BigInt(maxBytes))
       fail('source must be an owned single-link regular bounded file without foreign writes.');
-    const data = await snapshot(path);
+    const data = await snapshot(source);
     if (data.bytes > maxBytes || IDENTITY.some(key => data.fileIdentity[key] !== String(info[key])))
       fail('source changed before its stable read.');
     const { rows } = data;

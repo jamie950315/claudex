@@ -1,9 +1,11 @@
 import { constants } from 'node:fs';
+import { Readable } from 'node:stream';
 import { lstat, open, readdir, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { isDeepStrictEqual, TextDecoder } from 'node:util';
 import { isInlineBase64 } from './base64.mjs';
 import { nativeHistoryEntries } from './native-history-order.mjs';
+import { isCompressedRollout, isRolloutFileName, physicalRolloutPath, plainRolloutPath, readCompressedRollout, statRollout } from './codex-rollout-file.mjs';
 
 export const LOCAL_IMAGE_ROLLOUT_LIMITS = Object.freeze({ maxBytes: 512 * 1024 * 1024, maxRowBytes: 64 * 1024 * 1024, maxRollouts: 256 });
 const defaultIO = { lstat, open, realpath, readdir };
@@ -124,14 +126,17 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
       const group = byTurn.get(turnId) ?? []; group.push(state); byTurn.set(turnId, group);
     }
     if (await io.realpath(dirname(path)) !== dirname(path)) fail('rollout parent path must already be canonical.');
-    const initial = await io.lstat(path);
+    const { path: source, info: initial } = await statRollout(path, io.lstat), compressed = isCompressedRollout(source);
+    if (!regular(initial)) fail('rollout must be an owned regular file within the scan byte limit.');
+    const content = compressed ? await readCompressedRollout(source, initial, maxBytes, io.open) : null;
+    const size = content ? content.length : initial.size;
     // A history_base reference covers only the rows before its exact ordinal;
-    // the referenced rollout may still grow after it.
-    const length = prefix ? prefix.endByte : initial.size;
-    if (!regular(initial) || length > maxBytes || initial.size < length) fail('rollout must be an owned regular file within the scan byte limit.');
+    // the referenced rollout may still grow after it. A compressed one cannot.
+    const length = prefix ? prefix.endByte : size;
+    if (length > maxBytes || size < length) fail('rollout must be an owned regular file within the scan byte limit.');
     let scannedEnd = 0, rowOffset = 0, previousRowStart = 0, stopped = false;
-    const unchanged = (a, b) => !prefix ? same(a, b) : a.dev === b.dev && a.ino === b.ino && b.size >= scannedEnd;
-    const file = await io.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const unchanged = (a, b) => !prefix || compressed ? same(a, b) : a.dev === b.dev && a.ino === b.ino && b.size >= scannedEnd;
+    const file = await io.open(source, constants.O_RDONLY | constants.O_NOFOLLOW);
     let stream, total = 0, rowBytes = 0, parts = [], ordinal = 0, activeTurn = null, contextTurn = null, imageBytes = 0;
     const decoder = new TextDecoder('utf-8', { fatal: true });
     const consume = (bytes, rowStart) => {
@@ -211,7 +216,8 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
     try {
       const opened = await file.stat();
       if (!regular(opened) || !unchanged(initial, opened)) fail('transcript changed while being read before image recovery.');
-      stream = file.createReadStream({ autoClose: false, highWaterMark: 64 * 1024, start: 0, ...(prefix ? {} : { end: length - 1 }) });
+      stream = content ? Readable.from([content])
+        : file.createReadStream({ autoClose: false, highWaterMark: 64 * 1024, start: 0, ...(prefix ? {} : { end: length - 1 }) });
       reading: for await (const chunk of stream) {
         total += chunk.length;
         if (total > maxBytes) fail('rollout scan byte limit exceeded.');
@@ -236,7 +242,7 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
           fail('history_base byte offset does not match its ordinal boundary.');
       } else if (rowBytes) fail('rollout has an incomplete final line.');
       scannedEnd = rowOffset;
-      const after = await file.stat(), current = await io.lstat(path);
+      const after = await file.stat(), current = await io.lstat(source);
       if (!regular(current) || !unchanged(initial, after) || !unchanged(initial, current) || !prefix && total !== length)
         fail('transcript changed while being read during image recovery; no recovery was returned.');
       if (!ordinal || !allowAbsent && found.size !== requests.length || [...byId.values()].some(state =>
@@ -254,10 +260,20 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
 const UUID_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_HISTORY_BASE_LINKS = 64;
 
-async function readHeader(path, io, maxRowBytes) {
-  if (await io.realpath(dirname(path)) !== dirname(path)) fail('rollout parent path must already be canonical.');
-  const info = await io.lstat(path);
+async function readHeader(logicalPath, io, maxRowBytes) {
+  if (await io.realpath(dirname(logicalPath)) !== dirname(logicalPath)) fail('rollout parent path must already be canonical.');
+  const { path, info } = await statRollout(logicalPath, io.lstat);
   if (!regular(info)) fail('history_base rollout must be an owned regular file.');
+  if (isCompressedRollout(path)) {
+    const content = await readCompressedRollout(path, info, LOCAL_IMAGE_ROLLOUT_LIMITS.maxBytes, io.open);
+    const end = content.indexOf(10);
+    if (end < 0) fail('history_base rollout has no complete metadata row.');
+    if (end > maxRowBytes) fail('rollout row byte limit exceeded.');
+    let row;
+    try { row = JSON.parse(content.subarray(0, end).toString('utf8')); } catch { fail('malformed history_base rollout metadata.'); }
+    if (row?.type !== 'session_meta' || !row.payload || typeof row.payload.id !== 'string') fail('malformed history_base rollout metadata.');
+    return { meta: row.payload, size: content.length };
+  }
   const file = await io.open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
     const opened = await file.stat();
@@ -286,7 +302,7 @@ export function createCodexRolloutLocator(codexHome, io = defaultIO) {
   let names;
   const list = async () => {
     if (names) return names;
-    names = [];
+    const found = new Set();
     const walk = async (directory, depth) => {
       let entries;
       try { entries = await io.readdir(directory, { withFileTypes: true }); }
@@ -294,11 +310,13 @@ export function createCodexRolloutLocator(codexHome, io = defaultIO) {
       for (const entry of entries) {
         // Native layout only: sessions/YYYY/MM/DD/<file> and archived_sessions/<file>.
         if (entry.isDirectory() && depth > 0 && /^\d+$/.test(entry.name)) await walk(join(directory, entry.name), depth - 1);
-        else if (depth === 0 && entry.isFile() && /^rollout-.*\.jsonl$/.test(entry.name)) names.push(join(directory, entry.name));
+        // A compressed rollout is located by its logical plain path.
+        else if (depth === 0 && entry.isFile() && isRolloutFileName(entry.name)) found.add(plainRolloutPath(join(directory, entry.name)));
       }
     };
     await walk(join(codexHome, 'sessions'), 3);
     await walk(join(codexHome, 'archived_sessions'), 0);
+    names = [...found];
     return names;
   };
   return async segmentId => {
@@ -357,7 +375,7 @@ export async function resolveRolloutHistoryBase({ path, threadId, locate, io = d
 export function createCodexLocalImageResolver({ path, threadId, retainedRollouts = [], retainedPath, locateRollout,
   onResolved = () => {}, maxBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxBytes,
   maxRowBytes = LOCAL_IMAGE_ROLLOUT_LIMITS.maxRowBytes, io = defaultIO,
-  validateRetainedPath = sourcePath => io.lstat(sourcePath) }) {
+  validateRetainedPath = async sourcePath => io.lstat(await physicalRolloutPath(sourcePath, io.lstat)) }) {
   const validPath = value => typeof value === 'string' && isAbsolute(value) && resolve(value) === value;
   if (!Array.isArray(retainedRollouts) || retainedRollouts.length > LOCAL_IMAGE_ROLLOUT_LIMITS.maxRollouts)
     fail('retained rollout evidence exceeds its bounded schema.');
@@ -457,7 +475,7 @@ export function createCodexLocalImageResolver({ path, threadId, retainedRollouts
     if ([...found.values()].flat().reduce((sum, image) => sum + Buffer.byteLength(image.url), 0) > options.maxBytes)
       fail('recovered image byte limit exceeded; no partial recovery was returned.');
     for (const [sourcePath, { stat, unchanged }] of observed) {
-      const current = await io.lstat(sourcePath);
+      const current = await io.lstat(await physicalRolloutPath(sourcePath, io.lstat));
       if (!regular(current) || !unchanged(stat, current))
         fail('transcript changed while being read across retained image evidence; no recovery was returned.');
     }

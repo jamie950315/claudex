@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { nativeItemDigest } from './native-history-order.mjs';
 import { resolveRolloutHistoryBase } from './native-local-images.mjs';
+import { decompressRollout, isCompressedRollout, physicalRolloutPath } from './codex-rollout-file.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const IDENTITY = ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink'];
@@ -90,8 +91,9 @@ function projectSubAgent(item) {
   return { type: 'subAgentActivity', id: item.id, kind: item.kind, agentThreadId: item.agent_thread_id, agentPath: item.agent_path };
 }
 
-async function readSource(path, maxBytes) {
-  if (await realpath(dirname(path)) !== dirname(path)) fail('source parent is not canonical.');
+async function readSource(logicalPath, maxBytes) {
+  if (await realpath(dirname(logicalPath)) !== dirname(logicalPath)) fail('source parent is not canonical.');
+  const path = await physicalRolloutPath(logicalPath), compressed = isCompressedRollout(path);
   const named = await lstat(path, { bigint: true });
   if (!named.isFile() || named.uid !== BigInt(process.getuid()) || named.nlink !== 1n
     || (named.mode & 0o022n) !== 0n || named.size > BigInt(maxBytes)) fail('source must be an owned, single-link bounded regular file without group or world write access.');
@@ -107,7 +109,8 @@ async function readSource(path, maxBytes) {
       if (!bytesRead) break;
       length += bytesRead;
     }
-    const bytes = buffer.subarray(0, length);
+    const stored = buffer.subarray(0, length);
+    const bytes = compressed ? decompressRollout(stored, maxBytes) : stored;
     if (bytes.length > maxBytes || !isDeepStrictEqual(identity(before), identity(await file.stat({ bigint: true })))
       || !isDeepStrictEqual(identity(before), identity(await lstat(path, { bigint: true })))
       || await realpath(dirname(path)) !== dirname(path)) fail('source changed during its stable read.');

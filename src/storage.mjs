@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { decompressRollout, isCompressedRollout } from './codex-rollout-file.mjs';
 
 export const hash = value => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 
@@ -216,7 +217,10 @@ export async function snapshot(path) {
       .every(key => left[key] === right[key]);
     const before = await file.stat({ bigint: true });
     if (!before.isFile() || !sameSnapshot(namedBefore, before)) throw new Error('Transcript changed while being read.');
-    const text = await file.readFile('utf8');
+    // A compressed Codex rollout is identified by its own file and read as
+    // its decompressed text.
+    const compressed = isCompressedRollout(path);
+    const text = compressed ? decompressRollout(await file.readFile()).toString('utf8') : await file.readFile('utf8');
     const after = await file.stat({ bigint: true });
     let namedAfter;
     try { namedAfter = await lstat(path, { bigint: true }); }
@@ -228,6 +232,6 @@ export async function snapshot(path) {
     });
     const fileIdentity = Object.fromEntries(['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink']
       .map(key => [key, String(after[key])]));
-    return { text, rows, hash: hash(text), bytes: Number(after.size), mtimeMs: Number(after.mtimeNs) / 1e6, fileIdentity };
+    return { text, rows, hash: hash(text), bytes: compressed ? Buffer.byteLength(text) : Number(after.size), mtimeMs: Number(after.mtimeNs) / 1e6, fileIdentity };
   } finally { await file.close(); }
 }

@@ -8,6 +8,7 @@ import { DEFAULT_POLICY, planRetention } from './retention.mjs';
 import { originalArchiveGuard } from './codex-original-archive-tree.mjs';
 import { isDesktopTracked, validateDesktopEnrollment } from './desktop-enrollment.mjs';
 import { revokeClaudeDesktopHandoffActions } from './claude-desktop-handoff.mjs';
+import { rolloutAbsent } from './codex-rollout-file.mjs';
 
 const other = side => side === 'codex' ? 'claude' : 'codex';
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
@@ -571,7 +572,7 @@ export class DesktopBridge {
           || !isAbsolute(record.path) || !this.adapters.codex?.exists) return kept;
       // Both the planned file and the native thread must be provably absent;
       // an unreadable answer from either keeps the transaction.
-      const unpublished = await lstat(record.path).then(() => false, error => error.code === 'ENOENT');
+      const unpublished = await rolloutAbsent(record.path).catch(() => false);
       const unregistered = await Promise.resolve().then(() => this.adapters.codex.exists(record)).then(value => value === false, () => false);
       if (!unpublished || !unregistered) return kept;
       state.pending = null;

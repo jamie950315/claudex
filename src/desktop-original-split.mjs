@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { fingerprint } from './history.mjs';
 import { snapshot } from './storage.mjs';
 import { isDesktopTracked } from './desktop-enrollment.mjs';
+import { physicalRolloutPath } from './codex-rollout-file.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const validCheckpoint = value => Number.isSafeInteger(value?.count) && value.count > 0
@@ -58,9 +59,11 @@ export async function splitDesktopOriginal({ bridge, conversationId, originalNat
     // also fences metadata-only replacement or rewrites between those reads.
     const inspect = async record => {
       await bridge.adapters[record.side].assertIdle(record);
-      const before = await snapshot(record.path);
+      // A Codex rollout is read from whichever representation is present.
+      const source = record.side === 'codex' ? await physicalRolloutPath(record.path) : record.path;
+      const before = await snapshot(source);
       const data = await bridge.inspect(record);
-      const after = await snapshot(record.path);
+      const after = await snapshot(source);
       if (data.path !== record.path || data.incompleteTail !== false
         || before.hash !== after.hash || !isDeepStrictEqual(before.fileIdentity, after.fileIdentity))
         throw blocked('Native history changed or has an unfinished turn; neither branch was changed.');

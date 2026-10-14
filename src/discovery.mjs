@@ -3,21 +3,33 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { projectDirectory } from './claude.mjs';
 import { createReadStream } from 'node:fs';
 import { createInterface } from 'node:readline';
+import { pipeline } from 'node:stream';
+import { createZstdDecompress } from 'node:zlib';
+import { isCompressedRollout, isRolloutFileName, physicalRolloutPath, plainRolloutPath } from './codex-rollout-file.mjs';
 
 async function entries(path) {
   try { return await readdir(path, { withFileTypes: true }); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
 }
 
+// Rollouts are listed by their logical .jsonl path in either representation.
 async function* codexFiles(path) {
-  for (const entry of await entries(path)) {
+  const listed = await entries(path), rollouts = new Set();
+  for (const entry of listed) {
     if (entry.isDirectory()) yield* codexFiles(join(path, entry.name));
-    else if (entry.isFile() && entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) yield join(path, entry.name);
+    else if (entry.isFile() && isRolloutFileName(entry.name)) rollouts.add(plainRolloutPath(join(path, entry.name)));
   }
+  yield* rollouts;
 }
 
-async function header(path) {
-  const stream = createReadStream(path, { encoding: 'utf8' });
+async function header(logicalPath) {
+  let path;
+  try { path = await physicalRolloutPath(logicalPath); }
+  catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+  const raw = createReadStream(path);
+  // pipeline destroys every stage with a read or decode failure.
+  const stream = isCompressedRollout(path) ? pipeline(raw, createZstdDecompress(), () => {}) : raw;
+  stream.setEncoding('utf8');
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   try {
     for await (const line of lines) { try { return JSON.parse(line); } catch { return null; } }
@@ -69,7 +81,7 @@ async function claudeCwd(path) {
 }
 
 async function recent(path, since) {
-  try { return (await stat(path)).mtimeMs >= since; }
+  try { return (await stat(await physicalRolloutPath(path, stat))).mtimeMs >= since; }
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 

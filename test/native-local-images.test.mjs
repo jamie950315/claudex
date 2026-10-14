@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { constants } from 'node:fs';
-import { access, appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, symlink, writeFile } from 'node:fs/promises';
+import { access, appendFile, lstat, mkdir, mkdtemp, open, readFile, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -12,6 +12,8 @@ import { decodeClaude, encodeClaude } from '../src/claude.mjs';
 import { fingerprint } from '../src/history.mjs';
 import { buildOwnedCodexCommon, exportOwnedCodexHistory } from '../src/owned-codex-history.mjs';
 import { nativeItemDigest } from '../src/native-history-order.mjs';
+import { zstdCompressSync } from 'node:zlib';
+import { discoverSources } from '../src/discovery.mjs';
 
 async function fixture(t) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-native-local-images-')));
@@ -433,6 +435,28 @@ test('DesktopRuntime binds verified image recovery to its authoritative current 
   const result = await runtime.inspect({ side: 'codex', nativeId: f.threadId, managed: false });
   assert.equal(result.common.messages[0].content.filter(block => block.type === 'image').length, 2);
   await assert.rejects(runtime.inspect({ side: 'codex', nativeId: f.threadId, managed: true, conversationId: randomUUID() }), /Owned Codex checkpoint contains an unsupported native user input/);
+});
+
+test('a rollout Codex compressed while cold is read under its logical path and still pauses when absent', async t => {
+  const f = await fixture(t);
+  const runtime = await new DesktopRuntime({ root: join(f.base, 'state'), codexHome: f.codexHome, claudeHome: f.claudeHome,
+    clientFactory: async () => f.client, ownerFactory() { assert.fail('No Claude worker is needed'); } }).initialize();
+  t.after(() => runtime.close());
+  const record = { side: 'codex', kind: 'original', nativeId: f.threadId, path: f.path, verified: true, managed: false,
+    conversationId: randomUUID() };
+  const plain = await runtime.inspect(record);
+  record.checkpoint = { count: plain.common.messages.length, digest: plain.digest };
+  // Codex replaces a cold rollout with <name>.jsonl.zst and keeps reporting the plain path.
+  await writeFile(`${f.path}.zst`, zstdCompressSync(await readFile(f.path)), { mode: 0o600 });
+  await rm(f.path);
+  const compressed = await runtime.inspect(record);
+  assert.equal(compressed.path, f.path);
+  assert.equal(compressed.digest, plain.digest);
+  assert.deepEqual(compressed.common, plain.common);
+  const discovered = await discoverSources({ codexHome: f.codexHome, claudeHome: f.claudeHome, allProjects: true, since: 0 });
+  assert.deepEqual(discovered, [{ side: 'codex', path: f.path }]);
+  await rm(`${f.path}.zst`);
+  await assert.rejects(runtime.inspect(record), error => error.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE' && error.savedPath === f.path);
 });
 
 async function rolloverFixture(t, { owned = false } = {}) {
