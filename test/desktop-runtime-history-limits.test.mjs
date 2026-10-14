@@ -19,7 +19,7 @@ const apiTurn = (index, content, answer) => ({ id: `turn-${index}`, status: 'com
 async function fixture(t, { managed = false, text = 'Complete source answer', count = 1, ...options } = {}) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'cldx-runtime-limits-')));
   const root = join(base, 'state'), codexHome = join(base, 'codex'), claudeHome = join(base, 'claude');
-  let cwd = join(base, 'project');
+  let cwd = join(base, 'project'), reportedCwd;
   await Promise.all([codexHome, claudeHome, cwd].map(path => mkdir(path)));
   const nativeId = randomUUID(), conversationId = randomUUID(), path = join(codexHome, 'sessions', `rollout-${nativeId}.jsonl`);
   await mkdir(join(codexHome, 'sessions'));
@@ -29,7 +29,7 @@ async function fixture(t, { managed = false, text = 'Complete source answer', co
     async initialize() { return { codexHome }; }, async close() {},
     async request(method, params) {
       calls.push({ method, params });
-      if (method === 'thread/read') return { thread: { id: nativeId, cwd, path, status: { type: 'idle' } } };
+      if (method === 'thread/read') return { thread: { id: nativeId, cwd: reportedCwd ?? cwd, path, status: { type: 'idle' } } };
       assert.equal(method, 'thread/turns/list');
       const offset = params.cursor ? Number(params.cursor) : 0, next = offset + params.limit;
       return { data: turns.slice(offset, next), nextCursor: next < turns.length ? String(next) : null };
@@ -53,7 +53,7 @@ async function fixture(t, { managed = false, text = 'Complete source answer', co
   const record = { side: 'codex', nativeId, conversationId, path, cwd, managed, kind: managed ? 'snapshot' : 'original' };
   // Rename the project and leave its saved path as an alias of the new one.
   const aliasProject = async () => { const moved = join(base, 'moved-project'); await rename(cwd, moved); await symlink(moved, cwd); return moved; };
-  return { runtime, record, common, turns, calls, aliasProject };
+  return { runtime, record, common, turns, calls, aliasProject, reportCwd: value => { reportedCwd = value; } };
 }
 
 test('Desktop native history defaults retain 16 MiB and 100-turn pages on both export paths', async t => {
@@ -121,10 +121,13 @@ test('a verified prefix mismatch invokes strict late proof and preserves native 
   }
 });
 
-test('an owned snapshot keeps its saved directory alias while Codex reports it; an original reports the move', async t => {
+test('an owned snapshot keeps its saved directory alias while Codex reports that directory; an original reports the move', async t => {
   for (const managed of [true, false]) {
     const f = await fixture(t, { managed });
     const saved = f.record.cwd, moved = await f.aliasProject();
+    assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, managed ? saved : moved);
+    // Codex can later report the canonical spelling of the same directory.
+    f.reportCwd(moved);
     assert.equal((await f.runtime.inspect(f.record)).common.meta.cwd, managed ? saved : moved);
   }
 });

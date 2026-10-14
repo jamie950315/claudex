@@ -48,8 +48,10 @@ the saved prefix and two reads must agree. A Codex tail of closed turns (failed
 or interrupted without a reply, in both reads) does not hold the move: it cannot
 complete by waiting and stays in the native history; an in-progress tail waits.
 A Claudex-owned Codex snapshot, like a Claude read, keeps its saved directory
-string while Codex still reports exactly it, even once that directory is an
-alias; only an unmanaged original follows a Codex project move. The managed Claude owner must be
+string while Codex reports that same directory in either spelling (Codex later
+reports the canonical one), even once that directory is an alias; only an
+unmanaged original follows a Codex project move. Dependency anchors compare the
+directory the same way. The managed Claude owner must be
 idle and unchanged. Claude owners are per conversation and bound to their cwd,
 so the move retires the old owner: close it at an idle boundary, move its state
 to owners/retired/<hash>-<sessionId>.json and mark its record retired-owner (kept

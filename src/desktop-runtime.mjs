@@ -532,6 +532,13 @@ export class DesktopRuntime {
     }
   }
 
+  /** Whether a saved directory string still names the resolved directory. */
+  async sameDirectory(saved, resolved) {
+    if (typeof saved !== 'string' || !isAbsolute(saved)) return false;
+    try { return await realpath(saved) === resolved; }
+    catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return false; throw error; }
+  }
+
   async readStoppedOwner(record, read) {
     return ClaudeOwner.readStopped({ root: this.root, conversationId: record.conversationId, cwd: record.cwd,
       claudeHome: this.claudeHome, sessionId: record.nativeId, path: record.path, versionPolicy: this.versionPolicy }, read);
@@ -597,9 +604,10 @@ export class DesktopRuntime {
       if (metadata.id !== nativeId) throw new Error('Codex returned a different native identity.');
       const resolvedCwd = await this.nativeWorkingDirectory(metadata.cwd, { ...record, nativeId });
       // Like a Claude read, a Claudex-owned snapshot keeps its saved directory
-      // string while Codex still reports exactly it, even when that directory
-      // was renamed and left as an alias. Originals follow a Codex project move.
-      const cwd = record.managed === true && metadata.cwd === record.cwd ? record.cwd : resolvedCwd;
+      // string while Codex reports that same directory, in either spelling,
+      // after it was renamed and left as an alias. Originals follow a Codex
+      // project move.
+      const cwd = record.managed === true && await this.sameDirectory(record.cwd, resolvedCwd) ? record.cwd : resolvedCwd;
       const path = await this.safeRolloutPath(metadata.path);
       const limits = { maxBytes: this.nativeHistoryMaxBytes, pageSize: this.nativeHistoryPageSize };
       const failImageEvidence = message => { throw new Error(`Native Codex local image recovery: ${message}`); };
@@ -1043,7 +1051,7 @@ export class DesktopRuntime {
     const readMetadata = async () => {
       const { thread } = await client.request('thread/read', { threadId: record.nativeId, includeTurns: false });
       if (thread?.id !== record.nativeId || typeof thread.cwd !== 'string' || typeof thread.path !== 'string'
-          || await this.nativeWorkingDirectory(thread.cwd, record) !== record.cwd)
+          || !await this.sameDirectory(record.cwd, await this.nativeWorkingDirectory(thread.cwd, record)))
         throw dependencyAnchorGuard('Dependency anchor native identity or working directory changed.');
       if (!['idle', 'notLoaded'].includes(thread.status?.type))
         throw dependencyAnchorGuard('Dependency anchor parent is active or its idle state is unverified.');
