@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createController, shortJSON, usageLine, textChunks, configurationDiagnostic, taskInventoryCount } from '../plugins/claudex/hooks/controller.mjs';
 import { renderPanel } from '../plugins/claudex/hooks/panel.mjs';
 import { translator } from '../plugins/claudex/hooks/localization.mjs';
+import { formatWarmTime } from '../plugins/claudex/hooks/cache-warm-display.mjs';
 const CTX = { sessionId: '11111111-1111-4111-8111-111111111111', cwd: '/fixture' };
 const OTHER = { sessionId: '22222222-2222-4222-8222-222222222222', cwd: '/other' };
 const ID = '33333333-3333-4333-8333-333333333333';
@@ -54,6 +55,66 @@ test('status refresh performs only doctor/read and usage calls', async () => {
   const f = fixture(); await f.controller.refresh(f.api);
   assert.deepEqual(f.calls.map(call => call.op), ['doctor', 'read']);
   assert.equal(f.controller.state.usage.context.percent, 53); assert.equal(f.submissions.length, 0);
+  assert.deepEqual(f.calls.at(-1).params, { order: 'recent' });
+});
+
+test('task order refetches the first page and preserves the selected order through paging and refresh', async () => {
+  const f = fixture(); await f.controller.bind(f.api);
+  const state = f.controller.state;
+  state.taskOffset = 20; state.children = { task: { tasks: [] } };
+  await f.controller.taskOrder(f.api, 'id');
+  assert.deepEqual(f.calls.at(-1).params, { order: 'id', limit: 100 });
+  assert.equal(state.taskOrder, 'id'); assert.equal(state.taskOffset, 0); assert.deepEqual(state.children, {});
+  f.controller.page(f.api, 10);
+  await f.controller.taskPage(f.api, 'id-cursor');
+  assert.deepEqual(f.calls.at(-1).params, { order: 'id', limit: 100, cursor: 'id-cursor' });
+  assert.equal(state.taskOffset, 0);
+  await f.controller.refresh(f.api); assert.deepEqual(f.calls.at(-1).params, { order: 'id' });
+  await f.controller.taskOrder(f.api, 'recent');
+  assert.deepEqual(f.calls.at(-1).params, { order: 'recent', limit: 100 });
+  await f.controller.taskPage(f.api, 'recent-cursor');
+  assert.deepEqual(f.calls.at(-1).params, { order: 'recent', limit: 100, cursor: 'recent-cursor' });
+  const count = f.calls.length;
+  await f.controller.taskOrder(f.api, 'recent'); await f.controller.taskOrder(f.api, 'oldest');
+  assert.equal(f.calls.length, count);
+  f.api.bridge = async () => { throw new Error('Refused'); };
+  await f.controller.taskOrder(f.api, 'id'); assert.equal(state.taskOrder, 'recent');
+  assert.match(state.error, /Refused/);
+});
+
+test('delayed task order response cannot change a new session', async () => {
+  const f = fixture(); await f.controller.bind(f.api); let release;
+  f.api.bridge = () => new Promise(resolve => { release = resolve; });
+  const changing = f.controller.taskOrder(f.api, 'id'); await tick();
+  f.change(OTHER); await f.controller.bind(f.api); release({ tasks: [{ id: 'old' }] }); await changing;
+  assert.equal(f.controller.state.taskOrder, 'recent'); assert.equal(f.controller.state.tasks, null);
+});
+
+test('task panel localizes ordering controls and renders local update times with local and server paging', async () => {
+  const f = fixture(); await f.controller.bind(f.api);
+  const state = f.controller.state, updatedAt = Date.UTC(2026, 9, 14, 9, 24);
+  Object.assign(state, { tab: 'tasks', tasks: { tasks: Array.from({ length: 11 }, (_, i) => ({ id: `task-${i}`, owner: 'codex', status: 'ready', updatedAt })), totalCount: 101, nextCursor: 'recent-cursor' } });
+  const ui = Object.fromEntries(['Box', 'Text', 'Button', 'Input', 'Select'].map(type => [type, props => ({ type, props })]));
+  const nodes = tree => [tree, ...(tree.props?.children ?? []).filter(value => value && typeof value === 'object').flatMap(nodes)];
+  const render = language => renderPanel({ ui, state, controller: f.controller, host: () => f.api, options: {}, wake: { state: {} }, t: translator(language), language, setLanguage: () => {} });
+  for (const language of ['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']) {
+    const tree = render(language), select = nodes(tree).find(node => node.props?.key === 'tasks-order');
+    assert.equal(select.props.value, 'recent');
+    assert.equal(select.props.label, translator(language)('Sort tasks'));
+    assert.deepEqual(select.props.options.map(option => option.label), [translator(language)('Most recent'), translator(language)('Task ID')]);
+    const time = formatWarmTime(updatedAt);
+    assert.ok(JSON.stringify(tree).includes(`${translator(language)('Last updated')}: ${time}`));
+  }
+  await nodes(render('en')).find(node => node.props?.key === 'tasks-next').props.onPress();
+  assert.equal(state.taskOffset, 10);
+  assert.ok(nodes(render('en')).some(node => node.props?.key === 'task-task-10-0'));
+  await nodes(render('en')).find(node => node.props?.key === 'tasks-prev').props.onPress();
+  assert.equal(state.taskOffset, 0);
+  await nodes(render('en')).find(node => node.props?.key === 'tasks-page').props.onPress();
+  assert.deepEqual(f.calls.at(-1).params, { order: 'recent', limit: 100, cursor: 'recent-cursor' });
+  await nodes(render('en')).find(node => node.props?.key === 'tasks-order').props.onSelect('id');
+  assert.deepEqual(f.calls.at(-1).params, { order: 'id', limit: 100 });
+  assert.equal(state.taskOrder, 'id');
 });
 
 test('cache panel edits preview without mutation, confirms once and retains edits through read refresh', async () => {

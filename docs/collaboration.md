@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.24;
+Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.25;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -49,7 +49,7 @@ The MCP interface exposes 15 tools. Check-in is an action of the existing
 | `claudex_status` | Read progress, messages, last native identity and results. |
 | `claudex_wait` | Wait for a revision change or terminal result; default 5 minutes, explicit maximum 30 minutes. |
 | `claudex_cancel` | Cancel owned work and its active descendants. |
-| `claudex_list` | Read the bounded work inventory and broker limits. |
+| `claudex_list` | Read the bounded work inventory and broker limits; optional `order: "recent"` sorts by latest update. |
 | `claudex_chat_list` | List exact native chat identities observed by installed hooks. |
 | `claudex_chat_send` | Queue an authorized coordination note for an existing native chat. |
 | `claudex_chat_status` | Inspect queued, offered, acknowledged, or expired message state. |
@@ -81,6 +81,15 @@ The normal changed-files/checks report belongs to actual task completion, not to
 the outgoing boundary. These tokens are instructions, not completion receipts:
 the broker still waits for successful native completion and process-group exit.
 Model response and shutdown latency is not an instantaneous-transfer guarantee.
+
+`claudex_list` accepts `order: "id"` (the backward-compatible default) or
+`order: "recent"`. Recent order sorts `updatedAt` newest first, breaking ties by
+ascending task ID. Follow `nextCursor` with the same filters and order. Pages are
+live: a task updated between requests can move ahead of the cursor; refresh the
+first page to see the latest activity. Cursors from another order are rejected.
+The Mod's **Tasks** tab defaults to **Most recent**, offers **Task ID** in
+**Sort tasks**, and shows each card's last update in local time. Changing order
+refetches the first server page and resets the local ten-card page.
 
 ## Reading progress and results
 

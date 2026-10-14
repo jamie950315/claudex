@@ -10,6 +10,8 @@ import { privateRead, privateDir } from '../src/claude-mod-storage.mjs';
 import { validateRequest, validateParams } from '../src/claude-mod-protocol.mjs';
 
 test('work pane protocol narrows read bounds and keeps worker-only intervention outside the controller', () => {
+  for (const order of ['id', 'recent']) assert.equal(validateParams('list', { order, limit: 10, cursor: 'cursor' }).order, order);
+  assert.throws(() => validateParams('list', { order: 'oldest' }));
   const query = { taskId: 'task', generation: 1 };
   assert.equal(validateParams('work_events', { ...query, limit: 64 }).limit, 64);
   assert.equal(validateParams('work_reports', { ...query, limit: 16 }).limit, 16);

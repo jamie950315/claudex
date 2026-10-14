@@ -23,6 +23,11 @@ bounded, typed scope/identity/size refusal instead of claiming service failure.
 The Mod does not render an AbovePrompt status band; usage remains in its pane.
 The native panel uses grouped summaries, two wrapping navigation rows and collapsed
 technical records; never collapse or truncate the complete confirmation payload.
+The Tasks inventory defaults to most recent activity, with a native Select for
+Task ID order. Fetch the selected order from the broker on every inventory page;
+switching order refetches the first page and resets the local ten-card offset.
+Task cards show a compact local last-update time. API callers retain ID ordering
+by default; live inventory pages are not a frozen snapshot.
 Its native plugin-store language preference is independent of the app's preference,
 with the same nine languages and script/region-aware macOS system resolution.
 Language changes only redraw presentation, preserving form edits and pending

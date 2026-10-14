@@ -57,7 +57,8 @@ export function validateParams(method, input, mutation = false) {
   insist(record(input));
   const params = structuredClone(input);
   if (method === 'list') {
-    fields(params, ['parentId', 'limit', 'cursor']);
+    fields(params, ['parentId', 'limit', 'cursor', 'order']);
+    insist(params.order === undefined || ['id', 'recent'].includes(params.order));
     if (params.parentId !== undefined && params.parentId !== null) identity(params.parentId);
     if (params.limit !== undefined) boundedInteger(params.limit, 1, 100);
     if (params.cursor !== undefined) text(params.cursor, 8192);

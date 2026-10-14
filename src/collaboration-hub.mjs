@@ -745,22 +745,29 @@ export class CollaborationHub extends EventEmitter {
       return artifact;
     }
     if (method === 'list') {
-      if (Object.keys(params).some(key => !['status', 'parentId', 'project', 'limit', 'cursor'].includes(key)))
+      if (Object.keys(params).some(key => !['status', 'parentId', 'project', 'limit', 'cursor', 'order'].includes(key)))
         fail('CLAUDEX_INVALID_QUERY', 'Invalid task list parameters.');
       const limit = params.limit ?? 100;
+      const order = params.order === undefined ? 'id' : params.order;
       if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+        || !['id', 'recent'].includes(order)
         || params.status !== undefined && !['ready', 'running', 'waiting', 'paused', ...terminal].includes(params.status)
         || params.parentId !== undefined && params.parentId !== null && typeof params.parentId !== 'string'
         || params.project !== undefined && (typeof params.project !== 'string' || !isAbsolute(params.project)))
         fail('CLAUDEX_INVALID_QUERY', 'Invalid task list filters or bounds.');
+      // Keep the legacy ID digest and cursor format, including explicit order=id.
       const filter = digest(JSON.stringify([params.status ?? null, params.parentId ?? null,
-        Object.hasOwn(params, 'parentId'), params.project ?? null, actor.key]));
-      let after = '';
+        Object.hasOwn(params, 'parentId'), params.project ?? null, actor.key, ...(order === 'recent' ? [order] : [])]));
+      let after = order === 'id' ? '' : null;
       if (params.cursor !== undefined) {
         try {
           if (typeof params.cursor !== 'string' || params.cursor.length > 512) throw new Error();
           const cursor = JSON.parse(Buffer.from(params.cursor, 'base64url').toString());
-          if (cursor.filter !== filter || typeof cursor.after !== 'string' || cursor.after.length > 36) throw new Error();
+          if (cursor.filter !== filter) throw new Error();
+          if (order === 'id') {
+            if (typeof cursor.after !== 'string' || cursor.after.length > 36) throw new Error();
+          } else if (!cursor.after || !Number.isSafeInteger(cursor.after.updatedAt) || cursor.after.updatedAt < 0
+            || typeof cursor.after.id !== 'string' || cursor.after.id.length > 36) throw new Error();
           after = cursor.after;
         } catch { fail('CLAUDEX_INVALID_CURSOR', 'Task cursor does not match this query.'); }
       }
@@ -769,13 +776,15 @@ export class CollaborationHub extends EventEmitter {
         return (params.status === undefined || task.status === params.status)
           && (params.parentId === undefined || task.parentId === params.parentId)
           && (params.project === undefined || (task.projectRoot ?? task.cwd) === params.project);
-      }).sort((a, b) => a.id.localeCompare(b.id));
-      const remaining = tasks.filter(task => task.id > after), page = remaining.slice(0, limit);
+      }).sort((a, b) => (order === 'recent' ? b.updatedAt - a.updatedAt : 0) || a.id.localeCompare(b.id));
+      const remaining = tasks.filter(task => order === 'id' ? task.id > after : !after
+        || task.updatedAt < after.updatedAt || task.updatedAt === after.updatedAt && task.id.localeCompare(after.id) > 0);
+      const page = remaining.slice(0, limit), last = page.at(-1);
       return { tasks: page.map(task => ({ id: task.id, parentId: task.parentId, owner: task.owner, status: task.status,
         projectRoot: task.projectRoot ?? task.cwd, waitReason: this.waitReason(task),
         revision: task.revision, updatedAt: task.updatedAt, ...taskPresentation(task) })),
         totalCount: tasks.length, nextCursor: remaining.length > page.length
-          ? Buffer.from(JSON.stringify({ filter, after: page.at(-1).id })).toString('base64url') : null,
+          ? Buffer.from(JSON.stringify({ filter, after: order === 'id' ? last.id : { updatedAt: last.updatedAt, id: last.id } })).toString('base64url') : null,
         limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.permissionCeiling() >= 1,
           allowFullAccess: this.permissionCeiling() >= 2, defaultPermission: this.effectiveDefaultPermission(),
           defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },

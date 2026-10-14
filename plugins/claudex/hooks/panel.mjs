@@ -1,5 +1,6 @@
 import { textChunks, taskInventoryCount, WARM_LIMIT_PRESETS } from './controller.mjs';
 import { localizedUsage } from './localization.mjs';
+import { formatWarmTime } from './cache-warm-display.mjs';
 
 // Presentation state belongs to the exact controller context, never a receipt.
 const disclosures = new WeakMap();
@@ -64,8 +65,10 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
   ];
   const taskCard = (task, depth = 0) => {
     const branch = state.children?.[task.id];
+    const updated = formatWarmTime(task.updatedAt) ?? t('Not reported');
     return section(`${'↳ '.repeat(depth)}${task.owner} · ${status(task.phase ?? task.status)}`, [
       field(t('Task ID'), task.id), ...(task.objective ? [text(task.objective)] : []),
+      field(t('Last updated'), updated),
       ...(task.parentId ? [field(t('Parent task'), task.parentId)] : []),
       ...(task.progress?.stage ? [field(t('Stage'), task.progress.stage)] : []),
       row([button(`task-${task.id}-${depth}`, t('Inspect task'), () => controller.task(host(), task.id)),
@@ -178,6 +181,9 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
   } else if (state.tab === 'tasks') {
     const tasks = state.tasks?.tasks ?? [];
     body.push(section(t('Task inventory'), [button('tasks-refresh', t('Refresh tasks'), () => controller.refresh(host())),
+      Select({ key: 'tasks-order', label: t('Sort tasks'), value: state.taskOrder,
+        options: [{ value: 'recent', label: t('Most recent') }, { value: 'id', label: t('Task ID') }],
+        onSelect: value => { if (controller.state === state && !state.busy) return controller.taskOrder(host(), value); } }),
       muted(t('{count} tasks · showing {first}–{last}', { count: taskInventoryCount(state.tasks),
         first: tasks.length ? Math.min(state.taskOffset + 1, tasks.length) : 0,
         last: Math.min(state.taskOffset + 10, tasks.length) }))]));

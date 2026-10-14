@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.24
+# Claudex native companion, 0.8.25
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -74,6 +74,14 @@ restored after restart. Older observers without version evidence remain unknown.
 This diagnostic read does not renew observations or prove delivery, ACK, or work
 completion, and it cannot dispatch, change receiver settings, or start inference.
 
+The Tasks view defaults to **Most recent**, sorting the entire broker inventory
+by last update before paging. Use **Sort tasks** to switch to **Task ID**; changing
+order fetches the first page and resets the local ten-card page. Each card shows
+its last update in local time. Pages are live, so updated tasks can move between
+requests; refresh to see them at the top. The `claudex_list` API keeps `order: "id"`
+as its default; `order: "recent"` sorts `updatedAt` descending with ascending ID
+ties. Continue with the same filters and order; cross-order cursors are rejected.
+
 The Tasks view now exposes the bounded broker work hierarchy, generation-bound
 progress, blockers, instruction adoption, cooperative pause, declared checks and
 artifacts. Exact-task timelines and report histories are read on demand with
@@ -101,7 +109,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.24-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.25-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

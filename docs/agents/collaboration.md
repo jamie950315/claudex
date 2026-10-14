@@ -50,7 +50,13 @@ preserve actual native execution/process uncertainty. No prompts, tool payloads
 or reasoning are diagnostic data. PID/process samples never update activity.
 Per-task waitReason contains exact blockers (up to 64 IDs plus truncation/count);
 the legacy global uncertain flag is not a per-task blocking claim. List supports
-query-bound live pagination and filters. Multi-wait supports 1–16 targets with
+query-bound live pagination and filters. Task lists default to `order=id`, keeping
+the legacy ID cursor and digest; explicit `order=recent` sorts `updatedAt`
+descending with ascending ID ties and carries both values in the cursor.
+Bind recent cursors to their order and filters; reject cross-order continuation.
+Pages remain live: an updated task can move ahead of a saved cursor and requires
+a first-page refresh to appear again. Never look up the cursor task's current
+timestamp to resume a page. Multi-wait supports 1–16 targets with
 one event listener, atomically acknowledging only returned child outcomes after
 checking the MCP-escaped response bound. Preserve compatible single-task behavior.
 Task waits default to five minutes and accept an explicit maximum of thirty minutes;

@@ -71,6 +71,33 @@ test('pane draws for terminal and Desktop using native element validation', asyn
   }
 })
 
+test('task inventory defaults to recent activity and switches server order from the first page', async ($, on) => {
+  const seen: any[] = []
+  stubs(on, false, request => {
+    if (request.op === 'doctor') return { stopped: false }
+    if (request.method === 'list') {
+      seen.push(request.params)
+      return { tasks: Array.from({ length: 11 }, (_, index) => ({ id: `task-${index}`, owner: 'codex', status: 'ready', updatedAt: 1791989800000 })), totalCount: 101, nextCursor: 'cursor' }
+    }
+    return {}
+  })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, bodyColumns: 40 } })
+  await ui.press({ key: 'refresh' })
+  expect(seen.at(-1).order).toBe('recent')
+  await ui.press({ key: 'tab-tasks' })
+  expect(await ui.find({ type: 'Text', text: /Last updated:/ })).toBeDefined()
+  await ui.press({ key: 'tasks-next' })
+  expect(await ui.find({ key: 'task-task-10-0' })).toBeDefined()
+  await ui.select({ key: 'tasks-order', value: 'id' })
+  expect(seen.at(-1)).toEqual({ order: 'id', limit: 100 })
+  expect(await ui.find({ key: 'task-task-0-0' })).toBeDefined()
+  await ui.press({ key: 'tasks-page' })
+  expect(seen.at(-1)).toEqual({ order: 'id', limit: 100, cursor: 'cursor' })
+  await ui.select({ key: 'tasks-order', value: 'recent' })
+  expect(seen.at(-1)).toEqual({ order: 'recent', limit: 100 })
+  await ui.unmount()
+})
+
 test('work pane exposes exact-generation evidence and reviewed controls without read acknowledgements', async ($, on) => {
   const seen: any[] = []
   stubs(on, false, request => {

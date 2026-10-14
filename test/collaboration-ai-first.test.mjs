@@ -4,6 +4,7 @@ import { mkdtemp, chmod, rm, realpath, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
+import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { createNativeActivity } from '../src/collaboration-activity.mjs';
@@ -35,9 +36,70 @@ test('list filters and query-bound pagination preserve all tasks without acknowl
   assert.equal(third.nextCursor, null);
   assert.equal(first.totalCount, 5);
   assert.equal(first.tasks[0].waitReason.kind, 'queued');
+  assert.deepEqual(await call('list', { limit: 2, parentId: null, project: root, order: 'id' }), first);
+  const ids = [...first.tasks, ...second.tasks, ...third.tasks].map(task => task.id);
+  assert.deepEqual(ids, [...ids].sort((a, b) => a.localeCompare(b)));
+  const legacy = JSON.parse(Buffer.from(first.nextCursor, 'base64url'));
+  assert.equal(legacy.after, first.tasks.at(-1).id);
+  assert.equal(legacy.filter, createHash('sha256').update(JSON.stringify([null, null, true, root, 'controller:codex'])).digest('hex'));
+  assert.deepEqual(Object.keys(legacy).sort(), ['after', 'filter']);
   await assert.rejects(call('list', { cursor: first.nextCursor, status: 'completed' }), { code: 'CLAUDEX_INVALID_CURSOR' });
   assert.deepEqual((await call('list', { status: 'completed' })).tasks, []);
   assert.equal(hub.running.size, 0);
+});
+
+test('recent list orders timestamps and ID ties across live query-bound pages', async t => {
+  const { hub, call, start } = await fixture(t);
+  for (let i = 0; i < 5; i++) await start(`recent-${i}`);
+  const ids = Object.keys(hub.state.tasks).sort((a, b) => a.localeCompare(b));
+  await hub.mutate(state => ids.forEach((id, index) => { state.tasks[id].updatedAt = [10, 30, 20, 30, 30][index]; }));
+  const expected = [ids[1], ids[3], ids[4], ids[2], ids[0]];
+  const first = await call('list', { order: 'recent', limit: 2 });
+  const second = await call('list', { order: 'recent', limit: 2, cursor: first.nextCursor });
+  const third = await call('list', { order: 'recent', limit: 2, cursor: second.nextCursor });
+  assert.deepEqual([...first.tasks, ...second.tasks, ...third.tasks].map(task => task.id), expected);
+  assert.equal(third.nextCursor, null);
+  assert.equal(first.totalCount, 5);
+  const cursor = JSON.parse(Buffer.from(first.nextCursor, 'base64url'));
+  assert.deepEqual(cursor.after, { updatedAt: 30, id: ids[3] });
+  await assert.rejects(call('list', { cursor: first.nextCursor }), { code: 'CLAUDEX_INVALID_CURSOR' });
+  await assert.rejects(call('list', { order: 'id', cursor: first.nextCursor }), { code: 'CLAUDEX_INVALID_CURSOR' });
+  const legacy = await call('list', { limit: 2 });
+  await assert.rejects(call('list', { order: 'recent', cursor: legacy.nextCursor }), { code: 'CLAUDEX_INVALID_CURSOR' });
+  for (const after of ['legacy-id', null, { updatedAt: '30', id: ids[3] }, { updatedAt: -1, id: ids[3] }, { updatedAt: 30, id: 3 }])
+    await assert.rejects(call('list', { order: 'recent', cursor: Buffer.from(JSON.stringify({ ...cursor, after })).toString('base64url') }), { code: 'CLAUDEX_INVALID_CURSOR' });
+  for (const order of ['oldest', null, 1]) await assert.rejects(call('list', { order }), { code: 'CLAUDEX_INVALID_QUERY' });
+  // Updating the cursor task and an unseen task cannot invalidate the saved key
+  // or repeat earlier rows. The unseen task moves ahead and needs a refresh.
+  await hub.mutate(state => { state.tasks[ids[3]].updatedAt = 40; state.tasks[ids[4]].updatedAt = 50; });
+  const moved = await call('list', { order: 'recent', limit: 1, cursor: first.nextCursor });
+  const end = await call('list', { order: 'recent', limit: 1, cursor: moved.nextCursor });
+  assert.deepEqual([...moved.tasks, ...end.tasks].map(task => task.id), [ids[2], ids[0]]);
+  assert.equal(end.nextCursor, null);
+  assert.equal((await call('list', { order: 'recent' })).tasks[0].id, ids[4]);
+});
+
+test('recent list schema and continuation survive Unix RPC and MCP', async t => {
+  const { hub, root, start } = await fixture(t);
+  const server = await serveCollaborationSocket({ root, dispatch: envelope => hub.dispatch(envelope) });
+  t.after(() => server.close());
+  await start('recent-rpc-a'); await start('recent-rpc-b');
+  const input = new PassThrough(), output = new PassThrough(); let data = '';
+  output.on('data', chunk => { data += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', token: hub.controllerToken, input, output });
+  input.end([ { jsonrpc: '2.0', id: 1, method: 'tools/list' },
+    { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'claudex_list', arguments: { order: 'recent', limit: 1 } } },
+  ].map(value => JSON.stringify(value)).join('\n') + '\n');
+  await running;
+  const responses = data.trim().split('\n').map(line => JSON.parse(line));
+  const tool = responses.find(value => value.id === 1).result.tools.find(tool => tool.name === 'claudex_list');
+  assert.deepEqual(tool.inputSchema.properties.order, { type: 'string', enum: ['id', 'recent'], default: 'id' });
+  const first = JSON.parse(responses.find(value => value.id === 2).result.content[0].text);
+  assert.equal(first.tasks.length, 1);
+  const second = await callCollaboration({ root, peer: 'codex', token: hub.controllerToken, method: 'list',
+    params: { order: 'recent', limit: 1, cursor: first.nextCursor } });
+  assert.equal(second.tasks.length, 1); assert.notEqual(second.tasks[0].id, first.tasks[0].id);
+  assert.equal(second.nextCursor, null);
 });
 
 test('uncertain blockers are exact and separate from the legacy global flag and capacity', async t => {

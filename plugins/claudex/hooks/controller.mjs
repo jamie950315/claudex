@@ -57,7 +57,7 @@ export function taskInventoryCount(inventory) {
 function blank(context = null, epoch = 0) {
   return { context, epoch, enabled: false, busy: false, tab: 'overview', error: '', notice: '',
     usage: null, version: null, doctor: null, configuration: null, tasks: null, chats: null, chatQuery: '', chatCursor: null,
-    taskOffset: 0, selectedTask: null, detail: null, workGeneration: null, children: {}, events: null, reports: null, artifact: null, pending: null, lastReceipt: null,
+    taskOrder: 'recent', taskOffset: 0, selectedTask: null, detail: null, workGeneration: null, children: {}, events: null, reports: null, artifact: null, pending: null, lastReceipt: null,
     wakes: [], wakeTarget: null, wakePreview: null, form: '', cacheStatus: null, cachePending: null, cacheResult: null,
     cacheForm: { ttl: '1h', mode: 'session', limit: 'for=4h', compact: 'on' }, cacheDirty: false };
 }
@@ -171,8 +171,8 @@ export function createController({ nativeWake = false } = {}) {
         // Even status calls stay tied to one root and one exact native session.
         const [usage, version] = await Promise.all([api.usage().catch(() => null), api.version().catch(() => null)]);
         let tasks = null;
-        if (!doctor.stopped) tasks = await call(api, ticket, 'read', { method: 'list', params: {} });
-        if (await stillBound(api, ticket)) Object.assign(state, { doctor, usage, version, tasks });
+        if (!doctor.stopped) tasks = await call(api, ticket, 'read', { method: 'list', params: { order: state.taskOrder } });
+        if (await stillBound(api, ticket)) Object.assign(state, { doctor, usage, version, tasks, taskOffset: 0, children: {} });
       });
     },
     async refreshUsage(api) {
@@ -201,9 +201,17 @@ export function createController({ nativeWake = false } = {}) {
       if (state.busy || !Number.isSafeInteger(generation) || generation < 1 || generation > state.detail?.generation) return;
       Object.assign(state, { workGeneration: generation, events: null, reports: null, artifact: null }); changed(api);
     },
+    async taskOrder(api, order) {
+      if (!['recent', 'id'].includes(order)) return;
+      return run(api, async ticket => {
+        if (order === state.taskOrder) return;
+        const result = await call(api, ticket, 'read', { method: 'list', params: { order, limit: 100 } });
+        if (await stillBound(api, ticket)) Object.assign(state, { taskOrder: order, tasks: result, taskOffset: 0, children: {} });
+      });
+    },
     async taskPage(api, cursor) {
       return run(api, async ticket => {
-        const result = await call(api, ticket, 'read', { method: 'list', params: { limit: 100, ...(cursor ? { cursor } : {}) } });
+        const result = await call(api, ticket, 'read', { method: 'list', params: { order: state.taskOrder, limit: 100, ...(cursor ? { cursor } : {}) } });
         if (await stillBound(api, ticket)) Object.assign(state, { tasks: result, taskOffset: 0, children: {} });
       });
     },
