@@ -23,7 +23,7 @@ import { createNativeEmptyTurnResolver } from './native-empty-turn.mjs';
 import { createNativeLateItemResolver } from './native-late-items.mjs';
 import { createCodexRolloutLocator, createCodexLocalImageResolver } from './native-local-images.mjs';
 import { createNativeGoalRequestResolver } from './native-goal-request.mjs';
-import { decompressRollout, isCompressedRollout, isRolloutFileName, physicalRolloutPath, plainRolloutPath, rolloutAbsent } from './codex-rollout-file.mjs';
+import { codexThreadRolloutAbsent, decompressRollout, isCompressedRollout, isRolloutFileName, physicalRolloutPath, plainRolloutPath, rolloutAbsent } from './codex-rollout-file.mjs';
 import { encodeContextPacket } from './context-packet.mjs';
 import { encodeArchivedContextPacket, hasProjectedImages, MAX_CONTEXT_PACKET_BYTES } from './context-archive.mjs';
 import { prepareArchiveResolver } from './context-packet-reader.mjs';
@@ -32,7 +32,7 @@ import { isAllowedCodexVersion } from './codex-versions.mjs';
 import { normalizeVersionPolicy } from './runtime-version-policy.mjs';
 import { codexProjectionPath, createCodexProjection, registerCodexProjection } from './codex-projection.mjs';
 import { snapshotOriginalArchiveTree, compareOriginalArchiveTree, originalArchiveGuard } from './codex-original-archive-tree.mjs';
-import { readCodexDependencies, readCodexDependenciesForParents } from './codex-dependencies.mjs';
+import { codexInventoryContains, codexSourceReadFailure, readCodexDependencies, readCodexDependenciesForParents } from './codex-dependencies.mjs';
 
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 const kinds = ['cli', 'vscode', 'exec', 'appServer', 'subAgent', 'subAgentReview', 'subAgentCompact', 'subAgentThreadSpawn', 'subAgentOther', 'unknown'];
@@ -1083,7 +1083,10 @@ export class DesktopRuntime {
   }
   async prepareDependencyAnchors(records) {
     for (const record of records) this.assertDependencyAnchorRecord(record);
-    const dependencies = await readCodexDependenciesForParents(await this.codex(), records.map(record => record.nativeId));
+    const client = await this.codex();
+    const dependencies = await readCodexDependenciesForParents(client, records.map(record => record.nativeId), {
+      readMetadata: (id, options) => this.readCodexDependencyMetadata(client, id, options),
+    });
     const proofs = new Map();
     for (const record of records) proofs.set(record.id,
       await this.prepareDependencyAnchorFromInventory(record, dependencies.get(record.nativeId)));
@@ -1093,10 +1096,11 @@ export class DesktopRuntime {
     try {
       this.assertDependencyAnchorRecord(record);
       const client = await this.codex();
-      const dependencies = initialDependencies ?? await readCodexDependencies(client, record.nativeId);
+      const options = { readMetadata: (id, context) => this.readCodexDependencyMetadata(client, id, context) };
+      const dependencies = initialDependencies ?? await readCodexDependencies(client, record.nativeId, options);
       if (!dependencies.length) return null;
       const proof = await this.dependencyAnchorSnapshot(record);
-      const latest = await readCodexDependencies(client, record.nativeId);
+      const latest = await readCodexDependencies(client, record.nativeId, options);
       if (JSON.stringify(dependencies) !== JSON.stringify(latest)) throw dependencyAnchorGuard('Dependency anchor inventory changed during verification.');
       const after = await this.dependencyAnchorSnapshot(record);
       if (JSON.stringify(proof) !== JSON.stringify(after)) throw dependencyAnchorGuard('Dependency anchor parent changed during dependency verification.');
@@ -1145,6 +1149,53 @@ export class DesktopRuntime {
       throw error;
     }
   }
+  async codexSourceUntracked(nativeId) {
+    const path = join(this.root, 'desktop-state.json'), named = await lstat(path, { bigint: true });
+    const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const before = await file.stat({ bigint: true });
+      const same = other => ['dev', 'ino', 'size', 'mtimeNs', 'ctimeNs', 'uid', 'mode', 'nlink']
+        .every(key => before[key] === other[key]);
+      if (!before.isFile() || before.uid !== BigInt(process.getuid()) || (before.mode & 0o077n) || !same(named))
+        throw new Error('Codex source tracking ledger is unsafe.');
+      const state = JSON.parse(await file.readFile('utf8'));
+      if (!same(await file.stat({ bigint: true })) || !same(await lstat(path, { bigint: true })))
+        throw new Error('Codex source tracking ledger changed during inspection.');
+      if (state.version !== 2 || !Array.isArray(state.records) || state.records.some(record => !UUID.test(record?.nativeId ?? '')))
+        throw new Error('Codex source tracking ledger is unreadable.');
+      return !state.records.some(record => record.side === 'codex' && record.nativeId.toLowerCase() === nativeId.toLowerCase());
+    } finally { await file.close(); }
+  }
+  async readCodexDependencyMetadata(client, nativeId, options = {}) {
+    try {
+      const result = await client.request('thread/read', { threadId: nativeId, includeTurns: false });
+      if (!result?.thread || result.thread.id !== nativeId)
+        throw codexSourceReadFailure(new Error('Codex dependency source identity changed.'), nativeId,
+          { ...options, transientCandidate: false });
+      return result;
+    } catch (error) {
+      if (!(error instanceof Error) || error.name === 'AbortError') throw error;
+      if (error.nativeSource) throw error;
+      try {
+        // A loaded-list hint can outlive an ephemeral thread. Do not infer its
+        // disappearance from an error message, and never exempt stored,
+        // ancestral, parent or enrolled identities. Fresh native inventories
+        // prove it is no longer loaded or a dependency before any retirement.
+        if (options.transientCandidate && await this.codexSourceUntracked(nativeId)
+          && await codexThreadRolloutAbsent(this.codexHome, nativeId)
+          && !await codexInventoryContains(client, nativeId, options.parentIds)
+          && await codexThreadRolloutAbsent(this.codexHome, nativeId)
+          && await this.codexSourceUntracked(nativeId)) return null;
+      } catch (proofError) { throw codexSourceReadFailure(proofError, nativeId, options); }
+      throw codexSourceReadFailure(error, nativeId, options);
+    }
+  }
+  async revalidateCodexDependencySource(client, source) {
+    await this.readCodexDependencyMetadata(client, source.nativeId, source);
+    await readCodexDependenciesForParents(client, source.parentIds, {
+      readMetadata: (id, options) => this.readCodexDependencyMetadata(client, id, options),
+    });
+  }
   async assertCodexIndependent(record, label) {
     if (await exists(join(this.codexHome, 'sessions', record.nativeId))) throw new Error(`${label} has auxiliary data; retirement requires dependency verification.`);
     const client = await this.codex();
@@ -1155,7 +1206,9 @@ export class DesktopRuntime {
       const page = await client.request('thread/loaded/list', { limit: 100, ...(loadedCursor ? { cursor: loadedCursor } : {}) });
       for (const id of page.data) {
         if (id === record.nativeId) continue;
-        const { thread } = await client.request('thread/read', { threadId: id, includeTurns: false });
+        const result = await this.readCodexDependencyMetadata(client, id, { transientCandidate: true, parentIds: [record.nativeId] });
+        if (result === null) continue;
+        const { thread } = result;
         if (thread.id !== id) throw new Error('Loaded Codex dependency identity changed.');
         if (thread.forkedFromId === record.nativeId) throw new Error(`${label} has a dependent fork.`);
         if (thread.source?.subAgent?.thread_spawn?.parent_thread_id === record.nativeId)
@@ -1172,7 +1225,7 @@ export class DesktopRuntime {
         const page = await client.request('thread/list', { archived, sourceKinds: kinds, limit: 100, ...(cursor ? { cursor } : {}) });
         for (const value of page.data) {
           if (value.id === record.nativeId) continue;
-          if ((await client.request('thread/read', { threadId: value.id, includeTurns: false })).thread.forkedFromId === record.nativeId) throw new Error(`${label} has a dependent fork.`);
+          if ((await this.readCodexDependencyMetadata(client, value.id, { parentIds: [record.nativeId] })).thread.forkedFromId === record.nativeId) throw new Error(`${label} has a dependent fork.`);
         }
         cursor = page.nextCursor;
       } while (cursor);

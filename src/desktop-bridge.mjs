@@ -767,7 +767,7 @@ export class DesktopBridge {
   async collectInLock(state, callerId) {
     const holds = new Map(), frozen = new Set();
     const hold = (error, conversationId) => {
-      if (!callerId || !conversationId || conversationId === callerId || TRANSPORT.test(String(error?.message ?? error))) return false;
+      if (error?.nativeSource || !callerId || !conversationId || conversationId === callerId || TRANSPORT.test(String(error?.message ?? error))) return false;
       frozen.add(conversationId);
       if (!holds.has(conversationId)) holds.set(conversationId, error);
       return true;
@@ -795,7 +795,7 @@ export class DesktopBridge {
       } catch (error) {
         // Allocation-time collection reads other conversations. Preserve the
         // failing history's identity so the caller does not blame its own task.
-        error.conversationId ??= current.conversationId;
+        if (!error.nativeSource) error.conversationId ??= current.conversationId;
         if (!hold(error, current.conversationId)) throw error;
       }
     }
@@ -827,7 +827,7 @@ export class DesktopBridge {
           record.bytes = data.bytes ?? record.bytes;
         }
       } catch (error) {
-        error.conversationId ??= record.conversationId;
+        if (!error.nativeSource) error.conversationId ??= record.conversationId;
         if (!hold(error, record.conversationId)) throw error;
       }
     }

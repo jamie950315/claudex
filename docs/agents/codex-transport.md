@@ -19,6 +19,15 @@ Check both spawned descendants and ordinary forks before retirement: this Codex
 version omits fork ancestry from `thread/list`, so use metadata-only `thread/read`.
 Include `thread/loaded/list`: a fresh fork can be loaded before the stored list
 exposes it. Normal original archival and owned-snapshot retirement share these guards.
+That loaded inventory may retain a hint for a transient thread already deleted.
+After its metadata read fails, ignore only a loaded-only identity that is not a
+parent, stored/ancestor witness or enrolled record, whose exact native rollout is
+absent (plain, compressed and rollover representations), and whose fresh loaded,
+stored and parent-specific ancestor inventories all prove disappearance. Recheck
+rollout absence and enrollment after those native reads. Directory aliases,
+unstable listings and permission errors cannot prove absence. Existing native
+relationships and uncertain reads still block explicitly with the source's exact
+identity; no retry, native loading or write is used to establish disappearance.
 
 Shared Codex transport installs for the next normal app start: `bin/claudex-codex.mjs` preserves
 native Desktop args/env, starts a public Unix WS listener, and forwards JSONL

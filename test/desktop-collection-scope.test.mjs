@@ -100,6 +100,20 @@ test('both current sides remain required when their conversation has a retained 
   }
 });
 
+test('global dependency source failures are never relabeled as a retained snapshot conversation', async () => {
+  const f = await fixture(), { previous } = f.owned('retained');
+  const error = Object.assign(new Error('thread not loaded: synthetic-source'), {
+    nativeSource: { side: 'codex', nativeId: 'synthetic-source' },
+  });
+  f.bridge.adapters.codex.assertIdle = async record => {
+    assert.equal(record.id, previous.id); throw error;
+  };
+  await assert.rejects(f.bridge.collectInLock(f.state, 'caller'), value => value === error);
+  assert.equal(error.conversationId, undefined);
+  assert.equal(f.bridge.collectionHolds.size, 0);
+  assert.deepEqual(f.calls.remove, []);
+});
+
 test('superseded originals still block global collection even when their own conversation has no snapshots', async () => {
   const f = await fixture({ previousPerSide: 0 });
   f.coldPairs();

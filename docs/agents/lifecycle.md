@@ -152,6 +152,16 @@ counterpart is created by the subsequent normal guarded synchronization.
 Event-filtered discovery skips a Codex source whose metadata read fails only
 when its exact discovered rollout file is now absent (Desktop deleted a
 transient thread); other metadata failures keep their severity.
+An untracked event-only Codex identity with no rollout in the exact native
+layout, including compressed and rollover files, has nothing to enroll and must
+not block another conversation. Preserve the bounded completion-before-flush
+follow-ups; absence during discovery alone cannot prove a live thread vanished.
+A global dependency metadata failure carries its exact native source, never the
+caller or the snapshot being
+collected. Keep it visible across unrelated events and revalidate only on startup
+or a relevant event; never inspect it ahead of pending recovery. Loaded-only
+disappearance requires the independent native inventory and tracking proofs in
+the transport guide; persistent or enrolled sources retain their explicit guards.
 Never scan for same-ID substitutes; only the explicit native registry relocation
 protocol above may adopt a verified new project location without pending work.
 Without pending work, affected syncs are held individually. By user decision,

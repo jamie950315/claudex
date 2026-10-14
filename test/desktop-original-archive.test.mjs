@@ -72,6 +72,29 @@ test('original archival preserves bytes and unmanaged identity and is idempotent
   await assert.rejects(runtime.remove(record), /Only verified owned Codex snapshots/);
 });
 
+test('independence preflight ignores only a proven vanished untracked loaded source without writing', async t => {
+  const { runtime, record, state } = await fixture(t), transient = randomUUID();
+  await writeFile(join(runtime.root, 'desktop-state.json'), JSON.stringify({ version: 2, records: [record] }), { mode: 0o600 });
+  const client = await runtime.codex(), request = client.request.bind(client);
+  state.loaded = [transient];
+  client.request = async (method, params) => {
+    if (method === 'thread/read' && params.threadId === transient) {
+      state.loaded = [];
+      throw new Error(`thread not loaded: ${transient}`);
+    }
+    return request(method, params);
+  };
+  await runtime.assertCanArchiveOriginal(record);
+  assert.ok(state.calls.every(call => ['thread/read', 'thread/list', 'thread/loaded/list'].includes(call.method)));
+  state.loaded = [transient];
+  client.request = async (method, params) => {
+    if (method === 'thread/read' && params.threadId === transient) throw new Error(`thread not loaded: ${transient}`);
+    return request(method, params);
+  };
+  await assert.rejects(runtime.assertCanArchiveOriginal(record), error => error.nativeSource?.nativeId === transient);
+  assert.equal(state.calls.some(call => call.method === 'thread/archive'), false);
+});
+
 test('only a verified unmanaged original with a saved checkpoint can be archived', async t => {
   const { runtime, record, state } = await fixture(t);
   for (const invalid of [

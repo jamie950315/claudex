@@ -35,7 +35,8 @@ const lacksFirstTurn = error => /^Wait for a complete assistant turn(?: or verif
 const isUnsupported = error => error?.code === 'CLAUDEX_NATIVE_CWD_UNAVAILABLE' || UNSUPPORTED.test(reason(error))
   || /^Native Codex empty turn: /.test(reason(error))
   || /^Native Codex history export: an assistant message precedes the turn user input\.(?: \[Codex thread [a-f0-9-]+\])?$/i.test(reason(error));
-const isHistoryBlocked = error => error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
+const isHistoryBlocked = error => error?.nativeSource?.side === 'codex'
+  || error?.code === 'CLAUDEX_ORIGINAL_ARCHIVE_BLOCKED'
   || error?.code === 'CLAUDEX_DEPENDENCY_ANCHOR_BLOCKED'
   || error?.code === 'CLAUDEX_TRACKED_HISTORY_UNAVAILABLE'
   || error?.code === 'CLAUDEX_TRACKED_CWD_UNAVAILABLE'
@@ -102,7 +103,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     const delays = [250, 1000, 3000];
     if (attempt < delays.length) deferredEvents.set(eventKey(event), { event, attempt: attempt + 1, due: now() + delays[attempt] });
   };
-  let blocked = null;
+  let blocked = null, blockedSourceRead = null;
   const blockedConversations = new Map();
   const deferredBlock = Symbol('deferred history revalidation');
   // Allocation-time collection holds another conversation that fails its own
@@ -399,6 +400,16 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
           if (blocked && now() < blocked.retryAt && !events) throw deferredBlock;
           // The transport is a prerequisite. Never enroll a source while it is absent.
           const codex = await runtime.codex();
+          // Source failures belong to their exact native identity. Unrelated
+          // configuration/completion events cannot clear them. Only startup or
+          // a fresh event for that source rechecks its read/absence proof.
+          if (blocked?.scope === 'source' && blockedSourceRead && runtime.revalidateCodexDependencySource && (broadPass
+            || eventBatch?.some(event => !['started', 'configuration', 'owner-wake'].includes(event.kind)
+              && eventKey(event) === `${blocked.side}:${blocked.nativeId.toLowerCase()}`))
+            && !(await bridge.status()).pending) {
+            await runtime.revalidateCodexDependencySource(codex, blockedSourceRead);
+            blocked = null; blockedSourceRead = null;
+          }
           if (events && runtime.synchronizationHooks) hookStatus = await runtime.synchronizationHooks();
           const cacheContext = proofCache ? await runtime.verificationCacheContext() : null;
           const stopMissing = async id => {
@@ -533,6 +544,9 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
                 await bridge.recover();
                 return { recovered: true };
               }
+              // A global dependency read is not evidence against this sync's
+              // caller. The outer handler maps its exact source to the ledger.
+              if (error?.nativeSource) throw error;
               // A global allocation guard can encounter a different missing
               // project before its scheduled sync. Confirm that exact ledger
               // entry now so it cannot starve the remaining startup queue.
@@ -845,15 +859,17 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             await reflectCollectionHolds(bridge);
             lastCollection = now();
           }
-          blocked = null;
+          if (blocked?.scope !== 'source') { blocked = null; blockedSourceRead = null; }
         } catch (error) {
           configurationOnly = false;
           clearHints();
           if (error === deferredBlock) { /* Keep the exact pending intent and visible blocked state. */ }
           else if (isWaiting(error)) {
-            blocked = null;
+            if (blocked?.scope !== 'source') { blocked = null; blockedSourceRead = null; }
             const state = await bridge.status();
-            wait(error, { scope: 'coordinator',
+            const source = error?.nativeSource;
+            wait(error, { scope: source ? 'source' : 'coordinator',
+              ...(source ? { side: source.side, nativeId: source.nativeId } : {}),
               ...conversationContext(state, state.pending?.record?.conversationId ?? error.conversationId) });
             if (events) {
               const retry = eventBatch?.length ? eventBatch.filter(event => event.kind !== 'owner-wake') : [{ side: 'codex', nativeId: RECONNECT_ID, kind: 'reconnect' }];
@@ -864,7 +880,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             const state = await bridge.status(), pending = state.pending;
             const known = isHistoryBlocked(error);
             if (!known && (!pending || signal?.aborted || error?.name === 'AbortError' || !(error instanceof Error))) throw error;
-            const conversationId = pending?.record?.conversationId ?? error.conversationId ?? null;
+            const source = !pending && error?.nativeSource;
+            blockedSourceRead = source || null;
+            const sourceRecord = source && state.records.find(record => record.side === source.side
+              && record.nativeId?.toLowerCase() === source.nativeId.toLowerCase());
+            const conversationId = pending?.record?.conversationId ?? (source ? sourceRecord?.conversationId : error.conversationId) ?? null;
             // A delivery that failed before writing anything natively is
             // dropped and held on its own conversation. Otherwise the single
             // pending transaction stays, visibly blocked and retried by the
@@ -873,7 +893,8 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
             if (abandoned?.abandoned) {
               blocked = null;
               blockedConversations.set(conversationId, block(blockedConversations.get(conversationId), error, conversationContext(state, conversationId)));
-            } else blocked = block(blocked, error, { scope: pending ? 'pending' : 'coordinator',
+            } else blocked = block(blocked, error, { scope: pending ? 'pending' : source ? 'source' : 'coordinator',
+              ...(source ? { side: source.side, nativeId: source.nativeId } : {}),
               conversationId, ...conversationContext(state, conversationId),
               operationId: pending?.operationId ?? null, phase: pending?.phase ?? null });
           }

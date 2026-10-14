@@ -1,6 +1,6 @@
 import { constants } from 'node:fs';
-import { lstat, open, realpath } from 'node:fs/promises';
-import { isAbsolute, resolve } from 'node:path';
+import { lstat, open, readdir, realpath } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 import { zstdDecompressSync } from 'node:zlib';
 
 // Codex compresses a rollout left unchanged for seven days to <name>.jsonl.zst
@@ -52,6 +52,34 @@ export async function recordedDirectories(rows, cwd) {
 export async function rolloutAbsent(path, stat = lstat) {
   try { await physicalRolloutPath(path, stat); return false; }
   catch (error) { if (['ENOENT', 'ENOTDIR'].includes(error.code)) return true; throw error; }
+}
+
+/** Prove absence for one exact thread in the native rollout layout. Inspect
+ * names only, including compressed files and rollover segments. An alias or
+ * unreadable directory cannot establish absence. This never adopts a path. */
+export async function codexThreadRolloutAbsent(codexHome, nativeId) {
+  const uuid = '[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
+  if (!isAbsolute(codexHome ?? '') || typeof nativeId !== 'string' || !new RegExp(`^${uuid}$`, 'i').test(nativeId))
+    throw new Error('Exact Codex home and native thread identity are required for rollout absence.');
+  const name = new RegExp(`^(?:rollout-(?:.*-)?)?${nativeId}(?:_${uuid})?\\.jsonl(?:\\.zst)?$`, 'i');
+  const visit = async (directory, depth) => {
+    let info;
+    try { info = await lstat(directory, { bigint: true }); }
+    catch (error) { if (error.code === 'ENOENT') return true; throw error; }
+    if (!info.isDirectory() || info.isSymbolicLink() || await realpath(directory) !== directory)
+      throw new Error('Unsafe Codex rollout directory; absence is unverified.');
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (name.test(entry.name)) return false; // Even an unsafe matching entry is not absent.
+      if (depth > 0 && /^\d+$/.test(entry.name) && !entry.isFile())
+        if (!await visit(join(directory, entry.name), depth - 1)) return false;
+    }
+    const after = await lstat(directory, { bigint: true });
+    if (['dev', 'ino', 'mtimeNs', 'ctimeNs', 'mode', 'uid'].some(key => info[key] !== after[key]))
+      throw new Error('Codex rollout directory changed; absence is unverified.');
+    return true;
+  };
+  return await visit(join(codexHome, 'sessions'), 3)
+    && await visit(join(codexHome, 'archived_sessions'), 0);
 }
 
 /** Decompress the complete bytes of a compressed rollout within a byte limit. */

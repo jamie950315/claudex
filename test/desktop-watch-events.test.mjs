@@ -1,12 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
 import { SyncEventInbox } from '../src/sync-events.mjs';
 import { createSyncEventSource } from '../src/sync-event-source.mjs';
+import { DesktopRuntime } from '../src/desktop-runtime.mjs';
+import { readCodexDependencies } from '../src/codex-dependencies.mjs';
+import { codexThreadRolloutAbsent } from '../src/codex-rollout-file.mjs';
 
 async function fixture() {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'cwe-')));
@@ -71,6 +74,180 @@ function presentationOptions(f, { failHandoff, failFolders } = {}) {
 
 const configurationEvent = () => ({ side: 'codex', nativeId: '00000000-0000-4000-8000-000000000002',
   kind: 'configuration', revision: randomUUID(), at: 1 });
+
+test('an event-only transient loaded thread cannot pause an unrelated delivery', async () => {
+  const f = await fixture(), pair = f.add(), transient = randomUUID(), parent = randomUUID();
+  await writeFile(join(f.root, 'desktop-state.json'), JSON.stringify(f.state), { mode: 0o600 });
+  const event = { side: 'codex', nativeId: transient, kind: 'idle', revision: randomUUID(), at: 1 };
+  let loaded = true;
+  const calls = [];
+  const client = { async request(method, params) {
+    calls.push({ method, params });
+    if (method === 'thread/loaded/list') return { data: loaded ? [transient] : [], nextCursor: null };
+    if (method === 'thread/list') return { data: [], nextCursor: null };
+    if (method === 'thread/read' && params.threadId === transient) {
+      loaded = false;
+      throw new Error(`thread not loaded: ${transient}`);
+    }
+    throw new Error(`Unexpected synthetic request: ${method}`);
+  } };
+  const runtime = new DesktopRuntime({ root: f.root, codexHome: join(f.root, 'codex'), claudeHome: join(f.root, 'claude') });
+  f.runtime.codex = async () => client;
+  f.bridge.sync = async id => {
+    f.calls.sync.push(id);
+    await readCodexDependencies(client, parent, {
+      readMetadata: (id, options) => runtime.readCodexDependencyMetadata(client, id, options),
+    });
+    return { changed: true, incompleteTail: false };
+  };
+  const events = f.eventQueue([[event]]);
+  events.peek = async () => loaded ? [event] : [];
+  await f.run({ events, maxPasses: 2 });
+  assert.deepEqual(f.calls.sync, [pair.id]);
+  assert.ok(calls.some(call => call.method === 'thread/read' && call.params.threadId === transient));
+  for (const status of f.calls.status.filter(status => status.running)) {
+    assert.deepEqual(status.blockedConversations, []);
+    assert.equal(status.blocked, null);
+  }
+  assert.equal(f.calls.status.filter(status => status.running).at(-1).synchronization, 'ready');
+});
+
+test('unknown Codex lifecycle events without rollouts never enroll or block unrelated conversations', async () => {
+  const f = await fixture(), pair = f.add(), id = randomUUID();
+  const events = ['idle', 'completed', 'interrupted', 'changed', 'session'].map(kind =>
+    [{ side: 'codex', nativeId: id, kind, revision: randomUUID(), at: 1 }]);
+  await f.run({ events: f.eventQueue([...events]), maxPasses: events.length + 1 });
+  assert.deepEqual(f.calls.sync, [pair.id]);
+  assert.deepEqual(f.calls.track, []);
+  assert.deepEqual(f.calls.acknowledge, events.slice(0, -1));
+  for (const status of f.calls.status.filter(status => status.running)) {
+    assert.deepEqual(status.blockedConversations, []);
+    assert.equal(status.blocked, null);
+  }
+});
+
+test('a source read failure identifies its native thread and survives unrelated events until exact reinspection', async () => {
+  for (const tracked of [false, true]) {
+    const f = await fixture(), caller = f.add(), nativeId = randomUUID();
+    const source = tracked ? f.add('codex', nativeId) : null;
+    let available = false, clock = 0, transportDown = false;
+    const codex = f.runtime.codex;
+    f.runtime.codex = async () => {
+      if (transportDown) throw new Error('Shared Codex transport is not connected.');
+      return codex();
+    };
+    const nativeSource = { side: 'codex', nativeId, parentIds: [], transientCandidate: true };
+    f.bridge.sync = async id => {
+      f.calls.sync.push(id);
+      if (id === caller.id && !available)
+        throw Object.assign(new Error(`thread not loaded: ${nativeId}`), { nativeSource });
+      return { changed: true };
+    };
+    f.runtime.revalidateCodexDependencySource = async (_client, source) => {
+      assert.equal(source.nativeId, nativeId); assert.equal(available, true);
+    };
+    const exact = { side: 'codex', nativeId, kind: 'idle', revision: randomUUID() };
+    await f.run({ now: () => clock, maxPasses: 5, events: f.eventQueue([() => {
+      clock = 60_000; return [configurationEvent()];
+    }, () => { transportDown = true; return [configurationEvent()]; }, () => {
+      transportDown = false; return [caller.event('completed')];
+    }, () => { available = true; return [exact]; }]) });
+    const holds = f.calls.status.filter(status => status.running && status.blocked?.scope === 'source');
+    assert.ok(holds.length > 0);
+    for (const status of holds) {
+      assert.equal(status.blocked.nativeId, nativeId);
+      assert.equal(status.blocked.conversationId, source?.id ?? null);
+      assert.deepEqual(status.blockedConversations, []);
+    }
+    const afterClock = holds.filter(status => status.updatedAt >= 60_000);
+    assert.ok(afterClock.length > 0);
+    assert.equal(afterClock[0].blocked.attempts, 1); // No timer-driven retry at retryAt.
+    assert.equal(f.calls.status.filter(status => status.running).at(-1).blocked, null);
+  }
+});
+
+test('persisted, enrolled and still-loaded source failures cannot use transient absence', async () => {
+  for (const mode of ['rollout', 'tracked', 'loaded', 'listed', 'ancestor']) {
+    const f = await fixture(), nativeId = randomUUID(), parent = randomUUID();
+    await writeFile(join(f.root, 'desktop-state.json'), JSON.stringify(f.state), { mode: 0o600 });
+    if (mode === 'rollout') {
+      const directory = join(f.root, 'codex', 'archived_sessions');
+      await mkdir(directory, { recursive: true, mode: 0o700 });
+      await writeFile(join(directory, `rollout-${nativeId}.jsonl.zst`), 'synthetic bytes', { mode: 0o600 });
+    }
+    if (mode === 'tracked') await writeFile(join(f.root, 'desktop-state.json'), JSON.stringify({ version: 2, records: [
+      { side: 'codex', nativeId, status: 'original' },
+    ] }), { mode: 0o600 });
+    let failed = false;
+    const client = { async request(method, params) {
+      if (method === 'thread/loaded/list') return { data: !failed || mode === 'loaded' ? [nativeId] : [], nextCursor: null };
+      if (method === 'thread/list') return { data: mode === 'listed' && !params.ancestorThreadId
+        || mode === 'ancestor' && params.ancestorThreadId ? [{ id: nativeId }] : [], nextCursor: null };
+      if (method === 'thread/read') { failed = true; throw new Error(`thread not loaded: ${nativeId}`); }
+      throw new Error(`Unexpected synthetic request: ${method}`);
+    } };
+    const runtime = new DesktopRuntime({ root: f.root, codexHome: join(f.root, 'codex'), claudeHome: join(f.root, 'claude') });
+    await assert.rejects(readCodexDependencies(client, parent, {
+      readMetadata: (id, options) => runtime.readCodexDependencyMetadata(client, id, options),
+    }), error => error.nativeSource?.nativeId === nativeId && /thread not loaded/.test(error.message));
+  }
+});
+
+test('a source hold never revalidates native metadata ahead of pending recovery', async () => {
+  const f = await fixture(), caller = f.add(), nativeId = randomUUID(), order = [];
+  const nativeSource = { side: 'codex', nativeId, parentIds: [], transientCandidate: true };
+  f.bridge.sync = async () => { throw Object.assign(new Error('Synthetic metadata unavailable'), { nativeSource }); };
+  f.bridge.recover = async () => { order.push('recover'); f.state.pending = null; };
+  f.runtime.revalidateCodexDependencySource = async () => {
+    assert.equal(f.state.pending, null); order.push('source');
+  };
+  const exact = () => [{ side: 'codex', nativeId, kind: 'idle', revision: randomUUID() }];
+  await f.run({ maxPasses: 3, events: f.eventQueue([() => {
+    f.state.pending = { phase: 'applied', record: { conversationId: caller.id } }; return exact();
+  }, exact]) });
+  assert.deepEqual(order, ['recover', 'source']);
+});
+
+test('missing or aliased tracking ledgers and contradictory metadata never prove transient absence', async () => {
+  for (const mode of ['missing', 'alias', 'identity']) {
+    const f = await fixture(), nativeId = randomUUID();
+    if (mode === 'identity') await writeFile(join(f.root, 'desktop-state.json'), JSON.stringify(f.state), { mode: 0o600 });
+    if (mode === 'alias') {
+      const path = join(f.root, 'ledger-reference.json');
+      await writeFile(path, JSON.stringify(f.state), { mode: 0o600 });
+      await symlink(path, join(f.root, 'desktop-state.json'));
+    }
+    const client = { async request(method) {
+      if (method !== 'thread/read') return { data: [], nextCursor: null };
+      if (mode === 'identity') return { thread: { id: randomUUID() } };
+      throw new Error(`thread not loaded: ${nativeId}`);
+    } };
+    const runtime = new DesktopRuntime({ root: f.root, codexHome: join(f.root, 'codex'), claudeHome: join(f.root, 'claude') });
+    await assert.rejects(runtime.readCodexDependencyMetadata(client, nativeId, { transientCandidate: true, parentIds: [] }),
+      error => error.nativeSource?.nativeId === nativeId);
+  }
+});
+
+test('exact thread absence includes compressed, archived and rollover files and refuses directory aliases', async () => {
+  const id = randomUUID(), segment = randomUUID();
+  for (const [directory, filename] of [
+    ['sessions/2026/10/14', `rollout-2026-10-14T12-00-00-${id}.jsonl`],
+    ['sessions/2026/10/14', `rollout-2026-10-14T12-00-00-${id}_${segment}.jsonl.zst`],
+    ['archived_sessions', `${id}_${segment}.jsonl.zst`],
+  ]) {
+    const f = await fixture(), home = join(f.root, 'codex');
+    await mkdir(join(home, directory), { recursive: true, mode: 0o700 });
+    await writeFile(join(home, directory, filename), 'synthetic bytes', { mode: 0o600 });
+    assert.equal(await codexThreadRolloutAbsent(home, id), false);
+    assert.equal(await codexThreadRolloutAbsent(home, randomUUID()), true);
+  }
+  const f = await fixture(), home = join(f.root, 'codex');
+  await mkdir(home, { mode: 0o700 });
+  const elsewhere = join(f.root, 'elsewhere');
+  await mkdir(elsewhere, { mode: 0o700 });
+  await symlink(elsewhere, join(home, 'sessions'));
+  await assert.rejects(codexThreadRolloutAbsent(home, id), /Unsafe Codex rollout directory/);
+});
 
 test('unsupported sources remain visible across configuration and unrelated targeted discovery', async () => {
   const f = await fixture(), pair = f.add();

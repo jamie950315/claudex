@@ -127,5 +127,9 @@ and service at most one exact completion/session target, with fair ordering and
 revision rechecks. Only consumed revisions are acknowledged; started, control and
 newer events survive, except an owner wake, which is served and acknowledged at
 the next boundary (see the frontend guide). Unknown-source discovery is exact-key and revision-bounded.
+Unknown untracked Codex events with no rollout never block unrelated work; keep
+the existing bounded completion-before-flush follow-ups. Dependency read
+failures identify their actual native source and remain
+visible across unrelated events, rather than pausing the current sync's caller.
 Retain the old activity-interleaved scheduler only for the injected non-event
 harness. Do not defer all new completions until a long cold sweep finishes.
