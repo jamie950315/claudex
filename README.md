@@ -17,8 +17,8 @@ Collaboration runs models using your native accounts. Synchronization transports
 history without asking a model to generate a reply or summarize it.
 
 Current build: **Claudex.app 1.4.8**, bundling **Claude Mod 0.8.31**.
-Latest published release: **1.4.7** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.4.7)
-· [Release notes](docs/releases/1.4.7.md).
+Latest published release: **1.4.8** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.4.8)
+· [Release notes](docs/releases/1.4.8.md).
 App and Mod versions are separate. Guides on `main` describe current behavior;
 documents viewed under a release tag remain that release's original snapshot.
 
