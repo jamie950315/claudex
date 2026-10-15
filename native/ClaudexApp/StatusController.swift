@@ -140,14 +140,14 @@ final class StatusController: NSObject, UNUserNotificationCenterDelegate {
     }
 
     var diagnosticText: String {
-        formattedIssues(report.issues, includeIdentity: true)
+        formattedIssues(report.issues + report.featureDiagnostics, includeIdentity: true)
     }
 
     private func formattedIssues(_ issues: [HealthIssue], includeIdentity: Bool) -> String {
         issues.map { issue in
-            let target = issue.identity == nil ? L(issue.target) : issue.target
+            let target = issue.identity == nil || issue.diagnostic ? L(issue.target) : issue.target
             let identity = includeIdentity ? issue.identity.map { $0 == target ? "" : " [\($0)]" } ?? "" : ""
-            return LF("Conversation: %@", target) + identity + "\n"
+            return LF(issue.diagnostic ? "Feature: %@" : "Conversation: %@", target) + identity + "\n"
                 + LF("Reason: %@", LD(issue.reason)) + "\n"
                 + (issue.savedWorkingDirectory.map { LF("Saved working directory: %@", $0) + "\n" } ?? "")
                 + LF("Next step: %@", L(issue.nextStep))

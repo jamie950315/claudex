@@ -29,6 +29,19 @@ import { findAppModRuntime, ensureAppModRuntime } from './app-mod-runtime.mjs';
 const execute = promisify(execFile);
 const defaults = Object.freeze({ allProjects: true, allowWrite: true, defaultPermission: 'workspace-write' });
 const component = (id, label, state, detail, action) => ({ id, label, state, detail, ...(action ? { action } : {}) });
+const completionNextSteps = new Map([
+  ['wait-for-current-hook-inspection', 'Wait for the running watcher to inspect completion origin hooks, then refresh status.'],
+  ['run-setup-to-install-origin-hooks', 'Run setup to install the Codex and Claude completion origin hooks.'],
+  ['review-exact-PostToolUse-hook-in-Codex-hooks', 'Review and trust the exact Claudex PostToolUse hook in Codex /hooks.'],
+  ['enable-Claude-hooks', 'Enable Claude Code hooks in native settings, then refresh status.'],
+  ['check-task-origin-proof', 'Check the exact task notification status to verify its calling chat and recipient.'],
+  ['check-task-exact-recipient', 'Check the exact task notification status for the selected recipient. Global receiver observations do not prove delivery.'],
+  ['open-recipient-session-and-load-Mod', 'Open the recipient session and load the installed Claudex Mod.'],
+  ['explicitly-enable-nativeWake-and-selfWake', 'Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.'],
+  ['check-recipient-native-inbound-policy', "Check the recipient session's native inbound-message policy."],
+  ['verify-loaded-chat-wake-adapter', 'Verify that the recipient has loaded the supported chat-wake adapter.'],
+  ['check-task-exact-recipient-and-SendMessage-capability', 'Check the exact task recipient and native SendMessage capability.'],
+]);
 const processAlive = pid => {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (error) { if (error.code === 'ESRCH') return false; return true; }
@@ -55,6 +68,18 @@ function safeFailure(error) {
   if (error?.cmd || error?.stdout !== undefined || error?.stderr !== undefined)
     return 'The native operation did not complete. Existing settings and histories were preserved.';
   return String(error?.message ?? 'Setup could not be verified.').split('\n')[0].slice(0, 400);
+}
+
+function folderSetupFailure(error) {
+  const codes = { CLAUDEX_FRONTEND_CACHE_MISSING: 'cache-entry-missing', CLAUDEX_FRONTEND_CACHE_CHANGED: 'cache-changed',
+    CLAUDEX_FRONTEND_EVIDENCE_MISSING: 'recovery-evidence-missing', CLAUDEX_APP_FOLDER_CONFIGURATION_CHANGED: 'configuration-changed',
+    ENOENT: 'required-file-missing', EACCES: 'access-denied', EPERM: 'access-denied' };
+  const changed = ['Claude frontend graph: graph changed during discovery', 'Claude frontend graph: graph changed before publication',
+    'Claude frontend graph: entry changed during discovery', 'Claude frontend graph: cache inventory changed while reading',
+    'Claude renderer cache changed after graph validation', 'Claude renderer cache changed after publication'];
+  const reason = codes[error?.code] ?? (error?.message === 'Claude frontend graph: entry is not cached' ? 'cache-entry-missing'
+    : changed.includes(error?.message) ? 'cache-changed' : 'validation-refused');
+  return { state: ['cache-entry-missing', 'cache-changed'].includes(reason) ? 'waiting' : 'refused', reason };
 }
 
 export class AppSetup {
@@ -350,8 +375,10 @@ export class AppSetup {
       rows.push(component('claude-mod', 'Claude Mod', 'blocked',
         'Claude Mod installation needs attention. Use Install or update Claude Mod to retry; existing data is preserved.', 'mod-setup'));
     }
+    let completionDelivery;
     try {
       const broker = await this.collaborationStatus();
+      completionDelivery = broker?.completionDelivery;
       const writable = ['workspace-write', 'full-access'].includes(broker?.limits?.defaultPermission);
       rows.push(component('collaboration', 'Cross-model collaboration', !broker ? 'missing' : broker.blockedByUncertainWork ? 'blocked'
         : broker.limits?.allowWrite && writable ? 'ready' : 'waiting',
@@ -361,8 +388,22 @@ export class AppSetup {
           : writable ? 'All projects are available for task-scoped file editing and handoff.' : 'An existing broker retains its previous read-only policy. It must be upgraded when safely stopped.',
       broker?.blockedByUncertainWork ? 'resolve-uncertain' : 'retry'));
     } catch (error) { rows.push(component('collaboration', 'Cross-model collaboration', 'blocked', safeFailure(error), 'retry')); }
+    completionDelivery ??= { diagnosticOnly: true, deliveryGuaranteed: false,
+      selectedRoute: { claude: null, codex: 'native-owner' },
+      originHooks: { state: 'unknown', codex: { state: 'unknown' }, claude: { state: 'unknown' } },
+      recipientReadiness: { claude: { state: 'unknown', reason: 'broker-unobserved' }, codex: { state: 'unknown', reason: 'broker-unobserved' } },
+      nextStep: 'Completion delivery capability is unavailable. Start or update the collaboration broker, then refresh status.' };
+    const completionReady = completionDelivery.diagnosticOnly === true && completionDelivery.deliveryGuaranteed === false
+      && completionDelivery.originHooks?.state === 'ready' && ['codex', 'claude'].every(provider =>
+        completionDelivery.originHooks[provider]?.state === 'ready' && completionDelivery.recipientReadiness?.[provider]?.state === 'ready');
+    rows.push(component('completion-delivery', 'Completion delivery', completionReady ? 'ready' : 'waiting',
+      (completionNextSteps.get(completionDelivery.nextStep) ?? completionDelivery.nextStep) || (completionReady
+        ? 'Origin hooks and the selected recipient routes report ready. Each message still requires native receipt.'
+        : 'Check the exact task notification status for origin hook trust, the selected route and recipient readiness.'), 'diagnostics'));
+    let folderSetup;
     try {
       const config = await appPrivateJSON(join(this.root, 'config.json'));
+      folderSetup = await appPrivateJSON(join(this.root, 'app-folder-setup-status.json'));
       const watcher = await appPrivateJSON(join(this.root, 'watcher-status.json'));
       const live = watcher && processAlive(watcher.pid) && watcher.running === true && Number.isFinite(watcher.updatedAt)
         && watcher.updatedAt <= Date.now() + 5000 && Date.now() - watcher.updatedAt < 90000;
@@ -388,13 +429,21 @@ export class AppSetup {
               : live && watcher.waiting ? watcher.waiting : 'Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work.', held ? 'diagnostics' : 'retry'));
       const rendererHeld = live && watcher?.rendererAdapters?.state === 'held';
       const rendererChecking = live && ['checking', 'held'].includes(watcher?.rendererAdapters?.state);
+      const folderAttempt = config?.folderProjection?.enabled && ['waiting', 'refused'].includes(folderSetup?.state)
+        && !(live && Number.isFinite(watcher.rendererAdapters?.updatedAt) && watcher.rendererAdapters.updatedAt >= folderSetup.updatedAt)
+        ? folderSetup : null;
       rows.push(component('folders', 'Native project folders', watcher?.folderProjection?.state === 'error' ? 'blocked'
-        : rendererChecking ? 'waiting' : config?.folderProjection?.enabled && live && watcher.folderProjection?.state === 'ready' ? 'ready' : 'waiting',
+        : folderAttempt?.state === 'refused' ? 'blocked' : rendererChecking || folderAttempt ? 'waiting'
+          : config?.folderProjection?.enabled && live && watcher.folderProjection?.state === 'ready' ? 'ready' : 'waiting',
         watcher?.folderProjection?.state === 'error' ? watcher.folderProjection.error ?? 'The current frontend resource could not be verified. No replacement resource was assumed.'
+          : folderAttempt?.state === 'refused' ? 'Folder installation was refused by validation. Review diagnostics; saved maintenance preferences and original resources are preserved.'
           : rendererHeld ? 'Desktop integration is waiting for Claudex to resume and finish checking. No action is required.'
           : rendererChecking ? 'The frontend cache changed during inspection. Claudex is checking it again; no action is required.'
+          : folderAttempt ? config.rendererAdapters?.enabled === false
+            ? 'Folder installation is waiting, and automatic frontend maintenance is disabled. Rerun setup when a supported cache resource is available.'
+            : 'Folder installation is waiting for a supported cache resource. Maintenance is enabled and will validate the next native cache event.'
           : config?.folderProjection?.enabled ? 'The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required.'
-          : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', watcher?.folderProjection?.state === 'error' || rendererChecking ? 'diagnostics' : 'retry'));
+          : 'Folder integration requires a supported frontend resource and an idle synchronization setup.', watcher?.folderProjection?.state === 'error' || rendererChecking || folderAttempt ? 'diagnostics' : 'retry'));
       rows.push(component('handoffs', 'Native predecessor archival', watcher?.localHandoff?.state === 'error' ? 'blocked'
         : config?.desktopLocalHandoff?.enabled && live && watcher.localHandoff?.state === 'ready' ? 'ready' : 'waiting',
         watcher?.localHandoff?.state === 'error' ? watcher.localHandoff.error ?? 'The native handoff coordinator reports an unresolved guard. Original histories are preserved.'
@@ -404,9 +453,9 @@ export class AppSetup {
     for (const row of rows) if (notes[row.id]) { row.state = 'blocked'; row.detail = notes[row.id]; row.action = 'retry'; }
     const phase = rows.every(row => row.state === 'ready') ? 'ready' : rows.some(row => row.state === 'blocked') ? 'blocked'
       : rows.some(row => ['missing', 'login-required'].includes(row.state)) ? 'needs-action' : 'waiting';
-    return { version: 1, phase, allProjects: true, allowWrite: true, components: rows, modSettings, modInfo,
+    return { version: 1, phase, allProjects: true, allowWrite: true, components: rows, modSettings, modInfo, completionDelivery, folderSetup,
       message: phase === 'ready' ? 'Claudex is configured for all projects.'
-        : phase === 'waiting' ? 'No setup changes are required. Claudex will continue automatically.'
+        : phase === 'waiting' ? 'Some integrations are waiting. Review the reported reasons and next steps.'
           : 'Independent features stay available while the remaining requirements are resolved.' };
   }
 
@@ -602,16 +651,39 @@ export class AppSetup {
     this.requireWritable();
     const disabled = config.folderProjection?.enabled === false;
     const cachePath = claudeFolderPresentationCachePath(this.home, config.folderProjection?.cachePath);
-    // Presentation is independently guarded. A cache mismatch cannot prevent the base watcher from being installed.
+    const path = join(this.root, 'config.json');
+    const statusPath = join(this.root, 'app-folder-setup-status.json');
+    const saveOutcome = async outcome => {
+      const status = { version: 1, ...outcome, updatedAt: Date.now() };
+      await writeJSON(statusPath, status);
+      return status;
+    };
+    // Persist intent before touching the cache. An unavailable/unknown graph
+    // must not disable later event-driven validation by the normal watcher.
+    const next = { ...config, rendererAdapters: { ...config.rendererAdapters, enabled: config.rendererAdapters?.enabled !== false },
+      ...(!disabled ? { folderProjection: { ...config.folderProjection, enabled: true, cachePath },
+        desktopLocalHandoff: config.desktopLocalHandoff ?? { enabled: true } } : {}) };
+    if (JSON.stringify(await appPrivateJSON(path)) !== JSON.stringify(config))
+      throw new Error('Synchronization configuration changed during folder setup; it was preserved.');
+    if (JSON.stringify(next) !== JSON.stringify(config)) await writeJSON(path, next);
+    if (disabled) return saveOutcome({ state: 'disabled', reason: 'disabled-by-user' });
+    await saveOutcome({ state: 'waiting', reason: 'installation-pending' });
+    let outcome;
+    // Presentation is independently guarded. A cache mismatch cannot prevent
+    // the base watcher from being installed. No native error text is retained.
     try {
-      const resource = disabled ? null : await this.foldersInstall({ root: this.root, home: this.home, cachePath });
-      const next = { ...config, rendererAdapters: { enabled: config.rendererAdapters?.enabled !== false },
-        ...(!disabled ? { folderProjection: { enabled: true, cachePath: resource?.cachePath ?? cachePath },
-          desktopLocalHandoff: config.desktopLocalHandoff ?? { enabled: true } } : {}) };
-      if (JSON.stringify(await appPrivateJSON(join(this.root, 'config.json'))) !== JSON.stringify(config))
-        throw new Error('Synchronization configuration changed during folder setup; it was preserved.');
-      if (JSON.stringify(next) !== JSON.stringify(config)) await writeJSON(join(this.root, 'config.json'), next);
-    } catch { /* inspect reports waiting; never substitute or patch an unknown frontend. */ }
+      const resource = await this.foldersInstall({ root: this.root, home: this.home, cachePath });
+      if (JSON.stringify(await appPrivateJSON(path)) !== JSON.stringify(next))
+        throw Object.assign(new Error('Synchronization configuration changed during folder setup; it was preserved.'),
+          { code: 'CLAUDEX_APP_FOLDER_CONFIGURATION_CHANGED' });
+      if (resource?.status !== 'installed') outcome = { state: 'refused', reason: 'validation-refused' };
+      else {
+        if (resource?.cachePath && resource.cachePath !== cachePath)
+          await writeJSON(path, { ...next, folderProjection: { ...next.folderProjection, cachePath: resource.cachePath } });
+        outcome = { state: 'installed', reason: resource.activation === 'restart-required' ? 'restart-required' : 'load-not-verified' };
+      }
+    } catch (error) { outcome = folderSetupFailure(error); }
+    return saveOutcome(outcome);
   }
 
   async login(provider) {

@@ -87,6 +87,34 @@ check(health(changed).state == "waiting" && !health(changed).attention && !healt
 check(health(changed).title == "Waiting for Desktop integration" && health(changed).detail.contains("No action is required"))
 changed["folderProjection"] = ["state": "error", "error": "Exact map conflict"]
 check(health(changed).attention && health(changed).detail == "Exact map conflict")
+// A healthy folder resource cannot hide refused independent adapters.
+changed = ready; changed["rendererAdapters"] = ["state": "degraded", "adapters": [
+  "folders": ["status": "installed", "activation": "load-not-verified"],
+  "chatWake": ["status": "skipped", "failure": ["code": "validation-refused"]],
+  "ownerWake": ["status": "installed", "activation": "load-not-verified"],
+  "commands": ["status": "skipped"]]] as [String: Any]
+check(health(changed).state == "degraded" && health(changed).attention)
+check(health(changed).issues.contains { $0.target == "Conversation wake" })
+changed = ready; changed["hookStatus"] = ["ready": true, "notificationOrigin": ["ready": false,
+  "codex": ["configured": true, "trusted": false], "claude": ["configured": true, "enabled": true]] as [String: Any]] as [String: Any]
+check(health(changed).title == "Notification origin needs attention" && health(changed).attention)
+check(health(changed).issues.contains { $0.target == "Codex notification origin" })
+changed = ready; changed["rendererAdapters"] = ["state": "ready", "adapters": [
+  "chatWake": ["status": "installed", "activation": "load-not-verified"]]]
+check(health(changed).state == "ready" && health(changed).issues.isEmpty)
+check(health(changed).featureDiagnostics.first?.reason.contains("live activation is not verified") == true)
+changed = ready; changed["hookStatus"] = ["health": ["codex": ["state": "recorded", "errorCount": 3,
+  "phases": ["origin_recheck": ["errorCount": 3, "lastError": ["code": "ORIGIN_UNVERIFIED", "at": now]] as [String: Any]]] as [String: Any]]] as [String: Any]
+check(health(changed).title == "Hook diagnostics need attention" && health(changed).attention)
+check(health(changed).issues.first?.identity == "origin_recheck/ORIGIN_UNVERIFIED [3]")
+changed["hookStatus"] = ["health": ["codex": ["state": "recorded", "errorCount": 3,
+  "phases": ["origin_recheck": ["errorCount": 3, "lastError": ["code": "ORIGIN_UNVERIFIED", "at": now], "recoveredAt": now] as [String: Any]]] as [String: Any]]] as [String: Any]
+check(health(changed).state == "ready" && health(changed).issues.isEmpty)
+check(health(changed).featureDiagnostics.first?.identity == "origin_recheck/ORIGIN_UNVERIFIED [3]")
+changed["hookStatus"] = ["health": ["codex": ["state": "unavailable"]]]
+check(health(changed).attention)
+changed["blocked"] = ["reason": "Exact history conflict"]
+check(health(changed).state == "paused" && health(changed).detail == "Exact history conflict")
 var restart = ready; restart["claudeDesktopRestart"] = ["entry": "index-new.js", "requiredSince": now - 5000] as [String: Any]
 func restartHealth(_ launched: Double?) -> HealthReport {
   classifyHealth(watcher: restart, service: nil, now: now, alive: alive, claudeLaunchedAt: { launched })

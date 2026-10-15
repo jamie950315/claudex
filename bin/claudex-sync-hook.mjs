@@ -3,6 +3,14 @@ import { SyncEventInbox } from '../src/sync-events.mjs';
 import { readAppStopState } from '../src/app-stop-state.mjs';
 import { ChatMailbox } from '../src/chat-mailbox.mjs';
 import { isAbsolute, join } from 'node:path';
+import { recordSyncHookHealth, syncHookErrorCode } from '../src/sync-hook-health.mjs';
+
+let healthContext, phase = 'input';
+async function health(operation, error) {
+  if (!healthContext) return;
+  try { await recordSyncHookHealth({ ...healthContext, phase: operation, ...(error ? { error } : {}) }); }
+  catch { process.stderr.write('Claudex hook health could not be recorded; diagnostics are incomplete.\n'); }
+}
 
 const startTool = /^mcp__claudex[-_]work__claudex_start$/;
 const identifier = value => typeof value === 'string' && /^[A-Za-z0-9_.:-]{1,256}$/.test(value);
@@ -19,6 +27,7 @@ async function originRpc(options, method, params) {
   const stopped = await readAppStopState(options['--root']);
   if (stopped?.stopped || stopped?.resuming) return;
   await callCollaboration({ root, peer: options['--provider'], token: token.trim(), method, timeoutMs: 2500, params });
+  return true;
 }
 async function bindOrigin(options, input) {
   if (!startTool.test(input.tool_name ?? '') || !sourceHint(input) || !identifier(input.tool_use_id)
@@ -37,7 +46,7 @@ async function bindOrigin(options, input) {
     || typeof receipt.originChallenge !== 'string' || !/^[a-f0-9]{64}$/.test(receipt.originChallenge)) return;
   // These fields are hints only. The broker independently reads the exact native
   // tool call/result and verifies its arguments fingerprint and one-time challenge.
-  await originRpc(options, 'origin_bind', { taskId: receipt.taskId, sessionId: input.session_id, cwd: input.cwd,
+  return originRpc(options, 'origin_bind', { taskId: receipt.taskId, sessionId: input.session_id, cwd: input.cwd,
     toolUseId: input.tool_use_id, ...(input.turn_id === undefined ? {} : { turnId: input.turn_id }) });
 }
 
@@ -53,6 +62,8 @@ async function main() {
   // Delegated collaboration workers load the user's hooks but are not ordinary
   // conversations: never enroll, wake or message them. Drain input and stop.
   if (process.env.CLAUDEX_COLLABORATION_WORKER === '1') { for await (const _ of process.stdin); return; }
+  if (typeof options['--root'] !== 'string' || !isAbsolute(options['--root'])) throw new Error('Invalid hook root.');
+  healthContext = { root: options['--root'], provider: options['--provider'] };
   const chunks = [];
   let size = 0;
   for await (const chunk of process.stdin) {
@@ -63,14 +74,16 @@ async function main() {
   const input = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   if (!input || typeof input !== 'object') throw new Error('Invalid hook input.');
   if (input.agent_id || input.agentId || input.agent_type || input.hook_event_name === 'SubagentStop') return;
+  await health('input');
   if (input.hook_event_name === 'PostToolUse') {
     try {
       const stopped = await readAppStopState(options['--root']);
       if (stopped?.stopped || stopped?.resuming) return;
-      await bindOrigin(options, input);
+      if (await bindOrigin(options, input)) await health('origin_bind');
     }
     catch (error) {
-      const code = typeof error?.code === 'string' && /^[A-Z_]{1,64}$/.test(error.code) ? error.code : 'ORIGIN_UNVERIFIED';
+      await health('origin_bind', error);
+      const code = syncHookErrorCode('origin_bind', error);
       process.stderr.write(`Claudex origin binding was not confirmed (${code}); no retry or fallback was attempted.\n`);
     }
     return;
@@ -81,11 +94,12 @@ async function main() {
   if (stopped?.stopped || stopped?.resuming) return;
   if (['SessionStart', 'UserPromptSubmit', 'Stop'].includes(input.hook_event_name) && sourceHint(input)) {
     try {
-      await originRpc(options, 'origin_recheck', { sessionId: input.session_id, cwd: input.cwd, event: input.hook_event_name });
-    } catch {
+      if (await originRpc(options, 'origin_recheck', { sessionId: input.session_id, cwd: input.cwd, event: input.hook_event_name })) await health('origin_recheck');
+    } catch (error) {
       // Native transcripts may flush after PostToolUse. This exact-session event
       // is a bounded reread hint, not permission to retry work or notifications.
       // An unavailable broker must not suppress ordinary mailbox/sync handling.
+      await health('origin_recheck', error);
     }
     const currentStop = await readAppStopState(options['--root']);
     if (currentStop?.stopped || currentStop?.resuming) return;
@@ -104,17 +118,24 @@ async function main() {
           ? { decision: 'block', reason: receipt.context }
           : { hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: receipt.context } };
       }
+      await health('mailbox');
     } catch (error) {
       // A coordination error must not suppress ordinary synchronization hints.
+      await health('mailbox', error);
       process.stderr.write(error?.code === 'MAILBOX_CAPACITY_EXHAUSTED'
         ? 'Claudex chat mailbox capacity exhausted; registration or delivery is unavailable. Inspect collaboration status.\n'
         : 'Claudex native-chat coordination could not be verified; inspect the message receipt before retrying.\n');
     }
   }
+  phase = 'sync';
   const inbox = await new SyncEventInbox({ root: options['--root'] }).initialize();
   await inbox.publish({ side: options['--provider'], nativeId: input.session_id, kind,
     ...(typeof input.turn_id === 'string' ? { turnId: input.turn_id } : {}) });
+  await health('sync');
   if (output) process.stdout.write(JSON.stringify(output) + '\n');
 }
 
-main().catch(() => { process.stderr.write('Claudex could not record the synchronization wake event.\n'); process.exitCode = 1; });
+main().catch(async error => {
+  await health(phase, error);
+  process.stderr.write('Claudex could not record the synchronization wake event.\n'); process.exitCode = 1;
+});

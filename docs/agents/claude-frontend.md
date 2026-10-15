@@ -231,6 +231,12 @@ remains status-only. Check app-stop before publication and stop/drain cache work
 before releasing watch.lock. Bounded renderer-adapters-status.json and watcher
 rendererAdapters report matched/installed/skipped assets and activation limits;
 folder status also exposes this maintenance report.
+Partial refusals publish `refusedAdapters` and retain every adapter's status,
+fixed failure code and activation. The native health summary reports degraded or
+skipped maintenance even when folders succeeded; it never turns an unrelated
+chat/owner/command failure into a folder-map error. Prepared files with
+`load-not-verified` activation remain explicit in advanced diagnostics, separate
+from synchronization health and actual recipient/delivery proof.
 
 Each resource uses <adapter>/<cache filename>/ui-folder-compat, with adapter
 ui-folders, ui-chat-wake or ui-owner-wake, an immutable original and a

@@ -55,6 +55,24 @@ foreground queue must not hide initial verification of the cold backlog.
 
 Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
 requirements request user action, while normal runtime waits need no setup retry.
+Save folder/renderer maintenance intent before the guarded cache installation,
+preserving explicit disabled choices and other adapter settings. Cache absence,
+validation refusal and skipped installation must retain that intent and expose a
+typed, content-free last attempt in `app-folder-setup-status.json`; installation
+never certifies renderer activation. The normal watcher cache lifecycle performs
+later validation, with no setup retry timer or guessed frontend. A newer live
+renderer maintenance report supersedes an older installation-attempt refusal.
+Waiting setup summaries must not promise that no setup changes are required.
+Keep the `completion-delivery` checklist row and the separate `completionDelivery`
+report field independent of broker write readiness and loaded Mod activation.
+Use the broker's diagnostic origin-hook trust, selected provider routes,
+recipient readiness and concrete next step. Missing/stale/unobserved evidence
+stays unknown/waiting; an unspecified exact recipient is never ready. These
+observations grant no dispatch authority or delivery guarantee, enable no
+receiver preference and bypass no native trust review. Present known broker
+next-step codes as readable localized instructions while preserving the original
+diagnostic report; a global `observed` receiver never means an exact recipient
+is `ready`.
 Predecessor archival without a verified idle replacement owner (including an
 evicted owner) is a typed `owner_not_idle` wait after archive intents are revoked,
 not a history conflict or an actionable setup failure. Keep idle verification

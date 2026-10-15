@@ -376,6 +376,7 @@ test('native lifecycle publishes bounded policy observations and clear retires t
   expect(observed.length).toBe(1)
   expect(observed[0].context).toEqual({ sessionId: ID, cwd: '/fixture' })
   expect(observed[0].observation.inboundPolicy).toBe('hold')
+  expect(observed[0].observation.inboundPolicyEvidence).toBe('explicit')
   expect(observed[0].observation.usage).toEqual({ contextPercent: 42 })
   expect(observed[0].observation.capabilities).toEqual({ sendMessage: false })
   expect(observed[0].observation.modVersion).toBe(MOD_VERSION)
@@ -387,6 +388,15 @@ test('native lifecycle publishes bounded policy observations and clear retires t
   expect(observed[2].observation.lifecycle).toBe('loaded')
   expect(observed[2].observation.modVersion).toBe(MOD_VERSION)
   expect(observed[2].observation.observerId).not.toBe(observed[0].observation.observerId)
+})
+
+test('omitted native inbound policy is observed as an unset setting without guessing its default', async ($, on) => {
+  const observed: any[] = []
+  stubs(on, false, request => { if (request.op === 'wake-observe') observed.push(request); return {} }, 'en', () => ({}))
+  await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
+  expect(observed.length).toBe(1)
+  expect(observed[0].observation.inboundPolicy).toBe('unknown')
+  expect(observed[0].observation.inboundPolicyEvidence).toBe('setting-unset')
 })
 
 test('technical session details read supported setting scopes and show only exact public option diagnostics', async ($, on) => {

@@ -353,7 +353,7 @@ export class ChatMailbox {
     });
   }
 
-  async transaction(create, operation) {
+  async transaction(create, operation, { beforeCommit } = {}) {
     const previous = queues.get(this.root) ?? Promise.resolve();
     const work = previous.catch(() => {}).then(async () => {
       let exists = true;
@@ -370,6 +370,7 @@ export class ChatMailbox {
           validate(state);
           const serialized = `${JSON.stringify(state, null, 2)}\n`;
           if (Buffer.byteLength(serialized) > MAX_BYTES) fail('journal capacity exhausted; preserve and inspect existing records.');
+          beforeCommit?.();
           await atomicWrite(this.path, serialized);
         }
         return result;
@@ -461,7 +462,8 @@ export class ChatMailbox {
   }
 
   send({ fromProvider, targetProvider, targetSessionId, message, requestId, expiresInMs = 900000, wakeRequested, wakeRoute },
-    { expiresAt, beforeEnqueue } = {}) {
+    { expiresAt, beforeEnqueue, onPhase } = {}) {
+    onPhase?.('mailbox-guards');
     provider(fromProvider); provider(targetProvider); nativeId(targetSessionId); text(message, 1500, 'message'); text(requestId, 256, 'request ID');
     if (!Number.isSafeInteger(expiresInMs) || expiresInMs <= 0 || expiresInMs > 3600000) fail('expiry must be between 1 ms and one hour.');
     if (wakeRequested !== undefined && typeof wakeRequested !== 'boolean') fail('invalid wake request.');
@@ -474,6 +476,7 @@ export class ChatMailbox {
         ? null : await this.archivedRequest(fromProvider, requestId);
       const receipt = archived?.receipt ?? state.receipts.find(item => item.fromProvider === fromProvider && item.requestId === requestId);
       if (receipt) {
+        onPhase?.('mailbox-queued', receipt.messageId);
         if (receipt.payload !== payload) fail('request ID was reused with a different payload.');
         return publicMessage(archived?.message ?? state.messages.find(item => item.messageId === receipt.messageId), state);
       }
@@ -496,6 +499,9 @@ export class ChatMailbox {
       state.messages.push(record);
       state.receipts.push({ fromProvider, requestId, payload, messageId: record.messageId });
       return publicMessage(record, state);
+    }, { beforeCommit: () => onPhase?.('mailbox-commit') }).then(receipt => {
+      onPhase?.('mailbox-queued', receipt.messageId);
+      return receipt;
     });
   }
 
@@ -509,6 +515,22 @@ export class ChatMailbox {
       const record = state.messages.find(item => item.messageId === messageId) ?? (await this.archivedMessage(messageId))?.message;
       if (!record) fail('unknown message ID.');
       return publicMessage(record, state);
+    });
+  }
+
+  /** One bounded journal read with exact archive lookups; no native histories. */
+  statuses(messageIds) {
+    if (!Array.isArray(messageIds) || messageIds.length > 100100) fail('invalid receipt query.');
+    messageIds.forEach(nativeId);
+    return this.transaction(false, async state => {
+      const values = new Map(state.messages.map(message => [message.messageId, message]));
+      const result = new Map();
+      for (const id of new Set(messageIds)) {
+        const message = values.get(id) ?? (await this.archivedMessage(id))?.message;
+        if (!message) fail('unknown message ID.');
+        result.set(id, publicMessage(message, state));
+      }
+      return result;
     });
   }
 

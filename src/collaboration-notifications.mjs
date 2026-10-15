@@ -16,7 +16,7 @@ const ORIGIN_RECHECK_DELAYS = [1000, 3000];
 export const NOTIFICATION_FENCE = Symbol('claudex-notification-fence');
 const stateFor = hub => {
   if (!states.has(hub)) states.set(hub, { queued: false, running: null,
-    originTimers: new Map(), originChecks: new Map(), originEpoch: 0 });
+    originTimers: new Map(), originChecks: new Map(), originEpoch: 0, quotaTimer: null });
   return states.get(hub);
 };
 // A blocker has its own transition identity. Ordinary reports/activity must not
@@ -40,12 +40,18 @@ function notificationTarget(task) {
 const pending = task => Boolean(notificationTarget(task));
 const sameOrigin = (a, b) => a?.provider === b?.provider && a?.sessionId === b?.sessionId
   && a?.cwd === b?.cwd && a?.toolUseId === b?.toolUseId && a?.turnId === b?.turnId;
-function notificationLimit(state, notification, now = Date.now()) {
-  if (notification.deliveries.length >= 16) return 'task-notification-limit';
+// Completion and intermediate alerts have independent rolling budgets. Retain
+// every intent as no-replay evidence under the existing work-ledger byte bound;
+// a lifetime record count must never turn throttling into permanent suppression.
+function notificationLimit(state, notification, now = Date.now(), kind = 'terminal') {
+  const inWindow = delivery => (delivery.kind ?? 'terminal') === kind && delivery.createdAt > now - 60000;
+  const own = notification.deliveries.filter(inWindow);
   const recent = Object.values(state.tasks).flatMap(item => item.notification?.origin?.provider === notification.origin.provider
     && item.notification.origin.sessionId === notification.origin.sessionId ? item.notification.deliveries : [])
-    .filter(delivery => delivery.createdAt > now - 60000).length;
-  return recent >= 16 ? 'origin-rate-limit' : null;
+    .filter(inWindow);
+  const blocked = own.length >= 16 ? own : recent.length >= 16 ? recent : null;
+  return blocked ? { reason: own.length >= 16 ? 'task-notification-limit' : 'origin-rate-limit',
+    retryAt: blocked.map(delivery => delivery.createdAt).sort((a, b) => a - b)[blocked.length - 16] + 60000 } : null;
 }
 const stopped = async hub => {
   const stop = await readAppStopState(dirname(hub.root));
@@ -57,12 +63,26 @@ export function createTaskNotification(policy, requestKey, now = Date.now()) {
     origin: null, deliveries: [], suppressedRevision: null };
 }
 
-export function notificationPresentation(task) {
+export function notificationPresentation(task, receipts = new Map()) {
   const value = task.notification;
   if (!value) return { mode: 'off' };
+  const target = notificationTarget(task), waiting = value.pending;
+  const expiredPending = target && target.at + value.policy.expiresInMs <= Date.now();
+  const currentPending = expiredPending ? { kind: target.kind, revision: target.revision,
+    state: 'expired', reason: 'expired-before-publication', expiresAt: target.at + value.policy.expiresInMs }
+    : waiting && target && waiting.kind === target.kind && waiting.revision === target.revision
+    && waiting.generation === target.generation && waiting.blockerId === target.blockerId
+    && waiting.blockerRevision === target.blockerRevision ? waiting : null;
   return { mode: value.policy.mode, expiresInMs: value.policy.expiresInMs,
     bindingStatus: value.origin ? 'verified' : value.challengeExpiresAt <= Date.now() ? 'expired' : 'awaiting-native-proof',
-    origin: structuredClone(value.origin), deliveries: structuredClone(value.deliveries),
+    origin: structuredClone(value.origin), deliveries: value.deliveries.map(delivery => {
+      const receipt = receipts.get(delivery.messageId);
+      return { ...structuredClone(delivery), ...(receipt ? { dispatchState: delivery.state,
+        state: receipt.state, deliveryStatus: receipt.deliveryStatus, wakeState: receipt.wake?.state ?? null } : {}) };
+    }),
+    pending: structuredClone(currentPending),
+    missed: value.deliveries.filter(delivery => (receipts.get(delivery.messageId)?.state ?? delivery.state) === 'expired'
+      || delivery.state === 'failed-not-sent').length + Number(Boolean(expiredPending)),
     pendingVerification: value.originHint ? { attempts: value.originHint.attempts,
       lastAttemptAt: value.originHint.lastAttemptAt, error: value.originHint.error } : null,
     suppressedRevision: value.suppressedRevision, suppressedBlockers: structuredClone(value.suppressedBlockers ?? {}),
@@ -87,7 +107,7 @@ export async function inspectNotificationContinuation(hub, task) {
     return { ...result('wait', 'awaiting-native-proof'), retryAfterMs: 2000 };
   }
   const limit = notificationLimit(hub.state, n);
-  if (limit) return result('wait', limit);
+  if (limit) return result('wait', limit.reason);
   if (await stopped(hub)) return result('wait', 'app-stopped');
   const route = n.origin.provider === 'claude' ? hub.state.nativeWakeRoute ?? 'renderer' : 'native-owner';
   const chat = (await hub.chatMailbox.list()).find(value => value.provider === n.origin.provider
@@ -115,7 +135,11 @@ export async function inspectNotificationContinuation(hub, task) {
       wakeRoute: route, state: 'queued' });
     observation = ['receiver-observed', 'sender-observed'].includes(diagnosis?.reason)
       ? result('await-notification', diagnosis.reason, 'mod-self-reported')
-      : result('wait', diagnosis?.reason ?? 'receiver-unavailable');
+      : { ...result('wait', diagnosis?.reason ?? 'receiver-unavailable'),
+        ...(diagnosis?.detail ? { detail: diagnosis.detail } : {}),
+        ...(diagnosis?.missingEvidence ? { missingEvidence: diagnosis.missingEvidence } : {}),
+        ...(diagnosis?.missingProof ? { missingProof: diagnosis.missingProof } : {}),
+        ...(diagnosis?.nextStep ? { nextStep: diagnosis.nextStep } : {}) };
   } else observation = result('wait', 'renderer-readiness-unverified');
   // Metadata/probe awaits must not authorize yielding on a stale task or route.
   const current = hub.state.tasks[task.id];
@@ -134,7 +158,7 @@ export async function inspectNotificationContinuation(hub, task) {
     || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'renderer') !== route))
     return result('wait', 'task-or-route-changed');
   const finalLimit = notificationLimit(hub.state, final.notification);
-  if (finalLimit) return result('wait', finalLimit);
+  if (finalLimit) return result('wait', finalLimit.reason);
   return observation;
 }
 
@@ -145,12 +169,15 @@ export function validateTaskNotification(task, requests) {
   if (task.parentId !== null || n.policy.mode === 'off' || !/^[a-f0-9]{64}$/.test(n.challenge ?? '')
     || !Number.isSafeInteger(n.challengeExpiresAt) || !requests[n.requestKey]
     || requests[n.requestKey].result?.taskId !== task.id || requests[n.requestKey].result?.originChallenge !== n.challenge
-    || !Array.isArray(n.deliveries) || n.deliveries.length > 16
+    || !Array.isArray(n.deliveries) || n.deliveries.length > 100100
     || n.suppressedBlockers !== undefined && (!n.suppressedBlockers || typeof n.suppressedBlockers !== 'object'
       || Array.isArray(n.suppressedBlockers) || Object.keys(n.suppressedBlockers).length > 64
       || Object.entries(n.suppressedBlockers).some(([key, revision]) => !/^\d{1,3}:[A-Za-z0-9_.:-]{1,128}$/.test(key)
         || !Number.isSafeInteger(revision) || revision < 1))
-    || n.deliveries.some(d => !Number.isSafeInteger(d.revision) || !['dispatching', 'queued', 'expired', 'uncertain', 'failed'].includes(d.state)
+    || n.pending !== undefined && n.pending !== null && (n.pending.state !== 'throttled'
+      || !['origin-rate-limit', 'task-notification-limit'].includes(n.pending.reason)
+      || !Number.isSafeInteger(n.pending.retryAt) || !Number.isSafeInteger(n.pending.expiresAt))
+    || n.deliveries.some(d => !Number.isSafeInteger(d.revision) || !['dispatching', 'queued', 'expired', 'uncertain', 'failed', 'failed-not-sent'].includes(d.state)
       || !Number.isSafeInteger(d.createdAt) || !Number.isSafeInteger(d.expiresAt) || typeof d.requestId !== 'string'
       || d.kind !== undefined && !['terminal', 'blocker'].includes(d.kind)
       || d.kind === 'blocker' && (typeof d.blockerId !== 'string' || d.blockerId.length > 128
@@ -333,8 +360,17 @@ export async function recheckTaskOrigins(hub, envelope, actor) {
 
 /** Resume no ambiguous dispatch. An interrupted intent stays uncertain forever. */
 export function recoverNotifications(state) {
-  for (const task of Object.values(state.tasks)) for (const delivery of task.notification?.deliveries ?? []) {
-    if (delivery.state === 'dispatching') { delivery.state = 'uncertain'; delivery.reason = 'broker-restarted-during-dispatch'; }
+  for (const task of Object.values(state.tasks)) {
+    const n = task.notification;
+    if (!n) continue;
+    // These legacy markers prove no intent was created for the throttled target.
+    // Existing intents (including interrupted ones) still prevent any replay.
+    if (['origin-rate-limit', 'task-notification-limit'].includes(n.suppressionReason)) {
+      n.suppressedRevision = null; n.suppressedBlockers = {}; delete n.suppressionReason;
+    }
+    for (const delivery of n.deliveries) {
+      if (delivery.state === 'dispatching') { delivery.state = 'uncertain'; delivery.reason = 'broker-restarted-during-dispatch'; }
+    }
   }
 }
 
@@ -343,20 +379,26 @@ async function publish(hub) {
   for (let sent = 0; sent < 16 && !hub.closed; sent++) {
     if (await stopped(hub)) return 'held';
     const next = await hub.mutate(state => {
-      const task = Object.values(state.tasks).find(pending);
+      const candidates = Object.values(state.tasks).filter(pending)
+        .sort((a, b) => Number(terminal.has(b.status)) - Number(terminal.has(a.status)) || a.updatedAt - b.updatedAt || a.id.localeCompare(b.id));
+      const now = Date.now();
+      let task;
+      for (const candidate of candidates) {
+        const target = notificationTarget(candidate), n = candidate.notification;
+        const expiresAt = target.at + n.policy.expiresInMs;
+        const limit = notificationLimit(state, n, now, target.kind);
+        if (expiresAt > now && limit) {
+          const { at, ...identity } = target;
+          n.pending = { ...identity, state: 'throttled', ...limit, expiresAt };
+        } else if (!task) task = candidate;
+      }
       if (!task) return null;
       const target = notificationTarget(task);
-      const n = task.notification, now = Date.now();
-      const limit = notificationLimit(state, n, now);
-      if (limit) {
-        if (target.kind === 'terminal') n.suppressedRevision = task.revision;
-        else (n.suppressedBlockers ??= {})[`${target.generation}:${target.blockerId}`] = target.blockerRevision;
-        n.suppressionReason = limit;
-        return { suppressed: true };
-      }
+      const n = task.notification;
+      delete n.pending;
       const expiresAt = target.at + n.policy.expiresInMs;
       const { at, ...identity } = target;
-      const delivery = { ...identity, state: 'dispatching', mode: n.policy.mode,
+      const delivery = { ...identity, state: 'dispatching', dispatchPhase: 'intent', mode: n.policy.mode,
         createdAt: now, expiresAt,
         requestId: target.kind === 'terminal' ? `origin-${task.id}-${task.revision}-${n.challenge.slice(0, 16)}`
           : `blocker-${task.id}-${target.generation}-${target.blockerRevision}-${n.deliveries.length}-${n.challenge.slice(0, 16)}` };
@@ -369,13 +411,15 @@ async function publish(hub) {
     });
     if (!next) return 'drained';
     if (next.suppressed) continue;
-    let receipt, state = 'uncertain', reason = null;
+    let receipt, state = 'uncertain', reason = null, failureCode = null;
+    let dispatchPhase = 'intent', messageId;
+    const onPhase = (phase, id) => { dispatchPhase = phase; if (id) messageId = id; };
     try {
-      if (await stopped(hub)) { reason = 'app-stopped-before-dispatch'; }
+      if (await stopped(hub)) { state = 'failed-not-sent'; reason = failureCode = 'app-stopped-before-dispatch'; }
       else if (next.expiresAt <= Date.now()) { state = 'expired'; reason = 'expired-before-dispatch'; }
       else {
         // This internal caller, not the worker, holds controller authority.
-        const fence = { expiresAt: next.expiresAt, check: async () => {
+        const fence = { expiresAt: next.expiresAt, onPhase, check: async () => {
           if (await stopped(hub)) fail('CLAUDEX_NOTIFICATION_STOPPED', 'Notification dispatch stopped.');
           if (next.expiresAt <= Date.now()) fail('CLAUDEX_NOTIFICATION_EXPIRED', 'Notification expired before dispatch.');
           if (next.kind === 'blocker') {
@@ -400,13 +444,25 @@ async function publish(hub) {
         state = 'queued';
       }
     } catch (error) {
-      if (error.code === 'CLAUDEX_NOTIFICATION_SUPERSEDED') { state = 'failed'; reason = 'blocker-superseded'; }
-      else reason = 'notification-outcome-unknown';
+      const provenNotSent = ['preflight', 'mailbox-guards'].includes(dispatchPhase);
+      if (provenNotSent) {
+        state = 'failed-not-sent';
+        failureCode = ({ CLAUDEX_NOTIFICATION_SUPERSEDED: 'blocker-superseded',
+          CLAUDEX_NOTIFICATION_STOPPED: 'app-stopped-before-dispatch',
+          CLAUDEX_NOTIFICATION_EXPIRED: 'expired-before-dispatch',
+          CLAUDEX_NOTIFICATION_TARGET_UNAVAILABLE: 'notification-target-unavailable',
+          MAILBOX_CAPACITY_EXHAUSTED: 'mailbox-capacity-exhausted' })[error.code]
+          ?? (dispatchPhase === 'preflight' ? 'notification-preflight-failed' : 'mailbox-pre-enqueue-refused');
+        reason = failureCode;
+      } else { reason = 'notification-outcome-unknown'; failureCode = 'dispatch-outcome-unknown'; }
     }
     await hub.mutate(ledger => {
       const delivery = ledger.tasks[next.taskId].notification.deliveries.find(item => item.requestId === next.requestId);
       delivery.state = state;
+      delivery.dispatchPhase = dispatchPhase;
+      if (failureCode) delivery.failureCode = failureCode;
       if (reason) delivery.reason = reason;
+      if (messageId) delivery.messageId = messageId;
       if (receipt) { delivery.messageId = receipt.messageId; delivery.deliveryStatus = receipt.deliveryStatus ?? receipt.state; }
     });
   }
@@ -417,7 +473,7 @@ export function observeNotificationResume(hub) {
   const local = stateFor(hub);
   local.watcher = watch(dirname(hub.root), (_event, filename) => {
     if (filename === null || String(filename) === 'app-stop.json') void stopped(hub).then(held => {
-      if (held) stopOriginRechecks(hub);
+      if (held) { stopOriginRechecks(hub); clearQuotaTimer(hub); }
       else scheduleNotifications(hub);
     }).catch(error => { hub.closed = true; stopOriginRechecks(hub); hub.emit('fatal', error); hub.emit('change'); });
   });
@@ -427,8 +483,30 @@ export function observeNotificationResume(hub) {
 }
 
 export function scheduleNotifications(hub) {
-  if (hub.closed || !hub.state || !Object.values(hub.state.tasks).some(pending)) return;
+  if (hub.closed || !hub.state) return;
   const local = stateFor(hub);
+  clearQuotaTimer(hub);
+  const candidates = Object.values(hub.state.tasks).filter(pending);
+  if (!candidates.length) return;
+  const now = Date.now();
+  let nextAt = Infinity, ready = false;
+  for (const task of candidates) {
+    const target = notificationTarget(task), n = task.notification;
+    const expiresAt = target.at + n.policy.expiresInMs;
+    const limit = notificationLimit(hub.state, n, now, target.kind);
+    if (expiresAt <= now || !limit || n.pending?.retryAt !== limit.retryAt || n.pending?.kind !== target.kind
+      || n.pending?.revision !== target.revision || n.pending?.blockerRevision !== target.blockerRevision) ready = true;
+    else nextAt = Math.min(nextAt, limit.retryAt, expiresAt);
+  }
+  if (!ready) {
+    local.quotaTimer = setTimeout(() => {
+      local.quotaTimer = null;
+      void stopped(hub).then(held => { if (!held) scheduleNotifications(hub); })
+        .catch(error => { hub.closed = true; hub.emit('fatal', error); hub.emit('change'); });
+    }, Math.max(1, nextAt - now));
+    local.quotaTimer.unref?.();
+    return;
+  }
   if (local.queued) return;
   if (local.running) { local.changed = true; return; }
   local.queued = true;
@@ -442,13 +520,19 @@ export function scheduleNotifications(hub) {
       hub.closed = true; hub.emit('fatal', error); hub.emit('change');
     }).finally(() => {
       local.running = null;
-      if (outcome === 'more' || local.changed) scheduleNotifications(hub);
+      if (outcome !== 'held') scheduleNotifications(hub);
     });
   });
 }
 
+function clearQuotaTimer(hub) {
+  const local = stateFor(hub);
+  clearTimeout(local.quotaTimer); local.quotaTimer = null;
+}
+
 export async function drainNotifications(hub) {
-  const local = stateFor(hub); local.watcher?.close(); stopOriginRechecks(hub);
+  const local = stateFor(hub); local.watcher?.close(); stopOriginRechecks(hub); clearQuotaTimer(hub);
   await Promise.allSettled([...local.originChecks.values()].map(check => check.promise));
   await local.running;
+  clearQuotaTimer(hub);
 }

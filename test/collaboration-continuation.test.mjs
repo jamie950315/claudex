@@ -203,6 +203,24 @@ test('Claude route changes during awaited native mapping refuse stale continuati
   expect(await f.inspect(task), 'wait', 'renderer-readiness-unverified');
 });
 
+test('Claude mod-self continuation names missing policy evidence without treating it as native refusal', async t => {
+  const f = await fixture(t, { peer: 'claude' }), task = await f.start(); await f.bind(task);
+  await f.call('native_wake', { route: 'mod-self' });
+  for (const [index, [evidence, reason]] of [
+    ['setting-unset', 'native-policy-unset'], ['read-failed', 'native-policy-unavailable'],
+    ['unrecognized', 'native-policy-unrecognized'], [undefined, 'native-policy-unknown'],
+  ].entries()) {
+    await f.call('mod_wake_observe', { source: { sessionId, cwd: f.parent },
+      observation: observation({ sequence: index + 1, inboundPolicy: 'unknown',
+        ...(evidence ? { inboundPolicyEvidence: evidence } : {}) }) });
+    const result = await f.inspect(task);
+    expect(result, 'wait', reason);
+    assert.match(result.missingEvidence, /native|inbound policy/);
+    assert.match(result.nextStep, /claudex_wait/);
+  }
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
+});
+
 test('notification quotas refuse sleeping before any native probe', async t => {
   const f = await fixture(t), task = await f.start(); await f.bind(task);
   const other = await f.start('wake', 'other'); await f.bind(other);

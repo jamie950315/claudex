@@ -8,6 +8,7 @@ struct HealthIssue: Codable, Equatable {
     var reason: String
     var nextStep: String
     var savedWorkingDirectory: String? = nil
+    var diagnostic = false
 }
 
 struct HealthReport: Codable, Equatable {
@@ -21,6 +22,7 @@ struct HealthReport: Codable, Equatable {
     var autoRestart: Bool
     var operational = false
     var issues: [HealthIssue] = []
+    var featureDiagnostics: [HealthIssue] = []
     // A specific request shown as the notification instead of the generic notice.
     var notice: String? = nil
     var issueKey: String { attention ? state + ":" + detail : "" }
@@ -99,6 +101,16 @@ func claudeDesktopLaunchedAt() -> Double? {
         .compactMap { $0.launchDate }.max().map { $0.timeIntervalSince1970 * 1000 }
 }
 
+func hookDiagnosticsNeedAttention(_ hooks: [String: Any]?) -> Bool {
+    let health = hooks?["health"] as? [String: Any] ?? [:]
+    return ["codex", "claude"].contains { provider in
+        guard let value = health[provider] as? [String: Any] else { return false }
+        if value["state"] as? String == "unavailable" || value["incomplete"] != nil { return true }
+        let phases = value["phases"] as? [String: [String: Any]] ?? [:]
+        return phases.values.contains { $0["lastError"] != nil && $0["recoveredAt"] == nil }
+    }
+}
+
 func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: Double,
                     alive: (Any?) -> Bool = processAlive, claudeLaunchedAt: () -> Double? = { nil }) -> HealthReport {
     let automatic = service?["autoRestart"] as? Bool == true
@@ -107,7 +119,7 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
                 _ retry: Double? = nil, operational: Bool = false) -> HealthReport {
         let symbols = ["ready": "checkmark.circle", "waiting": "clock", "recovering": "arrow.triangle.2.circlepath",
                        "paused": "pause.circle", "offline": "exclamationmark.triangle", "unknown": "questionmark.circle",
-                       "stopping": "clock", "stopped": "stop.circle"]
+                       "stopping": "clock", "stopped": "stop.circle", "degraded": "exclamationmark.triangle"]
         return HealthReport(state: state, title: title, detail: String(detail.prefix(700)),
                             symbol: symbols[state] ?? "questionmark.circle", attention: attention,
                             updatedAt: updated, retryAt: retry, autoRestart: automatic, operational: operational)
@@ -190,6 +202,20 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
         return report("waiting", "Waiting for Desktop integration",
                       "Desktop integration is waiting for Claudex to resume and finish checking. No action is required.")
     }
+    if let renderer = watcher["rendererAdapters"] as? [String: Any],
+       ["degraded", "skipped"].contains(renderer["state"] as? String ?? "") {
+        return report("degraded", "Desktop integration needs attention",
+                      "Some Desktop integration features are unavailable. Synchronization readiness is separate; open diagnostics for each adapter.", true)
+    }
+    let hooks = watcher["hookStatus"] as? [String: Any]
+    if let origin = hooks?["notificationOrigin"] as? [String: Any], origin["ready"] as? Bool == false {
+        return report("degraded", "Notification origin needs attention",
+                      "Completion notification origin hooks are not ready. Review the exact PostToolUse hook in Codex /hooks and the Claude hook settings. Synchronization readiness is separate.", true)
+    }
+    if hookDiagnosticsNeedAttention(hooks) {
+        return report("degraded", "Hook diagnostics need attention",
+                      "A hook operation failed or its diagnostics could not be verified. Open diagnostics for fixed error codes and recorded counts; no message was retried.", true)
+    }
     if let handoff = watcher["localHandoff"] as? [String: Any],
        handoff["state"] as? String == "waiting", handoff["deferred"] as? String == "history_changed" {
         return report("waiting", "Waiting for Desktop handoff",
@@ -225,6 +251,12 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
         result.operational = false
     }
     var issues: [HealthIssue] = []
+    var featureDiagnostics: [HealthIssue] = []
+    func feature(_ target: String, _ reason: String, _ nextStep: String, identity: String? = nil, attention: Bool = false) {
+        let issue = HealthIssue(target: target, identity: identity, reason: reason, nextStep: nextStep, diagnostic: true)
+        if attention && issues.count < 20 { issues.append(issue) }
+        else if featureDiagnostics.count < 20 { featureDiagnostics.append(issue) }
+    }
     func bounded(_ value: Any?, _ fallback: String, _ limit: Int) -> String {
         guard let text = value as? String, !text.isEmpty else { return fallback }
         return String(text.prefix(limit))
@@ -288,9 +320,63 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
             var details = handoff; details["reason"] = "A conversation changed while its old Desktop entry was being checked. Archival was postponed and will be rechecked automatically; synchronization is not blocked by this check."
             append(details, target: "Desktop handoff", waiting: true, fallback: result.detail)
         }
+        let renderer = watcher["rendererAdapters"] as? [String: Any]
+        let adapters = renderer?["adapters"] as? [String: [String: Any]] ?? [:]
+        for (key, label) in [("folders", "Native project folders"), ("chatWake", "Conversation wake"),
+                             ("ownerWake", "Owner wake"), ("commands", "Claude commands")] {
+            guard let adapter = adapters[key] else { continue }
+            let refused = adapter["status"] as? String == "skipped"
+            let activation = adapter["activation"] as? String
+            let reason = refused ? "The adapter was refused. Synchronization readiness is separate."
+                : activation == "restart-required" ? "Restart Claude to load the prepared integration."
+                : adapter["status"] as? String == "disabled" ? "Disabled by configuration."
+                : "Renderer files are prepared; live activation is not verified."
+            let code = (adapter["failure"] as? [String: Any])?["code"] as? String
+            feature(label, reason, "Review the adapter status in diagnostics. Do not resend messages or change native permissions.",
+                    identity: code.map { String($0.prefix(64)) },
+                    attention: refused && !["checking", "held"].contains(renderer?["state"] as? String ?? ""))
+        }
+        let hooks = watcher["hookStatus"] as? [String: Any]
+        if let origin = hooks?["notificationOrigin"] as? [String: Any] {
+            for (provider, label) in [("codex", "Codex notification origin"), ("claude", "Claude notification origin")] {
+                guard let value = origin[provider] as? [String: Any] else { continue }
+                let ready = value["configured"] as? Bool == true
+                    && value[provider == "codex" ? "trusted" : "enabled"] as? Bool == true
+                feature(label, ready ? "The notification origin hook is configured and approved. This is not delivery proof."
+                        : "The notification origin hook is missing, disabled or awaiting native approval.",
+                        "Review the exact PostToolUse hook in Codex /hooks or the Claude hook settings. Native approval must remain explicit.",
+                        identity: provider == "codex" ? String((value["trustStatus"] as? String ?? "unknown").prefix(64)) : nil,
+                        attention: !ready)
+            }
+        }
+        let health = hooks?["health"] as? [String: [String: Any]] ?? [:]
+        for (provider, label) in [("codex", "Codex hook diagnostics"), ("claude", "Claude hook diagnostics")] {
+            guard let value = health[provider] else { continue }
+            if value["state"] as? String == "unavailable" {
+                feature(label, "Hook diagnostics could not be verified.",
+                        "Inspect private hook health storage. Diagnostics never authorize a retry.", attention: true)
+            }
+            if let incomplete = value["incomplete"] as? [String: Any], let phase = incomplete["phase"] as? String,
+               let code = incomplete["code"] as? String {
+                feature(label, "Some hook errors could not be counted. Recorded counts are lower bounds.",
+                        "Inspect private hook health storage. Diagnostics never authorize a retry.",
+                        identity: String("\(phase)/\(code)".prefix(100)), attention: true)
+            }
+            let phases = value["phases"] as? [String: [String: Any]] ?? [:]
+            for phase in ["input", "origin_bind", "origin_recheck", "mailbox", "sync"] {
+                guard let entry = phases[phase], let error = entry["lastError"] as? [String: Any],
+                      let code = error["code"] as? String, let count = entry["errorCount"] as? Int else { continue }
+                let recovered = entry["recoveredAt"] != nil
+                feature(label, recovered ? "A previous hook error was recorded; a later matching operation succeeded."
+                        : "A hook operation failed. Only fixed diagnostic codes and recorded counts are retained.",
+                        "Inspect private hook health storage. Diagnostics never authorize a retry.",
+                        identity: String("\(phase)/\(code) [\(count)]".prefix(100)), attention: !recovered)
+            }
+        }
     }
     if issues.isEmpty && result.attention { append([:], target: "Synchronization", waiting: false, fallback: result.detail) }
     result.issues = issues
+    result.featureDiagnostics = featureDiagnostics
     return result
 }
 

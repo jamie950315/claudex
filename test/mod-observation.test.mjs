@@ -211,3 +211,57 @@ test('unavailable native tool inventory is unknown rather than a false missing-t
   assert.equal(calls[0].observation.capabilities.sendMessage, null);
   await observer.stop();
 });
+
+test('native policy observations distinguish an unset setting from unavailable or unrecognized evidence over Unix RPC', async t => {
+  const f = await setup(t), message = await f.send();
+  const server = await serveCollaborationSocket({ root: f.hub.root, dispatch: request => f.hub.dispatch(request) });
+  t.after(() => server.close());
+  const bridge = createModBridge({ root: f.root, worker: false, allowNativeWake: true, allowSelfWake: true });
+  const observer = createSessionObserver(), calls = [];
+  let inbound = async () => undefined;
+  const api = { worker: async () => false, context: async () => source, inbound: () => inbound(),
+    tools: async () => [], usage: async () => null, nativeWakeEnabled: true, selfEnabled: true,
+    bridge: async request => { calls.push(request); return bridge(request); } };
+  await observer.start(api); t.after(() => observer.stop());
+  for (const [index, [read, evidence, reason, policy]] of [
+    [async () => undefined, 'setting-unset', 'native-policy-unset', 'unknown'],
+    [async () => { throw new Error('NEVER_COPY_NATIVE_POLICY_FAILURE'); }, 'read-failed', 'native-policy-unavailable', 'unknown'],
+    [async () => 'NEVER_COPY_NATIVE_POLICY_VALUE', 'unrecognized', 'native-policy-unrecognized', 'unknown'],
+    [async () => 'hold', 'explicit', 'native-inbound-hold', 'hold'],
+    [async () => 'allow', 'explicit', 'receiver-observed', 'allow'],
+  ].entries()) {
+    inbound = read;
+    if (index) await observer.refresh();
+    const diagnosis = (await f.call('chat_status', { messageId: message.messageId })).deliveryObservation;
+    assert.equal(diagnosis.reason, reason);
+    assert.equal(diagnosis.receiver.inboundPolicy, policy);
+    assert.equal(diagnosis.receiver.inboundPolicyEvidence, evidence);
+    assert.equal(diagnosis.diagnosticOnly, true);
+    if (policy === 'unknown') {
+      assert.match(diagnosis.missingEvidence, /unverified|could not read/);
+      assert.match(diagnosis.nextStep, /claudex_wait/);
+    } else {
+      assert.equal(diagnosis.missingEvidence, undefined);
+      assert.equal(diagnosis.nextStep, undefined);
+    }
+    assert.equal((await f.hub.chatMailbox.status(message.messageId)).state, 'queued');
+  }
+  assert.equal(JSON.stringify(calls).includes('NEVER_COPY_NATIVE_POLICY'), false);
+});
+
+test('policy evidence rejects arbitrary values and contradictions while retaining older observations', async t => {
+  const f = await setup(t), message = await f.send();
+  await f.call('mod_wake_observe', { source, observation: observation({ inboundPolicy: 'unknown' }) });
+  const legacy = await modDeliveryDiagnosis(f.hub, message);
+  assert.equal(legacy.reason, 'native-policy-unknown');
+  assert.match(legacy.missingEvidence, /without a reason/);
+  assert.match(legacy.nextStep, /normal native lifecycle boundary/);
+  for (const patch of [
+    { inboundPolicyEvidence: 'NEVER_COPY_POLICY' },
+    { inboundPolicy: 'unknown', inboundPolicyEvidence: 'explicit' },
+    { inboundPolicyEvidence: 'read-failed' },
+    { inboundPolicyEvidence: { raw: 'NEVER_COPY_POLICY' } },
+  ]) await assert.rejects(f.call('mod_wake_observe', { source,
+    observation: observation({ sequence: 2, ...patch }) }), { code: 'INVALID_REQUEST' });
+  assert.equal((await modDeliveryDiagnosis(f.hub, message)).reason, 'native-policy-unknown');
+});

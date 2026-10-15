@@ -104,23 +104,25 @@ test('blocker notifications require separate opt-in and revoke an awaited dispat
   await f.hub.mutate(state => { state.tasks[task.taskId].blockers[0].state = 'responded'; });
   release(); await drainNotifications(f.hub);
   const delivery = f.hub.state.tasks[task.taskId].notification.deliveries[0];
-  assert.equal(delivery.state, 'failed'); assert.equal(delivery.reason, 'blocker-superseded');
+  assert.equal(delivery.state, 'failed-not-sent'); assert.equal(delivery.reason, 'blocker-superseded');
   assert.equal(delivery.messageId, undefined);
 });
 
-test('multiple rate-limited blockers retain individual suppression without rescheduling storms', async t => {
+test('blocker quota keeps undispatched work pending and reserves completion capacity', async t => {
   const f = await fixture(t); const task = await f.start('blocker-quota'); await f.bind(task);
   await f.hub.mutate(state => {
     const value = state.tasks[task.taskId]; value.generation = 1;
     value.observability = { timeline: 'off', reports: 'off', blockerNotifications: true };
-    value.notification.deliveries = Array.from({ length: 16 }, (_, i) => ({ revision: i + 1,
+    value.notification.deliveries = Array.from({ length: 16 }, (_, i) => ({ kind: 'blocker', blockerId: `sent-${i}`,
+      generation: 1, blockerRevision: 1, revision: i + 1,
       state: 'queued', createdAt: Date.now(), expiresAt: Date.now() + 600000, requestId: `quota-${i}` }));
     value.blockers = ['one', 'two', 'three'].map(id => ({ id, generation: 1, revision: 1, state: 'open', updatedAt: Date.now() }));
   });
-  await until(() => Object.keys(f.hub.state.tasks[task.taskId].notification.suppressedBlockers ?? {}).length === 3);
-  await drainNotifications(f.hub);
+  await until(() => f.hub.state.tasks[task.taskId].notification.pending?.state === 'throttled');
   assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 16);
-  assert.deepEqual(f.hub.state.tasks[task.taskId].notification.suppressedBlockers, { '1:one': 1, '1:two': 1, '1:three': 1 });
+  assert.deepEqual(f.hub.state.tasks[task.taskId].notification.suppressedBlockers ?? {}, {});
+  await f.complete(task);
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries.some(d => d.kind === 'terminal' && d.state === 'queued'));
 });
 
 test('explicit off and unbound tasks never notify; exact root proof queues only once over Unix RPC', async t => {
@@ -243,14 +245,19 @@ test('lost notification responses and restart retain uncertainty without replay'
   assert.equal(reopened.state.tasks[task.taskId].notification.deliveries.length, 1);
 });
 
-test('interrupted write-ahead dispatch is uncertain on restart and same-origin storms are bounded', async t => {
+test('same-origin storms defer undispatched notifications until quota frees without replaying interrupted sends', async t => {
   const f = await fixture(t);
+  t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
   const tasks = [];
   for (let i = 0; i < 18; i++) { const task = await f.start(`storm-${i}`); await f.bind(task); tasks.push(task); }
   await f.hub.mutate(state => { for (const task of tasks) { state.tasks[task.taskId].status = 'completed'; state.tasks[task.taskId].revision++; } });
-  await until(() => Object.values(f.hub.state.tasks).every(task => task.notification.deliveries[0]?.state === 'queued' || task.notification.suppressedRevision));
+  await settle(() => Object.values(f.hub.state.tasks).every(task => task.notification.deliveries[0]?.state === 'queued' || task.notification.pending?.state === 'throttled'));
   assert.equal(Object.values(f.hub.state.tasks).flatMap(task => task.notification.deliveries).length, 16);
-  assert.equal(Object.values(f.hub.state.tasks).filter(task => task.notification.suppressedRevision).length, 2);
+  assert.equal(Object.values(f.hub.state.tasks).filter(task => task.notification.pending?.state === 'throttled').length, 2);
+  assert.equal(Object.values(f.hub.state.tasks).filter(task => task.notification.suppressedRevision).length, 0);
+  t.mock.timers.tick(60001);
+  await settle(() => Object.values(f.hub.state.tasks).every(task => task.notification.deliveries[0]?.state === 'queued'));
+  assert.equal(Object.values(f.hub.state.tasks).flatMap(task => task.notification.deliveries).length, 18);
   await drainNotifications(f.hub);
   await f.hub.mutate(state => { state.tasks[tasks[0].taskId].notification.deliveries[0].state = 'dispatching'; });
   await f.hub.close();
@@ -485,4 +492,133 @@ for (const boundary of ['close', 'app-stop', 'expiry']) test(`${boundary} fences
       assert.equal((await recheck()).checked, 0); assert.equal(reads, 3, 'restart never refunds an interrupted read');
     } finally { await reopened.close(); }
   }
+});
+
+for (const failure of ['permission', 'maxSteps']) test(`${failure} failure starts the notification deadline at the real terminal time`, async t => {
+  const f = await fixture(t); const task = await f.start(`terminal-${failure}`); await f.bind(task);
+  const now = Date.now();
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.updatedAt = now - 3600000;
+    if (failure === 'permission') value.permission = 'workspace-write';
+    else value.generation = f.hub.maxSteps;
+  });
+  await f.hub.pump();
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
+  const value = f.hub.state.tasks[task.taskId];
+  assert.equal(value.status, 'failed'); assert.ok(value.updatedAt >= now);
+  assert.equal(value.notification.deliveries[0].expiresAt, value.updatedAt + 600000);
+  assert.equal(value.notification.deliveries[0].state, 'queued');
+});
+
+test('notification status joins current offered, acknowledged, archived and expired mailbox receipts', async t => {
+  const f = await fixture(t); const task = await f.start('receipt-join'); await f.bind(task); await f.complete(task);
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
+  const messageId = f.hub.state.tasks[task.taskId].notification.deliveries[0].messageId;
+  await f.hub.chatMailbox.consume({ provider: 'codex', sessionId, event: 'Stop' });
+  assert.equal((await f.call('status', { taskId: task.taskId })).notification.deliveries[0].state, 'offered');
+  await f.hub.chatMailbox.consume({ provider: 'codex', sessionId, event: 'Stop', lastAssistantMessage: `CLAUDEX_ACK:${messageId}` });
+  await f.hub.chatMailbox.transaction(false, async state => {
+    await f.hub.chatMailbox.archiveMessage(state, state.messages.find(m => m.messageId === messageId));
+  });
+  const archived = (await f.call('status', { taskId: task.taskId })).notification.deliveries[0];
+  assert.equal(archived.state, 'acknowledged'); assert.equal(archived.dispatchState, 'queued');
+  const expiring = await f.start('expired-receipt', { mode: 'queue', expiresInMs: 1000 });
+  await f.bind(expiring); await f.complete(expiring);
+  await until(() => f.hub.state.tasks[expiring.taskId].notification.deliveries[0]?.state === 'queued');
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() + 1001 });
+  const expired = (await f.call('status', { taskId: expiring.taskId })).notification.deliveries[0];
+  assert.equal(expired.state, 'expired'); assert.equal(expired.deliveryStatus, 'expired');
+});
+
+test('exact pre-enqueue refusal is failed-not-sent while mailbox commit ambiguity stays uncertain', async t => {
+  const f = await fixture(t, { nativeChatDiscovery: async () => [] });
+  const task = await f.start('preflight-refusal'); await f.bind(task); await f.complete(task);
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'failed-not-sent');
+  const delivery = f.hub.state.tasks[task.taskId].notification.deliveries[0];
+  assert.equal(delivery.state, 'failed-not-sent'); assert.equal(delivery.dispatchPhase, 'preflight');
+  assert.equal(delivery.failureCode, 'notification-target-unavailable');
+  assert.equal(delivery.messageId, undefined);
+  const guarded = await fixture(t); const next = await guarded.start('mailbox-refusal'); await guarded.bind(next);
+  guarded.hub.chatMailbox.send = (_input, options) => {
+    options.onPhase('mailbox-guards');
+    throw Object.assign(new Error('PRIVATE detail must never be persisted'), { code: 'MAILBOX_CAPACITY_EXHAUSTED' });
+  };
+  await guarded.complete(next);
+  await until(() => guarded.hub.state.tasks[next.taskId].notification.deliveries[0]?.state === 'failed-not-sent');
+  const failed = guarded.hub.state.tasks[next.taskId].notification.deliveries[0];
+  assert.equal(failed.failureCode, 'mailbox-capacity-exhausted'); assert.doesNotMatch(JSON.stringify(failed), /PRIVATE/);
+  const ambiguous = await fixture(t); const lost = await ambiguous.start('mailbox-ambiguous'); await ambiguous.bind(lost);
+  ambiguous.hub.chatMailbox.send = (_input, options) => { options.onPhase('mailbox-commit'); throw new Error('Synthetic commit failure'); };
+  await ambiguous.complete(lost);
+  await until(() => ambiguous.hub.state.tasks[lost.taskId].notification.deliveries[0]?.state === 'uncertain');
+  assert.equal(ambiguous.hub.state.tasks[lost.taskId].notification.deliveries[0].dispatchPhase, 'mailbox-commit');
+});
+
+test('a throttled task expires visibly without enqueueing or replaying its earlier intents', async t => {
+  const f = await fixture(t); t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const task = await f.start('throttled-expiry', { mode: 'queue', expiresInMs: 1000 }); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.status = 'completed'; value.revision++;
+    value.notification.deliveries = Array.from({ length: 16 }, (_, i) => ({ revision: 100 + i, state: 'uncertain',
+      createdAt: Date.now(), expiresAt: Date.now() + 600000, requestId: `uncertain-${i}` }));
+  });
+  await settle(() => f.hub.state.tasks[task.taskId].notification.pending?.state === 'throttled');
+  t.mock.timers.tick(1001);
+  await settle(() => f.hub.state.tasks[task.taskId].notification.deliveries.length === 17);
+  const status = await f.call('status', { taskId: task.taskId });
+  assert.equal(status.notification.deliveries.at(-1).state, 'expired');
+  assert.equal(status.notification.missed, 1); assert.equal(status.notification.pending, null);
+  assert.equal(status.notification.deliveries.filter(d => d.state === 'uncertain').length, 16);
+  assert.equal((await f.hub.chatMailbox.pendingWakes()).length, 0);
+});
+
+test('per-task quota releases on time and app-stop clears its one timer until a marker release', async t => {
+  const f = await fixture(t); t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const task = await f.start('task-quota-release'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.status = 'completed'; value.revision++;
+    value.notification.deliveries = Array.from({ length: 16 }, (_, i) => ({ revision: 100 + i, state: 'uncertain',
+      createdAt: Date.now(), expiresAt: Date.now() + 600000, requestId: `previous-${i}` }));
+  });
+  await settle(() => f.hub.state.tasks[task.taskId].notification.pending?.state === 'throttled');
+  const clears = t.mock.method(globalThis, 'clearTimeout');
+  await writeJSON(join(f.parent, 'app-stop.json'), { version: 1, stopped: true });
+  await settle(() => clears.mock.calls.some(call => call.arguments[0] !== null && call.arguments[0] !== undefined));
+  t.mock.timers.tick(60001); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 16);
+  await writeJSON(join(f.parent, 'app-stop.json'), { version: 1, stopped: false });
+  await settle(() => f.hub.state.tasks[task.taskId].notification.deliveries.at(-1)?.state === 'queued');
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 17);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.filter(d => d.state === 'uncertain').length, 16);
+});
+
+test('restart recovers legacy quota suppression only when there was no dispatch intent', async t => {
+  const f = await fixture(t); const task = await f.start('legacy-throttle'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.status = 'completed'; value.revision++;
+    value.notification.suppressedRevision = value.revision; value.notification.suppressionReason = 'origin-rate-limit';
+  });
+  await f.hub.close();
+  const reopened = await new CollaborationHub({ root: f.root, run: () => assert.fail('No inference') }).initialize();
+  reopened.schedule = () => {}; t.after(() => reopened.close());
+  await until(() => reopened.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
+  assert.equal(reopened.state.tasks[task.taskId].notification.deliveries.length, 1);
+});
+
+test('closing clears a throttled notification timer and held expiry is visible before publication', async t => {
+  const f = await fixture(t); t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: Date.now() });
+  const task = await f.start('closed-throttle'); await f.bind(task);
+  await f.hub.mutate(state => {
+    const value = state.tasks[task.taskId]; value.status = 'completed'; value.revision++;
+    value.notification.deliveries = Array.from({ length: 16 }, (_, i) => ({ revision: 100 + i, state: 'uncertain',
+      createdAt: Date.now(), expiresAt: Date.now() + 600000, requestId: `retained-${i}` }));
+  });
+  await settle(() => f.hub.state.tasks[task.taskId].notification.pending?.state === 'throttled');
+  const clear = t.mock.method(globalThis, 'clearTimeout');
+  await f.hub.close();
+  assert.ok(clear.mock.calls.some(call => call.arguments[0] != null));
+  t.mock.timers.tick(600001); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 16);
+  const status = await f.call('status', { taskId: task.taskId });
+  assert.equal(status.notification.pending.state, 'expired'); assert.equal(status.notification.missed, 1);
 });

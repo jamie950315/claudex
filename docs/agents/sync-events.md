@@ -133,3 +133,32 @@ failures identify their actual native source and remain
 visible across unrelated events, rather than pausing the current sync's caller.
 Retain the old activity-interleaved scheduler only for the injected non-event
 harness. Do not defer all new completions until a long cold sweep finishes.
+
+## Hook health diagnostics
+
+Keep lifecycle synchronization trust separate from
+`hookStatus.notificationOrigin` (the exact PostToolUse hook's configuration and
+native approval). Missing origin trust degrades notification capability, never
+grants approval or blocks otherwise ready synchronization. The native health
+summary surfaces partial renderer failures, origin trust and hook failures
+independently; history and ownership conflicts keep priority.
+
+`bin/claudex-sync-hook.mjs` records content-free failures for input, origin_bind,
+origin_recheck, mailbox and sync in private `sync-hook-health-<provider>.json`.
+Use fixed allowlisted codes only: never store hook input, native IDs, cwd,
+error text or arbitrary error codes. Each provider retains the latest 16 errors,
+one last error/recovery per phase and counters saturating at 1,000,000,000;
+reads are bounded to 16 KiB. A matching successful operation marks recovery
+without erasing the recorded error. Ignored payloads are not origin failures
+or successful origin verification. These files never authorize native work.
+
+Concurrent error writers use the existing private lock. If it cannot be acquired,
+retain one exclusive content-free 256-byte-bounded
+`sync-hook-health-<provider>-incomplete.json` marker rather than retrying; recorded
+counts are then lower bounds. The marker stays visible across restarts and
+matching successes, so missing diagnostic counts cannot look fully recovered.
+Unsafe or malformed diagnostic files are preserved and reported unavailable. If even
+diagnostic publication fails, emit only fixed stderr. Coordination/diagnostic
+errors must not suppress ordinary mailbox/sync handling, relax origin proof or
+retry a native operation. The watcher refreshes these bounded private files on
+existing status heartbeats without native history reads or new polling.

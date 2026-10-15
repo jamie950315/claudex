@@ -106,7 +106,10 @@ test('unverified native proof remains unbound and typed diagnostics never includ
   const result = await f.hook(payload());
   assert.equal(result.code, 0); assert.equal(result.stdout, ''); assert.equal(calls, 1);
   assert.match(result.stderr, /ORIGIN_UNVERIFIED/); assert.doesNotMatch(result.stderr, /HOOK_PRIVATE_PAYLOAD/);
-  assert.deepEqual(await readdir(f.root), ['collaboration']);
+  const health = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(health.errorCount, 1);
+  assert.equal(health.phases.origin_bind.lastError.code, 'ORIGIN_UNVERIFIED');
+  assert.doesNotMatch(JSON.stringify(health), /HOOK_PRIVATE_PAYLOAD|fixture-project|native-tool|originChallenge/);
 });
 test('unsafe controller key is preserved and oversize input cannot cause a broker request', async t => {
   const f = await fixture(t), path = join(f.collaborationRoot, 'controller-key');
@@ -153,11 +156,17 @@ test('unavailable or refusing origin broker does not suppress normal mailbox reg
   const f = await fixture(t);
   f.dispatch(async () => { throw new Error('HOOK_PRIVATE_PAYLOAD'); });
   assert.deepEqual(await f.hook(payload({ hook_event_name: 'SessionStart', cwd: f.root })), { code: 0, stdout: '', stderr: '' });
+  let health = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(health.phases.origin_recheck.errorCount, 1);
+  assert.equal(health.phases.origin_recheck.lastError.code, 'ORIGIN_UNVERIFIED');
   await f.closeServer();
   assert.deepEqual(await f.hook(payload({ hook_event_name: 'Stop', cwd: f.root })), { code: 0, stdout: '', stderr: '' });
   const events = await new SyncEventInbox({ root: f.root }).read();
   assert.equal(Object.values(events.entries)[0].kind, 'completed');
   assert.ok((await readdir(f.collaborationRoot)).includes('chat-mailbox'));
+  health = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(health.phases.origin_recheck.errorCount, 2);
+  assert.doesNotMatch(JSON.stringify(health), /HOOK_PRIVATE_PAYLOAD|native-tool|fixture-project/);
 });
 
 test('app-stop set during the awaited origin recheck fences later mailbox and sync writes', async t => {
@@ -166,4 +175,38 @@ test('app-stop set during the awaited origin recheck fences later mailbox and sy
   assert.deepEqual(await f.hook(payload({ hook_event_name: 'SessionStart', cwd: f.root })), { code: 0, stdout: '', stderr: '' });
   assert.deepEqual((await readdir(f.root)).sort(), ['app-stop.json', 'collaboration']);
   assert.deepEqual((await readdir(f.collaborationRoot)).sort(), ['controller-key', 'rpc.sock']);
+});
+
+test('matching successful origin operations retain error counts and mark recovery across hook processes', async t => {
+  const f = await fixture(t);
+  f.dispatch(async () => { throw Object.assign(new Error('HOOK_PRIVATE_PAYLOAD'), { code: 'HOOK_PRIVATE_PAYLOAD' }); });
+  await f.hook(payload());
+  let value = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(value.phases.origin_bind.lastError.code, 'ORIGIN_UNVERIFIED');
+  f.dispatch(async () => ({ bound: true }));
+  await f.hook(payload({ tool_name: 'unrelated' }));
+  value = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(value.phases.origin_bind.recoveredAt, undefined, 'unrelated tool does not clear origin health');
+  await f.hook(payload());
+  value = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(value.errorCount, 1);
+  assert.ok(value.phases.origin_bind.recoveredAt >= value.phases.origin_bind.lastError.at);
+  assert.doesNotMatch(JSON.stringify(value), /HOOK_PRIVATE_PAYLOAD/);
+});
+
+test('mailbox and sync error paths record only typed diagnostics without blocking ordinary hints', async t => {
+  const f = await fixture(t);
+  await mkdir(join(f.collaborationRoot, 'chat-mailbox'), { mode: 0o700 });
+  await writeFile(join(f.collaborationRoot, 'chat-mailbox', 'state.json'), 'HOOK_PRIVATE_PAYLOAD', { mode: 0o600 });
+  const result = await f.hook(payload({ hook_event_name: 'Stop', cwd: f.root }));
+  assert.equal(result.code, 0);
+  assert.match(result.stderr, /coordination could not be verified/);
+  let value = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(value.phases.mailbox.lastError.code, 'COORDINATION_UNVERIFIED');
+  assert.equal(Object.values((await new SyncEventInbox({ root: f.root }).read()).entries)[0].kind, 'completed');
+  const invalid = await f.hook(payload({ hook_event_name: 'Interrupt', session_id: '' }));
+  assert.equal(invalid.code, 1);
+  value = JSON.parse(await readFile(join(f.root, 'sync-hook-health-codex.json'), 'utf8'));
+  assert.equal(value.phases.sync.lastError.code, 'SYNC_EVENT_UNRECORDED');
+  assert.doesNotMatch(JSON.stringify(value), /HOOK_PRIVATE_PAYLOAD/);
 });

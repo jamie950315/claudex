@@ -47,7 +47,7 @@ export const ENGINE_SRC = Object.freeze([
   'codex-projection.mjs', 'codex-versions.mjs', 'codex-websocket.mjs', 'codex.mjs',
   'cold-import.mjs', 'cold-verification-cache.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
   'collaboration-events.mjs', 'collaboration-artifacts.mjs', 'collaboration-progress.mjs',
-  'collaboration-notification-policy.mjs', 'collaboration-worker-boundary.mjs',
+  'collaboration-notification-policy.mjs', 'collaboration-worker-boundary.mjs', 'completion-delivery.mjs',
   'collaboration-permissions.mjs',
   'collaboration-native.mjs', 'collaboration-activity.mjs', 'collaboration-outcome.mjs', 'collaboration-origin.mjs', 'collaboration-notifications.mjs', 'collaboration-processes.mjs', 'collaboration-transport.mjs', 'collaboration-wait.mjs', 'collaboration-effort.mjs', 'collaboration-workspace.mjs', 'app-stop-state.mjs', 'compaction.mjs',
   'context-archive.mjs', 'context-packet-reader.mjs', 'context-packet.mjs',
@@ -59,7 +59,7 @@ export const ENGINE_SRC = Object.freeze([
   'owned-claude-history.mjs', 'owned-codex-history.mjs', 'retention.mjs',
   'runtime-version-policy.mjs', 'service-supervisor.mjs', 'service.mjs',
   'status-app-install.mjs', 'storage.mjs', 'verification-observations.mjs',
-  'sync-events.mjs', 'sync-event-source.mjs', 'sync-hook-install.mjs',
+  'sync-events.mjs', 'sync-event-source.mjs', 'sync-hook-install.mjs', 'sync-hook-health.mjs',
 ]);
 
 export async function runCommand(command, args, options = {}) {

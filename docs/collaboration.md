@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.28;
+Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.29;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -371,6 +371,29 @@ prepare/confirm starts retain an off default because neither has a native MCP
 start call/result for PostToolUse to prove. A broker without an origin verifier
 also keeps omitted notifications off. Handoff preserves the original policy and
 origin. Status/wait remains the authoritative result path.
+
+`claudex_list` and task status expose a separate `completionDelivery` capability:
+origin-hook trust for each provider, the selected routes, recipient observations
+and a concrete next step. Broker readiness alone does not certify a completion
+wake. The app shows **Completion delivery** separately from broker setup.
+An unset native inbound policy is reported as `native-policy-unset`, with the
+missing evidence and next step; an unavailable settings read or unrecognized
+value has its own diagnosis. An earlier ACK does not prove current native policy.
+These diagnostics do not enable receiver opt-ins or change native admission.
+
+Task and origin quotas each allow sixteen notification intents per rolling
+minute, with separate completion and blocker budgets. A notification that has
+not been dispatched remains `pending.state: "throttled"`, with `reason`,
+`retryAt` and its original `expiresAt`. One event-driven timer schedules the
+next quota release or expiry; app-stop/close clears it. Earlier blocker alerts
+cannot use completion capacity. Existing dispatched/uncertain intents are never
+resent. All intent identities are retained under the work ledger's existing
+capacity bounds. Expired or proven not-sent notifications are counted as `missed`;
+results remain available through status even when their wake was missed.
+Notification `deliveries` join exact current mailbox/archive receipts, showing
+queued, offered, acknowledged or expired separately from `dispatchState`,
+`dispatchPhase` and any fixed `failureCode`. `failed-not-sent` requires exact
+pre-enqueue evidence. An unknown write remains uncertain and cannot be retried.
 
 A wake or queue start returns a one-use origin challenge valid for five minutes.
 The narrowly matched native PostToolUse hook submits identity hints to the private

@@ -3,6 +3,20 @@ import { peerContext } from './chat-mailbox.mjs';
 
 export const MOD_OBSERVATION_TTL = 60000;
 const observations = new WeakMap();
+const missingPolicyProofs = {
+  'setting-unset': { reason: 'native-policy-unset',
+    missingEvidence: 'The loaded Mod read native settings without crossSessionInbound. Its effective native default is unverified; this is not an observed hold or refusal.',
+    nextStep: 'Keep monitoring with claudex_wait. Verified effective native inbound policy is required before relying on asynchronous completion wake; an earlier ACK does not establish the current policy.' },
+  'read-failed': { reason: 'native-policy-unavailable',
+    missingEvidence: 'The loaded Mod could not read native inbound policy. No native hold, refusal or allow was observed.',
+    nextStep: 'Keep monitoring with claudex_wait and inspect the next normal native policy observation. No raw settings error is retained.' },
+  unrecognized: { reason: 'native-policy-unrecognized',
+    missingEvidence: 'The loaded Mod read an unrecognized native inbound policy value. Its effective behavior is unverified; the raw value is not retained.',
+    nextStep: 'Keep monitoring with claudex_wait. Native policy support must be verified before relying on asynchronous completion wake; do not infer allow from this observation.' },
+};
+const legacyMissingPolicyProof = { reason: 'native-policy-unknown',
+  missingEvidence: 'The loaded Mod reported unknown inbound policy without a reason. An observation distinguishing an unset setting, failed read or unrecognized value is missing.',
+  nextStep: 'Keep monitoring with claudex_wait. The updated Mod can report the missing reason after a normal native lifecycle boundary; an earlier ACK does not establish the current policy.' };
 function records(hub, now = Date.now()) {
   let values = observations.get(hub);
   if (!values) { values = new Map(); observations.set(hub, values); }
@@ -72,13 +86,15 @@ export async function modDeliveryDiagnosis(hub, message) {
     if (!target || !mapped || mapped.cwd !== target.cwd) reason = 'target-unmapped';
   } catch { reason = 'target-unmapped'; }
   const observation = target ? modSessionObservation(hub, target) : null;
+  const policyProof = observation?.inboundPolicy === 'unknown'
+    ? missingPolicyProofs[observation.inboundPolicyEvidence] ?? legacyMissingPolicyProof : null;
   if (!reason && hub.closed) reason = 'broker-stopping';
   if (!reason && targetChat.phase === 'ended') reason = 'waiting-for-resume';
   if (!reason && message.wakeRoute === 'mod-self') {
     reason = !observation ? 'no-live-receiver' : !observation.nativeWake ? 'native-wake-disabled'
       : !observation.selfWake ? 'self-delivery-disabled'
       : ['hold', 'refuse'].includes(observation.inboundPolicy) ? `native-inbound-${observation.inboundPolicy}`
-      : observation.inboundPolicy === 'unknown' ? 'native-policy-unknown' : 'receiver-observed';
+      : policyProof ? policyProof.reason : 'receiver-observed';
   }
   if (!reason) {
     const senders = [...records(hub).values()].filter(value => value.lifecycle === 'loaded'
@@ -88,6 +104,7 @@ export async function modDeliveryDiagnosis(hub, message) {
         ? 'native-tools-unavailable' : 'missing-SendMessage';
   }
   return { reason, observedAt: Date.now(), receiver: observation, diagnosticOnly: true,
+    ...(policyProof && reason === policyProof.reason ? { missingEvidence: policyProof.missingEvidence, nextStep: policyProof.nextStep } : {}),
     note: 'Observations do not prove dispatch readiness, recipient ACK, or work completion.' };
 }
 

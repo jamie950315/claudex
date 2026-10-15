@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { AppSetup, appPrivateJSON } from '../src/app-setup.mjs';
 import { readAppStopState } from '../src/app-stop-state.mjs';
 import { FOLDER_CACHE_FILENAME } from '../src/claude-folder-cache.mjs';
+import { ensureClaudeFolderPresentationCache } from '../src/claude-folder-presentation-cache.mjs';
+import { completionDeliveryCapability } from '../src/completion-delivery.mjs';
 
 const readyProviders = (base, versions = {}) => ({
   codex: { binary: join(base, 'codex'), app: join(base, 'Codex.app'), version: versions.codex ?? 'codex-cli 0.155.0-alpha.16.4' },
@@ -44,7 +46,7 @@ async function fixture(t, options = {}) {
     desktopInstall: async input => { events.push(['desktop', input]); },
     serviceInstall: async input => { events.push(['service', input]); },
     ownership: async () => ({ allowed: options.ownerAllowed !== false }),
-    foldersInstall: async input => { events.push(['folders', input]); },
+    foldersInstall: async input => { events.push(['folders', input]); return { status: 'installed', cachePath: input.cachePath }; },
     interfaceInstall: async input => { events.push(['interface', input]); },
     syncHooksInstall: async input => { events.push(['sync-hooks', input]); return { configured: true }; },
     modFindRuntime: async () => ({ state: 'ready', binary: providers.claude.binary, version: '2.1.287' }),
@@ -183,6 +185,110 @@ test('native Mod receiver observations cannot combine different sessions into a 
     { version: '0.7.0', build: 'observer-v1', observers: 2, nativeWakeCount: 1, selfWakeCount: 1, bothEnabledCount: 0 } ] });
   const report = await setup.inspect();
   assert.equal(report.components.find(r => r.id === 'claude-mod-activation').state, 'waiting');
+});
+
+test('completion capability is separate from broker and loaded Mod readiness', async t => {
+  const { setup, events } = await fixture(t);
+  const completionDelivery = { diagnosticOnly: true, deliveryGuaranteed: false,
+    selectedRoute: { claude: 'mod-self', codex: 'native-owner' },
+    originHooks: { state: 'waiting', codex: { configured: true, trusted: false, state: 'waiting' },
+      claude: { configured: true, enabled: true, state: 'ready' }, nextStep: 'Review the Claudex PostToolUse hook in Codex /hooks.' },
+    recipientReadiness: { claude: { state: 'waiting', reason: 'receiver-disabled', nextStep: 'Enable receiver permission explicitly.' },
+      codex: { state: 'unknown', reason: 'exact-recipient-required', nextStep: 'Check the exact task notification status.' } },
+    nextStep: 'Review the Claudex PostToolUse hook in Codex /hooks.' };
+  setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' }, completionDelivery });
+  let report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'collaboration').state, 'ready');
+  assert.equal(report.components.find(row => row.id === 'claude-mod-activation').state, 'ready');
+  let row = report.components.find(row => row.id === 'completion-delivery');
+  assert.equal(row.state, 'waiting');
+  assert.equal(row.action, 'diagnostics');
+  assert.equal(row.detail, completionDelivery.nextStep);
+  assert.deepEqual(report.completionDelivery, completionDelivery);
+  assert.deepEqual(report.modSettings, { nativeWake: false, selfWake: false });
+  completionDelivery.originHooks.state = 'ready';
+  completionDelivery.originHooks.codex = { configured: true, trusted: true, state: 'ready' };
+  completionDelivery.recipientReadiness.claude.state = 'ready';
+  report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting', 'an unspecified exact recipient stays unknown');
+  completionDelivery.recipientReadiness.codex.state = 'ready';
+  completionDelivery.recipientReadiness.claude.state = 'observed';
+  report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting', 'a global receiver observation is not recipient readiness');
+  completionDelivery.recipientReadiness.claude.state = 'ready';
+  report = await setup.inspect();
+  row = report.components.find(row => row.id === 'completion-delivery');
+  assert.equal(row.state, 'ready');
+  assert.ok(events.every(([kind]) => kind === 'auth-codex' || kind === 'auth-claude'), 'inspection only reads account status');
+});
+
+test('actual completion capability keeps origin trust separate and presents readable next steps', async t => {
+  const { root, setup } = await fixture(t);
+  const hub = { root: join(root, 'collaboration'), state: { nativeWakeRoute: 'mod-self' }, modWaiters: 0 };
+  const watcher = { pid: process.pid, running: true, updatedAt: Date.now(), hookStatus: { notificationOrigin: {
+    codex: { configured: true, trusted: false }, claude: { configured: true, enabled: true } } } };
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(watcher), { mode: 0o600 });
+  let capability;
+  setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' },
+    completionDelivery: capability = await completionDeliveryCapability(hub) });
+  let report = await setup.inspect();
+  assert.deepEqual(report.completionDelivery, capability);
+  assert.equal(report.components.find(row => row.id === 'collaboration').state, 'ready');
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').detail,
+    'Review and trust the exact Claudex PostToolUse hook in Codex /hooks.');
+  assert.equal(report.completionDelivery.selectedRoute.claude, 'mod-self');
+  assert.equal(report.completionDelivery.recipientReadiness.claude.state, 'waiting');
+  assert.equal(report.completionDelivery.deliveryGuaranteed, false);
+  watcher.hookStatus.notificationOrigin.codex.trusted = true;
+  watcher.updatedAt = Date.now();
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify(watcher), { mode: 0o600 });
+  report = await setup.inspect();
+  assert.equal(report.completionDelivery.originHooks.state, 'ready');
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting');
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').detail,
+    'Open the recipient session and load the installed Claudex Mod.');
+  assert.deepEqual(report.modSettings, { nativeWake: false, selfWake: false });
+});
+
+test('known completion recipient steps are readable while diagnostic codes and receiver preferences stay intact', async t => {
+  const { setup, events } = await fixture(t);
+  const steps = [
+    ['open-recipient-session-and-load-Mod', 'Open the recipient session and load the installed Claudex Mod.'],
+    ['explicitly-enable-nativeWake-and-selfWake', 'Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.'],
+    ['check-recipient-native-inbound-policy', "Check the recipient session's native inbound-message policy."],
+    ['verify-loaded-chat-wake-adapter', 'Verify that the recipient has loaded the supported chat-wake adapter.'],
+    ['check-task-exact-recipient-and-SendMessage-capability', 'Check the exact task recipient and native SendMessage capability.'],
+    ['future-recipient-diagnostic', 'future-recipient-diagnostic'],
+  ];
+  for (const [nextStep, detail] of steps) {
+    const completionDelivery = { diagnosticOnly: true, deliveryGuaranteed: false,
+      selectedRoute: { claude: 'mod-self', codex: 'native-owner' },
+      originHooks: { state: 'ready', codex: { state: 'ready' }, claude: { state: 'ready' } },
+      recipientReadiness: { claude: { state: 'waiting', nextStep }, codex: { state: 'unknown' } }, nextStep };
+    setup.collaborationStatus = async () => ({ limits: { allowWrite: true, defaultPermission: 'workspace-write' }, completionDelivery });
+    const report = await setup.inspect();
+    const row = report.components.find(row => row.id === 'completion-delivery');
+    assert.equal(row.detail, detail);
+    assert.equal(row.state, 'waiting');
+    assert.deepEqual(report.completionDelivery, completionDelivery);
+    assert.deepEqual(report.modSettings, { nativeWake: false, selfWake: false });
+  }
+  assert.ok(events.every(([kind]) => kind === 'auth-codex' || kind === 'auth-claude'), 'diagnostics never install or enable receivers');
+});
+
+test('missing or offline completion diagnostics stay unknown without hiding broker readiness', async t => {
+  const { setup } = await fixture(t);
+  let report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'collaboration').state, 'ready');
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting');
+  assert.equal(report.completionDelivery.originHooks.state, 'unknown');
+  assert.equal(report.completionDelivery.selectedRoute.claude, null);
+  assert.ok(report.completionDelivery.nextStep);
+  setup.collaborationStatus = async () => { throw new Error('Broker offline'); };
+  report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'collaboration').state, 'blocked');
+  assert.equal(report.components.filter(row => row.id === 'completion-delivery').length, 1);
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting');
 });
 
 test('explicit Mod actions are scoped, preserve unrelated setup and refuse read-only before any native operation', async t => {
@@ -392,9 +498,75 @@ test('setup enables graph maintenance and updates the legacy folder hint without
   await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
   setup.foldersInstall = async () => { throw new Error('Unvalidated frontend'); };
   await setup.setup();
-  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), config);
+  assert.deepEqual(await appPrivateJSON(join(root, 'config.json')), { ...config, rendererAdapters: { enabled: true },
+    folderProjection: { enabled: true, cachePath: join(cacheDir, FOLDER_CACHE_FILENAME) } });
+  assert.equal((await appPrivateJSON(join(root, 'app-folder-setup-status.json'))).state, 'refused');
   setup.readOnly = true;
   await assert.rejects(setup.configureFolderPresentation(config), /Read-only application inspection/);
+});
+
+test('fresh folder setup saves maintenance intent before a missing native cache and returns a typed wait', async t => {
+  const { root, setup, events } = await fixture(t);
+  const config = { version: 1, mode: 'desktop', allProjects: true };
+  await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  let atInstall;
+  setup.foldersInstall = async input => {
+    atInstall = await appPrivateJSON(join(root, 'config.json'));
+    return ensureClaudeFolderPresentationCache(input);
+  };
+  const outcome = await setup.configureFolderPresentation(config);
+  assert.equal(atInstall.rendererAdapters?.enabled, true);
+  assert.equal(atInstall.folderProjection?.enabled, true);
+  assert.equal((await appPrivateJSON(join(root, 'config.json'))).desktopLocalHandoff.enabled, true);
+  assert.equal(outcome.state, 'waiting');
+  assert.equal(outcome.reason, 'cache-entry-missing');
+  assert.deepEqual(await appPrivateJSON(join(root, 'app-folder-setup-status.json')), outcome);
+  const report = await setup.inspect();
+  assert.equal(report.folderSetup.state, 'waiting');
+  assert.equal(report.components.find(row => row.id === 'folders').action, 'diagnostics');
+  assert.doesNotMatch(report.message, /No setup changes are required/);
+  const repeated = await setup.setup();
+  assert.equal(repeated.folderSetup.state, 'waiting');
+  assert.ok(events.some(([kind]) => kind === 'service'), 'missing cache does not prevent base watcher installation');
+  assert.equal((await appPrivateJSON(join(root, 'config.json'))).rendererAdapters.enabled, true);
+});
+
+test('folder validation refusal retains intent and content-free diagnostics until a newer watcher pass', async t => {
+  const { root, setup } = await fixture(t);
+  const config = { version: 1, mode: 'desktop', allProjects: true,
+    rendererAdapters: { enabled: true, relaunchAfterUpdate: false }, desktopLocalHandoff: { enabled: false } };
+  await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  setup.foldersInstall = async () => { throw Object.assign(new Error('Private path or native diagnostic'), { code: 'CLAUDEX_FRONTEND_EVIDENCE_MISSING' }); };
+  const outcome = await setup.configureFolderPresentation(config);
+  assert.equal(outcome.state, 'refused');
+  assert.equal(outcome.reason, 'recovery-evidence-missing');
+  const saved = await appPrivateJSON(join(root, 'config.json'));
+  assert.deepEqual(saved.rendererAdapters, config.rendererAdapters);
+  assert.equal(saved.desktopLocalHandoff.enabled, false);
+  assert.doesNotMatch(JSON.stringify(outcome), /Private path/);
+  let report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'folders').state, 'blocked');
+  await writeFile(join(root, 'watcher-status.json'), JSON.stringify({ pid: process.pid, running: true, updatedAt: Date.now(),
+    synchronization: 'ready', foregroundCompletedAt: Date.now(), rendererAdapters: { state: 'ready', updatedAt: outcome.updatedAt + 1 },
+    folderProjection: { state: 'ready' }, localHandoff: { state: 'ready' } }), { mode: 0o600 });
+  report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'folders').state, 'ready');
+});
+
+test('folder skipped results are refused and an install-time config change is never overwritten', async t => {
+  const { root, setup } = await fixture(t);
+  const config = { version: 1, rendererAdapters: { enabled: false } };
+  await writeFile(join(root, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+  setup.foldersInstall = async () => ({ status: 'skipped', reason: 'Unknown vendor anchors' });
+  assert.equal((await setup.configureFolderPresentation(config)).state, 'refused');
+  const next = await appPrivateJSON(join(root, 'config.json'));
+  assert.equal(next.rendererAdapters.enabled, false);
+  setup.foldersInstall = async () => {
+    await writeFile(join(root, 'config.json'), JSON.stringify({ ...next, marker: 'concurrent-change' }), { mode: 0o600 });
+    return { status: 'installed', cachePath: next.folderProjection.cachePath };
+  };
+  assert.equal((await setup.configureFolderPresentation(next)).reason, 'configuration-changed');
+  assert.equal((await appPrivateJSON(join(root, 'config.json'))).marker, 'concurrent-change');
 });
 
 test('native account inspection preserves the OS username without forwarding API credentials', async t => {
@@ -431,7 +603,7 @@ test('ordinary native waiting is not a request for user action and retains the e
     waiting: 'Codex destination is active.', folderProjection: { state: 'ready' }, localHandoff: { state: 'ready' } }), { mode: 0o600 });
   const report = await setup.inspect();
   assert.equal(report.phase, 'waiting');
-  assert.equal(report.message, 'No setup changes are required. Claudex will continue automatically.');
+  assert.equal(report.message, 'Some integrations are waiting. Review the reported reasons and next steps.');
   assert.equal(report.components.find(item => item.id === 'synchronization').detail, 'Codex destination is active.');
 });
 

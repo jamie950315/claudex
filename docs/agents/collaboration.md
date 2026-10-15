@@ -142,9 +142,33 @@ ownership and no group/world writes, retaining private stable single-link files.
 Do not demand broker-only directory modes or chmod originals to validate origin.
 Keep write-ahead notification intents, absolute expiry through awaited preflights,
 and the final native dispatch fence. Interrupted/unknown dispatch never retries.
-Coalesce undispatched terminal revisions and cap retained sends at 16/task and
-16/origin/minute. App-stop release is event-driven, not a polling loop. Status/wait
-remains the result authority.
+Coalesce undispatched terminal revisions. Task and origin quotas each allow 16
+intents per rolling minute, independently for terminal and blocker notifications;
+blockers cannot consume completion capacity. A throttled target stays pending
+without an intent. One broker timer wakes at the earliest quota release or
+absolute deadline; close/app-stop clears it and resume uses the existing marker
+event. Expiry becomes an explicit missed delivery. Do not poll or resend an
+existing intent. Retain all intent identities under the existing ledger byte and
+request bounds (the validation ceiling covers 100,000 requests plus 100 generations),
+rather than treating sixteen retained receipts as a lifetime send limit. Legacy
+quota suppression without an intent is eligible again within its original TTL;
+dispatched/uncertain records remain no-replay.
+All terminal failure paths update updatedAt at the transition. Status joins exact
+active/archive mailbox receipts, showing queued/offered/acknowledged/expired and
+the separate dispatch state; it never manufactures an ACK or extends a TTL.
+Notification intents record a fixed dispatch phase and typed failure code. Only
+an internal preflight or mailbox-guard phase proves failed-not-sent; entering the
+mailbox commit boundary or an unknown/native dispatch remains uncertain. Never
+infer pre-dispatch safety from an error string/code alone. Keep origin references
+for dispatching/uncertain evidence.
+List/status expose completionDelivery separately from broker health: fresh watcher
+PostToolUse trust for each provider, the selected route, diagnostic recipient
+observations and concrete next-step codes. Missing/stale trust stays unknown.
+Only explicit status checkNotification performs the existing exact-recipient
+preflight. Aggregate loaded observers and a prior ACK never certify that recipient
+or its effective native policy. Unknown Mod policy includes the missing proof and
+observer reason when available, without changing native admission or defaults.
+Status/wait remains the result authority.
 
 `collaboration` is an explicit inference-capable work protocol, separate from
 the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable

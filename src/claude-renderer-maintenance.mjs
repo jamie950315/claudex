@@ -133,6 +133,7 @@ export async function startClaudeRendererMaintenance({ root, home = homedir(), f
           const retryScheduled = retryInterruptedCache();
           const transient = refused && refusals.every(a => transientCodes.has(a.failure?.code));
           const details = { entry: result.entry, missingChunks: result.missingChunks,
+            refusedAdapters: Object.entries(result.adapters).filter(([, value]) => value.status === 'skipped').map(([name]) => name),
             adapters: Object.fromEntries(Object.entries(result.adapters).map(([key, value]) => [key,
               { ...Object.fromEntries(['status', 'asset', 'reason', 'changed', 'activation', 'search'].filter(k => value[k] !== undefined).map(k => [k, value[k]])),
                 ...(value.failure ? { failure: { code: value.failure.code } } : {}) }])) };

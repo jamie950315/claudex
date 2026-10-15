@@ -1,7 +1,7 @@
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 // Loaded-code evidence, not marketplace configuration or an undocumented host API.
-export const MOD_VERSION = '0.8.28';
+export const MOD_VERSION = '0.8.29';
 export const MOD_BUILD = 'observer-v1';
 
 /** One lifecycle-local reporter; no text, tool arguments, or history inspection. */
@@ -14,12 +14,17 @@ export function createSessionObserver() {
       inboundPolicy: 'unknown', capabilities: { sendMessage: false }, usage: null,
       modVersion: MOD_VERSION, modBuild: MOD_BUILD };
     const [policy, tools, usage] = await Promise.all([
-      binding.api.inbound().catch(() => 'unknown'), binding.api.tools().catch(() => null), binding.api.usage().catch(() => null),
+      binding.api.inbound().then(value => ({
+        inboundPolicy: ['allow', 'hold', 'refuse'].includes(value) ? value : 'unknown',
+        inboundPolicyEvidence: ['allow', 'hold', 'refuse'].includes(value) ? 'explicit'
+          : value === undefined ? 'setting-unset' : 'unrecognized',
+      }), () => ({ inboundPolicy: 'unknown', inboundPolicyEvidence: 'read-failed' })),
+      binding.api.tools().catch(() => null), binding.api.usage().catch(() => null),
     ]);
     if (current !== binding || !same(await binding.api.context(), binding.context) || current !== binding) return null;
     const percent = usage?.context?.percent;
     return { observerId: binding.id, sequence, lifecycle, nativeWake: binding.api.nativeWakeEnabled,
-      selfWake: binding.api.selfEnabled, inboundPolicy: ['allow', 'hold', 'refuse'].includes(policy) ? policy : 'unknown',
+      selfWake: binding.api.selfEnabled, ...policy,
       capabilities: { sendMessage: Array.isArray(tools) ? tools.some(tool => tool.name === 'SendMessage') : null },
       usage: Number.isFinite(percent) && percent >= 0 && percent <= 100 ? { contextPercent: percent } : null,
       modVersion: MOD_VERSION, modBuild: MOD_BUILD };

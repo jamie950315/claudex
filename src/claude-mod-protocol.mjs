@@ -202,7 +202,7 @@ export function sameContext(a, b) { return a.sessionId === b.sessionId && a.cwd 
 
 /** Enumerated, content-free observations are diagnostic only, never capabilities. */
 export function validateModObservation(value) {
-  fields(value, ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage', 'modVersion', 'modBuild'],
+  fields(value, ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'inboundPolicyEvidence', 'capabilities', 'usage', 'modVersion', 'modBuild'],
     ['observerId', 'sequence', 'lifecycle', 'nativeWake', 'selfWake', 'inboundPolicy', 'capabilities', 'usage']);
   identity(value.observerId); boundedInteger(value.sequence, 1, Number.MAX_SAFE_INTEGER);
   if (value.modVersion !== undefined) insist(typeof value.modVersion === 'string' && value.modVersion.length <= 48
@@ -212,6 +212,10 @@ export function validateModObservation(value) {
   insist(['loaded', 'ended'].includes(value.lifecycle));
   insist(typeof value.nativeWake === 'boolean' && typeof value.selfWake === 'boolean');
   insist(['allow', 'hold', 'refuse', 'unknown'].includes(value.inboundPolicy));
+  if (value.inboundPolicyEvidence !== undefined) {
+    insist(['explicit', 'setting-unset', 'read-failed', 'unrecognized'].includes(value.inboundPolicyEvidence));
+    insist((value.inboundPolicy !== 'unknown') === (value.inboundPolicyEvidence === 'explicit'));
+  }
   fields(value.capabilities, ['sendMessage'], ['sendMessage']);
   insist(value.capabilities.sendMessage === null || typeof value.capabilities.sendMessage === 'boolean');
   if (value.usage !== null) {

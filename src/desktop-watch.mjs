@@ -15,6 +15,7 @@ import { syncEventKey } from './sync-events.mjs';
 import { startClaudeRendererMaintenance } from './claude-renderer-maintenance.mjs';
 import { claudeCacheDirectory } from './claude-frontend-graph.mjs';
 import { physicalRolloutPath, rolloutAbsent } from './codex-rollout-file.mjs';
+import { readSyncHookHealth } from './sync-hook-health.mjs';
 
 const WAITING = /still running|complete assistant|no completed persisted history|in-progress turn|unfinished|incomplete final|incomplete final line|empty or invalid conversation|transcript changed while being read|source history changed between complete reads|active writer|destination is active|Claude turn is still running|Claude Code is open|another bridge operation|shared Codex Desktop backend is not ready|shared Codex transport (?:closed|failed|is not connected)|could not connect to the shared Codex transport|transport unavailable|socket.*(?:unavailable|closed|disconnected)|ECONNREFUSED|ECONNRESET|ENOENT.*socket/i;
 const UNSUPPORTED = /Codex compaction|Compacted Codex history|Referenced Codex history|Claude compaction|Dependent Claude history|Forked Claude history|Nonlinear Claude history|Missing or dependent Codex history|working directory changed|turn was interrupted|Unsupported message role|Duplicate open tool call|Unpaired tool result|External image references|Artifact handoffs|^Native Codex local image recovery: |^Native Codex history export: (?:unsupported user input or external asset; nothing was silently omitted\.|(?:converted )?byte limit exceeded; no partial export is returned\.|a completed turn (?:lacks its final assistant response|has no persisted items)\.)(?: \[Codex thread [a-f0-9-]+\])?$/i;
@@ -223,10 +224,12 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
   let lastProgressAt = null, lastProgressHealth = null, publishedFirstOperation = false;
   const writeProgress = async () => {
     const timestamp = now();
+    const hookHealth = events ? await readSyncHookHealth(root) : null;
     const hookBlock = hookStatus && !hookStatus.ready ? { scope: 'hooks', reason: hookStatus.reason } : null;
     const progress = { mode: 'desktop', running: true, pid: process.pid,
     scheduler: events ? 'completion-events' : 'activity-interleaved', startedAt, updatedAt: now(),
-    ...(events ? { eventWakeCount, eventSyncCount, lastEventAt, awaitingEvents, eventSources: events.metrics, hookStatus, ownerWake } : {}),
+    ...(events ? { eventWakeCount, eventSyncCount, lastEventAt, awaitingEvents, eventSources: events.metrics,
+      hookStatus: { ...hookStatus, health: hookHealth }, ownerWake } : {}),
     versionPolicy: runtime.versionPolicy ?? config.versionPolicy ?? 'strict',
     versionWarnings: runtime.versionWarnings?.() ?? [], foregroundCompletedAt, foregroundDurationMs, initialSweepCompletedAt,
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
@@ -244,6 +247,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       waiting: progress.waiting, waitingContexts: progress.waitingContexts,
       blockedSourceCount: progress.blockedSourceCount, blockedSources: progress.blockedSources,
       folderProjection: presentationHealth(progress.folderProjection), localHandoff: presentationHealth(progress.localHandoff),
+      rendererAdapters: progress.rendererAdapters, hookStatus: progress.hookStatus,
       foregroundComplete: progress.foregroundCompletedAt !== null, initialSweepComplete: progress.initialSweepCompletedAt !== null });
     // Progress is disposable diagnostics. Coalesce rapid updates while keeping
     // every changed conflict/reason visible immediately. The next poll or 10s

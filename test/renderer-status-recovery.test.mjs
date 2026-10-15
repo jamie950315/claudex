@@ -3,19 +3,19 @@ import assert from 'node:assert/strict';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { setImmediate } from 'node:timers/promises';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
+import { recordSyncHookHealth } from '../src/sync-hook-health.mjs';
 
 const refusal = 'Frontend cache discovery or maintenance refused; no native work was restarted';
 const skipped = { state: 'skipped', reason: refusal };
 const ready = { state: 'ready', adapters: { folders: { status: 'matched', activation: 'load-not-verified' } } };
 
-async function idleWatcher(t, { initial = skipped, mapError = null, deferred = null, claudeRelaunch, relaunchAfterUpdate } = {}) {
+async function idleWatcher(t, { initial = skipped, mapError = null, deferred = null, claudeRelaunch, relaunchAfterUpdate, synchronizationHooks } = {}) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-renderer-status-')));
   const controller = new AbortController();
   const statuses = [];
   const calls = { status: 0, sync: 0, discover: 0, folders: 0, handoffs: 0, collect: 0, writes: 0 };
-  let clock = 1000, update, enteredWait, heartbeat, activeWrites = 0, overlappingWrites = false, pass;
+  let clock = 1000, update, enteredWait, heartbeat, activeWrites = 0, overlappingWrites = false, pass, nextWrite, nextHeartbeat;
   const waiting = new Promise(resolve => { enteredWait = resolve; });
   const state = { version: 2, pending: null, conversations: {}, records: [] };
   const work = runDesktopWatch({ root, signal: controller.signal,
@@ -27,13 +27,14 @@ async function idleWatcher(t, { initial = skipped, mapError = null, deferred = n
       const abort = () => reject(Object.assign(new Error('Heartbeat cancelled.'), { name: 'AbortError' }));
       signal.addEventListener('abort', abort, { once: true });
       heartbeat = () => { signal.removeEventListener('abort', abort); resolve(); };
+      nextHeartbeat?.(); nextHeartbeat = undefined;
     }),
     bridge: {
       async status() { calls.status++; return structuredClone(state); },
       async sync() { calls.sync++; throw new Error('No synthetic history should be synchronized.'); },
       async collect() { calls.collect++; },
     },
-    runtime: { async codex() { return {}; }, async ownedNativeIds() { return new Set(); } },
+    runtime: { synchronizationHooks, async codex() { return {}; }, async ownedNativeIds() { return new Set(); } },
     discover: async () => { calls.discover++; return []; },
     publishFolders: async () => {
       calls.folders++;
@@ -58,7 +59,7 @@ async function idleWatcher(t, { initial = skipped, mapError = null, deferred = n
     writeStatus: async (_path, value) => {
       if (++activeWrites > 1) overlappingWrites = true;
       await Promise.resolve();
-      calls.writes++; statuses.push(structuredClone(value)); activeWrites--;
+      calls.writes++; statuses.push(structuredClone(value)); activeWrites--; nextWrite?.(); nextWrite = undefined;
     },
   });
   t.after(async () => {
@@ -69,14 +70,17 @@ async function idleWatcher(t, { initial = skipped, mapError = null, deferred = n
   await waiting;
   const nativeCalls = () => Object.fromEntries(Object.entries(calls).filter(([key]) => key !== 'writes'));
   const before = nativeCalls();
-  return { statuses, calls, latest: () => statuses.filter(value => value.running).at(-1), pass: value => pass(value),
+  return { root, statuses, calls, latest: () => statuses.filter(value => value.running).at(-1), pass: value => pass(value),
     async change(value) {
       const writes = calls.writes;
       update(structuredClone(value));
       assert.equal(calls.writes, writes, 'renderer callback must not introduce a concurrent status writer');
       clock += 30_000;
+      const published = new Promise(resolve => { nextWrite = resolve; });
+      const rearmed = new Promise(resolve => { nextHeartbeat = resolve; });
       heartbeat();
-      await setImmediate();
+      await published;
+      await rearmed;
       assert.ok(calls.writes > writes, 'normal idle heartbeat publishes updated renderer state');
       assert.deepEqual(nativeCalls(), before, 'resource changes must not republish maps or read native history/state');
     } };
@@ -165,4 +169,24 @@ test('a restart the user must make is published with its write time and withdraw
   // The saved choice only disables the automatic restart; the request is still decided.
   assert.deepEqual(seen[0], { automatic: false });
   assert.equal((await idleWatcher(t, { initial: ready })).latest().claudeDesktopRestart, null);
+});
+
+test('independent adapter failures and hook health stay visible without changing folder or synchronization readiness', async t => {
+  const notificationOrigin = { ready: false, codex: { configured: true, trusted: false }, claude: { configured: true, enabled: true } };
+  const f = await idleWatcher(t, { initial: ready, synchronizationHooks: async () => ({ ready: true, notificationOrigin }) });
+  const before = f.latest();
+  const mixed = { state: 'degraded', adapters: { folders: ready.adapters.folders,
+    chatWake: { status: 'skipped', failure: { code: 'validation-refused' } }, commands: { status: 'skipped' } } };
+  await recordSyncHookHealth({ root: f.root, provider: 'codex', phase: 'origin_recheck', error: new Error('PRIVATE_ERROR'), at: 2000 });
+  await f.change(mixed);
+  assert.equal(f.latest().folderProjection.state, 'ready');
+  assert.equal(f.latest().synchronization, 'ready');
+  assert.equal(f.latest().blocked, null);
+  assert.deepEqual(f.latest().hookStatus.notificationOrigin, notificationOrigin);
+  assert.equal(f.latest().hookStatus.health.codex.phases.origin_recheck.lastError.code, 'ORIGIN_UNVERIFIED');
+  assert.deepEqual(f.latest().rendererAdapters, mixed);
+  assert.equal(f.latest().folderProjection.updatedAt, before.folderProjection.updatedAt);
+  await recordSyncHookHealth({ root: f.root, provider: 'codex', phase: 'origin_recheck', at: 3000 });
+  await f.change(ready);
+  assert.equal(f.latest().hookStatus.health.codex.phases.origin_recheck.recoveredAt, 3000);
 });

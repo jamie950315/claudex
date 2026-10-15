@@ -22,6 +22,7 @@ import { observabilityPolicy, instruction, recordProgress, progressPresentation,
   checkInInstructions, inputConsumed } from './collaboration-progress.mjs';
 import { initializeWorkEvents, appendWorkEvent, queryWorkEvents, validateWorkEvents } from './collaboration-events.mjs';
 import { readCollaborationArtifact } from './collaboration-artifacts.mjs';
+import { completionDeliveryCapability, taskCompletionDelivery } from './completion-delivery.mjs';
 import { DEFAULT_WAIT_MS, validWaitTimeout } from './collaboration-wait.mjs';
 import { collaborationCapabilities, SANDBOX_PERMISSION_DESCRIPTION, SANDBOX_WORKER_GUIDANCE } from './collaboration-permissions.mjs';
 import { notificationPolicy, createTaskNotification, notificationPresentation, validateTaskNotification,
@@ -616,6 +617,7 @@ export class CollaborationHub extends EventEmitter {
         const message = await this.chatMailbox.status(params.messageId);
         return { ...message, deliveryObservation: await modDeliveryDiagnosis(this, message) };
       }
+      notificationFence?.onPhase('preflight');
       if (this.closed) throw new Error('Broker is stopping; new messages are refused.');
       await notificationFence?.check();
       requestId(params.requestId);
@@ -646,14 +648,14 @@ export class CollaborationHub extends EventEmitter {
       if (this.nativeChatDiscovery && targetProvider === 'codex') {
         [nativeTarget] = (await this.nativeChatDiscovery({ sessionId: targetSessionId }))
           .filter(chat => chat.sessionId === targetSessionId);
-        if (!nativeTarget) throw new Error('Exact native chat is unavailable or archived; no message was queued.');
+        if (!nativeTarget) fail('CLAUDEX_NOTIFICATION_TARGET_UNAVAILABLE', 'Exact native chat is unavailable or archived; no message was queued.');
       }
       if (expectedTitle !== undefined) {
         text(expectedTitle, 'expected title', 4096);
         const exact = (await this.chatMailbox.list()).filter(chat => chat.provider === targetProvider && chat.sessionId === targetSessionId);
         const [current] = nativeTarget ? [nativeTarget] : await this.chatTitleResolver(exact);
         if (!current || current.titleError || current.archived || current.title !== expectedTitle)
-          throw new Error('Native chat title changed or could not be verified. Search again; no message was queued.');
+          fail('CLAUDEX_NOTIFICATION_TARGET_UNAVAILABLE', 'Native chat title changed or could not be verified. Search again; no message was queued.');
       }
       if (nativeTarget) await this.chatMailbox.discover(nativeTarget);
       await notificationFence?.check();
@@ -661,14 +663,17 @@ export class CollaborationHub extends EventEmitter {
         targetSessionId, message: params.message, requestId: params.requestId, wakeRequested: params.wake !== false,
         ...(targetProvider === 'claude' && params.wake !== false ? { wakeRoute: this.state.nativeWakeRoute ?? 'renderer' } : {}),
         ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) },
-      notificationFence ? { expiresAt: notificationFence.expiresAt, beforeEnqueue: notificationFence.check } : undefined);
+      notificationFence ? { expiresAt: notificationFence.expiresAt, beforeEnqueue: notificationFence.check,
+        onPhase: notificationFence.onPhase } : undefined);
       let wakeStatus = params.wake === false ? 'disabled' : 'unavailable';
       if (['mod', 'mod-self'].includes(receipt.wakeRoute) && receipt.state === 'queued') { wakeStatus = 'waiting-for-mod'; this.emit('chat-wake'); }
       if (params.wake !== false && targetProvider === 'claude' && !['mod', 'mod-self'].includes(receipt.wakeRoute) && this.claudeWakeManifest && receipt.state === 'queued') {
+        notificationFence?.onPhase('wake-preflight', receipt.messageId);
         try { await notificationFence?.check(); await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
         catch { wakeStatus = 'unavailable'; }
       }
       if (params.wake !== false && targetProvider === 'codex' && this.chatWake && receipt.state === 'queued') {
+        notificationFence?.onPhase('wake-preflight', receipt.messageId);
         let handle;
         try {
           await notificationFence?.check();
@@ -686,7 +691,9 @@ export class CollaborationHub extends EventEmitter {
               }
               let outcome;
               try { outcome = await handle.dispatch({ messageId: claim.messageId, text: claim.context,
-                ...(notificationFence ? { beforeDispatch: notificationFence.check } : {}) }); }
+                ...(notificationFence ? { beforeDispatch: async () => {
+                  await notificationFence.check(); notificationFence.onPhase('native-dispatch', receipt.messageId);
+                } } : {}) }); }
               catch { outcome = { status: 'uncertain' }; }
               wakeStatus = outcome.status;
               receipt = await this.chatMailbox.finishWake(claim.messageId, {
@@ -737,6 +744,8 @@ export class CollaborationHub extends EventEmitter {
         fail('CLAUDEX_ACCESS_DENIED', 'Only an external controller may inspect its native continuation route.');
       const response = await this.readTask(envelope);
       if (params.checkNotification) response.notification.continuation = await inspectNotificationContinuation(this, this.state.tasks[params.taskId]);
+      response.completionDelivery = taskCompletionDelivery(await completionDeliveryCapability(this),
+        this.state.tasks[params.taskId], response.notification.continuation);
       return response;
     }
     if (method === 'work_events' || method === 'artifact_read' || method === 'work_reports') {
@@ -796,6 +805,7 @@ export class CollaborationHub extends EventEmitter {
           permissionCapabilities: Object.fromEntries(COLLABORATION_PERMISSIONS.map(level => [level, collaborationCapabilities(level)])),
           defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
         blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain'),
+        completionDelivery: await completionDeliveryCapability(this),
         ...(!actor.task ? { chatMailbox: await this.chatMailbox.diagnostics() } : {}),
         uncertainTasks: Object.values(this.state.tasks).filter(task => task.status === 'uncertain').slice(0, 20)
           .map(task => ({ id: task.id, owner: task.owner, permission: task.permission, cwd: task.cwd, error: task.error,
@@ -1032,12 +1042,12 @@ export class CollaborationHub extends EventEmitter {
             if (!task) return null;
             if (permissionRank(task.permission) > this.permissionCeiling(state)) {
               task.status = 'failed'; task.error = task.permission === 'full-access' ? 'The current broker no longer authorizes full-access work.'
-                : 'The current broker no longer authorizes workspace writes.'; task.revision++;
+                : 'The current broker no longer authorizes workspace writes.'; task.revision++; task.updatedAt = Date.now();
               this.deliverToParent(state, task);
               return { limit: true };
             }
             if (task.generation >= this.maxSteps) {
-              task.status = 'failed'; task.error = 'Execution/ownership transition limit reached.'; task.revision++;
+              task.status = 'failed'; task.error = 'Execution/ownership transition limit reached.'; task.revision++; task.updatedAt = Date.now();
               this.deliverToParent(state, task);
               return { limit: true };
             }
@@ -1318,7 +1328,7 @@ export class CollaborationHub extends EventEmitter {
       const state = this.state;
       const actor = this.actor(envelope, state);
       const acknowledgements = [];
-      const responses = targets.map(({ taskId, afterRevision, baseline }) => {
+      const responses = await Promise.all(targets.map(async ({ taskId, afterRevision, baseline }) => {
       const task = state.tasks[taskId];
       this.allowed(actor, task, state);
       const child = actor.task && task.parentId === actor.task.id && terminal.has(task.status);
@@ -1343,7 +1353,8 @@ export class CollaborationHub extends EventEmitter {
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }
       }
       response.waitReason = this.waitReason(task, state);
-      response.notification = notificationPresentation(task);
+      const messageIds = (task.notification?.deliveries ?? []).flatMap(delivery => delivery.messageId ? [delivery.messageId] : []);
+      response.notification = notificationPresentation(task, messageIds.length ? await this.chatMailbox.statuses(messageIds) : undefined);
       response.outcome = includeOutcome || !terminal.has(task.status) ? outcomePresentation(task) : undefined;
       Object.assign(response, progressPresentation(task));
       response.objective = (task.messages.find(message => message.kind === 'request')?.text ?? '').slice(0, 2048);
@@ -1360,7 +1371,7 @@ export class CollaborationHub extends EventEmitter {
         acknowledgements.push([taskId, task.revision]);
       }
       return response;
-      });
+      }));
       // Fail before acknowledging anything if the atomic response cannot fit.
       // The MCP facade nests JSON as text: escaping can almost double its size.
       // Bound that actual outer representation before committing acknowledgements.

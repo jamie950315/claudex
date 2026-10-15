@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.4.7**, with **Claude Mod 0.8.28** bundled.
+Current development build: **Claudex.app 1.4.7**, with **Claude Mod 0.8.29** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -41,6 +41,9 @@ so troubleshooting evidence is not changed. CLI output remains English.
 4. Review and trust the exact Claudex completion hooks through Codex's native hook
    review (`/hooks` in Codex CLI). Setup preserves existing hooks and never bypasses
    native trust. A configured-but-untrusted hook remains an explicit readiness issue.
+   The `PostToolUse` origin hook has its own trust requirement for binding a
+   collaboration task to its calling chat. Ordinary synchronization readiness
+   does not establish that completion-delivery capability.
    The optional cache-command hook requires its own trust review; it does not
    gate ordinary synchronization. See [command activation](cache-warming.md#command-in-the-chatgpt-desktop-codex-page).
 5. Let the checklist report which integrations are ready and which require an
@@ -122,6 +125,22 @@ or the user's global Node.js installation.
   launcher runtime, not Claudex's own Node binary for that protected integration.
 - Native folder presentation and Local predecessor handoff when the existing
   frontend resource and lifecycle checks permit them.
+
+Setup saves folder maintenance preferences before attempting cache installation.
+If the cache is not available yet, the saved choice lets the normal watcher
+validate a later native cache event. An unsupported resource remains explicitly
+refused; setup never guesses a patch. Explicitly disabled maintenance stays
+disabled. Diagnostics distinguish waiting, refused, installed and disabled
+installation attempts; installed resources still require activation checks.
+
+The **Completion delivery** checklist entry is separate from collaboration broker
+and Mod installation readiness. Its diagnostic report includes Codex/Claude
+origin-hook trust, the selected provider routes, recipient readiness and a
+concrete next step. Missing or stale observations remain unknown. An exact
+recipient still needs the task's notification status check, even when the
+broker accepts new work. This capability report does not send input or prove
+receipt. New Mod receiver opt-ins remain off; enabling them requires the
+existing explicit confirmation and does not change the selected route.
 
 ## Claude Mod lifecycle
 
