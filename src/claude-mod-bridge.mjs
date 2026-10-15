@@ -5,6 +5,7 @@ import { privateDir, privateJSON, privateRead, writeReceipt, exclusiveAction } f
 import { validateRequest, validateParams, sameContext, insist, ModError, identity, context, record } from './claude-mod-protocol.mjs';
 import { createWakeOutbox } from './claude-mod-wake-outbox.mjs';
 import { inspectSelfInbox, submitSelfInbox } from './claude-mod-self-inbox.mjs';
+import { collaborationCapabilities, SANDBOX_PERMISSION_DESCRIPTION, MOD_PERMISSION_GUIDANCE } from './collaboration-permissions.mjs';
 const TTL = 10 * 60 * 1000;
 const JOURNAL_LIMIT = 2048;
 const RPC_TIMEOUT = 12000;
@@ -24,6 +25,8 @@ async function nativeRpc(envelope) {
 function publicReceipt(receipt) {
   const resultBytes = Buffer.byteLength(JSON.stringify(receipt.result ?? null));
   return { id: receipt.id, state: receipt.state, method: receipt.method, params: receipt.params,
+    ...(receipt.method === 'start' ? { capabilities: collaborationCapabilities(receipt.params.permission, receipt.params.provider),
+      notice: { code: 'SANDBOX_NO_NETWORK', message: `${SANDBOX_PERMISSION_DESCRIPTION} ${MOD_PERMISSION_GUIDANCE}` } } : {}),
     context: receipt.context, preparedAt: receipt.preparedAt, expiresAt: receipt.expiresAt,
     ...(receipt.finishedAt === undefined ? {} : { finishedAt: receipt.finishedAt }),
     ...(receipt.error ? { error: receipt.error } : {}),

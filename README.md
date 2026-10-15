@@ -153,6 +153,9 @@ and coordinate shared edits: the protocol does not lock workspaces, create
 worktrees, or merge conflicts. Work has no fixed execution timeout; explicit
 cancellation remains available. In read-only/workspace-write profiles, Claude
 workers have bounded file tools without Bash and Codex uses its native sandbox.
+Both sandboxed levels have no network access and do not load the user's config,
+plugins, MCP servers or hooks. Check `claudex_list` for the broker default before
+choosing a level; omit `permission` to inherit the parent or broker default.
 Explicit **Full access** uses the user's normal tools, settings and hooks without
 a sandbox or permission prompts; it is not the default for new installations.
 

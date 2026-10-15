@@ -217,7 +217,21 @@ Native execution uses fresh Codex ephemeral exec or Claude nonpersistent print
 sessions with normal account authentication, no copied credentials, no inherited
 API keys, and explicit collaboration MCP configuration. Ordinary sync must not
 enroll this work. read-only and workspace-write profiles do not inherit arbitrary
-user tools, hooks or model settings. By user decision, full-access work runs like
+user tools, hooks or model settings. By user decision, sandboxed levels remain
+network-less; do not add network access or change authorization to hide this limit.
+The pure collaboration-permissions module defines native launch profiles and
+public network/userConfig/provider-shell capabilities. Tool descriptions and the
+permission schema must explicitly describe no network and no user config,
+plugins, MCP servers or hooks (Claude also has no Bash or web tools). Tell callers
+to inspect claudex_list's defaultPermission/permissionCapabilities before choosing
+and to omit permission for inheritance when authorized full-access is needed.
+Start/handoff receipts expose effective permission and destination capabilities;
+an explicit start below the effective broker default includes PERMISSION_NARROWED,
+captured in the idempotency receipt, and other starts omit it. Handoff cannot change
+permission. Sandboxed worker prompts require an exact need report instead of
+retrying or working around network/tool/config limits. The Mod's read-only default
+and sandbox-only start boundary remain unchanged; its previews/receipts always
+show SANDBOX_NO_NETWORK, including omitted permission. By user decision, full-access work runs like
 the user's own agent: Codex danger-full-access without --ignore-user-config and
 Claude --dangerously-skip-permissions without --restricted/--strict-mcp-config,
 so user settings, plugins, MCP servers and hooks (such as RTK) load. The user's

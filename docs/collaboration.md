@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.25;
+Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.26;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -761,6 +761,26 @@ finish. Explicit milestone reporting or an unconsumed follow-up can instead make
 that parent eligible for earlier follow-up work while children are still running.
 
 ### Full access
+
+`read-only` and `workspace-write` have **no network access** and do not load your
+Codex/Claude config, plugins, MCP servers or hooks. Claude exposes only bounded
+file tools, without Bash or web tools; Codex retains its sandboxed shell.
+For work needing the network, your CLI tools or MCP servers, first check
+`claudex_list`: `limits.defaultPermission` reports the broker default and
+`limits.permissionCapabilities` reports each level's `network`, `userConfig`
+and provider-specific `shell` access. Omit `permission` to inherit the parent or
+broker default; these capabilities require an authorized `full-access` default.
+Omission does not override a sandboxed parent or broker default.
+
+Start and handoff receipts report the effective `permission` and provider-specific
+`capabilities`. Explicitly starting below the broker default also returns
+`notice: {code: "PERMISSION_NARROWED", defaultPermission, message}`; inherited or
+equal permissions do not produce that notice. Handoff preserves permission.
+Sandboxed workers must report the exact network or user-tool/config need in their
+result or `claudex_report`, instead of retrying or working around the sandbox.
+The Mod's reviewed start still defaults to `read-only` and only permits sandboxed
+levels; its preview and receipt always show `SANDBOX_NO_NETWORK`. For network work,
+use the existing agent/operator workflow with an authorized full-access default.
 
 Permissions are ordered `read-only` < `workspace-write` < `full-access`. A
 full-access worker runs like your own agent: Codex uses `danger-full-access`

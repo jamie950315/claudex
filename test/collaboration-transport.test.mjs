@@ -350,6 +350,16 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
   assert.equal(byId.get(2).result.tools.length, 15);
   const tools = byId.get(2).result.tools;
   assert.match(tools.find(tool => tool.name === 'claudex_start').description, /concurrent/i);
+  const start = tools.find(tool => tool.name === 'claudex_start');
+  for (const description of [start.description, start.inputSchema.properties.permission.description]) {
+    assert.match(description, /read-only and workspace-write/);
+    assert.match(description, /NO network access/);
+    assert.match(description, /config, plugins, MCP servers or hooks/);
+    assert.match(description, /Claude: no Bash or web tools/);
+    assert.match(description, /first check claudex_list.*then omit permission/);
+  }
+  assert.equal(tools.find(tool => tool.name === 'claudex_handoff').inputSchema.properties.permission, undefined);
+  assert.match(tools.find(tool => tool.name === 'claudex_list').description, /limits.permissionCapabilities/);
   assert.doesNotMatch(tools.find(tool => tool.name === 'claudex_start').description, /deferredUntilParentExit|CLAUDEX_YIELD/);
   assert.match(tools.find(tool => tool.name === 'claudex_handoff').description, /CLAUDEX_HANDOFF: no further tools or summary/);
   assert.deepEqual(JSON.parse(byId.get(3).result.content[0].text), { taskId: 'task-1', revision: 1 });

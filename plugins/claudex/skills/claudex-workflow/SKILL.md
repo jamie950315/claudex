@@ -14,8 +14,15 @@ Keep the caller's generation-scoped worker token and
 existing directory grants. A managed worker must continue using its own MCP
 connection. Preserve `CLAUDEX_COLLABORATION_WORKER` and all native permission modes.
 
-For delegation, verify the user's scope and choose read-only unless the user has
-authorized writes. Use a dedicated checkout or explicitly disjoint writable
+For delegation, verify the user's scope and existing authorization before choosing
+permission. read-only/workspace-write have no network or user config, plugins,
+MCP servers or hooks (Claude also has no Bash or web tools). For network/user-tool
+work, check claudex_list's defaultPermission/permissionCapabilities first, then
+omit permission to inherit an authorized full-access parent or broker default.
+The Mod preview defaults to read-only even when the broker default is full-access;
+use the existing agent/operator workflow for network work. Sandboxed workers must
+report the exact need instead of retrying or working around the sandbox.
+Use a dedicated checkout or explicitly disjoint writable
 paths. Include the actual question, relevant files, constraints, test evidence,
 and expected deliverable in the new task. Provider names and exact model IDs
 remain distinct; retain model IDs exactly as the user supplies them.

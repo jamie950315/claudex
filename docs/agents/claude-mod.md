@@ -43,8 +43,12 @@ marketplace settings. Technical diagnostics expose only these two known identiti
 and wake booleans/types, never complete settings or secrets. The local /claudex
 command returns explicit handled text after opening its pane, not an empty reply.
 User-authored controller writes use exact-context prepare/confirm and durable
-no-replay receipts; managed workers cannot borrow controller authority. Since
-0.3.1, explicit selfWake accompanies nativeWake; both default to false.
+no-replay receipts; managed workers cannot borrow controller authority. The
+Mod start defaults to read-only and only permits sandboxed levels; previews
+and receipts must expose capabilities and SANDBOX_NO_NETWORK before confirmation.
+Omitting permission here retains read-only, not the broker default; network work
+uses the existing agent/operator workflow with an authorized full-access default.
+Since 0.3.1, explicit selfWake accompanies nativeWake; both default to false.
 `collaboration native-wake --route mod-self|mod|renderer` captures the route on
 new wake-enabled Claude messages; existing messages and receipts keep their
 original route. The same loaded recipient Mod can receive with both opt-ins and

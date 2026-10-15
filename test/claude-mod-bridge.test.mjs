@@ -147,6 +147,23 @@ test('prepare is non-inference and captures provider defaults at preview time', 
   assert.match(prepared.params.requestId, /^mod:/); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].method, 'models');
   assert.equal(JSON.stringify(prepared).includes(KEY), false);
 });
+test('Mod sandbox starts expose network limits before confirmation, including omitted permission', async t => {
+  const f = await fixture(t);
+  for (const provider of ['codex', 'claude']) {
+    for (const permission of [undefined, 'workspace-write']) {
+      const params = { ...taskParams, provider, ...(permission ? { permission } : {}) };
+      const prepared = await f.handle(make('prepare', { method: 'start', params }));
+      assert.equal(prepared.params.permission, permission ?? 'read-only');
+      assert.deepEqual(prepared.capabilities, { network: false, userConfig: false, shell: provider === 'codex' });
+      assert.equal(prepared.notice.code, 'SANDBOX_NO_NETWORK');
+      assert.match(prepared.notice.message, /NO network access.*config, plugins, MCP servers or hooks/);
+      assert.match(prepared.notice.message, /The Mod defaults to read-only/);
+      assert.match(prepared.notice.message, /existing agent\/operator workflow/);
+      assert.deepEqual((await f.handle(make('receipt', { id: prepared.id }))).notice, prepared.notice);
+    }
+  }
+  assert.equal(f.calls.filter(call => call.method === 'start').length, 0);
+});
 test('duplicate preview returns same receipt across controller reload', async t => {
   const f = await fixture(t);
   const first = await f.handle(make('prepare', { method: 'cancel', params: { taskId: 'job' } }));

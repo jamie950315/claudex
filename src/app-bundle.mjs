@@ -48,6 +48,7 @@ export const ENGINE_SRC = Object.freeze([
   'cold-import.mjs', 'cold-verification-cache.mjs', 'collaboration-hub.mjs', 'collaboration-install.mjs',
   'collaboration-events.mjs', 'collaboration-artifacts.mjs', 'collaboration-progress.mjs',
   'collaboration-notification-policy.mjs', 'collaboration-worker-boundary.mjs',
+  'collaboration-permissions.mjs',
   'collaboration-native.mjs', 'collaboration-activity.mjs', 'collaboration-outcome.mjs', 'collaboration-origin.mjs', 'collaboration-notifications.mjs', 'collaboration-processes.mjs', 'collaboration-transport.mjs', 'collaboration-wait.mjs', 'collaboration-effort.mjs', 'collaboration-workspace.mjs', 'app-stop-state.mjs', 'compaction.mjs',
   'context-archive.mjs', 'context-packet-reader.mjs', 'context-packet.mjs',
   'desktop-bridge.mjs', 'desktop-enrollment.mjs', 'desktop-install.mjs', 'desktop-original-split.mjs', 'desktop-runtime.mjs',

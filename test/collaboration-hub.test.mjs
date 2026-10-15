@@ -407,11 +407,79 @@ test('a read-only parent does not inherit the app default write permission for i
   const parent = await hub.dispatch(controller(hub, 'codex', 'start', { provider: 'codex', cwd: root, permission: 'read-only', prompt: 'parent', requestId: 'parent-read' }));
   await until(() => parentToken);
   const child = await hub.dispatch(request('codex', 'start', { provider: 'claude', cwd: root, prompt: 'child', requestId: 'child-inherited' }, parentToken));
+  assert.equal(child.notice, undefined);
+  assert.deepEqual(child.capabilities, { network: false, userConfig: false, shell: false });
   const done = await until(async () => { const value = await status(hub, child.taskId); return value.status === 'completed' && value; });
   assert.equal(done.permission, 'read-only');
   await hub.dispatch(request('codex', 'status', { taskId: child.taskId }, parentToken));
   gate.resolve({ text: 'parent done' });
   await until(async () => (await status(hub, parent.taskId)).status === 'completed');
+});
+
+test('permission capabilities and explicit narrowing notices follow the effective broker default', async t => {
+  const { root, hub } = await setup(t, async () => assert.fail('No native invocation expected'), { allowWrite: true });
+  hub.schedule = () => {};
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'full-access' }));
+  const list = await hub.dispatch(controller(hub, 'codex', 'list', {}));
+  assert.equal(list.limits.defaultPermission, 'full-access');
+  assert.deepEqual(list.limits.permissionCapabilities, {
+    'read-only': { network: false, userConfig: false, shell: { codex: true, claude: false } },
+    'workspace-write': { network: false, userConfig: false, shell: { codex: true, claude: false } },
+    'full-access': { network: true, userConfig: true, shell: { codex: true, claude: true } },
+  });
+  const start = (provider, permission, requestId) => hub.dispatch(controller(hub, 'codex', 'start', {
+    provider, cwd: root, prompt: 'Inspect capabilities', requestId,
+    ...(permission === undefined ? {} : { permission }),
+  }));
+  for (const provider of ['codex', 'claude']) {
+    for (const permission of [undefined, 'read-only', 'workspace-write', 'full-access']) {
+      const receipt = await start(provider, permission, `${provider}-${permission}`);
+      const full = permission === undefined || permission === 'full-access';
+      assert.equal(receipt.permission, permission ?? 'full-access');
+      assert.deepEqual(receipt.capabilities, { network: full, userConfig: full, shell: provider === 'codex' || full });
+      assert.equal(Boolean(receipt.notice), !full);
+      if (!full) {
+        assert.equal(receipt.notice.code, 'PERMISSION_NARROWED');
+        assert.equal(receipt.notice.defaultPermission, 'full-access');
+        assert.match(receipt.notice.message, /NO network access.*config, plugins, MCP servers or hooks/);
+      }
+      const prompt = hub.prompt(await status(hub, receipt.taskId));
+      if (full) assert.doesNotMatch(prompt, /NO network access|instead of retrying or working around the sandbox/);
+      else {
+        assert.match(prompt, /NO network access/);
+        assert.match(prompt, /report the exact need to the controller in your result or claudex_report instead of retrying or working around the sandbox/);
+      }
+    }
+  }
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'workspace-write' }));
+  const replayed = await start('codex', 'read-only', 'codex-read-only');
+  assert.equal(replayed.replayed, true);
+  assert.equal(replayed.notice.defaultPermission, 'full-access');
+  for (const permission of [undefined, 'workspace-write', 'read-only']) {
+    const receipt = await start('claude', permission, `sandbox-${permission}`);
+    assert.equal(receipt.capabilities.network, false);
+    assert.equal(Boolean(receipt.notice), permission === 'read-only');
+    if (receipt.notice) assert.equal(receipt.notice.defaultPermission, 'workspace-write');
+  }
+  await hub.dispatch(controller(hub, 'codex', 'models', { defaultPermission: 'read-only' }));
+  assert.equal((await start('codex', 'read-only', 'equal-read-only')).notice, undefined);
+});
+
+test('handoff reports the destination capabilities without changing permission or adding a narrowing notice', async t => {
+  const { root, hub } = await setup(t, async () => assert.fail('No native invocation expected'), {
+    allowFullAccess: true, defaultPermission: 'full-access',
+  });
+  hub.schedule = () => {};
+  const task = await hub.dispatch(controller(hub, 'codex', 'start', {
+    provider: 'codex', cwd: root, prompt: 'Inspect only', permission: 'read-only', requestId: 'handoff-capabilities',
+  }));
+  assert.equal(task.capabilities.shell, true);
+  const receipt = await hub.dispatch(controller(hub, 'codex', 'handoff', {
+    taskId: task.taskId, revision: task.revision, provider: 'claude', message: 'Continue inspection', requestId: 'transfer-capabilities',
+  }));
+  assert.equal(receipt.permission, 'read-only');
+  assert.deepEqual(receipt.capabilities, { network: false, userConfig: false, shell: false });
+  assert.equal(receipt.notice, undefined);
 });
 
 test('a writable default cannot bypass the broker write authorization', () => {

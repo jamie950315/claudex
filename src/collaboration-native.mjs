@@ -8,6 +8,7 @@ import { revalidateWorkspace } from './collaboration-workspace.mjs';
 import { createOwnedProcessTracker } from './collaboration-processes.mjs';
 import { createNativeActivity, NATIVE_ACTIVITY_INTERVAL_MS } from './collaboration-activity.mjs';
 import { projectNativeWorkEvents } from './collaboration-events.mjs';
+import { COLLABORATION_PERMISSION_PROFILES } from './collaboration-permissions.mjs';
 
 const MAX_STDOUT = 8 * 1024 * 1024;
 const MAX_LINE = 2 * 1024 * 1024;
@@ -51,11 +52,12 @@ function checkedMcp(mcp) {
 function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, writableDirs, controllerMcpRegistered }) {
   // full-access runs like the user's own agent: their config, plugins, MCP servers
   // and hooks load, with no sandbox and no prompts. Other levels stay isolated.
-  const full = permission === 'full-access';
+  const profile = COLLABORATION_PERMISSION_PROFILES[permission];
+  const full = profile.userConfig;
   if (provider === 'codex') {
     const args = [
       'exec', '--json', '--ephemeral', ...(full ? [] : ['--ignore-user-config']), '--skip-git-repo-check',
-      '--sandbox', full ? 'danger-full-access' : permission === 'workspace-write' ? 'workspace-write' : 'read-only',
+      '--sandbox', profile.codexSandbox,
       '-c', 'approval_policy="never"',
     ];
     if (full && controllerMcpRegistered) args.push('-c', `mcp_servers.${NATIVE_CONTROLLER_MCP}.enabled=false`);
@@ -84,9 +86,7 @@ function argv(provider, { prompt, model, effort, permission, mcp, readOnlyDirs, 
     if (mcp) args.push('--mcp-config', JSON.stringify({ mcpServers: { [MCP_NAME]: { command: mcp.command, args: mcp.args } } }));
     return args;
   }
-  const tools = permission === 'workspace-write'
-    ? 'Read,Glob,Grep,Edit,Write'
-    : 'Read,Glob,Grep';
+  const tools = profile.claudeTools;
   const args = [
     '-p', '--output-format', 'stream-json', '--verbose',
     '--no-session-persistence', '--restricted', '--strict-mcp-config',

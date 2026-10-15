@@ -356,6 +356,7 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
       field(t('Session ID'), state.pending.context?.sessionId), field(t('Directory'), state.pending.context?.cwd),
       field(t('State root'), options.stateRoot),
       // Unlike optional diagnostics, confirmation always includes every byte of params.
+      ...(state.pending.notice ? [text(state.pending.notice.message)] : []),
       text(JSON.stringify(state.pending.params, null, 2)),
       text(t('Confirm dispatches exactly this operation. Writable work needs disjoint files or a dedicated checkout. Cancellation retains existing edits.')),
       button('confirm-action', t('Confirm and dispatch once'), () => controller.commit(host()), true),

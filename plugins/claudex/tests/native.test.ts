@@ -196,7 +196,8 @@ test('native compose previews the entire operation before exactly one dispatch',
     expect(event.init.timeoutMs).toBe(20000)
     if (request.op === 'prepare') {
       prepared = { id: ID, state: 'prepared', method: request.method,
-        params: request.params, context: request.context }
+        params: request.params, context: request.context,
+        notice: { code: 'SANDBOX_NO_NETWORK', message: 'Sandbox notice: NO network access.' } }
       return prepared
     }
     if (request.op === 'commit') return { ...prepared, state: 'completed', result: { taskId: 'fixture-task' } }
@@ -212,6 +213,7 @@ test('native compose previews the entire operation before exactly one dispatch',
     expect(await ui.find({ key: 'confirm-action' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: 'Prepared only. Confirm explicitly to dispatch.' })).toBeDefined()
     expect(await ui.find({ type: 'Text', text: /Review only; preserve files\./ })).toBeDefined()
+    expect(await ui.find({ type: 'Text', text: 'Sandbox notice: NO network access.' })).toBeDefined()
     expect(seen.filter(item => item.op === 'commit').length).toBe(surface === 'terminal' ? 0 : 1)
     await ui.press({ key: 'confirm-action' })
     expect(await ui.find({ key: 'confirm-action' })).toBeUndefined()
