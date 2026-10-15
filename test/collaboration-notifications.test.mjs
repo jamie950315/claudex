@@ -308,7 +308,7 @@ test('an absolute notification deadline is not extended by slow native discovery
   assert.equal((await f.hub.chatMailbox.pendingWakes()).length, 0);
 });
 
-test('native flush gaps retain identity hints and only matching lifecycle events recheck bounded proof', async t => {
+test('matching lifecycle events share bounded origin proof recovery with scheduled follow-ups', async t => {
   let available = false, attempts = 0;
   const f = await fixture(t, { verifier: async p => {
     attempts++;
@@ -318,7 +318,7 @@ test('native flush gaps retain identity hints and only matching lifecycle events
   } });
   const task = await f.start('flush'); await f.complete(task);
   assert.equal((await f.bind(task)).bound, false);
-  await delay(15); assert.equal(attempts, 1, 'no polling rechecks');
+  await delay(15); assert.equal(attempts, 1, 'the scheduled follow-up is not immediate');
   assert.equal((await f.call('origin_recheck', { sessionId: otherSession, cwd: f.parent, event: 'Stop' })).checked, 0);
   available = true;
   const result = await f.call('origin_recheck', { sessionId, cwd: f.parent, event: 'Stop' });
@@ -333,4 +333,156 @@ test('native flush gaps retain identity hints and only matching lifecycle events
   const before = attempts;
   assert.equal((await f.call('origin_recheck', { sessionId, cwd: f.parent, event: 'SessionStart' })).checked, 0);
   assert.equal(attempts, before); assert.equal(f.hub.state.tasks[exhausted.taskId].notification.origin, null);
+});
+
+const unavailable = () => Object.assign(new Error('Synthetic native flush gap'), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+const syntheticProof = p => ({ provider: p.provider, sessionId: p.sessionId, cwd: p.cwd, toolUseId: p.toolUseId,
+  turnId: p.turnId, source: 'synthetic-native-proof', verifiedAt: Date.now() });
+async function settle(check) {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setImmediate(resolve));
+    if (check()) { await new Promise(resolve => setImmediate(resolve)); return; }
+  }
+  throw new Error('Synthetic proof follow-up did not settle');
+}
+
+test('origin follow-ups reread one exact hint after 1 and 3 seconds and stop at three shared attempts', async t => {
+  const reads = [];
+  const f = await fixture(t, { verifier: async p => { reads.push(p); throw unavailable(); } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const task = await f.start('automatic-bound', { mode: 'wake' });
+  assert.equal((await f.bind(task)).attempts, 1);
+  const initial = await f.call('status', { taskId: task.taskId, checkNotification: true });
+  assert.equal(initial.notification.continuation.reason, 'awaiting-native-proof');
+  assert.equal(initial.notification.continuation.retryAfterMs, 2000);
+  await assert.rejects(f.call('origin_bind', { taskId: task.taskId, sessionId: otherSession, cwd: f.parent,
+    toolUseId: 'other-call', turnId: 'turn-1' }), { code: 'CLAUDEX_ORIGIN_CONFLICT' });
+  t.mock.timers.tick(999); await new Promise(resolve => setImmediate(resolve)); assert.equal(reads.length, 1);
+  t.mock.timers.tick(1);
+  await settle(() => f.hub.state.tasks[task.taskId].notification.originHint.attempts === 2);
+  await f.hub.serial; await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(2999); await new Promise(resolve => setImmediate(resolve)); assert.equal(reads.length, 2);
+  t.mock.timers.tick(1);
+  await settle(() => f.hub.state.tasks[task.taskId].notification.originHint.attempts === 3);
+  await f.hub.serial; await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(300000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads.length, 3); assert.deepEqual(reads, [reads[0], reads[0], reads[0]]);
+  assert.equal((await f.bind(task)).reason, 'native-proof-attempts-exhausted');
+  assert.equal((await f.call('origin_recheck', { sessionId, cwd: f.parent, event: 'Stop' })).checked, 0);
+  const status = await f.call('status', { taskId: task.taskId, checkNotification: true });
+  assert.equal(status.notification.continuation.reason, 'native-proof-attempts-exhausted');
+  assert.equal(status.notification.continuation.retryAfterMs, undefined);
+  assert.equal(reads.length, 3); assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
+});
+
+test('timer, lifecycle and duplicate bind checks coalesce and success cancels remaining follow-ups', async t => {
+  let reads = 0, finish;
+  const f = await fixture(t, { verifier: async p => {
+    if (++reads === 1) throw unavailable();
+    return new Promise(resolve => { finish = () => resolve(syntheticProof(p)); });
+  } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const task = await f.start('coalesced'); await f.bind(task);
+  t.mock.timers.tick(1000); await settle(() => finish);
+  const lifecycle = f.call('origin_recheck', { sessionId, cwd: f.parent, event: 'Stop' });
+  const duplicate = f.bind(task);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(reads, 2);
+  finish(); assert.equal((await duplicate).bound, true); assert.equal((await lifecycle).results[0].bound, true);
+  t.mock.timers.tick(300000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 2); assert.equal(f.hub.state.tasks[task.taskId].notification.originHint, undefined);
+});
+
+for (const code of ['ORIGIN_PROOF_INVALID', 'ORIGIN_PROOF_BOUND_EXCEEDED']) test(`${code} ends scheduled origin proof recovery`, async t => {
+  let reads = 0;
+  const f = await fixture(t, { verifier: async () => {
+    if (++reads === 1) throw unavailable();
+    throw Object.assign(new Error('Synthetic refused native proof'), { code });
+  } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const task = await f.start(`refused-${code}`); await f.bind(task);
+  t.mock.timers.tick(1000);
+  await settle(() => f.hub.state.tasks[task.taskId].notification.originHint.attempts === 3);
+  t.mock.timers.tick(300000); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(reads, 2); assert.equal(f.hub.state.tasks[task.taskId].notification.originHint.error, code);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.origin, null);
+});
+
+test('origin expiry prevents both a scheduled read and a follow-up beyond the challenge deadline', async t => {
+  let reads = 0;
+  const f = await fixture(t, { verifier: async () => { reads++; throw unavailable(); } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = await f.start('expire-pending'); await f.bind(pending);
+  await f.hub.mutate(state => { state.tasks[pending.taskId].notification.challengeExpiresAt = 1; });
+  t.mock.timers.tick(1000); await new Promise(resolve => setImmediate(resolve)); assert.equal(reads, 1);
+  const expiring = await f.start('expire-before-delay');
+  await f.hub.mutate(state => { state.tasks[expiring.taskId].notification.challengeExpiresAt = Date.now() + 500; });
+  await f.bind(expiring); assert.equal(reads, 2);
+  t.mock.timers.tick(300000); await new Promise(resolve => setImmediate(resolve)); assert.equal(reads, 2);
+  assert.equal(f.hub.state.tasks[pending.taskId].notification.origin, null);
+  assert.equal(f.hub.state.tasks[expiring.taskId].notification.origin, null);
+});
+
+test('close clears origin timers; restart waits for matching lifecycle recovery without rearming them', async t => {
+  let reads = 0;
+  const f = await fixture(t, { verifier: async () => { reads++; throw unavailable(); } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const task = await f.start('restart-hint'); await f.bind(task); await f.hub.close();
+  t.mock.timers.tick(300000); await new Promise(resolve => setImmediate(resolve)); assert.equal(reads, 1);
+  const reopened = await new CollaborationHub({ root: f.root, originVerifier: async p => { reads++; return syntheticProof(p); },
+    run: async () => { throw new Error('No inference'); } }).initialize();
+  reopened.schedule = () => {}; t.after(() => reopened.close());
+  t.mock.timers.tick(300000); await new Promise(resolve => setImmediate(resolve)); assert.equal(reads, 1);
+  assert.equal(reopened.state.tasks[task.taskId].notification.originHint.attempts, 1);
+  const call = params => reopened.dispatch({ peer: 'codex', token: reopened.controllerToken, method: 'origin_recheck', params });
+  assert.equal((await call({ sessionId: otherSession, cwd: f.parent, event: 'Stop' })).checked, 0);
+  assert.equal((await call({ sessionId, cwd: f.parent, event: 'UserPromptSubmit' })).results[0].bound, true);
+  assert.equal(reads, 2);
+});
+
+test('app-stop clears origin follow-ups without exhausting the stored hint or rearming on resume', async t => {
+  let available = false, reads = 0;
+  const f = await fixture(t, { verifier: async p => {
+    reads++; if (!available) throw unavailable(); return syntheticProof(p);
+  } });
+  const clear = t.mock.method(globalThis, 'clearTimeout');
+  const task = await f.start('stop-hint'); await f.bind(task);
+  const before = clear.mock.calls.length;
+  await writeJSON(join(f.parent, 'app-stop.json'), { version: 1, stopped: true });
+  await until(() => clear.mock.calls.slice(before).some(call => call.arguments[0] !== undefined));
+  await writeJSON(join(f.parent, 'app-stop.json'), { version: 1, stopped: false });
+  available = true; await delay(1100);
+  assert.equal(reads, 1); assert.equal(f.hub.state.tasks[task.taskId].notification.originHint.attempts, 1);
+  assert.equal((await f.call('origin_recheck', { sessionId, cwd: f.parent, event: 'Stop' })).results[0].bound, true);
+  assert.equal(reads, 2);
+});
+
+for (const boundary of ['close', 'app-stop', 'expiry']) test(`${boundary} fences an in-flight scheduled origin proof`, async t => {
+  let reads = 0, finish;
+  const f = await fixture(t, { verifier: async p => {
+    if (++reads === 1) throw unavailable();
+    return new Promise(resolve => { finish = () => resolve(syntheticProof(p)); });
+  } });
+  const task = await f.start(`late-followup-${boundary}`); await f.bind(task); await until(() => finish);
+  let closing;
+  if (boundary === 'close') closing = f.hub.close();
+  else if (boundary === 'app-stop') {
+    await writeJSON(join(f.parent, 'app-stop.json'), { version: 1, stopped: true });
+  } else await f.hub.mutate(state => { state.tasks[task.taskId].notification.challengeExpiresAt = 1; });
+  finish();
+  if (closing) await closing;
+  else { await delay(25); await f.hub.serial; }
+  assert.equal(reads, 2); assert.equal(f.hub.state.tasks[task.taskId].notification.origin, null);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.originHint.attempts, 2);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
+  if (boundary === 'close') {
+    const reopened = await new CollaborationHub({ root: f.root, originVerifier: async () => { reads++; throw unavailable(); },
+      run: async () => { throw new Error('No inference'); } }).initialize();
+    try {
+      const recheck = () => reopened.dispatch({ peer: 'codex', token: reopened.controllerToken, method: 'origin_recheck',
+        params: { sessionId, cwd: f.parent, event: 'Stop' } });
+      assert.equal((await recheck()).results[0].attempts, 3);
+      assert.equal((await recheck()).checked, 0); assert.equal(reads, 3, 'restart never refunds an interrupted read');
+    } finally { await reopened.close(); }
+  }
 });

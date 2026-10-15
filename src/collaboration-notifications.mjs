@@ -10,10 +10,13 @@ const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const fail = (code, message) => { throw Object.assign(new Error(message), { code }); };
 const states = new WeakMap();
+const ORIGIN_ATTEMPTS = 3;
+const ORIGIN_RECHECK_DELAYS = [1000, 3000];
 // Non-serializable, internal-only dispatch fence. Wire callers cannot supply it.
 export const NOTIFICATION_FENCE = Symbol('claudex-notification-fence');
 const stateFor = hub => {
-  if (!states.has(hub)) states.set(hub, { queued: false, running: null });
+  if (!states.has(hub)) states.set(hub, { queued: false, running: null,
+    originTimers: new Map(), originChecks: new Map(), originEpoch: 0 });
   return states.get(hub);
 };
 // A blocker has its own transition identity. Ordinary reports/activity must not
@@ -77,7 +80,12 @@ export async function inspectNotificationContinuation(hub, task) {
   const n = task.notification;
   if (!n || n.policy.mode === 'off') return result('wait', 'notifications-off');
   if (n.policy.mode !== 'wake') return result('wait', 'queue-does-not-wake');
-  if (!n.origin) return result('wait', n.challengeExpiresAt <= Date.now() ? 'origin-expired' : 'awaiting-native-proof');
+  if (!n.origin) {
+    if (n.challengeExpiresAt <= Date.now()) return result('wait', 'origin-expired');
+    if (n.originHint?.attempts >= ORIGIN_ATTEMPTS && !stateFor(hub).originChecks.has(task.id))
+      return result('wait', 'native-proof-attempts-exhausted');
+    return { ...result('wait', 'awaiting-native-proof'), retryAfterMs: 2000 };
+  }
   const limit = notificationLimit(hub.state, n);
   if (limit) return result('wait', limit);
   if (await stopped(hub)) return result('wait', 'app-stopped');
@@ -150,12 +158,49 @@ export function validateTaskNotification(task, requests) {
       || typeof n.origin.cwd !== 'string' || !n.origin.cwd.startsWith('/') || typeof n.origin.toolUseId !== 'string')
     || n.originHint && (!uuid.test(n.originHint.sessionId ?? '') || !['codex', 'claude'].includes(n.originHint.provider)
       || typeof n.originHint.cwd !== 'string' || !n.originHint.cwd.startsWith('/') || typeof n.originHint.toolUseId !== 'string'
-      || !Number.isSafeInteger(n.originHint.attempts) || n.originHint.attempts < 1 || n.originHint.attempts > 3
+      || !Number.isSafeInteger(n.originHint.attempts) || n.originHint.attempts < 1 || n.originHint.attempts > ORIGIN_ATTEMPTS
       || !Number.isSafeInteger(n.originHint.lastAttemptAt)))
     fail('CLAUDEX_NOTIFICATION_STORAGE', 'Malformed notification evidence was preserved.');
 }
 
-/** Hook inputs only locate evidence. The independent native read is authority. */
+function clearOriginTimer(hub, taskId) {
+  const timers = stateFor(hub).originTimers;
+  clearTimeout(timers.get(taskId)); timers.delete(taskId);
+}
+
+/** Cancel only read-only proof follow-ups, never work or notification dispatch. */
+export function stopOriginRechecks(hub) {
+  const local = stateFor(hub);
+  local.originEpoch++;
+  for (const taskId of local.originTimers.keys()) clearOriginTimer(hub, taskId);
+}
+
+function scheduleOriginRecheck(hub, taskId, epoch) {
+  clearOriginTimer(hub, taskId);
+  const local = stateFor(hub);
+  const n = hub.state.tasks[taskId]?.notification, hint = n?.originHint;
+  if (hub.closed || local.originEpoch !== epoch || n?.origin || !hint || hint.attempts >= ORIGIN_ATTEMPTS) return;
+  const delay = ORIGIN_RECHECK_DELAYS[hint.attempts - 1];
+  if (Date.now() + delay >= n.challengeExpiresAt) return;
+  const timer = setTimeout(() => {
+    if (local.originTimers.get(taskId) !== timer) return;
+    local.originTimers.delete(taskId);
+    const current = hub.state.tasks[taskId]?.notification;
+    if (hub.closed || local.originEpoch !== epoch || current?.origin || current?.challenge !== n.challenge
+      || current.challengeExpiresAt <= Date.now() || !sameOrigin(current.originHint, hint)
+      || current.originHint.attempts !== hint.attempts || current.originHint.lastAttemptAt !== hint.lastAttemptAt) return;
+    // The hint and original receipt alone select the same bounded native read.
+    // This cannot scan for another origin or retry any native input/send.
+    void recheckOriginHint(hub, hub.state.tasks[taskId], { peer: hint.provider, token: hub.controllerToken },
+      { peer: hint.provider, task: null }).catch(error => {
+      hub.closed = true; stopOriginRechecks(hub); hub.emit('fatal', error); hub.emit('change');
+    });
+  }, delay);
+  local.originTimers.set(taskId, timer); timer.unref?.();
+}
+
+/** Hook inputs only locate evidence. The independent native read is authority.
+ * Coalesce overlapping hook/timer checks so they share one attempt budget. */
 export async function bindTaskOrigin(hub, envelope, actor) {
   const p = envelope.params;
   if (actor.task || Object.keys(p).some(key => !['taskId', 'sessionId', 'cwd', 'toolUseId', 'turnId'].includes(key))
@@ -164,6 +209,22 @@ export async function bindTaskOrigin(hub, envelope, actor) {
     || typeof p.toolUseId !== 'string' || !/^[A-Za-z0-9_.:-]{1,256}$/.test(p.toolUseId)
     || p.turnId !== undefined && (typeof p.turnId !== 'string' || p.turnId.length > 256))
     fail('CLAUDEX_ORIGIN_REFUSED', 'Origin binding requires an external controller and exact native identity hints.');
+  const local = stateFor(hub), requested = { provider: actor.peer, ...p };
+  const active = local.originChecks.get(p.taskId);
+  if (active) {
+    if (!sameOrigin(active.requested, requested)) fail('CLAUDEX_ORIGIN_CONFLICT', 'Another exact origin is being verified.');
+    return active.promise;
+  }
+  const check = { requested }, epoch = local.originEpoch;
+  // Defer until the entry exists, including for a synchronously refusing verifier.
+  check.promise = Promise.resolve().then(() => verifyTaskOrigin(hub, envelope, actor, epoch))
+    .finally(() => { if (local.originChecks.get(p.taskId) === check) local.originChecks.delete(p.taskId); });
+  local.originChecks.set(p.taskId, check);
+  return check.promise;
+}
+
+async function verifyTaskOrigin(hub, envelope, actor, epoch) {
+  const p = envelope.params;
   const task = hub.state.tasks[p.taskId], n = task?.notification;
   if (!task || task.parentId !== null || task.returnTo !== actor.peer || !n || typeof hub.originVerifier !== 'function')
     fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'This task has no eligible native origin notification request.');
@@ -173,27 +234,43 @@ export async function bindTaskOrigin(hub, envelope, actor) {
     if (!sameOrigin(n.origin, requested)) fail('CLAUDEX_ORIGIN_CONFLICT', 'The task already has a different verified origin.');
     return { bound: true, origin: structuredClone(n.origin), replayed: true };
   }
-  if (n.challengeExpiresAt <= Date.now() || await stopped(hub))
+  if (n.originHint && !sameOrigin(n.originHint, requested))
+    fail('CLAUDEX_ORIGIN_CONFLICT', 'The task already retains a different exact origin hint.');
+  clearOriginTimer(hub, p.taskId);
+  if (n.challengeExpiresAt <= Date.now() || await stopped(hub) || stateFor(hub).originEpoch !== epoch)
     fail('CLAUDEX_ORIGIN_EXPIRED', 'Origin verification expired or the broker is stopped.');
   const receipt = hub.state.requests[n.requestKey];
-  if (n.originHint && sameOrigin(n.originHint, requested) && n.originHint.attempts >= 3)
+  if (n.originHint?.attempts >= ORIGIN_ATTEMPTS)
     return { bound: false, reason: 'native-proof-attempts-exhausted' };
+  const attempt = n.originHint ? n.originHint.attempts + 1 : 1;
+  if (n.originHint) {
+    // Spend a retained hint's attempt before its read, including one interrupted
+    // by shutdown. Restart/lifecycle recovery cannot exceed the same total bound.
+    await hub.mutate(async state => {
+      const current = state.tasks[p.taskId]?.notification;
+      if (!current || current.origin || current.challenge !== n.challenge || !sameOrigin(current.originHint, requested)
+        || current.challengeExpiresAt <= Date.now() || await stopped(hub) || stateFor(hub).originEpoch !== epoch)
+        fail('CLAUDEX_ORIGIN_EXPIRED', 'Origin recheck no longer applies.');
+      current.originHint.attempts = attempt; current.originHint.lastAttemptAt = Date.now();
+    });
+  }
   let proof;
   try {
     proof = await hub.originVerifier({ ...requested, expectedFingerprint: receipt.fingerprint,
       expectedReceipt: structuredClone(receipt.result) });
   } catch (error) {
     if (error?.code !== 'ORIGIN_PROOF_UNAVAILABLE') throw error;
-    return hub.mutate(async state => {
+    const result = await hub.mutate(async state => {
       const current = state.tasks[p.taskId]?.notification;
       if (hub.actor(envelope, state).task || !current || current.origin || current.challenge !== n.challenge
-        || current.challengeExpiresAt <= Date.now() || await stopped(hub))
+        || current.challengeExpiresAt <= Date.now() || await stopped(hub) || stateFor(hub).originEpoch !== epoch)
         fail('CLAUDEX_ORIGIN_EXPIRED', 'Origin hint no longer applies.');
-      const previous = current.originHint;
-      current.originHint = { ...requested, attempts: Math.min(3, sameOrigin(previous, requested) ? previous.attempts + 1 : 1),
+      current.originHint = { ...requested, attempts: attempt,
         lastAttemptAt: Date.now(), error: 'ORIGIN_PROOF_UNAVAILABLE' };
       return { bound: false, reason: 'awaiting-native-evidence', attempts: current.originHint.attempts };
     });
+    scheduleOriginRecheck(hub, p.taskId, epoch);
+    return result;
   }
   if (!sameOrigin(proof, requested) || typeof proof.source !== 'string' || proof.source.length > 100
     || !Number.isSafeInteger(proof.verifiedAt) || proof.verifiedAt < 0)
@@ -203,7 +280,7 @@ export async function bindTaskOrigin(hub, envelope, actor) {
   return hub.mutate(async state => {
     const current = state.tasks[p.taskId]?.notification;
     if (hub.actor(envelope, state).task || !current || current.challenge !== n.challenge
-      || current.challengeExpiresAt <= Date.now() || await stopped(hub))
+      || current.challengeExpiresAt <= Date.now() || await stopped(hub) || stateFor(hub).originEpoch !== epoch)
       fail('CLAUDEX_ORIGIN_EXPIRED', 'Origin verification no longer applies.');
     if (current.origin && !sameOrigin(current.origin, origin)) fail('CLAUDEX_ORIGIN_CONFLICT', 'The task origin changed.');
     current.origin ??= origin;
@@ -212,7 +289,29 @@ export async function bindTaskOrigin(hub, envelope, actor) {
   });
 }
 
-/** Only native lifecycle events retry missing proof, never native input/dispatch. */
+async function recheckOriginHint(hub, task, envelope, actor) {
+  const hint = task.notification.originHint;
+  try {
+    return { taskId: task.id, ...await bindTaskOrigin(hub, { ...envelope, method: 'origin_bind', params: {
+      taskId: task.id, sessionId: hint.sessionId, cwd: hint.cwd, toolUseId: hint.toolUseId,
+      ...(hint.turnId === undefined ? {} : { turnId: hint.turnId }),
+    } }, actor) };
+  } catch (error) {
+    // Stopping/expiry cancels verification, preserving hints for lifecycle recovery.
+    if (error?.code !== 'CLAUDEX_ORIGIN_EXPIRED') await hub.mutate(state => {
+      const current = state.tasks[task.id]?.notification;
+      if (current && !current.origin && sameOrigin(current.originHint, hint)) {
+        current.originHint.attempts = ORIGIN_ATTEMPTS;
+        current.originHint.error = ['ORIGIN_PROOF_INVALID', 'ORIGIN_PROOF_BOUND_EXCEEDED'].includes(error?.code)
+          ? error.code : 'ORIGIN_PROOF_UNAVAILABLE';
+      }
+    });
+    clearOriginTimer(hub, task.id);
+    return { taskId: task.id, bound: false, reason: 'native-proof-refused' };
+  }
+}
+
+/** Matching lifecycle events retain bounded recovery, including after restart. */
 export async function recheckTaskOrigins(hub, envelope, actor) {
   const p = envelope.params;
   if (actor.task || Object.keys(p).some(key => !['sessionId', 'cwd', 'event'].includes(key))
@@ -224,26 +323,9 @@ export async function recheckTaskOrigins(hub, envelope, actor) {
   const tasks = Object.values(hub.state.tasks).filter(task => {
     const n = task.notification, hint = n?.originHint;
     return !n?.origin && hint?.provider === actor.peer && hint.sessionId === p.sessionId && hint.cwd === p.cwd
-      && hint.attempts < 3 && n.challengeExpiresAt > Date.now();
+      && hint.attempts < ORIGIN_ATTEMPTS && n.challengeExpiresAt > Date.now();
   }).sort((a, b) => a.notification.originHint.lastAttemptAt - b.notification.originHint.lastAttemptAt).slice(0, 4);
-  const results = await Promise.all(tasks.map(async task => {
-    const hint = task.notification.originHint;
-    try {
-      return { taskId: task.id, ...await bindTaskOrigin(hub, { ...envelope, method: 'origin_bind', params: {
-        taskId: task.id, sessionId: hint.sessionId, cwd: hint.cwd, toolUseId: hint.toolUseId,
-        ...(hint.turnId === undefined ? {} : { turnId: hint.turnId }),
-      } }, actor) };
-    } catch (error) {
-      await hub.mutate(state => {
-        const current = state.tasks[task.id].notification;
-        if (!current.origin && sameOrigin(current.originHint, hint)) {
-          current.originHint.attempts = 3;
-          current.originHint.error = error?.code === 'ORIGIN_PROOF_INVALID' ? 'ORIGIN_PROOF_INVALID' : 'ORIGIN_PROOF_UNAVAILABLE';
-        }
-      });
-      return { taskId: task.id, bound: false, reason: 'native-proof-refused' };
-    }
-  }));
+  const results = await Promise.all(tasks.map(task => recheckOriginHint(hub, task, envelope, actor)));
   return { checked: results.length, results };
 }
 
@@ -332,9 +414,12 @@ async function publish(hub) {
 export function observeNotificationResume(hub) {
   const local = stateFor(hub);
   local.watcher = watch(dirname(hub.root), (_event, filename) => {
-    if (filename === null || String(filename) === 'app-stop.json') scheduleNotifications(hub);
+    if (filename === null || String(filename) === 'app-stop.json') void stopped(hub).then(held => {
+      if (held) stopOriginRechecks(hub);
+      else scheduleNotifications(hub);
+    }).catch(error => { hub.closed = true; stopOriginRechecks(hub); hub.emit('fatal', error); hub.emit('change'); });
   });
-  local.watcher.on('error', error => { hub.closed = true; hub.emit('fatal', error); hub.emit('change'); });
+  local.watcher.on('error', error => { hub.closed = true; stopOriginRechecks(hub); hub.emit('fatal', error); hub.emit('change'); });
   local.watcher.unref?.();
   scheduleNotifications(hub);
 }
@@ -361,5 +446,7 @@ export function scheduleNotifications(hub) {
 }
 
 export async function drainNotifications(hub) {
-  const local = stateFor(hub); local.watcher?.close(); await local.running;
+  const local = stateFor(hub); local.watcher?.close(); stopOriginRechecks(hub);
+  await Promise.allSettled([...local.originChecks.values()].map(check => check.promise));
+  await local.running;
 }

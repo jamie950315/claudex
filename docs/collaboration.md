@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.27;
+Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.28;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -255,7 +255,11 @@ the native start call has returned, request
 - `notification.continuation.nextAction: "await-notification"` means the exact
   origin is bound and its current native route has been observed. The caller may
   end its current turn with a pending-work handoff, not a completion claim.
-- `"wait"` means keep monitoring with `claudex_wait`. Only `"await-notification"`
+- `"wait"` with reason `"awaiting-native-proof"` means re-check the same status
+  with `checkNotification: true` after `retryAfterMs` (about two seconds). Native
+  PostToolUse can precede result persistence; a long task wait would miss this
+  binding change. Other `"wait"` reasons mean keep monitoring with `claudex_wait`.
+  Only `"await-notification"`
   permits ending the current turn with pending work. The reason distinguishes missing
   native proof, unavailable ownership/receiver, native policy, app-stop, ended
   origins, quota limits and routes without observable readiness. Do not replay
@@ -269,8 +273,16 @@ message, changes revisions or runs inference. Codex checks exact metadata and it
 existing native owner; Claude Mod routes use bounded, self-reported observations.
 Every result is labeled `diagnosticOnly: true`, `deliveryGuaranteed: false`.
 Checks are snapshots, not reservations: a later closed app, expired notification,
-changed policy, route or connection can still prevent delivery. No timer or
-automatic retry is added. Results remain durable and readable through status.
+changed policy, route or connection can still prevent delivery. Missing native
+proof gets at most two broker-owned, read-only follow-ups: one second after the
+first missing-proof read, then three seconds after the next, sharing a total of
+three attempts with lifecycle rechecks and staying inside the five-minute origin
+challenge. Every read verifies the same exact native hint, fingerprint and one-use
+receipt. No invocation or notification send is retried. Success, invalid evidence,
+inspection bounds, exhaustion or expiry ends this sequence. Close/app-stop clears
+timers and fences late proof; restart/resume relies on matching native lifecycle
+events for pending hints. Exhaustion reports `native-proof-attempts-exhausted`
+and uses ordinary task waiting. Results remain durable and readable through status.
 On the actual notification, the main agent reads the exact task result and
 continues within the original user authorization; receipt is not goal completion.
 Managed parents retain their existing child-result yield/resumption contract,

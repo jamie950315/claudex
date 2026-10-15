@@ -357,8 +357,10 @@ test('MCP initialize, discovery, tool invocation and tool errors use JSON-RPC li
     assert.match(description, /claudex_status with checkNotification: true/);
     assert.match(description, /only (?:on )?await-notification/);
     assert.match(description, /on wait.*claudex_wait/i);
+    assert.match(description, /awaiting-native-proof.*2 seconds.*retryAfterMs/);
     assert.match(description, /Managed children must omit notifications/);
   }
+  assert.match(tools.find(tool => tool.name === 'claudex_status').description, /awaiting-native-proof.*retryAfterMs/);
   for (const description of [start.description, start.inputSchema.properties.permission.description]) {
     assert.match(description, /read-only and workspace-write/);
     assert.match(description, /NO network access/);

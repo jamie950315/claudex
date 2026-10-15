@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { access, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, mkdtemp, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,7 +40,7 @@ async function fixture(t, provider, claudeKind) {
   await chmod(parent, 0o700);
   const root = join(parent, 'collaboration'), claudeHome = join(parent, 'claude'), registryRoot = join(parent, 'registry');
   await mkdir(root, { mode: 0o700 });
-  let nativeReady = false, nativeResult, nativeArguments, nativeReads = 0, syntheticInvocations = 0;
+  let nativeReady = false, nativePartial = false, nativeResult, nativeArguments, nativeReads = 0, syntheticInvocations = 0;
   const methods = [];
   const transcript = sessionPath(claudeHome, parent, ID);
   if (provider === 'claude') {
@@ -51,6 +51,8 @@ async function fixture(t, provider, claudeKind) {
         title: 'Synthetic native origin', lastActivityAt: Date.now(), isArchived: false }), { mode: 0o600 });
     }
     await mkdir(dirname(transcript), { recursive: true, mode: 0o700 });
+    await chmod(claudeHome, 0o755); await chmod(join(claudeHome, 'projects'), 0o700);
+    await chmod(dirname(transcript), 0o700);
     await writeFile(transcript, '\n', { mode: 0o600 });
   }
   const verifier = createOriginVerifier({ syncRoot: parent, claudeHome,
@@ -63,8 +65,8 @@ async function fixture(t, provider, claudeKind) {
       }
       assert.equal(method, 'thread/items/list'); assert.equal(args.turnId, TURN);
       return { data: nativeReady ? [{ turnId: TURN, item: { type: 'mcpToolCall', id: TOOL,
-        server: 'claudex-work', tool: 'claudex_start', status: 'completed', arguments: nativeArguments,
-        error: null, result: { content: nativeResult.content, structuredContent: null } } }] : [], nextCursor: null };
+        server: 'claudex-work', tool: 'claudex_start', status: nativePartial ? 'inProgress' : 'completed', arguments: nativeArguments,
+        error: null, result: nativePartial ? null : { content: nativeResult.content, structuredContent: null } } }] : [], nextCursor: null };
     } }),
   });
   const hub = await new CollaborationHub({ root, originVerifier: verifier, run: async () => {
@@ -85,23 +87,50 @@ async function fixture(t, provider, claudeKind) {
     child.stdin.on('error', () => {});
     child.stdin.end(JSON.stringify({ session_id: ID, cwd: parent, ...event }));
   });
-  const publishNativeResult = async (args, result) => {
-    nativeArguments = args; nativeResult = result; nativeReady = true;
+  const resultRow = () => ({ type: 'user', uuid: 'native-result', parentUuid: 'native-assistant', sourceToolAssistantUUID: 'native-assistant',
+    sessionId: ID, cwd: parent, isSidechain: false, version: '2.1.295', message: { role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: TOOL, content: nativeResult.content }] } });
+  const publishNativeResult = async (args, result, { partial = false } = {}) => {
+    nativeArguments = args; nativeResult = result; nativeReady = true; nativePartial = partial;
     if (provider !== 'claude') return;
     const rows = [
       ...(claudeKind === 'managed-remote-control' ? [{ type: 'claudex-owner', sessionId: ID, owner: 'fixture-owner' }] : []),
       { type: 'assistant', uuid: 'native-assistant', parentUuid: null, sessionId: ID, cwd: parent,
-        isSidechain: false, version: '2.1.281', message: { role: 'assistant', content: [{ type: 'tool_use',
+        isSidechain: false, version: '2.1.295', message: { role: 'assistant', content: [{ type: 'tool_use',
           id: TOOL, name: 'mcp__claudex-work__claudex_start', input: args }] } },
-      { type: 'user', uuid: 'native-result', parentUuid: 'native-assistant', sourceToolAssistantUUID: 'native-assistant',
-        sessionId: ID, cwd: parent, isSidechain: false, version: '2.1.281', message: { role: 'user',
-          content: [{ type: 'tool_result', tool_use_id: TOOL, content: result.content }] } },
+      ...['last-prompt', 'custom-title', 'agent-name', 'atis-latch', 'bridge-session'].map(type => ({ type })),
+      ...(partial ? [] : [resultRow()]),
     ];
     await writeFile(transcript, rows.map(row => JSON.stringify(row)).join('\n') + '\n', { mode: 0o600 });
   };
-  return { parent, root, registryRoot, hub, hook, methods, publishNativeResult,
+  const flushNativeResult = async () => {
+    nativePartial = false;
+    if (provider === 'claude') await appendFile(transcript, JSON.stringify(resultRow()) + '\n');
+  };
+  return { parent, root, registryRoot, hub, hook, methods, publishNativeResult, flushNativeResult,
     nativeReads: () => nativeReads, syntheticInvocations: () => syntheticInvocations };
 }
+
+for (const provider of ['claude', 'codex']) test(`${provider} PostToolUse before native result flush binds default wake without a lifecycle event`, async t => {
+  const f = await fixture(t, provider, 'cli-sdk');
+  const args = { provider: provider === 'claude' ? 'codex' : 'claude', cwd: f.parent,
+    prompt: 'Synthetic late native result', requestId: `flush-without-lifecycle-${provider}` };
+  const nativeResult = await mcpStart(f.root, f.hub.controllerToken, provider, args);
+  const receipt = JSON.parse(nativeResult.content[0].text);
+  await f.publishNativeResult(args, nativeResult, { partial: true });
+  assert.deepEqual(await f.hook({ hook_event_name: 'PostToolUse', tool_name: 'mcp__claudex-work__claudex_start',
+    tool_use_id: TOOL, tool_input: args, tool_response: provider === 'claude' ? nativeResult.content : nativeResult,
+    ...(provider === 'codex' ? { turn_id: TURN } : {}) }), { code: 0, stdout: '', stderr: '' });
+  const pending = f.hub.state.tasks[receipt.taskId].notification;
+  assert.equal(pending.origin, null); assert.equal(pending.originHint.attempts, 1);
+  await delay(25); await f.flushNativeResult();
+  await until(() => f.hub.state.tasks[receipt.taskId].notification.origin !== null);
+  const notification = f.hub.state.tasks[receipt.taskId].notification;
+  assert.equal(notification.origin.source, `${provider}-native-mcp-result`);
+  assert.equal(notification.originHint, undefined); assert.equal(notification.deliveries.length, 0);
+  assert.equal(f.syntheticInvocations(), 0, 'proof follow-ups do not run work');
+  assert.deepEqual(f.methods, ['start', 'origin_bind'], 'no lifecycle hook or caller rebind was needed');
+});
 
 for (const [provider, claudeKind] of [['codex'], ['claude', 'desktop'], ['claude', 'cli-sdk'], ['claude', 'managed-remote-control']]) for (const deferred of [false, true]) {
   test(`${provider} ${claudeKind ?? ''} MCP start -> native ${deferred ? 'late flush -> lifecycle recheck -> explicit queue' : 'proof -> default wake'} notification`, async t => {

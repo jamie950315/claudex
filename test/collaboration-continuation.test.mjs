@@ -75,6 +75,32 @@ test('Unix RPC continuation waits without probes for off, queue and unbound task
   assert.deepEqual(f.counters, { probes: 0, closed: 0, discovery: 0 });
 });
 
+for (const peer of ['claude', 'codex']) test(`${peer} short status recheck reaches await-notification after automatic proof binding`, async t => {
+  let available = false, reads = 0;
+  const f = await fixture(t, { peer, originVerifier: async input => {
+    reads++;
+    if (!available) throw Object.assign(new Error('Synthetic native flush gap'), { code: 'ORIGIN_PROOF_UNAVAILABLE' });
+    return { ...input, source: 'synthetic-native-proof', verifiedAt: Date.now() };
+  } });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  if (peer === 'claude') {
+    await f.call('native_wake', { route: 'mod-self' });
+    await f.call('mod_wake_observe', { source: { sessionId, cwd: f.parent }, observation: observation() });
+  }
+  const task = await f.start(); assert.equal((await f.bind(task)).bound, false);
+  const pending = await f.inspect(task);
+  expect(pending, 'wait', 'awaiting-native-proof'); assert.equal(pending.retryAfterMs, 2000);
+  available = true; t.mock.timers.tick(1000);
+  let result;
+  for (let i = 0; i < 100; i++) {
+    result = await f.inspect(task);
+    if (result.nextAction === 'await-notification') break;
+  }
+  expect(result, 'await-notification', peer === 'claude' ? 'receiver-observed' : 'native-owner-observed');
+  assert.equal(reads, 2); assert.equal(result.retryAfterMs, undefined);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
+});
+
 test('terminal work requests its result without a native readiness probe', async t => {
   const f = await fixture(t), task = await f.start('off');
   await f.hub.mutate(state => { state.tasks[task.taskId].status = 'completed'; state.tasks[task.taskId].revision++; });

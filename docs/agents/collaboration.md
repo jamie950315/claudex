@@ -62,8 +62,11 @@ checking the MCP-escaped response bound. Preserve compatible single-task behavio
 Task waits default to five minutes and accept an explicit maximum of thirty minutes;
 only validated waits extend the private RPC deadline. Native MCP host deadlines
 remain independent. External controllers must request status checkNotification:true
-after start and may end their turn only on await-notification; wait requires
-continued claudex_wait monitoring. Its continuation nextAction is a read-only
+after start and may end their turn only on await-notification. On wait with reason
+awaiting-native-proof, re-check that status after retryAfterMs (2000 ms); other wait
+reasons require continued claudex_wait monitoring. Exhausted proof attempts use
+native-proof-attempts-exhausted without a short status-recheck hint.
+Its continuation nextAction is a read-only
 snapshot, never a dispatch lease or delivery guarantee: require verified origin,
 available notification quota, exact current native routing and lifecycle checks.
 Do not navigate, dispatch, change revisions or infer permission in this check.
@@ -111,9 +114,27 @@ native result provenance and primary parent-chain checks, excluding agent nodes.
 Canonical owned home/projects/project directories must reject foreign writes.
 Nonpersistent, remote-host-only, missing or ambiguous evidence stays unbound;
 never scan or accept arbitrary hook transcript paths. Origin proof is separate
-from unchanged notification recipient/wake capability checks. Native flush gaps
-retain one identity-only hint, rechecked on matching
-SessionStart/UserPromptSubmit/Stop only (four tasks/event, three attempts/task).
+from unchanged notification recipient/wake capability checks. Observed on
+2026-10-15 with Claude Code 2.1.295: PostToolUse ran before the native tool_result
+row was appended, and lifecycle-only recovery deadlocked with the caller's
+in-turn wait protocol until the challenge expired. Codex exact-turn native items
+can likewise remain inProgress or lack the persisted result at the first read.
+By user decision, an ORIGIN_PROOF_UNAVAILABLE result retains one identity-only
+hint and arms broker-owned read-only follow-ups after 1000 ms, then 3000 ms after
+the next missing-proof result, strictly inside the original five-minute challenge.
+Use the identical bindTaskOrigin verifier and original fingerprint/receipt; no
+new hint, transcript scan, invocation or notification-send retry. Keep one hint
+per task and reject a conflicting identity; coalesce overlapping checks. Timer,
+duplicate bind and matching SessionStart/UserPromptSubmit/Stop recovery share the
+existing three-attempt bound (lifecycle events still select at most four tasks).
+Reserve each retained hint's attempt before reading, so shutdown/restart cannot
+restore a spent read; retain unused attempts for later lifecycle recovery.
+Success, invalid/bound-exceeded evidence and exhaustion end follow-ups. Expiry
+prevents reads; broker close/app-stop clears timers and fences in-flight results,
+without exhausting a stopped hint. No timer is persisted or rearmed at startup
+or app resume: pending hints recover through matching lifecycle events. Do not
+expand the PostToolUse matcher: broker follow-ups handle both providers without
+changing hook definitions or requiring a new Codex trust review.
 The new PostToolUse trust diagnostic is separate from legacy sync readiness.
 Claude PostToolUse uses a single-text MCP content array; Codex uses the full
 MCP envelope. Native Claude project directories may be 0755: require canonical

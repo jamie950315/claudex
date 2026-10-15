@@ -132,8 +132,11 @@ for the next native hook; wake consumes native model allowance. Managed children
 must omit notifications; the Mod's prepare/confirm starts stay off because they
 have no native MCP origin proof. After start, call `claudex_status` with
 `checkNotification: true`. Only `await-notification` permits ending the current
-turn with pending work; on `wait`, keep monitoring with `claudex_wait`, and on
-`read-result`, collect status. Native PostToolUse plus independent call/result validation
+turn with pending work. On `wait` with reason `awaiting-native-proof`, re-check
+that status after `retryAfterMs` (about two seconds); other wait reasons use
+`claudex_wait`. On `read-result`, collect status. The broker makes at most two
+delayed reads of the same missing native proof, never retries sends.
+Native PostToolUse plus independent call/result validation
 must bind the initiating chat before a notification can be queued. Missing,
 untrusted or unmapped native proof leaves it unbound; never synthesize origin
 IDs or resend an uncertain notification. Check notification.bindingStatus and

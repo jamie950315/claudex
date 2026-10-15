@@ -27,7 +27,7 @@ import { collaborationCapabilities, SANDBOX_PERMISSION_DESCRIPTION, SANDBOX_WORK
 import { notificationPolicy, createTaskNotification, notificationPresentation, validateTaskNotification,
   inspectNotificationContinuation,
   bindTaskOrigin, recheckTaskOrigins, recoverNotifications, scheduleNotifications, drainNotifications,
-  observeNotificationResume, NOTIFICATION_FENCE } from './collaboration-notifications.mjs';
+  observeNotificationResume, stopOriginRechecks, NOTIFICATION_FENCE } from './collaboration-notifications.mjs';
 
 const providers = ['codex', 'claude'];
 const terminal = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
@@ -1373,6 +1373,7 @@ export class CollaborationHub extends EventEmitter {
 
   async close() {
     this.closed = true; this.emit('change');
+    stopOriginRechecks(this);
     let cacheCloseError;
     try { await this.cacheWarm?.close(); } catch (error) { cacheCloseError = error; }
     try { await this.codexCacheWarm?.close(); } catch (error) { cacheCloseError ??= error; }
