@@ -61,13 +61,15 @@ one event listener, atomically acknowledging only returned child outcomes after
 checking the MCP-escaped response bound. Preserve compatible single-task behavior.
 Task waits default to five minutes and accept an explicit maximum of thirty minutes;
 only validated waits extend the private RPC deadline. Native MCP host deadlines
-remain independent. External controllers may request status checkNotification:true
-before ending a wake-enabled root turn. Its continuation nextAction is a read-only
+remain independent. External controllers must request status checkNotification:true
+after start and may end their turn only on await-notification; wait requires
+continued claudex_wait monitoring. Its continuation nextAction is a read-only
 snapshot, never a dispatch lease or delivery guarantee: require verified origin,
 available notification quota, exact current native routing and lifecycle checks.
 Do not navigate, dispatch, change revisions or infer permission in this check.
 Queue-only, unbound, stopped, ended and unobservable routes continue waiting.
-Notifications still default off; main reads authoritative status after reception.
+External root notifications default to wake; off explicitly opts out. Main reads
+authoritative status after reception.
 MCP errors retain typed code and readable text through structuredContent.error.
 Worker-only report is generation-fenced and explicitly self-reported, never
 verified goal completion or a replacement for completed/resultFinal. Handoff
@@ -79,8 +81,21 @@ Mod observations are content-free, self-reported diagnostics in broker memory:
 at most 64 observers, 60-second server TTL, lifecycle/disconnect invalidation and
 existing wait refresh. Never reuse observations as dispatch or claim permission.
 Every new RPC must be in the private transport allowlist and tested over Unix
-RPC. Root notifications default off; explicit queue/wake captures per-task intent,
-but no message is created before independent native call/result origin proof.
+RPC. By explicit user decision (2026-10-15), external root start defaults to wake
+when the broker has a native origin verifier: omitting notifications must not lose
+the caller's completion wake. This supersedes the earlier default-off decision.
+Explicit off opts out; explicit queue retains next-hook delivery. Default wake
+uses the existing ten-minute expiry after the terminal revision and is visible as
+notificationMode in the start receipt. Preserve the original omitted arguments
+in the native request fingerprint. No message is created before independent
+native call/result origin proof. Managed children omit notifications and retain
+only their child-result continuation, even when the broker has an origin verifier.
+Manual CLI request start and Mod prepare/confirm explicitly keep omitted root
+notifications off: neither produces a native MCP start call/result for PostToolUse
+to prove. The Mod protocol still exposes no notifications field. Roots without
+an origin verifier also stay off when omitted; explicit unsupported queue/wake
+still refuses. Handoff preserves the original task notification policy and origin;
+it does not create or rebind one.
 PostToolUse supplies hints only: match the exact start arguments fingerprint,
 one-use receipt challenge, primary session and call/result identity. Codex uses
 bounded exact-turn native items; Claude verifies one exact native UUID/cwd transcript
@@ -181,7 +196,7 @@ exists; duplicates return needs-selection without enqueueing. Known ended chats
 can queue messages waiting-for-resume. Only real SessionStart/UserPromptSubmit
 reactivates them; late Stop events cannot. Receipt deliveryStatus is computed,
 not a new durable state or proof of native receipt. This
-alone does not establish managed-task-to-origin-chat mapping; the opt-in native
+alone does not establish managed-task-to-origin-chat mapping; the native
 receipt proof above is separate. Codex metadata discovery
 does not fabricate hook registrations. The broker inspects the synchronization
 root beside its collaboration root for the configured Desktop launcher. When

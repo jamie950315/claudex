@@ -526,7 +526,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         modMessage = wrapping("Checking Mod receiver permission…", size: 11, color: .secondaryLabelColor)
         modSection.addArrangedSubview(modMessage)
         modMessage.widthAnchor.constraint(equalTo: modSection.widthAnchor).isActive = true
-        let receiverHelp = wrapping("Receiver permission lets a loaded Claude Mod receive explicitly requested background notifications. Each task must still opt in; this does not change notification routes, start model work, or restart Claude.", size: 11, color: .secondaryLabelColor)
+        let receiverHelp = wrapping("Receiver permission lets a loaded Claude Mod receive wake-enabled task notifications. External root tasks default to wake; off opts out. Native origin proof and existing delivery rules still apply.", size: 11, color: .secondaryLabelColor)
         modSection.addArrangedSubview(receiverHelp)
         receiverHelp.widthAnchor.constraint(equalTo: modSection.widthAnchor).isActive = true
         modReceiverButton = NSButton(title: L("Enable receiver permission…"), target: self, action: #selector(changeModReceiver(_:)))

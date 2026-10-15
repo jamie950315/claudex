@@ -826,14 +826,17 @@ export class CollaborationHub extends EventEmitter {
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
-    let workspace, startPermission;
+    let workspace, startPermission, startNotifications;
     if (method === 'start') {
-      const notifications = notificationPolicy(params.notifications);
+      // Only external roots with an origin proof mechanism default to wake.
+      // Preserve the original params for exact native call/result fingerprints.
+      const notifications = startNotifications = notificationPolicy(params.notifications === undefined
+        && (actor.task || typeof this.originVerifier !== 'function') ? { mode: 'off' } : params.notifications);
       const observability = observabilityPolicy(params.observability);
       if (observability.blockerNotifications && !actor.task && notifications.mode === 'off')
-        fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'External blocker notifications require an explicit queue or wake notification policy.');
+        fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'External blocker notifications require a queue or wake notification policy.');
       if (notifications.mode !== 'off' && (actor.task || typeof this.originVerifier !== 'function'))
-        fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'Opt-in notifications require an external root caller and an available native origin verifier.');
+        fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'Origin notifications require an external root caller and an available native origin verifier.');
       const permission = startPermission = params.permission ?? actor.task?.permission ?? this.effectiveDefaultPermission();
       this.checkPermission(permission, actor.task);
       workspace = await resolveCollaborationWorkspace({ cwd: params.cwd, projectRoot: params.projectRoot,
@@ -875,8 +878,7 @@ export class CollaborationHub extends EventEmitter {
         state.tasks[task.id] = task;
         task.observability = observabilityPolicy(params.observability);
         initializeWorkEvents(task, task.observability);
-        const notifications = notificationPolicy(params.notifications);
-        if (notifications.mode !== 'off') task.notification = createTaskNotification(notifications, key);
+        if (startNotifications.mode !== 'off') task.notification = createTaskNotification(startNotifications, key);
         if (params.permission !== undefined && permissionRank(permission) < permissionRank(this.effectiveDefaultPermission(state))) {
           extraReceipt.notice = { code: 'PERMISSION_NARROWED', defaultPermission: this.effectiveDefaultPermission(state),
             message: `Permission was narrowed below the broker default. ${SANDBOX_PERMISSION_DESCRIPTION}` };

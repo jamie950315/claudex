@@ -2,13 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, chmod, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { once } from 'node:events';
-import { callCollaboration } from '../src/collaboration-transport.mjs';
+import { callCollaboration, serveCollaborationSocket } from '../src/collaboration-transport.mjs';
+import { CollaborationHub } from '../src/collaboration-hub.mjs';
 
 const cli = fileURLToPath(new URL('../bin/claudex.mjs', import.meta.url));
 
@@ -20,6 +21,33 @@ test('standalone collaboration CLI executes through a filesystem alias', async t
   await symlink(target, alias);
   const { stdout } = await promisify(execFile)(process.execPath, [alias, '--help']);
   assert.match(stdout, /^Claudex collaboration: one work protocol/);
+});
+
+test('manual CLI root starts stay off without a native MCP origin proof', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'ccn-'))); await chmod(root, 0o700);
+  const hub = await new CollaborationHub({ root, originVerifier: async () => assert.fail('No native CLI origin proof'),
+    run: async () => assert.fail('No model inference') }).initialize();
+  hub.schedule = () => {};
+  const server = await serveCollaborationSocket({ root, dispatch: envelope => hub.dispatch(envelope) });
+  t.after(async () => { await server.close(); await hub.close(); await rm(root, { recursive: true, force: true }); });
+  const env = { ...process.env };
+  delete env.CLAUDEX_WORK_TOKEN; delete env.CLAUDEX_COLLABORATION_WORKER;
+  for (const suppliedToken of [false, true]) {
+    // An environment-supplied controller token is still a manual root caller.
+    const child = spawn(process.execPath, [cli, 'collaboration', 'request', 'start', '--root', root], {
+      env: { ...env, ...(suppliedToken ? { CLAUDEX_WORK_TOKEN: hub.controllerToken } : {}) }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    const exited = once(child, 'close');
+    child.stdin.end(JSON.stringify({ provider: 'claude', cwd: root, prompt: 'Synthetic queued task', requestId: `manual-start-${suppliedToken}` }));
+    assert.equal((await exited)[0], 0, stderr);
+    const receipt = JSON.parse(stdout);
+    assert.equal(receipt.originChallenge, undefined);
+    assert.equal(hub.state.tasks[receipt.taskId].notification, undefined);
+    assert.equal(hub.state.tasks[receipt.taskId].status, 'ready');
+  }
+  assert.equal(hub.running.size, 0);
 });
 
 test('real broker process serves both MCP peers without starting inference or requiring sync initialization', async t => {

@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.26;
+Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.27;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -246,16 +246,17 @@ tool outcomes, actual artifact observations and independent acceptance separatel
 
 ### Background completion and caller continuation
 
-For user-authorized background delegation, the external main agent starts a
-root task with `notifications: {mode: "wake"}`. Defaults remain off; queue mode
-only delivers at the next native hook and does not wake an idle caller. After
+For user-authorized background delegation, an external MCP root task defaults
+to `notifications: {mode: "wake"}` when omitted. Use `{mode: "off"}` to opt out;
+queue mode only delivers at the next native hook and does not wake an idle caller. After
 the native start call has returned, request
 `claudex_status({taskId, view: "summary", checkNotification: true})`:
 
 - `notification.continuation.nextAction: "await-notification"` means the exact
   origin is bound and its current native route has been observed. The caller may
   end its current turn with a pending-work handoff, not a completion claim.
-- `"wait"` means retain status/wait monitoring. The reason distinguishes missing
+- `"wait"` means keep monitoring with `claudex_wait`. Only `"await-notification"`
+  permits ending the current turn with pending work. The reason distinguishes missing
   native proof, unavailable ownership/receiver, native policy, app-stop, ended
   origins, quota limits and routes without observable readiness. Do not replay
   start or send, invent a source identity, or change native permissions.
@@ -263,7 +264,7 @@ the native start call has returned, request
   read current status and inspect `resultFinal`, errors and blockers before
   continuing the original work.
 
-This opt-in check is read-only: it never opens a chat, sends input, claims a
+This continuation check is read-only: it never opens a chat, sends input, claims a
 message, changes revisions or runs inference. Codex checks exact metadata and its
 existing native owner; Claude Mod routes use bounded, self-reported observations.
 Every result is labeled `diagnosticOnly: true`, `deliveryGuaranteed: false`.
@@ -344,16 +345,22 @@ Use globally distinctive IDs per conversation/operation; identical generic IDs
 from two chats of the same provider share a receipt, while different input is
 rejected with `CLAUDEX_REQUEST_ID_CONFLICT`. This does not establish native origin.
 
-Root `start` accepts optional `notifications: {mode, expiresInMs}`. Mode defaults
-to off; queue uses ordinary next-hook delivery, while wake explicitly permits
-the existing native wake route and model allowance. Expiry defaults to ten
+External MCP root `start` accepts optional `notifications: {mode, expiresInMs}`.
+Omission defaults to wake; explicit off opts out. Queue uses ordinary next-hook
+delivery, while wake permits the existing native wake route and consumes model
+allowance. The start receipt exposes `notificationMode: "wake"` even when defaulted.
+Expiry defaults to ten
 minutes after the task's terminal revision, or the selected blocker transition
 when separately opted in, bounded to 1 second–1 hour. A long
 app-stop hold cannot renew that deadline when the broker resumes.
-Managed workers cannot request origin notifications or borrow controller send
-authority. Status/wait remains the authoritative result path.
+Managed workers must omit notifications; their children use the child-result
+contract without origin notifications. Manual CLI `request start` and Mod
+prepare/confirm starts retain an off default because neither has a native MCP
+start call/result for PostToolUse to prove. A broker without an origin verifier
+also keeps omitted notifications off. Handoff preserves the original policy and
+origin. Status/wait remains the authoritative result path.
 
-An opted-in start returns a one-use origin challenge valid for five minutes.
+A wake or queue start returns a one-use origin challenge valid for five minutes.
 The narrowly matched native PostToolUse hook submits identity hints to the private
 broker. The broker independently matches the original request fingerprint and
 complete challenge receipt against the exact primary native call/result. A

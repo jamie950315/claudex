@@ -104,16 +104,17 @@ async function fixture(t, provider, claudeKind) {
 }
 
 for (const [provider, claudeKind] of [['codex'], ['claude', 'desktop'], ['claude', 'cli-sdk'], ['claude', 'managed-remote-control']]) for (const deferred of [false, true]) {
-  test(`${provider} ${claudeKind ?? ''} MCP start -> native ${deferred ? 'late flush -> lifecycle recheck' : 'proof'} -> exact queue-only notification`, async t => {
+  test(`${provider} ${claudeKind ?? ''} MCP start -> native ${deferred ? 'late flush -> lifecycle recheck -> explicit queue' : 'proof -> default wake'} notification`, async t => {
     const f = await fixture(t, provider, claudeKind);
     if (provider === 'claude' && claudeKind !== 'desktop') await assert.rejects(access(f.registryRoot), { code: 'ENOENT' });
     assert.deepEqual(await f.hook({ hook_event_name: 'SessionStart' }), { code: 0, stdout: '', stderr: '' });
     const args = { provider: provider === 'codex' ? 'claude' : 'codex', cwd: f.parent,
       prompt: 'Private synthetic prompt must not enter notification evidence.', requestId: `integrated-${provider}-${deferred}`,
-      notifications: { mode: 'queue' } };
+      ...(deferred ? { notifications: { mode: 'queue' } } : {}) };
     const nativeResult = await mcpStart(f.root, f.hub.controllerToken, provider, args);
     const receipt = JSON.parse(nativeResult.content[0].text);
     assert.match(receipt.originChallenge, /^[a-f0-9]{64}$/);
+    assert.equal(receipt.notificationMode, deferred ? 'queue' : 'wake');
     assert.equal(f.syntheticInvocations(), 0);
     if (!deferred) await f.publishNativeResult(args, nativeResult);
     const event = { hook_event_name: 'PostToolUse', tool_name: 'mcp__claudex-work__claudex_start',
@@ -145,7 +146,7 @@ for (const [provider, claudeKind] of [['codex'], ['claude', 'desktop'], ['claude
     assert.equal(delivered.length, 1);
     const message = await f.hub.chatMailbox.status(delivered[0].messageId);
     assert.equal(message.targetSessionId, ID); assert.equal(message.targetProvider, provider);
-    assert.equal(message.wakeRequested, false); assert.equal(message.state, 'queued');
+    assert.equal(message.wakeRequested, !deferred); assert.equal(message.state, 'queued');
     assert.match(message.message, new RegExp(receipt.taskId));
     assert.doesNotMatch(message.message, /Private synthetic prompt|originChallenge/);
     assert.equal(f.methods.filter(method => method === 'start').length, 1);

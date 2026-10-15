@@ -103,6 +103,8 @@ export function validateParams(method, input, mutation = false) {
     else insist(params.decision === undefined);
   }
   if (method === 'start') {
+    // No origin-notification field: prepare/confirm has no MCP PostToolUse proof.
+    // The bridge explicitly opts out when dispatching the reviewed action.
     fields(params, ['provider', 'cwd', 'prompt', 'permission', 'model', 'effort', 'projectRoot', 'readOnlyDirs', 'writableDirs', 'observability'], ['provider', 'cwd', 'prompt']);
     provider(params.provider); absolute(params.cwd); text(params.prompt);
     params.permission ??= 'read-only';

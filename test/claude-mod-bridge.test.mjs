@@ -63,6 +63,8 @@ test('protocol bounds operations and extra fields', () => {
 test('protocol preserves exact model names and narrows permission defaults', () => {
   const params = validateParams('start', { ...taskParams, model: 'gpt-6-sol' }, true);
   assert.equal(params.model, 'gpt-6-sol'); assert.equal(params.permission, 'read-only');
+  assert.equal(params.notifications, undefined);
+  assert.throws(() => validateParams('start', { ...taskParams, notifications: { mode: 'wake' } }, true));
   assert.throws(() => validateParams('start', { ...taskParams, permission: 'full-access' }, true));
   assert.equal(validateParams('start', { ...taskParams, model: null, effort: null }, true).model, null);
 });

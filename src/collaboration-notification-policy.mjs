@@ -1,7 +1,7 @@
 // Shared wire validation must remain independent of broker/runtime imports so
 // the standalone Mod transport can load without the broker implementation.
 export function notificationPolicy(value) {
-  if (value === undefined) return { mode: 'off' };
+  if (value === undefined) value = { mode: 'wake' };
   if (!value || typeof value !== 'object' || Array.isArray(value)
     || Object.keys(value).some(key => !['mode', 'expiresInMs'].includes(key))
     || !['off', 'queue', 'wake'].includes(value.mode)

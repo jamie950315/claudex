@@ -123,12 +123,11 @@ test('multiple rate-limited blockers retain individual suppression without resch
   assert.deepEqual(f.hub.state.tasks[task.taskId].notification.suppressedBlockers, { '1:one': 1, '1:two': 1, '1:three': 1 });
 });
 
-test('default-off and unbound tasks never notify; exact root proof queues only once over Unix RPC', async t => {
+test('explicit off and unbound tasks never notify; exact root proof queues only once over Unix RPC', async t => {
   const f = await fixture(t);
   const off = await f.start('off', { mode: 'off' }), task = await f.start('queue');
-  // Explicit off is the same as omitted policy at the production boundary.
-  const disabled = await f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'off', requestId: 'default-off' });
-  assert.equal(disabled.originChallenge, undefined);
+  assert.equal(off.originChallenge, undefined);
+  assert.deepEqual((await f.call('status', { taskId: off.taskId })).notification, { mode: 'off' });
   await f.complete(task); await delay(10);
   assert.equal((await f.call('status', { taskId: task.taskId })).notification.bindingStatus, 'awaiting-native-proof');
   assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
@@ -146,8 +145,50 @@ test('default-off and unbound tasks never notify; exact root proof queues only o
   assert.equal((await f.bind(task)).replayed, true);
   assert.equal(f.proofs.length, 1);
   await assert.rejects(f.call('origin_bind', { ...params, sessionId: otherSession }), { code: 'CLAUDEX_ORIGIN_CONFLICT' });
-  await assert.rejects(f.bind(disabled), { code: 'CLAUDEX_ORIGIN_UNAVAILABLE' });
+  await assert.rejects(f.bind(off), { code: 'CLAUDEX_ORIGIN_UNAVAILABLE' });
   assert.equal(f.hub.running.size, 0); assert.equal(f.hub.state.tasks[off.taskId].notification, undefined);
+});
+
+test('external root omission defaults to visible wake with the existing expiry and exact proof', async t => {
+  let wakes = 0;
+  const f = await fixture(t, { chatWake: async () => { wakes++; return { status: 'busy' }; } });
+  const params = { provider: 'claude', cwd: f.parent, prompt: 'Default completion wake', requestId: 'default-wake' };
+  const task = await f.call('start', params);
+  assert.equal(task.notificationMode, 'wake');
+  assert.match(task.originChallenge, /^[a-f0-9]{64}$/);
+  assert.deepEqual(notificationPolicy(), { mode: 'wake', expiresInMs: 600000 });
+  assert.equal((await f.call('status', { taskId: task.taskId })).notification.expiresInMs, 600000);
+  assert.equal((await f.call('start', params)).originChallenge, task.originChallenge);
+  await f.complete(task); await drainNotifications(f.hub);
+  assert.equal(wakes, 0, 'default wake still requires independent native origin proof');
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
+  await f.bind(task);
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
+  const value = f.hub.state.tasks[task.taskId], delivery = value.notification.deliveries[0];
+  assert.equal(delivery.expiresAt, value.updatedAt + 600000);
+  const message = await f.call('chat_status', { messageId: delivery.messageId });
+  assert.equal(message.wakeRequested, true); assert.equal(wakes, 1);
+  const { createHash } = await import('node:crypto');
+  assert.equal(f.proofs[0].expectedFingerprint,
+    createHash('sha256').update(JSON.stringify({ method: 'start', params })).digest('hex'));
+  assert.equal(f.proofs[0].expectedReceipt.notificationMode, 'wake');
+});
+
+test('roots without an origin verifier stay off and handoff preserves the original policy', async t => {
+  const f = await fixture(t, { originVerifier: null });
+  const task = await f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'No native origin', requestId: 'no-origin' });
+  assert.equal(task.originChallenge, undefined);
+  assert.equal(f.hub.state.tasks[task.taskId].notification, undefined);
+  const transferred = await f.call('handoff', { taskId: task.taskId, revision: task.revision,
+    provider: 'codex', message: 'Same task, no new origin', requestId: 'no-origin-handoff' });
+  assert.equal(transferred.originChallenge, undefined);
+  assert.equal(f.hub.state.tasks[task.taskId].notification, undefined);
+  const enabled = await fixture(t);
+  const wake = await enabled.call('start', { provider: 'claude', cwd: enabled.parent, prompt: 'Root wake', requestId: 'handoff-wake' });
+  const before = structuredClone(enabled.hub.state.tasks[wake.taskId].notification);
+  await enabled.call('handoff', { taskId: wake.taskId, revision: wake.revision,
+    provider: 'codex', message: 'Preserve the same origin', requestId: 'wake-handoff' });
+  assert.deepEqual(enabled.hub.state.tasks[wake.taskId].notification, before);
 });
 
 test('unverified or late native proof cannot bind or notify after shutdown, expiry or app-stop', async t => {
@@ -177,6 +218,10 @@ test('a mismatched native proof and worker capability cannot borrow controller n
   });
   await assert.rejects(f.call('origin_bind', { taskId: task.taskId, sessionId, cwd: f.parent, toolUseId: 'call-1' }, 'codex', token), { code: 'CLAUDEX_ORIGIN_REFUSED' });
   await assert.rejects(f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'child', requestId: 'child', notifications: { mode: 'wake' } }, 'codex', token), { code: 'CLAUDEX_ORIGIN_UNAVAILABLE' });
+  const child = await f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'child', requestId: 'child-omitted' }, 'codex', token);
+  assert.equal(child.originChallenge, undefined); assert.equal(child.notificationMode, undefined);
+  assert.equal(f.hub.state.tasks[child.taskId].parentId, task.taskId);
+  assert.equal(f.hub.state.tasks[child.taskId].notification, undefined);
 });
 
 test('lost notification responses and restart retain uncertainty without replay', async t => {
@@ -215,7 +260,7 @@ test('interrupted write-ahead dispatch is uncertain on restart and same-origin s
   assert.equal(reopened.state.tasks[tasks[0].taskId].notification.deliveries.length, 1);
 });
 
-test('wake is explicit, preserves native refusal, and ended origins use ordinary resume boundaries', async t => {
+test('wake preserves native refusal, and ended origins use ordinary resume boundaries', async t => {
   let wakes = 0;
   const f = await fixture(t, { chatWake: async () => { wakes++; return { status: 'busy' }; } });
   const queue = await f.start('queue'), wake = await f.start('wake', { mode: 'wake', expiresInMs: 1000 });

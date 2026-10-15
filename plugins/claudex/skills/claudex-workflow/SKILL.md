@@ -126,9 +126,14 @@ checkout diffs do not prove worker authorship. Use explicit `review-result` with
 decision `reviewed` or `integrated` only after doing that work; viewing a pane,
 reading a file or receiving an outcome is not automatic integration.
 
-Root notifications default off. Only when requested, use start's
-`notifications: {mode: "queue" | "wake", expiresInMs}`; wake consumes native
-model allowance. Native PostToolUse plus independent call/result validation
+External MCP root starts default to wake, with expiry ten minutes after the
+terminal revision; `notifications: {mode: "off"}` opts out. Explicit queue waits
+for the next native hook; wake consumes native model allowance. Managed children
+must omit notifications; the Mod's prepare/confirm starts stay off because they
+have no native MCP origin proof. After start, call `claudex_status` with
+`checkNotification: true`. Only `await-notification` permits ending the current
+turn with pending work; on `wait`, keep monitoring with `claudex_wait`, and on
+`read-result`, collect status. Native PostToolUse plus independent call/result validation
 must bind the initiating chat before a notification can be queued. Missing,
 untrusted or unmapped native proof leaves it unbound; never synthesize origin
 IDs or resend an uncertain notification. Check notification.bindingStatus and

@@ -31,6 +31,7 @@ const help = `Claudex collaboration: one work protocol for delegation and owners
                                                 Read or save the default permission for new root work
   claudex collaboration request METHOD --peer codex|claude
                                                 Read JSON parameters from stdin
+                                                Manual root start defaults notifications to off (no native origin proof)
   claudex collaboration native-wake [--route mod|mod-self|renderer]
                                                 Inspect or select Claude delivery for new messages
   claudex collaboration cache-warm [status]
@@ -239,6 +240,10 @@ export async function collaborationMain(args = process.argv.slice(2)) {
       if (Buffer.byteLength(buffer) > 256 * 1024) throw new Error('Request exceeds 256 KiB.');
     }
     const params = JSON.parse(buffer || '{}');
+    // Manual requests have no native MCP call/result for PostToolUse to prove.
+    // Managed children keep their omitted policy and normal child-result path.
+    if (positionals[1] === 'start' && process.env.CLAUDEX_COLLABORATION_WORKER !== '1' && params.notifications === undefined)
+      params.notifications = { mode: 'off' };
     console.log(JSON.stringify(await callCollaboration({ root, peer, token, method: positionals[1], params }), null, 2));
     return;
   }

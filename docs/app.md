@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.4.7**, with **Claude Mod 0.8.26** bundled.
+Current development build: **Claudex.app 1.4.7**, with **Claude Mod 0.8.27** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -159,7 +159,7 @@ and never prove message delivery or that every open session uses the new version
 Advanced diagnostics shows bundled, installed, manager and observed Mod versions,
 plus **Install or update Claude Mod**. An intentionally disabled Mod stays disabled
 until **Enable Claude Mod** is selected. Receiver permission has a separate explicit
-confirmation and preserves per-task notification opt-in and the existing delivery
+confirmation and preserves per-task notification policy and the existing delivery
 route. Normal status refresh is read-only; it never starts installation, a model,
 or a native test suite. Runtime feature-flag overrides used in explicitly authorized
 developer tests are never applied by setup.

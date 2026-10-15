@@ -67,6 +67,9 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
     insist(!await stopState(), 'APP_STOPPED', 'Claudex is stopped or resuming; inspect its normal application lifecycle.');
   }
   async function requestRpc(method, params) {
+    // Companion prepare/confirm is not a native MCP start call/result. Keep its
+    // origin notifications off without changing existing action fingerprints.
+    if (method === 'start') params = { ...params, notifications: { mode: 'off' } };
     await privateDir(collaborationRoot);
     const raw = await privateRead(join(collaborationRoot, 'controller-key'), { maxBytes: 65 });
     insist(/^[a-f0-9]{64}\n$/.test(raw), 'INVALID_CAPABILITY', 'The controller capability requires inspection.');
