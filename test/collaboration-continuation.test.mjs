@@ -8,6 +8,7 @@ import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { callCollaboration, serveCollaborationSocket } from '../src/collaboration-transport.mjs';
 import { writeJSON } from '../src/storage.mjs';
 import { MOD_OBSERVATION_TTL } from '../src/mod-wake-broker.mjs';
+import { ChatMailbox } from '../src/chat-mailbox.mjs';
 
 const sessionId = '11111111-1111-4111-8111-111111111111';
 const deferred = () => {
@@ -224,4 +225,48 @@ test('final mailbox await cannot hide a changed task boundary', async t => {
   };
   expect(await f.inspect(task), 'wait', 'task-or-route-changed');
   assert.equal(f.counters.closed, 1);
+});
+
+test('Unix RPC surfaces fully referenced mailbox capacity in continuation and collaboration diagnostics', async t => {
+  const f = await fixture(t), task = await f.start(); await f.bind(task);
+  const now = Date.now(), journal = { version: 1, chats: [], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) {
+    journal.chats.push({ chatId: `claude:target-${i}`, provider: 'claude', nativeId: `target-${i}`,
+      cwd: f.parent, phase: 'ended', lastSeenAt: 0 });
+    journal.messages.push({ messageId: `message-${i}`, fromProvider: 'codex', targetProvider: 'claude',
+      targetSessionId: `target-${i}`, message: 'Synthetic message', state: 'offered', offeredAt: now,
+      createdAt: now, expiresAt: now + 3600000 });
+    journal.receipts.push({ fromProvider: 'codex', requestId: `request-${i}`, messageId: `message-${i}`,
+      payload: JSON.stringify(['claude', `target-${i}`, 'Synthetic message', 3600000]) });
+  }
+  await writeJSON(f.hub.chatMailbox.path, journal);
+  await assert.rejects(f.hub.chatMailbox.register({ provider: 'codex', sessionId, cwd: f.parent, event: 'SessionStart' }),
+    { code: 'MAILBOX_CAPACITY_EXHAUSTED' });
+  expect(await f.inspect(task), 'wait', 'mailbox-capacity-exhausted');
+  const inventory = await f.call('list');
+  assert.equal(inventory.chatMailbox.reason, 'mailbox-capacity-exhausted');
+  assert.equal(inventory.chatMailbox.messages, 1024);
+  const mod = await f.call('mod_wake_status');
+  assert.deepEqual(mod.chatMailbox, inventory.chatMailbox);
+  assert.deepEqual(f.counters, { probes: 0, closed: 0, discovery: 0 });
+});
+
+test('new notification origin publication and hook retirement share one durable lock', async t => {
+  const f = await fixture(t), task = await f.start();
+  const journal = { version: 1, chats: [], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) journal.chats.push({ chatId: `codex:${i ? `chat-${i}` : sessionId}`,
+    provider: 'codex', nativeId: i ? `chat-${i}` : sessionId, cwd: f.parent, phase: 'ended', lastSeenAt: i });
+  await writeJSON(f.hub.chatMailbox.path, journal);
+  const entered = deferred(), release = deferred();
+  const transaction = f.hub.chatMailbox.transaction.bind(f.hub.chatMailbox);
+  f.hub.chatMailbox.transaction = (create, operation) => transaction(create, async (...args) => {
+    entered.resolve(); await release.promise; return operation(...args);
+  });
+  const binding = f.bind(task); await entered.promise;
+  const other = new ChatMailbox({ root: f.hub.chatMailbox.root });
+  const registering = other.hook({ provider: 'codex', sessionId: 'new', cwd: f.parent, event: 'SessionStart' });
+  release.resolve(); await binding; await registering;
+  const chats = await other.list();
+  assert.equal(chats.some(chat => chat.nativeId === sessionId), true);
+  assert.equal(chats.some(chat => chat.nativeId === 'chat-1'), false);
 });

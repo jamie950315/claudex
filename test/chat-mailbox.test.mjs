@@ -7,6 +7,25 @@ import { ChatMailbox } from '../src/chat-mailbox.mjs';
 import { withLock } from '../src/storage.mjs';
 import { setTimeout as delay } from 'node:timers/promises';
 
+const DAY = 86400000;
+const claimId = '11111111-1111-4111-8111-111111111111';
+const chatRecord = (nativeId, directory, phase = 'ended', lastSeenAt = 0) => ({
+  chatId: `claude:${nativeId}`, provider: 'claude', nativeId, cwd: directory, phase, lastSeenAt,
+});
+function addMessage(state, targetSessionId, index, extra = {}) {
+  const now = Date.now();
+  const message = { messageId: `message-${index}`, fromProvider: 'codex', targetProvider: 'claude', targetSessionId,
+    message: 'Synthetic peer message', state: 'queued', createdAt: now, expiresAt: now + 3600000, ...extra };
+  state.messages.push(message);
+  state.receipts.push({ fromProvider: 'codex', requestId: `request-${index}`, messageId: message.messageId,
+    payload: JSON.stringify(['claude', targetSessionId, message.message, 3600000]) });
+  return message;
+}
+async function saveJournal(root, state) {
+  await writeFile(join(root, 'state.json'), JSON.stringify(state), { mode: 0o600 });
+  await chmod(join(root, 'state.json'), 0o600);
+}
+
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), 'claudex-mailbox-'));
   const root = join(directory, 'mailbox');
@@ -323,4 +342,138 @@ test('malformed lock evidence fails immediately rather than using contention rec
   await assert.rejects(mailbox.transaction(false, () => { entered = true; }), /Malformed lock owner/);
   assert.equal(entered, false);
   assert.equal(await readFile(lockPath, 'utf8'), '{bad-owner');
+});
+
+test('a full legacy journal retires only the oldest safe ended chat and preserves every live reference', async t => {
+  const { root, mailbox, directory } = await fixture(t), now = Date.now();
+  const state = { version: 1, chats: [], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) state.chats.push(chatRecord(`chat-${i}`, directory, 'active', now));
+  for (let i = 0; i < 10; i++) Object.assign(state.chats[i], { phase: 'ended', lastSeenAt: i });
+  state.chats[10].lastSeenAt = now - 31 * DAY;
+  addMessage(state, 'chat-0', 0);
+  addMessage(state, 'chat-1', 1, { state: 'offered', offeredAt: now });
+  addMessage(state, 'chat-2', 2, { state: 'acknowledged', offeredAt: now, acknowledgedAt: now,
+    wakeRoute: 'mod', wakeRequested: true, wake: { state: 'uncertain', claimId, at: now, detail: 'Unknown native outcome',
+      source: { sessionId: 'chat-3', cwd: directory } } });
+  // wakeRequested participates in the exact receipt payload.
+  state.receipts[2].payload = JSON.stringify(['claude', 'chat-2', 'Synthetic peer message', 3600000, true]);
+  await saveJournal(root, state);
+  await writeFile(join(directory, 'work.json'), JSON.stringify({ version: 1, tasks: {
+    pending: { status: 'running', notification: { policy: { mode: 'wake' }, origin: { provider: 'claude', sessionId: 'chat-4' }, deliveries: [] } },
+    terminal: { status: 'completed', revision: 2, updatedAt: now, notification: { policy: { mode: 'queue', expiresInMs: 600000 },
+      origin: { provider: 'claude', sessionId: 'chat-5' }, deliveries: [] } },
+    hinted: { status: 'running', notification: { policy: { mode: 'wake' }, challengeExpiresAt: now + 600000,
+      originHint: { provider: 'claude', sessionId: 'chat-6' }, deliveries: [] } },
+  } }), { mode: 0o600 });
+  await chmod(join(directory, 'work.json'), 0o600);
+  await writeFile(join(root, 'wake-manifest.json'), JSON.stringify({ version: 1,
+    messages: [{ messageId: 'manifest-message', sessionId: 'chat-7', expiresAt: now + 600000 }] }), { mode: 0o600 });
+  await chmod(join(root, 'wake-manifest.json'), 0o600);
+  await mailbox.hook({ provider: 'codex', sessionId: 'new', cwd: directory, event: 'SessionStart' });
+  const chats = await mailbox.list();
+  assert.equal(chats.length, 1024);
+  assert.equal(chats.some(chat => chat.nativeId === 'chat-8'), false);
+  for (const id of [0, 1, 2, 3, 4, 5, 6, 7, 9, 10]) assert.ok(chats.some(chat => chat.nativeId === `chat-${id}`));
+  assert.equal((await mailbox.status('message-2')).wake.state, 'uncertain');
+});
+
+test('discovery retires stale non-ended metadata after 30 days, with deterministic identity ties', async t => {
+  const { root, mailbox, directory } = await fixture(t), now = Date.now();
+  const state = { version: 1, chats: [], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) state.chats.push(chatRecord(`chat-${i}`, directory, 'idle', now));
+  for (const i of [2, 1]) Object.assign(state.chats[i], { phase: 'active', lastSeenAt: now - 31 * DAY });
+  await saveJournal(root, state);
+  await mailbox.discover({ provider: 'codex', sessionId: 'new', cwd: directory });
+  const chats = await mailbox.list();
+  assert.equal(chats.length, 1024);
+  assert.equal(chats.some(chat => chat.nativeId === 'chat-1'), false);
+  assert.equal(chats.some(chat => chat.nativeId === 'chat-2'), true);
+  assert.equal(chats.find(chat => chat.nativeId === 'new').registeredByHook, false);
+});
+
+test('fully referenced capacity fails visibly and recovers through a normal ACK and registration after restart', async t => {
+  const { root, mailbox, directory } = await fixture(t), now = Date.now();
+  const state = { version: 1, chats: [], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) {
+    state.chats.push(chatRecord(`chat-${i}`, directory));
+    addMessage(state, `chat-${i}`, i, { state: 'offered', offeredAt: now });
+  }
+  await saveJournal(root, state);
+  const input = { provider: 'claude', sessionId: 'new', cwd: directory, event: 'SessionStart' };
+  await assert.rejects(mailbox.hook(input), { code: 'MAILBOX_CAPACITY_EXHAUSTED', resource: 'chat' });
+  const diagnosis = await mailbox.diagnostics();
+  assert.equal(diagnosis.reason, 'mailbox-capacity-exhausted');
+  assert.equal(diagnosis.messageCapacityExhausted, true);
+  assert.deepEqual(JSON.parse(await readFile(join(root, 'state.json'), 'utf8')), state);
+  await mailbox.hook({ ...input, sessionId: 'chat-0' });
+  await mailbox.hook({ ...input, sessionId: 'chat-0', event: 'Stop', stopHookActive: true,
+    lastAssistantMessage: 'CLAUDEX_ACK:message-0' });
+  await mailbox.hook({ ...input, sessionId: 'chat-0', event: 'SessionEnd' });
+  const restarted = new ChatMailbox({ root });
+  await restarted.hook(input);
+  assert.equal((await restarted.list()).length, 1024);
+  assert.equal((await restarted.list()).some(chat => chat.nativeId === 'chat-0'), false);
+  assert.equal((await restarted.status('message-0')).state, 'acknowledged');
+  const replay = { fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'chat-0',
+    requestId: 'request-0', message: 'Synthetic peer message', expiresInMs: 3600000 };
+  assert.equal((await restarted.send(replay)).messageId, 'message-0');
+  await assert.rejects(restarted.send({ ...replay, message: 'changed' }), /different payload/);
+  assert.equal((await restarted.diagnostics()).chatCapacityExhausted, true);
+});
+
+test('message capacity archives resolved pairs while preserving claims, exact receipts and status after restart', async t => {
+  const { root, mailbox, directory } = await fixture(t), now = Date.now();
+  const state = { version: 1, chats: [chatRecord('target', directory, 'active', now)], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) addMessage(state, 'target', i, { state: 'offered', offeredAt: now });
+  Object.assign(state.messages[0], { state: 'acknowledged', acknowledgedAt: now - 2 });
+  state.messages[0].wake = { state: 'accepted', claimId, at: now - 2, detail: 'Synthetic accepted wake' };
+  Object.assign(state.messages[1], { state: 'expired', createdAt: now - 3600001, expiresAt: now - 1 });
+  delete state.messages[1].offeredAt;
+  state.messages[2].wake = { state: 'dispatching', claimId, at: now };
+  await saveJournal(root, state);
+  const args = { fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target', message: 'new', requestId: 'new' };
+  await mailbox.send(args);
+  const active = JSON.parse(await readFile(join(root, 'state.json'), 'utf8'));
+  assert.equal(active.messages.length, 1024); assert.equal(active.receipts.length, 1024);
+  assert.equal(active.messages.some(message => message.messageId === 'message-0'), false);
+  assert.equal(active.messages.find(message => message.messageId === 'message-2').wake.state, 'dispatching');
+  const restarted = new ChatMailbox({ root });
+  assert.equal((await restarted.status('message-0')).state, 'acknowledged');
+  assert.equal((await restarted.finishWake('message-0', { claimId, state: 'accepted', detail: 'Synthetic accepted wake' })).state, 'acknowledged');
+  assert.equal((await restarted.send({ ...args, message: 'Synthetic peer message', requestId: 'request-0', expiresInMs: 3600000 })).messageId, 'message-0');
+  await restarted.send({ ...args, requestId: 'newer' });
+  assert.equal((await restarted.status('message-1')).state, 'expired');
+  await assert.rejects(restarted.send({ ...args, requestId: 'overflow' }), { code: 'MAILBOX_CAPACITY_EXHAUSTED', resource: 'message' });
+  assert.equal((await restarted.diagnostics()).reason, 'mailbox-message-capacity-exhausted');
+});
+
+test('interrupted archival preserves its active pair and finishes without replay on the next capacity request', async t => {
+  const { root, mailbox, directory } = await fixture(t), now = Date.now();
+  const state = { version: 1, chats: [chatRecord('target', directory, 'active', now)], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) addMessage(state, 'target', i);
+  Object.assign(state.messages[0], { state: 'acknowledged', offeredAt: now, acknowledgedAt: now });
+  await saveJournal(root, state);
+  const request = mailbox.archivedRequest.bind(mailbox);
+  mailbox.archivedRequest = async (side, requestId) => {
+    if (requestId === 'request-0') throw new Error('Synthetic crash before receipt index publication');
+    return request(side, requestId);
+  };
+  const args = { fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target', message: 'new', requestId: 'new' };
+  await assert.rejects(mailbox.send(args), /Synthetic crash/);
+  assert.equal(JSON.parse(await readFile(join(root, 'state.json'), 'utf8')).messages.length, 1024);
+  const restarted = new ChatMailbox({ root });
+  await restarted.hook({ provider: 'claude', sessionId: 'target', cwd: directory, event: 'Stop', stopHookActive: true });
+  await restarted.send(args);
+  assert.equal((await restarted.status('message-0')).state, 'acknowledged');
+  assert.equal(JSON.parse(await readFile(join(root, 'state.json'), 'utf8')).messages.length, 1024);
+});
+
+test('unsafe archive storage blocks capacity recovery without changing evidence', async t => {
+  const { mailbox, root, directory, send } = await fixture(t);
+  const sent = await send();
+  const before = await readFile(join(root, 'state.json'), 'utf8');
+  await symlink(directory, join(root, 'archive'));
+  await assert.rejects(send({ requestId: 'another' }), /private, owned and regular/);
+  assert.equal(await readFile(join(root, 'state.json'), 'utf8'), before);
+  assert.equal((await mailbox.status(sent.messageId)).state, 'queued');
 });

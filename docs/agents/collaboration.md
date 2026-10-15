@@ -194,6 +194,42 @@ automatically replayed. Only the same native recipient's Stop acknowledgement
 marker counts as receipt, never as proof of task shutdown or new authorization.
 The sync hook registers and consumes in one ChatMailbox.hook journal
 transaction with the same register-then-consume semantics.
+Observed on 2026-10-15: the 1,024-chat journal filled with mostly ended
+registrations, permanently refusing new hooks and losing their completion-wake
+and peer-message routes. Capacity recovery is now demand-driven in that same
+transaction, including legacy journals and native metadata discovery. Retire only
+one needed slot, ended chats first, then non-ended chats unseen for at least 30
+days; within each group use ascending lastSeenAt, then exact chatId. This forgets
+mailbox metadata only, never native history, lifecycle state or ownership.
+Queued/offered messages and any unresolved wake (including dispatching/uncertain
+after ACK) pin their exact target and claim-source chats. Receipts remain paired
+with their message. Unexpired wake-manifest entries pin their message and native
+recipient; publication rechecks the queue under the retention lock after awaited
+metadata reads. Native titles, observations and delivery diagnoses are not
+references or retirement authority.
+Read the adjacent private work ledger through a bounded stable no-follow read.
+Pin verified origins (and unexpired origin hints) for nonterminal notification
+tasks, unexpired unsuppressed terminal notifications awaiting publication, and
+dispatching/uncertain deliveries. Publish changed task-origin pins under the
+same mailbox lock before the work ledger becomes visible; this prevents hooks
+from retiring an origin concurrently with binding or reopening its task.
+On message/receipt pressure, archive the oldest acknowledged or expired pair
+(terminal time, createdAt, then messageId), excluding unresolved wakes and
+unexpired manifest references. A chat retirement archives all its resolved pairs
+before removing its metadata. Preserve exact message and request lookup records
+durably under the private mailbox archive before removing an active pair. Keep
+archives indefinitely: status and sender-scoped request-ID replay/conflict checks
+use exact filenames without scans; no receipt is discarded and no native input
+is replayed. Interrupted publication leaves the active pair recoverable at the
+next capacity request, including after restart. Storage operations and scans are
+bounded by existing journal limits; archive size grows with retained receipts.
+If no safe slot exists, refuse with MAILBOX_CAPACITY_EXHAUSTED without changing
+the journal. Hooks report explicit capacity stderr while preserving sync hints.
+Controller collaboration list/status inventory and mod_wake_status expose
+content-free chatMailbox counts and capacity flags; notification continuation
+reports mailbox-capacity-exhausted for a missing origin when registration is
+blocked. This is diagnostic evidence, never dispatch permission. Malformed or
+unsafe reference/archive storage fails closed and is never repaired by deletion.
 Idle wake requires an explicitly authorized and verified native-owner adapter;
 hook-only delivery must continue to report that it cannot wake idle chats.
 Never resolve fuzzy titles, create/archive replacement chats,

@@ -92,7 +92,9 @@ export async function inspectNotificationContinuation(hub, task) {
   const route = n.origin.provider === 'claude' ? hub.state.nativeWakeRoute ?? 'renderer' : 'native-owner';
   const chat = (await hub.chatMailbox.list()).find(value => value.provider === n.origin.provider
     && value.sessionId === n.origin.sessionId && value.cwd === n.origin.cwd);
-  if (!chat || chat.phase === 'ended') return result('wait', !chat ? 'origin-not-registered' : 'waiting-for-resume');
+  if (!chat) return result('wait', (await hub.chatMailbox.diagnostics()).chatCapacityExhausted
+    ? 'mailbox-capacity-exhausted' : 'origin-not-registered');
+  if (chat.phase === 'ended') return result('wait', 'waiting-for-resume');
   let observation;
   if (n.origin.provider === 'codex') {
     if (!hub.chatWake || !hub.chatWakeProbe || !hub.nativeChatDiscovery) return result('wait', 'wake-probe-unavailable');

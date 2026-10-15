@@ -6,7 +6,7 @@ import { privateDirectory, readJSON, writeJSON, publishExclusive } from './stora
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
-import { ChatMailbox } from './chat-mailbox.mjs';
+import { ChatMailbox, notificationChatReferences } from './chat-mailbox.mjs';
 import { CacheWarmManager } from './cache-warm.mjs';
 import { CodexCacheWarmer } from './codex-cache-warm.mjs';
 import { defaultWarmLimit, DEFAULT_WARM_LIMIT } from '../plugins/claudex/hooks/cache-warm-display.mjs';
@@ -409,7 +409,12 @@ export class CollaborationHub extends EventEmitter {
     const serialized = JSON.stringify(state);
     if (serialized === this.serializedState) return value;
     if (Buffer.byteLength(serialized) > this.maxStateBytes) throw new Error('Collaboration ledger capacity reached; no history was discarded.');
-    await writeJSON(this.path, state);
+    // Hooks read the durable work ledger under this same mailbox lock when
+    // retiring chats. Publish newly protected origins before releasing it.
+    const now = Date.now();
+    if (JSON.stringify(notificationChatReferences(state, now)) !== JSON.stringify(notificationChatReferences(this.state, now)))
+      await this.chatMailbox.transaction(true, () => writeJSON(this.path, state));
+    else await writeJSON(this.path, state);
     this.state = state; this.serializedState = serialized; this.emit('change'); scheduleNotifications(this);
     return value;
   }
@@ -791,6 +796,7 @@ export class CollaborationHub extends EventEmitter {
           permissionCapabilities: Object.fromEntries(COLLABORATION_PERMISSIONS.map(level => [level, collaborationCapabilities(level)])),
           defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
         blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain'),
+        ...(!actor.task ? { chatMailbox: await this.chatMailbox.diagnostics() } : {}),
         uncertainTasks: Object.values(this.state.tasks).filter(task => task.status === 'uncertain').slice(0, 20)
           .map(task => ({ id: task.id, owner: task.owner, permission: task.permission, cwd: task.cwd, error: task.error,
             revision: task.revision, updatedAt: task.updatedAt })) };

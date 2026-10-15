@@ -104,9 +104,11 @@ async function main() {
           ? { decision: 'block', reason: receipt.context }
           : { hookSpecificOutput: { hookEventName: input.hook_event_name, additionalContext: receipt.context } };
       }
-    } catch {
+    } catch (error) {
       // A coordination error must not suppress ordinary synchronization hints.
-      process.stderr.write('Claudex native-chat coordination could not be verified; inspect the message receipt before retrying.\n');
+      process.stderr.write(error?.code === 'MAILBOX_CAPACITY_EXHAUSTED'
+        ? 'Claudex chat mailbox capacity exhausted; registration or delivery is unavailable. Inspect collaboration status.\n'
+        : 'Claudex native-chat coordination could not be verified; inspect the message receipt before retrying.\n');
     }
   }
   const inbox = await new SyncEventInbox({ root: options['--root'] }).initialize();

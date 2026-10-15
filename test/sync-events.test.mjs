@@ -232,6 +232,27 @@ test('concurrent hook bursts register every chat despite live lock contention', 
   assert.deepEqual((await mailbox.list()).map(chat => chat.nativeId).sort(), [...sessions].sort());
 });
 
+test('normal hook repairs a saturated legacy mailbox and reports capacity when recent chats cannot retire', async t => {
+  const inbox = await fixture(t), session_id = randomUUID();
+  const mailbox = new ChatMailbox({ root: join(inbox.root, 'collaboration', 'chat-mailbox') });
+  await mailbox.register({ provider: 'codex', sessionId: 'seed', cwd: inbox.root, event: 'SessionEnd' });
+  const journal = { version: 1, chats: [], messages: [], receipts: [] };
+  for (let i = 0; i < 1024; i++) journal.chats.push({ chatId: `codex:old-${i}`, provider: 'codex', nativeId: `old-${i}`,
+    cwd: inbox.root, phase: 'ended', lastSeenAt: i });
+  await writeFile(mailbox.path, JSON.stringify(journal), { mode: 0o600 });
+  const recovered = await hook(inbox, { hook_event_name: 'SessionStart', session_id, cwd: inbox.root });
+  assert.deepEqual(recovered, { code: 0, stdout: '', stderr: '' });
+  const chats = await mailbox.list();
+  assert.equal(chats.length, 1024); assert.ok(chats.some(chat => chat.nativeId === session_id));
+  assert.equal(chats.some(chat => chat.nativeId === 'old-0'), false);
+  for (const chat of journal.chats) { chat.phase = 'active'; chat.lastSeenAt = Date.now(); }
+  await writeFile(mailbox.path, JSON.stringify(journal), { mode: 0o600 });
+  const blocked = await hook(inbox, { hook_event_name: 'SessionStart', session_id, cwd: inbox.root });
+  assert.equal(blocked.code, 0); assert.match(blocked.stderr, /chat mailbox capacity exhausted/);
+  assert.equal((await inbox.list()).some(event => event.nativeId === session_id), true, 'sync hint still publishes');
+  assert.equal((await mailbox.diagnostics()).reason, 'mailbox-capacity-exhausted');
+});
+
 test('hook ignores subagents and unknown hooks; completed native input stores no private content', async t => {
   const inbox = await fixture(t), session_id = randomUUID();
   for (const extra of [{ agent_id: 'child' }, { hook_event_name: 'SubagentStop' }, { hook_event_name: 'Other' }]) {

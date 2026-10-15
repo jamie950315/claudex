@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os';
 import { ChatMailbox } from '../src/chat-mailbox.mjs';
 import { createClaudeChatWakeManifest } from '../src/claude-chat-wake-manifest.mjs';
 
+const syntheticMailbox = pending => ({ pendingWakes: async () => [...pending()],
+  transaction: async (_create, operation) => operation({ messages: pending().map(message => ({ ...message,
+    state: 'queued', targetProvider: 'claude', wakeRequested: true })) }) });
+
 test('manifest exposes exact native metadata only for explicit queued Claude wake requests', async () => {
   const root = await mkdtemp(join(tmpdir(), 'cldx-wake-manifest-'));
   const mailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
@@ -42,8 +46,8 @@ test('manifest bounds published identities and removes claimed candidates on rep
   const mappings = new Map(pending.map(message => [message.targetSessionId, { sessionId: `local_${message.targetSessionId}`, cwd: root,
     title: message.targetSessionId, registryPath: join(root, `${message.targetSessionId}.json`) }]));
   const manifest = createClaudeChatWakeManifest({ root, mappings: async () => mappings });
-  assert.equal((await manifest.publish({ pendingWakes: async () => pending })).count, 64);
-  assert.equal((await manifest.publish({ pendingWakes: async () => [] })).count, 0);
+  assert.equal((await manifest.publish(syntheticMailbox(() => pending))).count, 64);
+  assert.equal((await manifest.publish(syntheticMailbox(() => []))).count, 0);
   assert.deepEqual(JSON.parse(await readFile(join(root, 'chat-mailbox', 'wake-manifest.json'), 'utf8')).messages, []);
 });
 
@@ -62,7 +66,7 @@ test('overlapping publication cannot replace newly queued wake messages with an 
       registryPath: join(root, `${message.targetSessionId}.json`), isArchived: false,
     }]));
   } });
-  const mailbox = { pendingWakes: async () => [...pending] };
+  const mailbox = syntheticMailbox(() => pending);
   const old = manifest.publish(mailbox);
   await inspecting;
   pending = [first, second];
@@ -73,4 +77,25 @@ test('overlapping publication cannot replace newly queued wake messages with an 
   await Promise.all([old, fresh]);
   const saved = JSON.parse(await readFile(join(root, 'chat-mailbox', 'wake-manifest.json'), 'utf8'));
   assert.deepEqual(saved.messages.map(message => message.messageId), [first.messageId, second.messageId]);
+});
+
+test('an awaited metadata snapshot cannot republish a recipient after its message was acknowledged', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'cldx-wake-retire-'));
+  const mailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
+  await mailbox.register({ provider: 'claude', sessionId: 'target', cwd: root, event: 'SessionStart' });
+  const sent = await mailbox.send({ fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target',
+    message: 'Synthetic wake', requestId: 'wake', wakeRequested: true });
+  let release, entered;
+  const gate = new Promise(resolve => { release = resolve; });
+  const reading = new Promise(resolve => { entered = resolve; });
+  const manifest = createClaudeChatWakeManifest({ root, mappings: async () => {
+    entered(); await gate;
+    return new Map([['target', { sessionId: 'local_target', cwd: root, title: 'Synthetic target', registryPath: join(root, 'target.json') }]]);
+  } });
+  const publishing = manifest.publish(mailbox); await reading;
+  await mailbox.consume({ provider: 'claude', sessionId: 'target', event: 'Stop' });
+  await mailbox.consume({ provider: 'claude', sessionId: 'target', event: 'Stop', stopHookActive: true,
+    lastAssistantMessage: `CLAUDEX_ACK:${sent.messageId}` });
+  release(); assert.equal((await publishing).count, 0);
+  assert.deepEqual(JSON.parse(await readFile(join(mailbox.root, 'wake-manifest.json'), 'utf8')).messages, []);
 });

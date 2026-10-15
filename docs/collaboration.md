@@ -659,8 +659,23 @@ completed the requested work. The recipient's exact hook ACK remains separate.
 
 Messages are capped at 1,500 UTF-8 bytes, with a default 15-minute TTL (up to one
 hour). The private `collaboration/chat-mailbox/state.json` is bounded to 1,024
-chats/messages/receipts and 8 MiB; it preserves receipts rather than silently
-pruning or replaying work. No raw hook prompt or transcript is stored. Hook
+chats/messages/receipts and 8 MiB. When a slot is needed, registration forgets
+unreferenced ended chats first (oldest last seen first), then unreferenced chats
+unseen for at least 30 days. Unresolved messages/claims, live wake-manifest entries
+and pending task notifications protect their referenced chats. Native chats and
+history are never removed. A later native hook can register forgotten metadata
+again through the normal path.
+
+Acknowledged or expired message/receipt pairs move to a private archive when
+capacity is needed; unresolved wake outcomes remain active. Archived receipts
+are retained indefinitely, so exact message status and sender-scoped request-ID
+deduplication still work after restart. The active journal stays bounded; the
+archive grows with retained receipts. If all slots remain protected, registration
+or enqueueing fails explicitly. `claudex collaboration status` and the native
+Mod delivery diagnostics expose `chatMailbox` counts and capacity flags;
+notification continuation reports `mailbox-capacity-exhausted` when a missing
+origin cannot register. Existing saturated journals recover on the next hook
+without manual state editing. No raw hook prompt or transcript is stored. Hook
 registration and delivery stop when the graphical app's Quit hold is active.
 
 Native clients may need to refresh MCP tool discovery through a supported native

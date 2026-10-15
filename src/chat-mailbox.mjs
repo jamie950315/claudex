@@ -1,12 +1,14 @@
 import { lstat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { atomicWrite, privateDirectory, withLock } from './storage.mjs';
+import { privateRead } from './claude-mod-storage.mjs';
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_ITEMS = 1024;
+const STALE_CHAT_MS = 30 * 24 * 60 * 60 * 1000;
 const queues = new Map();
 const events = new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']);
 const states = new Set(['queued', 'offered', 'acknowledged', 'expired']);
@@ -23,6 +25,38 @@ function cwd(value) { text(value, 4096, 'cwd'); if (!isAbsolute(value)) fail('cw
 function event(value) { if (!events.has(value)) fail('unsupported hook event.'); return value; }
 const key = (side, id) => `${side}:${id}`;
 const timestamp = value => Number.isSafeInteger(value) && value >= 0;
+const terminalTasks = new Set(['completed', 'failed', 'cancelled', 'uncertain']);
+const resolvedMessage = message => ['acknowledged', 'expired'].includes(message.state)
+  && !['dispatching', 'uncertain'].includes(message.wake?.state);
+const requestHash = (side, requestId) => createHash('sha256').update(JSON.stringify([side, requestId])).digest('hex');
+const compare = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+async function optionalJournal(path, maxBytes) {
+  const raw = await privateRead(path, { optional: true, maxBytes });
+  if (raw === null) return null;
+  let value;
+  try { value = JSON.parse(raw); } catch { fail('malformed retention evidence.'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) fail('invalid retention evidence.');
+  return value;
+}
+
+/** Identity-only pins, also used to serialize new notification references with
+ * hook retention. Queued deliveries are pinned by their unresolved message. */
+export function notificationChatReferences(state, now = Date.now()) {
+  const refs = new Set();
+  for (const task of Object.values(state.tasks)) {
+    const n = task.notification;
+    if (!n || n.policy.mode === 'off') continue;
+    const origin = n.origin ?? (n.challengeExpiresAt > now ? n.originHint : null);
+    if (!origin) continue;
+    if (!terminalTasks.has(task.status)
+      || n.deliveries.some(d => ['dispatching', 'uncertain'].includes(d.state))
+      || (n.suppressedRevision !== task.revision && task.updatedAt + n.policy.expiresInMs > now
+        && !n.deliveries.some(d => (d.kind ?? 'terminal') === 'terminal' && d.revision === task.revision))) {
+      refs.add(key(provider(origin.provider), nativeId(origin.sessionId)));
+    }
+  }
+  return [...refs].sort();
+}
 const lockContention = new Set([
   'Another bridge operation holds the lock. Inspect status before retrying.',
   'Another bridge operation holds the lock; lock owner publication is pending. Inspect status before retrying.',
@@ -158,7 +192,6 @@ function registerChat(state, now, side, sessionId, directory, hookEvent) {
   const chatId = key(side, sessionId);
   let chat = state.chats.find(item => item.chatId === chatId);
   if (!chat) {
-    if (state.chats.length >= MAX_ITEMS) fail('chat capacity exhausted.');
     chat = { chatId, provider: side, nativeId: sessionId, cwd: directory, phase: 'active', lastSeenAt: now };
     state.chats.push(chat);
   }
@@ -205,6 +238,121 @@ export class ChatMailbox {
     this.path = join(this.root, 'state.json');
   }
 
+  async references(now) {
+    const parent = dirname(this.root);
+    owned(await lstat(parent), true);
+    const work = await optionalJournal(join(parent, 'work.json'), 128 * 1024 * 1024);
+    if (work && (work.version !== 1 || !work.tasks || Array.isArray(work.tasks)
+      || typeof work.tasks !== 'object' || Object.keys(work.tasks).length > 10000)) fail('invalid task reference journal.');
+    const chats = new Set(work ? notificationChatReferences(work, now) : []), messages = new Set();
+    const manifest = await optionalJournal(join(this.root, 'wake-manifest.json'), 256 * 1024);
+    if (manifest) {
+      if (manifest.version !== 1 || !Array.isArray(manifest.messages) || manifest.messages.length > 64) fail('invalid wake manifest references.');
+      for (const entry of manifest.messages) {
+        nativeId(entry.messageId); nativeId(entry.sessionId);
+        if (!timestamp(entry.expiresAt)) fail('invalid wake manifest expiry.');
+        if (entry.expiresAt > now) { chats.add(key('claude', entry.sessionId)); messages.add(entry.messageId); }
+      }
+    }
+    return { chats, messages };
+  }
+
+  retirementCandidates(state, now, refs) {
+    const blocked = new Set(refs.chats);
+    for (const message of state.messages) {
+      if (!resolvedMessage(message) || refs.messages.has(message.messageId)) {
+        blocked.add(key(message.targetProvider, message.targetSessionId));
+        if (message.wake?.source) blocked.add(key('claude', message.wake.source.sessionId));
+      }
+    }
+    return state.chats.filter(chat => !blocked.has(chat.chatId)
+      && (chat.phase === 'ended' || chat.lastSeenAt <= now - STALE_CHAT_MS))
+      .sort((a, b) => Number(b.phase === 'ended') - Number(a.phase === 'ended')
+        || a.lastSeenAt - b.lastSeenAt || compare(a.chatId, b.chatId));
+  }
+
+  async archiveDirectory(kind, create = false) {
+    let path = this.root;
+    for (const part of ['archive', kind]) {
+      path = join(path, part);
+      try { owned(await lstat(path), true); }
+      catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        if (!create) return null;
+        await privateDirectory(path); owned(await lstat(path), true);
+      }
+    }
+    return path;
+  }
+
+  async archivedMessage(messageId) {
+    const directory = await this.archiveDirectory('messages');
+    if (!directory) return null;
+    const record = await optionalJournal(join(directory, `${messageId}.json`), MAX_BYTES);
+    if (!record) return null;
+    if (record.version !== 1 || record.message?.messageId !== messageId || !resolvedMessage(record.message)) fail('invalid archived message.');
+    validate({ version: 1, chats: [record.chat], messages: [record.message], receipts: [record.receipt] });
+    return record;
+  }
+
+  async archivedRequest(side, requestId) {
+    const directory = await this.archiveDirectory('requests');
+    if (!directory) return null;
+    const index = await optionalJournal(join(directory, `${requestHash(side, requestId)}.json`), 1024);
+    if (!index) return null;
+    nativeId(index.messageId);
+    const record = await this.archivedMessage(index.messageId);
+    if (index.version !== 1 || !record || record.receipt.fromProvider !== side || record.receipt.requestId !== requestId) fail('invalid archived receipt.');
+    return record;
+  }
+
+  async archiveMessage(state, message) {
+    const receipt = state.receipts.find(item => item.messageId === message.messageId);
+    const chat = state.chats.find(item => item.chatId === key(message.targetProvider, message.targetSessionId));
+    const messages = await this.archiveDirectory('messages', true), requests = await this.archiveDirectory('requests', true);
+    const existing = await this.archivedMessage(message.messageId);
+    if (existing && (JSON.stringify(existing.message) !== JSON.stringify(message)
+      || JSON.stringify(existing.receipt) !== JSON.stringify(receipt))) fail('archived message conflict; original evidence preserved.');
+    // Publish both exact lookup records durably before removing the active pair.
+    // A crash between publications leaves the pair active and can finish safely.
+    if (!existing) await atomicWrite(join(messages, `${message.messageId}.json`), JSON.stringify({ version: 1, chat, message, receipt }));
+    const indexed = await this.archivedRequest(receipt.fromProvider, receipt.requestId);
+    if (indexed && indexed.message.messageId !== message.messageId) fail('archived request conflict; original evidence preserved.');
+    if (!indexed) await atomicWrite(join(requests, `${requestHash(receipt.fromProvider, receipt.requestId)}.json`),
+      JSON.stringify({ version: 1, messageId: message.messageId }));
+    state.messages = state.messages.filter(item => item.messageId !== message.messageId);
+    state.receipts = state.receipts.filter(item => item.messageId !== message.messageId);
+  }
+
+  async makeChatRoom(state, now, chatId) {
+    if (state.chats.length < MAX_ITEMS || state.chats.some(chat => chat.chatId === chatId)) return;
+    const refs = await this.references(now), candidate = this.retirementCandidates(state, now, refs)[0];
+    if (!candidate) this.capacityFailure('chat');
+    for (const message of [...state.messages]) if (key(message.targetProvider, message.targetSessionId) === candidate.chatId)
+      await this.archiveMessage(state, message);
+    state.chats = state.chats.filter(chat => chat.chatId !== candidate.chatId);
+  }
+
+  capacityFailure(kind) {
+    throw Object.assign(new Error(`Chat mailbox: ${kind} capacity exhausted; no safely retirable records. Inspect collaboration status.`),
+      { code: 'MAILBOX_CAPACITY_EXHAUSTED', resource: kind });
+  }
+
+  diagnostics() {
+    return this.transaction(false, async (state, now) => {
+      const refs = state.chats.length >= MAX_ITEMS || state.messages.length >= MAX_ITEMS
+        ? await this.references(now) : { chats: new Set(), messages: new Set() };
+      const retirable = this.retirementCandidates(state, now, refs).length;
+      const archivable = state.messages.filter(message => resolvedMessage(message) && !refs.messages.has(message.messageId)).length;
+      const chatBlocked = state.chats.length >= MAX_ITEMS && !retirable;
+      const messageBlocked = state.messages.length >= MAX_ITEMS && !archivable;
+      return { diagnosticOnly: true, limit: MAX_ITEMS, staleChatMs: STALE_CHAT_MS,
+        chats: state.chats.length, messages: state.messages.length, receipts: state.receipts.length,
+        chatCapacityExhausted: chatBlocked, messageCapacityExhausted: messageBlocked,
+        reason: chatBlocked ? 'mailbox-capacity-exhausted' : messageBlocked ? 'mailbox-message-capacity-exhausted' : null };
+    });
+  }
+
   async transaction(create, operation) {
     const previous = queues.get(this.root) ?? Promise.resolve();
     const work = previous.catch(() => {}).then(async () => {
@@ -233,7 +381,10 @@ export class ChatMailbox {
 
   register({ provider: side, sessionId, cwd: directory, event: hookEvent }) {
     provider(side); nativeId(sessionId); cwd(directory); event(hookEvent);
-    return this.transaction(true, (state, now) => registerChat(state, now, side, sessionId, directory, hookEvent));
+    return this.transaction(true, async (state, now) => {
+      await this.makeChatRoom(state, now, key(side, sessionId));
+      return registerChat(state, now, side, sessionId, directory, hookEvent);
+    });
   }
 
   /** One native hook's registration and offer in a single journal transaction:
@@ -241,7 +392,8 @@ export class ChatMailbox {
    * durable write. */
   hook({ provider: side, sessionId, cwd: directory, event: hookEvent, stopHookActive = false, lastAssistantMessage = '' }) {
     provider(side); nativeId(sessionId); cwd(directory); event(hookEvent); consumeInput(stopHookActive, lastAssistantMessage);
-    return this.transaction(true, (state, now) => {
+    return this.transaction(true, async (state, now) => {
+      await this.makeChatRoom(state, now, key(side, sessionId));
       const chat = registerChat(state, now, side, sessionId, directory, hookEvent);
       return { chat, ...consumeChat(state, now, side, sessionId, hookEvent, stopHookActive, lastAssistantMessage) };
     });
@@ -250,10 +402,10 @@ export class ChatMailbox {
   /** A verified native metadata entry is not a fabricated hook registration. */
   discover({ provider: side, sessionId, cwd: directory }) {
     provider(side); nativeId(sessionId); cwd(directory);
-    return this.transaction(true, (state, now) => {
+    return this.transaction(true, async (state, now) => {
       let chat = state.chats.find(item => item.chatId === key(side, sessionId));
       if (!chat) {
-        if (state.chats.length >= MAX_ITEMS) fail('chat capacity exhausted.');
+        await this.makeChatRoom(state, now, key(side, sessionId));
         chat = { chatId: key(side, sessionId), provider: side, nativeId: sessionId, cwd: directory,
           phase: 'ended', lastSeenAt: now, registeredByHook: false, discoveredAt: now };
         state.chats.push(chat);
@@ -278,8 +430,8 @@ export class ChatMailbox {
   finishWake(messageId, { claimId, state: outcome, detail }) {
     nativeId(messageId); nativeId(claimId); text(detail, 2048, 'wake detail');
     if (!['accepted', 'uncertain', 'deferred', 'rejected', 'submitted'].includes(outcome)) fail('invalid wake outcome.');
-    return this.transaction(false, (state, now) => {
-      const message = state.messages.find(item => item.messageId === messageId);
+    return this.transaction(false, async (state, now) => {
+      const message = state.messages.find(item => item.messageId === messageId) ?? (await this.archivedMessage(messageId))?.message;
       if (!message || message.wake?.claimId !== claimId) fail('wake claim is no longer current.');
       if (message.wake.state === outcome && message.wake.detail === detail) return publicMessage(message, state);
       if (message.wake.state !== 'dispatching') fail('wake claim is no longer current.');
@@ -318,14 +470,23 @@ export class ChatMailbox {
     const payload = JSON.stringify([targetProvider, targetSessionId, message, expiresInMs, ...(wakeRequested === undefined ? [] : [wakeRequested]),
       ...(expiresAt === undefined ? [] : [{ expiresAt }])]);
     return this.transaction(false, async (state, now) => {
-      const receipt = state.receipts.find(item => item.fromProvider === fromProvider && item.requestId === requestId);
+      const archived = state.receipts.some(item => item.fromProvider === fromProvider && item.requestId === requestId)
+        ? null : await this.archivedRequest(fromProvider, requestId);
+      const receipt = archived?.receipt ?? state.receipts.find(item => item.fromProvider === fromProvider && item.requestId === requestId);
       if (receipt) {
         if (receipt.payload !== payload) fail('request ID was reused with a different payload.');
-        return publicMessage(state.messages.find(item => item.messageId === receipt.messageId), state);
+        return publicMessage(archived?.message ?? state.messages.find(item => item.messageId === receipt.messageId), state);
       }
       const target = state.chats.find(item => item.chatId === key(targetProvider, targetSessionId));
       if (!target) fail('exact target is not registered.');
-      if (state.messages.length >= MAX_ITEMS || state.receipts.length >= MAX_ITEMS) fail('message capacity exhausted.');
+      if (state.messages.length >= MAX_ITEMS || state.receipts.length >= MAX_ITEMS) {
+        const refs = await this.references(now);
+        const candidate = state.messages.filter(item => resolvedMessage(item) && !refs.messages.has(item.messageId))
+          .sort((a, b) => (a.acknowledgedAt ?? a.expiresAt) - (b.acknowledgedAt ?? b.expiresAt)
+            || a.createdAt - b.createdAt || compare(a.messageId, b.messageId))[0];
+        if (!candidate) this.capacityFailure('message');
+        await this.archiveMessage(state, candidate);
+      }
       await beforeEnqueue?.();
       now = Date.now();
       if (expiresAt !== undefined && (expiresAt <= now || expiresAt > now + 3600000)) fail('notification deadline expired or exceeds its bound.');
@@ -344,8 +505,8 @@ export class ChatMailbox {
     .map(message => publicMessage(message, state))); }
   status(messageId) {
     nativeId(messageId);
-    return this.transaction(false, state => {
-      const record = state.messages.find(item => item.messageId === messageId);
+    return this.transaction(false, async state => {
+      const record = state.messages.find(item => item.messageId === messageId) ?? (await this.archivedMessage(messageId))?.message;
       if (!record) fail('unknown message ID.');
       return publicMessage(record, state);
     });

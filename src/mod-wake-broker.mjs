@@ -97,7 +97,7 @@ export async function dispatchModWake(hub, envelope, actor) {
   if (actor.task) throw new Error('Only an external controller may use native Mod delivery.');
   if (method === 'mod_wake_status') {
     fields(params, [], []);
-    return modWakeStatus(hub);
+    return { ...modWakeStatus(hub), chatMailbox: await hub.chatMailbox.diagnostics() };
   }
   if (method === 'native_wake') {
     fields(params, ['route']);

@@ -29,9 +29,17 @@ export function createClaudeChatWakeManifest({ root,
           if (messages.length >= 64 || size + bytes > 240 * 1024) break;
           messages.push(candidate); size += bytes + 1;
         }
-        const directory = await privateDirectory(join(root, 'chat-mailbox'));
-        await writeJSON(join(directory, 'wake-manifest.json'), { version: 1, messages });
-        return { count: messages.length };
+        return mailbox.transaction(true, async state => {
+          // Retention, claims and publication share one lock. A metadata read
+          // that outlives an ACK must not republish a now-retired recipient.
+          const current = messages.filter(candidate => state.messages.some(message => message.messageId === candidate.messageId
+            && message.targetProvider === 'claude' && message.targetSessionId === candidate.sessionId
+            && message.state === 'queued' && message.wakeRequested === true
+            && !['mod', 'mod-self'].includes(message.wakeRoute) && message.expiresAt === candidate.expiresAt));
+          const directory = await privateDirectory(join(root, 'chat-mailbox'));
+          await writeJSON(join(directory, 'wake-manifest.json'), { version: 1, messages: current });
+          return { count: current.length };
+        });
       });
       publication = operation.catch(() => {});
       return operation;
