@@ -25,13 +25,21 @@ const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 const isJS = u => u.startsWith(FRONTEND_ASSET_ROOT) && /^[A-Za-z0-9_-]+\.js$/.test(u.slice(FRONTEND_ASSET_ROOT.length));
 const args = process.argv.slice(2), options = {};
 for (let i = 0; i < args.length; i += 2) {
-  if (!['--home', '--root', '--report', '--last-builds'].includes(args[i]) || !args[i + 1]) throw new Error('Usage: node dev/verify-claude-frontend-builds.mjs [--home HOME] [--root ROOT] [--report FILE] [--last-builds COUNT]');
-  if (args[i] === '--last-builds') {
+  if (!['--home', '--root', '--report', '--last-builds', '--first-builds', '--entry', '--rust-checker', '--rust-only'].includes(args[i]) || !args[i + 1]) throw new Error('Usage: node dev/verify-claude-frontend-builds.mjs [--home HOME] [--root ROOT] [--report FILE] [--last-builds COUNT | --first-builds COUNT | --entry index-NAME.js] [--rust-checker EXECUTABLE] [--rust-only true]');
+  if (args[i] === '--last-builds' || args[i] === '--first-builds') {
     const count = Number(args[i + 1]);
-    if (!Number.isInteger(count) || count < 2 || count > 64) throw new Error('last-builds must be between 2 and 64');
-    options.lastBuilds = count;
+    if (!Number.isInteger(count) || count < 2 || count > 64) throw new Error(`${args[i].slice(2)} must be between 2 and 64`);
+    options[args[i] === '--first-builds' ? 'firstBuilds' : 'lastBuilds'] = count;
+  } else if (args[i] === '--rust-only') {
+    if (args[i + 1] !== 'true') throw new Error('rust-only requires true');
+    options.rustOnly = true;
+  } else if (args[i] === '--entry') {
+    if (!/^index-[A-Za-z0-9_-]+\.js$/.test(args[i + 1])) throw new Error('entry must be a native index asset name');
+    options.entry = args[i + 1];
   } else options[args[i].slice(2)] = resolve(args[i + 1]);
 }
+if ([options.entry, options.lastBuilds, options.firstBuilds].filter(Boolean).length > 1) throw new Error('Use one entry selection option');
+if (options.rustOnly && !options['rust-checker']) throw new Error('rust-only requires rust-checker');
 const home = await realpath(options.home ?? homedir()), root = await realpath(options.root ?? join(home, '.local', 'share', 'claudex'));
 const temporary = await realpath(await mkdtemp(join(tmpdir(), 'claudex-real-frontends-')));
 const reportPath = options.report ?? join(temporary, 'report.json');
@@ -116,6 +124,34 @@ async function validateTarget(adapter, matched, f) {
     ...(bindings.client ? { client: bindings.client } : { native: bindings.native }) };
 }
 
+async function compareRust(graph, f) {
+  const result = await run(options['rust-checker'], ['--home', f.home, '--root', f.root, '--output', join(f.base, 'rust')],
+    { maxBuffer: 1024 * 1024, timeout: 180000 });
+  const rust = JSON.parse(result.stdout), rows = {};
+  assert.equal(rust.entry.asset, graph.entry.asset, 'Rust and JavaScript entry selection');
+  for (const adapter of adapters) {
+    const expected = graph.adapters[adapter], actual = rust.adapters[adapter];
+    try {
+      assert.equal(actual.status, expected.status, actual.reason);
+      if (expected.status !== 'matched') { rows[adapter] = { status: 'passed', selection: 'both-skipped' }; continue; }
+      assert.equal(actual.url, expected.target.url, 'Rust and JavaScript target selection');
+      assert.equal(actual.sources.length, expected.consumer ? 2 : 1, 'complete helper/consumer preparation');
+      const source = await readFile(actual.sources[0].path, 'utf8');
+      await nodeCheck(source, `rust-${adapter}`);
+      patchContracts[adapter](source, expected.target.source, expected.bindings);
+      if (expected.consumer) {
+        assert.equal(actual.sources[1].url, expected.consumer.target.url, 'Rust consumer selection');
+        const consumer = await readFile(actual.sources[1].path, 'utf8');
+        await nodeCheck(consumer, 'rust-folder-consumer');
+        folderConsumerPatchContract(consumer, expected.consumer.target.source, expected.consumer.bindings);
+      }
+      rows[adapter] = { status: 'passed', asset: basename(actual.url), vendorASTAndWiring: 'passed',
+        ...(expected.consumer ? { consumer: basename(actual.sources[1].url) } : {}) };
+    } catch (error) { rows[adapter] = { status: 'failed', reason: error.message.slice(0, 400) }; }
+  }
+  return rows;
+}
+
 async function historicalPin(adapter, module) {
   if (adapter === 'commands') return null;
   const path = `src/${adapter === 'folders' ? 'claude-folder' : adapter === 'chatWake' ? 'claude-chat-wake' : 'claude-owner-wake'}-cache.mjs`;
@@ -174,7 +210,10 @@ try {
     .sort((a, b) => Number(a.metadata.readBigInt64LE(20) - b.metadata.readBigInt64LE(20)));
   assert.ok(entries.length, 'No real entry assets available'); report.availableEntries = entries.length;
   const graphs = [], consumers = new Map();
-  for (const [i, entry] of (options.lastBuilds ? entries.slice(-options.lastBuilds) : entries).entries()) {
+  const selected = options.entry ? entries.filter(entry => basename(entry.url) === options.entry)
+    : options.lastBuilds ? entries.slice(-options.lastBuilds) : options.firstBuilds ? entries.slice(0, options.firstBuilds) : entries;
+  assert.ok(selected.length, 'Requested real entry is unavailable');
+  for (const [i, entry] of selected.entries()) {
     const g = reachable(entry); graphs.push({ entry, ...g });
     const f = await isolated(`build-${i}`); await copyGraph(f, g);
     const row = { entry: basename(entry.url), fetchedAt: new Date(Number((entry.metadata.readBigInt64LE(20) - 11644473600000000n) / 1000n)).toISOString(),
@@ -182,6 +221,15 @@ try {
     report.builds.push(row); process.stderr.write(`Checking ${row.entry} (${g.found.size} cached modules)\n`);
     try {
       const graph = await discoverClaudeFrontend(f);
+      if (options['rust-checker']) row.rust = await compareRust(graph, f);
+      if (options.rustOnly) {
+        row.adapters = row.rust;
+        process.stderr.write(`  ${adapters.map(a => `${a}:${row.rust[a].status}`).join(' ')}\n`);
+        for (const adapter of adapters) if (row.rust[adapter].status === 'failed')
+          process.stderr.write(`    ${adapter}: ${row.rust[adapter].reason}\n`);
+        await rm(f.base, { recursive: true });
+        continue;
+      }
       if (graph.adapters.folders.consumer) consumers.set(graph.adapters.folders.consumer.target.url, graph.adapters.folders.consumer);
       for (const adapter of adapters) {
         try {
@@ -214,7 +262,7 @@ try {
   }
   // Every journal is accounted for, including obsolete hand-pins into the
   // Chat/Cowork module. Those may not qualify as today's Code owner adapter.
-  for (const j of journals) {
+  for (const j of options.rustOnly ? [] : journals) {
     const m = modules.get(j.url), row = { adapter: j.adapter, asset: basename(j.url), cacheFilename: m.name,
       entries: graphs.filter(g => g.found.has(j.url)).map(g => basename(g.entry.url)), missingDirectModules: dependencies(m).filter(u => !modules.has(u)).map(basenameSafe) };
     report.journals.push(row);
@@ -238,7 +286,7 @@ try {
   // its isolated copy. Install N, replace its cache with N+1, wait for reported
   // installation, and prove old immutable originals AND receipts survived.
   const previous = graphs.at(-2), current = graphs.at(-1);
-  if (previous && current) {
+  if (!options.rustOnly && previous && current) {
     const f = await isolated('automatic-reapply'); await copyGraph(f, previous);
     const statuses = []; let maintenance;
     try {
@@ -283,11 +331,13 @@ try {
   }
   for (const [p, hash] of observed) assert.equal((await snapshotClaudeCache(p, p.endsWith('manifest.json') ? 16384 : undefined)).hash, hash, 'Live source changed during verification');
   report.liveSourcesUnchanged = true;
+  if (options['rust-checker']) report.rustParityPassed = report.builds.every(b => !b.discovery && adapters.every(a => b.rust?.[a]?.status === 'passed'));
   report.adapterAcceptancePassed = report.builds.every(b => !b.discovery && adapters.every(a => b.adapters[a]?.status === 'passed' && b.adapters[a].installation === 'installed'))
     && report.transitions.length > 0 && report.transitions.every(t => t.status === 'passed');
   report.passed = report.adapterAcceptancePassed && report.builds.every(b => !b.discovery && adapters.every(a => b.adapters[a]?.status === 'passed'
     && b.adapters[a].handPinEquivalence?.status !== 'failed'))
     && report.transitions.every(t => t.status === 'passed') && report.journals.every(j => j.status !== 'failed');
+  if (options.rustOnly) { report.passed = report.rustParityPassed; report.adapterAcceptancePassed = false; }
 } catch (e) { report.fatal = e.message.slice(0, 300); report.passed = false; }
 finally {
   await mkdir(dirname(reportPath), { recursive: true, mode: 0o700 }); await writeFile(reportPath, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 }); await chmod(reportPath, 0o600);

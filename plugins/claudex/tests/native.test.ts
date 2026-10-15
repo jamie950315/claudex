@@ -191,7 +191,8 @@ test('native compose previews the entire operation before exactly one dispatch',
   let prepared: any
   stubs(on, false, (request, event) => {
     seen.push(request)
-    expect(event.argv[1]).toMatch(/\/runtime\/bin\/claudex-mod-bridge\.mjs$/)
+    expect(event.argv[0]).toMatch(/\/runtime\/bin\/claudex$/)
+    expect(event.argv[1]).toBe('mod-bridge')
     expect(event.argv[2]).toBe('--root')
     expect(event.init.timeoutMs).toBe(20000)
     if (request.op === 'prepare') {

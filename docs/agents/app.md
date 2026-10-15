@@ -18,9 +18,8 @@ manager, not replacement of an existing inference CLI. Its bootstrap disables
 package scripts and selects the exact native platform package, not the wrapper's
 postinstall placeholder. Bundled source/runtime and the signed app bundle/executable
 may be owned by the current user or root, protected from foreign writes. Private
-state, login files and plugin caches must remain owned by the current user. Empty
-npm user/global configuration files must be distinct and protected; do not inherit credentials
-or a provider directory's npm settings. Native runtime guards and accounts remain.
+state, login files and plugin caches must remain owned by the current user. Native package downloads use a clean environment and verified registry integrity;
+never inherit npm configuration, run package scripts or copy credentials. Native runtime guards and accounts remain.
 Show installed payload/version and fresh loaded-Mod self-report separately.
 mod_wake_status is controller-only, bounded and content-free, never a dispatch
 lease or delivery proof. Old/expired observers cannot certify current activation.
@@ -134,7 +133,7 @@ Do not delete native data, credentials, or login definitions. Inspect/smoke and
 duplicate-instance exits must never stop services. CLI-only status display Quit
 retains its display-only behavior.
 
-`native/ClaudexApp` and `bin/claudex-app.mjs` provide automatic setup for users
+`native/ClaudexApp` and the Rust `claudex app` command provide automatic setup for users
 who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
 replace those apps. Reuse native CLIs or fill missing CLI components from pinned
 official npm packages in the private root. Keep normal native credential
@@ -157,11 +156,14 @@ team, and a passing strict deep verification; it is labeled as a local build.
 Codex keeps its vendor-only check. Any other publisher blocks only its own
 desktop-integration row; never skip to another copy or show unrelated
 prerequisites as missing.
-Package portable Node/npm and production dependencies so end users need no Git,
-Node installation, compiler or terminal setup. Build with an explicit file
-allowlist, probe the supplied Node binary's Zstandard/CRC32 APIs before staging,
-and verify nested signatures. Reject incompatible runtime distributions before
-producing an app. Development signing is not notarized
+Package the complete Rust executable at `Resources/engine/bin/claudex` and
+explicitly allowlisted host-required Mod assets so end users need no Git, Node
+installation, compiler or terminal setup. Swift invokes the executable with `app`.
+The builder checks native architecture, system-only dylib dependencies, complete
+UI/Mod catalogs, the icon and nested signatures. Do not package the JavaScript
+engine or npm dependencies. Codex Desktop's OpenAI-signed Node remains the native
+process host through the embedded narrow bootstrap; never replace that signed
+ancestry with the Rust executable. Development signing is not notarized
 public distribution. `--inspect-only` is read-only UI validation; `--ui-smoke`
 checks native layout with synthetic data, not installed service acceptance.
 The 20-second setup inspection runs only while the window is visible or a

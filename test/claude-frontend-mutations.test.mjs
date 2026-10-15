@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import { runInNewContext } from 'node:vm';
 import { frontendBuild } from './fixtures/claude-frontend.mjs';
 import { ownerAnchors, transformAnchoredOwner, syntax } from '../src/claude-frontend-anchors.mjs';
+import { rustFrontendProof } from './fixtures/rust-frontend-proof.mjs';
 
 // Differential mutation testing of the owner-wake proof. Each mutant inserts
 // one binding form for one name at one place in a synthetic Code component.
 // Whenever the anchors still accept the mutant, the patched module must behave
 // exactly like the unpatched mutant, and its signals must never name a session
 // other than one the native send could have used. Refusing is always allowed.
-const BASE = 'https://assets.invalid/v1/';
+const BASE = 'https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/';
 function bases() {
   const retained = frontendBuild();
   retained.sources.react += 'var Ref=Ra.useRef;var refGetter={useRef:()=>Ref};export{Ref as RefHook};';
@@ -62,40 +63,45 @@ test('accepted owner-wake mutants keep native behaviour and never signal a sessi
     const modules = new Map(Object.keys(build.sources).map(key => [BASE + build.names[key], { url: BASE + build.names[key], source: build.sources[key] }]));
     const url = BASE + build.names.ownerWake, graph = { get: path => modules.get(new URL(path, url).href) };
     const original = build.sources.ownerWake;
-    // The unmutated component is accepted and signals the session it sends.
-    const baseline = transformAnchoredOwner(original, ownerAnchors(original, graph), bootstrap);
-    assert.deepEqual((await behave(baseline)).outcome, (await behave(original)).outcome, kind);
-    const position = ([marker, after]) => { const at = original.indexOf(marker);
-      return at < 0 || original.indexOf(marker, at + 1) >= 0 ? -1 : after ? at + marker.length : at; };
-    const mutants = [];
-    for (const place of PLACES) for (const name of NAMES) for (const make of FORMS) {
-      const cut = position(place); if (cut < 0) continue;
-      mutants.push([`${JSON.stringify(place[0])} ${make(name)}`, original.slice(0, cut) + make(name) + original.slice(cut)]);
-    }
-    // Second order: a use in the component combined with a binding in the send.
-    // A hidden read plus an escape once satisfied a count of three identifiers.
-    for (const name of NAMES) for (const outer of PLACES.slice(0, 2)) for (const use of USES)
-      for (const inner of PLACES.slice(2)) for (const hide of HIDES) {
-        const first = position(outer), second = position(inner); if (first < 0 || second < 0) continue;
-        mutants.push([`${JSON.stringify(outer[0])} ${use(name)} + ${JSON.stringify(inner[0])} ${hide(name)}`,
-          original.slice(0, first) + use(name) + original.slice(first, second) + hide(name) + original.slice(second)]);
+    const rust = await rustFrontendProof(modules, url);
+    const transform = async source => rust ? rust.transform(source, bootstrap)
+      : transformAnchoredOwner(source, ownerAnchors(source, graph), bootstrap);
+    try {
+      // The unmutated component is accepted and signals the session it sends.
+      const baseline = await transform(original);
+      assert.deepEqual((await behave(baseline)).outcome, (await behave(original)).outcome, kind);
+      const position = ([marker, after]) => { const at = original.indexOf(marker);
+        return at < 0 || original.indexOf(marker, at + 1) >= 0 ? -1 : after ? at + marker.length : at; };
+      const mutants = [];
+      for (const place of PLACES) for (const name of NAMES) for (const make of FORMS) {
+        const cut = position(place); if (cut < 0) continue;
+        mutants.push([`${JSON.stringify(place[0])} ${make(name)}`, original.slice(0, cut) + make(name) + original.slice(cut)]);
       }
-    for (const [description, mutant] of mutants) {
-      counts.mutants++;
-      try { syntax(mutant); } catch { counts.invalid++; continue; }
-      let bindings;
-      try { bindings = ownerAnchors(mutant, graph); } catch { counts.refused++; continue; }
-      counts.accepted++;
-      const label = `${kind} ${description}`;
-      const native = await behave(mutant), patched = await behave(transformAnchoredOwner(mutant, bindings, bootstrap));
-      if (JSON.stringify(native.outcome) !== JSON.stringify(patched.outcome)) { failures.push(`${label}: native ${JSON.stringify(native.outcome)} patched ${JSON.stringify(patched.outcome)}`); continue; }
-      const sent = patched.outcome.sent;
-      if (!sent || typeof sent !== 'object') continue;
-      const submits = patched.signals.filter(signal => signal[1] === 'submit');
-      if (submits.length !== 1) failures.push(`${label}: ${submits.length} submit signals for one native send`);
-      else if (submits[0][0] !== sent.id && !['session_first', 'session_next'].includes(submits[0][0]))
-        failures.push(`${label}: signalled ${submits[0][0]} while native sent ${sent.id}`);
-    }
+      // Second order: a use in the component combined with a binding in the send.
+      // A hidden read plus an escape once satisfied a count of three identifiers.
+      for (const name of NAMES) for (const outer of PLACES.slice(0, 2)) for (const use of USES)
+        for (const inner of PLACES.slice(2)) for (const hide of HIDES) {
+          const first = position(outer), second = position(inner); if (first < 0 || second < 0) continue;
+          mutants.push([`${JSON.stringify(outer[0])} ${use(name)} + ${JSON.stringify(inner[0])} ${hide(name)}`,
+            original.slice(0, first) + use(name) + original.slice(first, second) + hide(name) + original.slice(second)]);
+        }
+      for (const [description, mutant] of mutants) {
+        counts.mutants++;
+        try { syntax(mutant); } catch { counts.invalid++; continue; }
+        let transformed;
+        try { transformed = await transform(mutant); } catch { counts.refused++; continue; }
+        counts.accepted++;
+        const label = `${kind} ${description}`;
+        const native = await behave(mutant), patched = await behave(transformed);
+        if (JSON.stringify(native.outcome) !== JSON.stringify(patched.outcome)) { failures.push(`${label}: native ${JSON.stringify(native.outcome)} patched ${JSON.stringify(patched.outcome)}`); continue; }
+        const sent = patched.outcome.sent;
+        if (!sent || typeof sent !== 'object') continue;
+        const submits = patched.signals.filter(signal => signal[1] === 'submit');
+        if (submits.length !== 1) failures.push(`${label}: ${submits.length} submit signals for one native send`);
+        else if (submits[0][0] !== sent.id && !['session_first', 'session_next'].includes(submits[0][0]))
+          failures.push(`${label}: signalled ${submits[0][0]} while native sent ${sent.id}`);
+      }
+    } finally { rust?.close(); }
   }
   assert.deepEqual(failures.slice(0, 12), [], `${failures.length} failing mutants`);
   // The generator must exercise both verdicts, or it proves nothing.

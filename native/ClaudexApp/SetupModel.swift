@@ -278,7 +278,6 @@ struct StopResult: Decodable {
 
 final class SetupRunner {
     private let root: String
-    private let node: URL
     private let engine: URL
     private let maxOutput = 1_048_576
     private let readOnly: Bool
@@ -287,8 +286,7 @@ final class SetupRunner {
         self.root = root
         self.readOnly = readOnly
         let base = resources ?? URL(fileURLWithPath: "/nonexistent")
-        self.node = base.appendingPathComponent("runtime/bin/node")
-        self.engine = base.appendingPathComponent("engine/bin/claudex-app.mjs")
+        self.engine = base.appendingPathComponent("engine/bin/claudex")
     }
 
     func run(_ command: SetupCommand, completion: @escaping (Result<SetupReport, SetupProcessError>) -> Void) {
@@ -361,13 +359,13 @@ final class SetupRunner {
 
     private func executeData(_ arguments: [String]) -> Result<Data, SetupProcessError> {
         let files = FileManager.default
-        guard files.isExecutableFile(atPath: node.path), files.fileExists(atPath: engine.path) else {
+        guard files.isExecutableFile(atPath: engine.path) else {
             return .failure(.unavailable)
         }
         let process = Process()
-        process.executableURL = node
+        process.executableURL = engine
         // Read-only inspection must not record engine state such as verification caches.
-        process.arguments = [engine.path] + arguments + ["--root", root] + (readOnly ? ["--read-only"] : [])
+        process.arguments = ["app"] + arguments + ["--root", root] + (readOnly ? ["--read-only"] : [])
         let output = Pipe(), errors = Pipe()
         process.standardOutput = output
         process.standardError = errors

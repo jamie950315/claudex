@@ -93,10 +93,10 @@ function api($, options, observer = null) {
     preferredLanguages: () => $.process.run(['/usr/bin/defaults', 'read', '-g', 'AppleLanguages'], { timeoutMs: 2000 }),
     bridge: async request => {
       if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker controller access is disabled.');
-      if (!validPath(options.stateRoot) || !validPath(options.nodeBinary)) throw new Error('Stage and configure the Claudex companion with canonical root and Node paths.');
+      if (!validPath(options.stateRoot)) throw new Error('Stage and configure the Claudex companion with a canonical state root.');
       const root = $.plugin.root;
       if (!validPath(root)) throw new Error('The native plugin root is unavailable.');
-      const reply = await $.process.run([options.nodeBinary, `${root}/runtime/bin/claudex-mod-bridge.mjs`,
+      const reply = await $.process.run([`${root}/runtime/bin/claudex`, 'mod-bridge',
         '--root', options.stateRoot, ...(options.nativeWake === true ? ['--native-wake'] : []), ...(options.selfWake === true ? ['--self-wake'] : [])], {
         stdin: JSON.stringify(request), timeoutMs: request.op === 'wake-next' ? 35000 : 20000,
       });

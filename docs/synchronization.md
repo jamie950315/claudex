@@ -5,7 +5,10 @@
 This guide documents Desktop setup and the native lifecycle, history and storage
 contracts. Synchronization moves completed history without requesting model
 inference. For model execution and delegation, use [collaboration](collaboration.md).
-Run all commands from the repository directory.
+Use the installed `claudex` executable, or `bin/claudex` from a built developer
+checkout. This branch's Rust migration status is tracked in
+[Rust migration](rust-migration.md); historical native acceptance below does not
+establish installed acceptance of the Rust candidate.
 
 ## In this guide
 
@@ -23,9 +26,10 @@ Run all commands from the repository directory.
 
 ## Runtime compatibility
 
-Requires macOS and Node.js 22.15+ (22.x) or 23.8+. The earlier 22.x and 23.x
-runtimes lack the Zstandard/CRC32 APIs used by the Desktop resource adapters.
-The app supplies its own compatible runtime. Validated native baselines are Codex CLI
+Requires macOS and the native Rust Claudex executable. The app bundle includes
+that engine; an end-user Node.js or npm installation is not required. Codex
+Desktop's protected process chain still uses its original OpenAI-signed Node
+host. Validated native baselines are Codex CLI
 `0.155.0-alpha.16.3`/`0.155.0-alpha.16.4` and Claude Code `2.1.210`/`2.1.281`.
 Manual CLI initialization defaults to `versionPolicy: "strict"`, which enforces
 these baselines. New graphical installations use `warn` unless an existing policy
@@ -54,9 +58,9 @@ is refused.
 For a fresh state root (do not reinitialize an existing configuration):
 
 ```sh
-node bin/claudex.mjs init --all-projects
-node bin/claudex.mjs desktop install
-node bin/claudex.mjs service install
+claudex init --all-projects
+claudex desktop install
+claudex service install
 ```
 
 Installation enables all-project discovery and configures the native
@@ -85,7 +89,7 @@ The new runtime takes effect on the next backend launch. Do not weaken native
 peer verification to keep an unsigned wrapper running.
 
 App updates do not need to match a single hard-coded CLI patch release.
-`src/codex-versions.mjs` defines the exact validated runtime allowlist shared by
+`crates/claudex-core/src/version.rs` defines the exact validated runtime allowlist shared by
 the launcher, doctor and both adapters. Under strict policy, an unvalidated version starts Desktop's
 original native transport with unchanged arguments and environment, under an
 exclusive native-only owner lease. No shared socket is published, and the
@@ -101,8 +105,8 @@ launcher initialization. No model request is needed for these checks.
 ### Version-only enforcement
 
 ```sh
-node bin/claudex.mjs version-policy warn
-node bin/claudex.mjs version-policy strict
+claudex version-policy warn
+claudex version-policy strict
 ```
 
 The first command opts out of version-only blocking for Codex, Claude Code and
@@ -121,7 +125,8 @@ using native-only transport, a normal app restart is required before sharing
 can start. Do not restart active user work. Claudex no longer forces
 `DISABLE_AUTOUPDATER=1` on its Claude workers; explicitly inherited user settings
 are preserved. Installed applications keep their normal update mechanisms;
-Claudex does not automatically upgrade its npm SDK dependency.
+The Rust engine uses the selected native Claude CLI's SDK protocol directly;
+it does not install or upgrade an engine-side npm SDK dependency.
 
 Warn policy also allows changed native version tags through the existing exact
 image-sidecar and reset-prologue formats. It does not relax signatures, native
@@ -288,7 +293,7 @@ For other manual enrollment changes, stop the owned watcher normally. In Desktop
 mode, `untrack` accepts the exact logical conversation ID shown by `status`:
 
 ```sh
-node bin/claudex.mjs untrack CONVERSATION_ID
+claudex untrack CONVERSATION_ID
 ```
 
 This stops synchronization and removes the conversation from folder and Local
@@ -305,7 +310,7 @@ tracking does not grant deletion or hide quota exhaustion. To restore the saved
 enrollment explicitly, stop the watcher and run:
 
 ```sh
-node bin/claudex.mjs resume-tracking CONVERSATION_ID
+claudex resume-tracking CONVERSATION_ID
 ```
 
 Resumption verifies preserved originals, dependency anchors and current histories
@@ -322,7 +327,7 @@ enroll the original as a separate logical conversation. First inspect both branc
 and record the exact completed original checkpoint. With the watcher stopped:
 
 ```sh
-node bin/claudex.mjs split-original CONVERSATION_ID --id ORIGINAL_NATIVE_ID \
+claudex split-original CONVERSATION_ID --id ORIGINAL_NATIVE_ID \
   --record-id ORIGINAL_RECORD_ID --expected-count MESSAGE_COUNT --expected-digest SHA256
 ```
 
@@ -439,8 +444,8 @@ or missing Local matches are left unchanged instead of guessing a destination.
 Stop the watcher safely while Claude is idle, then run:
 
 ```sh
-node bin/claudex.mjs desktop folders enable
-node bin/claudex.mjs desktop folders status
+claudex desktop folders enable
+claudex desktop folders status
 ```
 
 Restart the idle Claude app once, then start the watcher again. New verified
@@ -495,7 +500,7 @@ renderer reads the archived native session and git metadata through the app's
 existing APIs and its exact session normalizer; it does not invent a folder key
 or create a similarly named group.
 
-To undo, stop the watcher safely and run `node bin/claudex.mjs desktop folders
+To undo, stop the watcher safely and run `claudex desktop folders
 disable`, then restart the idle Claude app and watcher. The map is cleared and
 the exact original cache resource is restored only if the current file remains
 installer-owned. Original conversations and backups are preserved.
@@ -641,8 +646,7 @@ from the direct registry. Check the subsequent
 After deploying an updated bundle, the coordinator installs with:
 
 ```sh
-/Applications/Claudex.app/Contents/Resources/runtime/bin/node \
-  /Applications/Claudex.app/Contents/Resources/engine/bin/claudex-app.mjs setup \
+/Applications/Claudex.app/Contents/Resources/engine/bin/claudex app setup \
   --root "$HOME/.local/share/claudex"
 ```
 
@@ -685,8 +689,8 @@ evidence alone does not establish those outcomes for a new graph.
 After enabling folders, safely stop the watcher before changing this setting:
 
 ```sh
-node bin/claudex.mjs desktop handoffs enable
-node bin/claudex.mjs desktop handoffs status
+claudex desktop handoffs enable
+claudex desktop handoffs status
 ```
 
 Restart the idle Claude app after the cache adapter upgrade, then start the
@@ -735,7 +739,7 @@ authenticated Claudex import labels and transport receipts inside history remain
 unchanged.
 
 To disable only automatic Local archival, stop the watcher and run
-`node bin/claudex.mjs desktop handoffs disable`. This clears pending commands;
+`claudex desktop handoffs disable`. This clears pending commands;
 it does not unarchive predecessors, delete histories or change the current
 Remote Control writer.
 
@@ -862,9 +866,9 @@ back into the CLI-only coordinator. This rollback does not alter a running app.
 Existing conversations can be enrolled explicitly:
 
 ```sh
-node bin/claudex.mjs track --from codex --id CODEX_THREAD_ID
-node bin/claudex.mjs track --from claude --source /absolute/path/to/session.jsonl
-node bin/claudex.mjs sync CONVERSATION_ID --from claude
+claudex track --from codex --id CODEX_THREAD_ID
+claudex track --from claude --source /absolute/path/to/session.jsonl
+claudex sync CONVERSATION_ID --from claude
 ```
 
 `track` returns the logical conversation ID. The watcher handles subsequent
@@ -880,8 +884,8 @@ For background operation, stop the foreground watcher and install the per-user
 LaunchAgent once:
 
 ```sh
-node bin/claudex.mjs service install
-node bin/claudex.mjs service status
+claudex service install
+claudex service status
 ```
 
 The service runs at login. `status` shows errors without transcript contents.
@@ -920,7 +924,7 @@ Only one watcher can run for a state root.
 For an existing CLI-only installation that needs a standalone menu-bar display:
 
 ```sh
-node bin/claudex.mjs status-app install
+claudex status-app install
 ```
 
 Graphical Claudex.app already owns this interface and blocks a second standalone
@@ -1003,10 +1007,10 @@ Policy overrides live in `config.json` under `policy`: `previousPerSide`,
    the independent previous version; prune only verified independent backups.
 
 ```sh
-node bin/claudex.mjs status
-node bin/claudex.mjs recover
-node bin/claudex.mjs abort
-node bin/claudex.mjs gc
+claudex status
+claudex recover
+claudex abort
+claudex gc
 ```
 
 `recover` finishes the same interrupted transaction; it does not allocate a new
@@ -1302,10 +1306,13 @@ histories do not gain an exception to the normal completion checks.
 
 ### Shared Codex transport
 
-`bin/claudex-codex.mjs` is the native launcher installed by Desktop mode. It preserves
-the Desktop-supplied arguments and environment, replaces only the app-server
-transport with the public Unix WebSocket listener, and forwards Desktop JSONL
-frames unchanged. `CodexWebSocketClient` can join that same native backend. An
+`claudex desktop install` publishes a narrow host bootstrap under the private
+state root. Codex's original OpenAI-signed Node starts its native backend, while
+the Rust `codex-host` sidecar owns transport policy and framing outside that
+protected ancestry. It preserves the Desktop-supplied arguments and environment,
+replaces only the app-server transport with the public Unix WebSocket listener,
+and forwards Desktop JSONL frames unchanged. Other authenticated Claudex clients
+can join that same native backend. An
 isolated native test proves that a second client can safely archive an idle owned
 projection while the first client remains connected and receives the event.
 

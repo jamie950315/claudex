@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.31
+# Claudex native companion, 0.8.32
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -112,12 +112,12 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.31-marketplace
+claudex mod stage --root /absolute/private/claudex-root --output /new/claudex-0.8.32-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local
-installation. Staging bundles the existing Unix-socket transport together with
-the new bounded helper. It creates no service and requests no inference. The
+installation. Staging bundles the native Rust helper and its bounded Unix-socket
+transport. It creates no service and requests no inference. The
 source directory alone intentionally has no configured state root or bundled
 runtime.
 
@@ -185,7 +185,7 @@ gate. Linux and Windows own-inbox delivery are not implemented.
 
 See `docs/claude-mod.md`, `docs/claude-mod-handoff.md`, and
 `docs/claude-mod-acceptance.md` in the source repository. Review source and trust
-the Node executable and configuration: a native Mod runs with the current user's
+the Rust executable and configuration: a native Mod runs with the current user's
 local permissions. Helper requests carry operation data on stdin; controller
 capabilities stay in the private broker root.
 

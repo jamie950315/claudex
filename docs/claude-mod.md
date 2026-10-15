@@ -1,10 +1,15 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.31
+## Current companion: 0.8.32
 
 Claudex.app 1.4.8 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.32 stages the native Rust companion executable rather than the
+JavaScript engine. The native Mod remains host-required JavaScript; controller
+requests use the same exact-context protocol, private Unix RPC and durable
+no-replay receipts. This migration branch is not an installed Desktop acceptance
+or a published release.
 Version 0.8.31 lets `/claudex:warm on` start its own first warm request when
 there is no usable current request sample, then refresh periodically. No extra
 user message is needed. A cache miss is recorded without stopping a successful
@@ -279,7 +284,7 @@ runtime, not a requirement for every end user to run tests manually:
 3. Install/configure the staged plugin using its native manager. Open a fresh
    normal session or use a supported reload, verifying the actual loaded version.
 4. Configure both native opt-ins, select
-   `node bin/claudex.mjs collaboration native-wake --route mod-self`, and inspect
+   `claudex collaboration native-wake --route mod-self`, and inspect
    its status. Run a separately authorized canary with only the recipient loaded,
    checking the exact claim, native reception, real reply and Stop ACK. Verify
    inbound hold/refuse, lifecycle fencing and no replay; a socket write alone
@@ -305,7 +310,7 @@ route. Keep historical and new evidence separate in the
 ```text
 Claude Desktop Code tab / Claude Code CLI
     native Mod: pane, user-confirmed actions, workflow skill
-        $.process.run(fixed Node argv, JSON stdin)
+        $.process.run(fixed native executable argv, JSON stdin)
             packaged, bounded Claudex helper
                 existing private collaboration/rpc.sock
                     existing CollaborationHub
@@ -389,14 +394,15 @@ support before use.
 
 ## Standalone staging and developer validation
 
-From a source checkout:
+From a source checkout, build the Rust executable and run the affected contracts:
 
 ```sh
-node --version
-npm ci --ignore-scripts --no-audit --no-fund
-node --test --test-concurrency=4 test/claude-mod-*.test.mjs
-# Run npm test when the change affects shared core, persistence, or concurrency.
+cargo build -p claudex-cli
+cargo test -p claudex-app
 ```
+
+The existing JavaScript tests remain behavioral references during migration;
+Rust synthetic evidence and native activation evidence remain separate.
 
 Select the **synchronization root**, with `collaboration/` underneath it. The
 usual repo default is `$HOME/.local/share/claudex`; read the actual installation's
@@ -408,19 +414,18 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.31-review"
-node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
+STAGE="$PARENT/claudex-0.8.32-review"
+target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
-`STAGE` must be new. Staging refuses replacement, validates its explicit source
-allowlist, bundles the existing transport and its effort module, writes fixed
-canonical Node/root defaults, and produces `stage-report.json` with hashes. It
-changes no native app, service, settings file, transcript or runtime allowlist.
-The Node executable must be regular, executable, and free of group/world write
-permission; provide a trusted alternative with `--node /absolute/node` when
-necessary. Keep its architecture and supported Node version appropriate for the
-local host. Shared CI executable permissions are handled with isolated test
-fixtures, without weakening the production check.
+`STAGE` must be new. Staging checks an explicit source allowlist and copies the
+complete native executable to `runtime/bin/claudex` with executable permissions.
+Use `--executable /absolute/claudex` to choose another built executable and
+`--source-root /absolute/checkout-or-engine` to choose its host assets. A script
+is refused. The former `--node` option is rejected; it cannot select the native
+companion. The stage contains fixed root defaults and `stage-report.json` with
+the exact payload hashes. It changes no native app, service, settings file,
+transcript or runtime allowlist and does not require a Node installation.
 
 Use the independently selected native validation executable:
 
@@ -430,8 +435,8 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.31-native-tests"
-node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
+TEST_STAGE="$PARENT/claudex-0.8.32-native-tests"
+target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"
 ```
@@ -453,8 +458,7 @@ instead of these manual commands:
 "$CLAUDE_VALIDATE" plugin install claudex@claudex-local --scope user
 ```
 
-Use `/plugin configure claudex@claudex-local` to verify the state root, Node
-executable and intended `nativeWake` and `selfWake` values, including overrides
+Use `/plugin configure claudex@claudex-local` to verify the state root and intended `nativeWake` and `selfWake` values, including overrides
 retained from prior installs. Both default to true; use the native manager to
 retain an explicit false when opting out. Validate a new runtime separately.
 For own-inbox activation, both must be true. Open a fresh suitable native Code
@@ -469,7 +473,7 @@ them through its supported configuration command instead of editing settings:
 ```
 
 Provide a JSON object on stdin with single-line string values for `stateRoot`,
-`nodeBinary`, `nativeWake`, and `selfWake` (booleans supplied as the string
+`nativeWake`, and `selfWake` (booleans supplied as the string
 `"false"` or authorized `"true"`). Verify the result has no
 unconfigured options. The native writer parses the declared boolean type.
 
@@ -483,7 +487,7 @@ Use the actual installed cache path reported by the native plugin manager:
 "$CLAUDE_VALIDATE" --plugin-dir="$INSTALLED_PLUGIN" plugin configure claudex@inline --values-stdin --json
 ```
 
-Save the intended state root, Node executable and wake preferences for both
+Save the intended state root and wake preferences for both
 identities. False/false supports a default-disabled installation; only explicitly
 authorized receiver changes should enable the wake options. Keep source
 defaults intact; do not copy credentials, edit native registries or change the
@@ -711,17 +715,15 @@ are deliberately separate from native deployment evidence.
 
 ## Current app engine packaging
 
-`src/app-bundle.mjs` includes both companion commands and the companion runtime
-modules through explicit allowlists, including the Mod broker route, own-inbox
-transport and receipt outbox modules. `ENGINE_PLUGIN_FILES` includes the manifest,
-hooks declaration, controller, register, delivery, panel, localization and catalog
-modules, workflow skill, plugin README and native test fixture.
-`copyAllowed` copies only these assets and validates plugin directories from the
-source root downward. A symlinked parent is rejected before inspecting descendants.
+The Rust builder includes the actual `engine/bin/claudex` executable and only
+`mod_install::STAGE_FILES` host assets. Its native companion is copied again into
+the stage, so removing the source checkout cannot break an installed Mod.
+The manifest, register/delivery/controller/panel/cache modules, complete locale
+catalog, README, skills and native test fixture are explicitly allowlisted.
+Symlinked asset parents and non-regular files are refused. No engine JavaScript,
+Node distribution or npm dependency installation is bundled.
 
-The packaging tests cover dependency coverage, staging from copied engine resources,
-exclusion of unlisted files, and symlink rejection. The existing full-runtime
-allowlist test also passes with these additions. Current graphical setup uses the
-separate app-owned installation journal and official manager described in the app
-guide; the stager itself still only produces files. A signed build verifies
-packaging, not installation or native Mod painting.
+The Swift UI, catalogs, icon, native architecture/system-library checks and
+nested signatures use the normal app build path. The signed Codex Desktop
+process host stays separate. A signed build proves packaging; native Mod
+painting, installed service behavior and model reception have their own checks.

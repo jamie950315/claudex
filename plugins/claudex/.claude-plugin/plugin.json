@@ -1,16 +1,12 @@
 {
   "name": "claudex",
-  "version": "0.8.31",
+  "version": "0.8.32",
   "author": { "name": "Claudex contributors" },
   "description": "AI-first Claudex session observations, reviewed operations and exact-session receipt handling.",
   "userConfig": {
     "stateRoot": {
       "type": "string", "title": "Claudex state root",
       "description": "Canonical private synchronization root. The stage command supplies this path.", "default": ""
-    },
-    "nodeBinary": {
-      "type": "string", "title": "Node executable",
-      "description": "Absolute trusted Node.js executable supplied by the stage command.", "default": ""
     },
     "selfWake": {
       "type": "boolean", "title": "Enable current-session inbox delivery",

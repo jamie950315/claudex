@@ -2,7 +2,9 @@
 
 [Back to README](../README.md)
 
-Current release: **Claudex.app 1.4.8**, with **Claude Mod 0.8.31** bundled.
+Current source: **Claudex.app 1.4.8**, with **Claude Mod 0.8.32** bundled.
+The `codex/rust-refactor` branch is an incomplete runtime migration, not a new
+published release.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -19,8 +21,9 @@ Claudex.app is for Mac users who already have the official ChatGPT/Codex and
 Claude desktop applications installed. It connects those existing installations;
 it does not install, replace, or upgrade the vendor desktop apps.
 
-The app bundles Node.js, its package manager, and the Claudex engine. End users
-do not need Git, a separate Node.js installation, or terminal configuration.
+The Rust app bundle contains the native Claudex engine, Swift UI and required
+host assets. End users do not need Git, Node.js, npm or terminal configuration.
+Codex Desktop's protected launcher still uses its own OpenAI-signed Node host.
 
 ## First launch
 
@@ -104,10 +107,10 @@ and the scope of the assigned task still apply. Children inherit a read-only
 parent's restriction even when the app's root-task default permits editing.
 
 The app reuses working CLI components. If a necessary CLI is missing, it installs
-a pinned official npm package under the private Claudex state directory using
-its bundled runtime. The provider desktop apps must already be present before
-this step. Installation uses the public npm registry, not a copied account key
-or the user's global Node.js installation.
+a pinned official native package under the private Claudex state directory.
+The provider desktop apps must already be present before this step. Installation
+verifies the public npm registry's package integrity without running npm or
+installation scripts, copying account keys or using a global Node.js installation.
 
 ## What setup configures
 
@@ -122,7 +125,8 @@ or the user's global Node.js installation.
   MCP device grant and a published owner map. Claude RC delivers queued messages;
   this activation does not submit model input or require Codex to be connected.
 - All-project Desktop synchronization using the original OpenAI-signed native
-  launcher runtime, not Claudex's own Node binary for that protected integration.
+  launcher runtime, with the Rust transport sidecar outside the protected native
+  process ancestry.
 - Native folder presentation and Local predecessor handoff when the existing
   frontend resource and lifecycle checks permit them.
 
@@ -159,8 +163,9 @@ Unexpected or modified installations stay explicit instead of being overwritten.
 
 An existing manager is selected by actual configure/validate capabilities. If no
 supported native manager is present, the app installs a separate pinned official
-management CLI with its bundled Node/npm, checks package integrity and disables
-installation scripts. This does not change the CLI used for existing model work.
+native management CLI by directly downloading its pinned official platform
+package, checking registry integrity and extracting only safe bounded files.
+It never invokes npm or installation scripts. This does not change the CLI used for existing model work.
 Initial component downloads require network access; vendor desktop apps and
 native account access are still prerequisites. No credentials are copied.
 
@@ -335,7 +340,7 @@ prevents the folder patch;
 there is no guessed resource or signature bypass. Refer to
 [synchronization](synchronization.md) for the exact boundaries.
 
-Developer diagnostics can invoke `node bin/claudex-app.mjs inspect --read-only`
+Developer diagnostics can invoke `claudex app inspect --read-only`
 for a non-mutating JSON report. Plain `inspect` does not run setup or models but
 may record a successful signature-verification cache entry; `--read-only` forbids
 that write too. `Claudex.app --inspect-only` exposes that report in the native UI
@@ -364,28 +369,33 @@ and notarization are still required before advertising a download that launches
 without additional Gatekeeper handling on other users' Macs. No OS verification
 is disabled as a workaround.
 
-For maintainers, obtain an official portable macOS Node distribution and verify
-its published checksum, then build with Xcode's Swift compiler and an available
-signing identity:
+On the Rust migration branch, maintainers build the complete native engine with
+Cargo and use Xcode's Swift compiler plus an available signing identity:
 
 ```sh
-node bin/build-claudex-app.mjs \
+cargo build --release -p claudex-cli
+target/release/claudex app build \
+  --source-root /absolute/claudex-checkout \
+  --executable /absolute/claudex-checkout/target/release/claudex \
   --output /absolute/output/Claudex.app \
-  --node-distribution /absolute/node-distribution \
   --identity "$CLAUDEX_SIGNING_IDENTITY" \
   --zip /absolute/output/Claudex-macOS-arm64.zip
 ```
 
-The builder requires Node.js 22.15+ (22.x) or 23.8+ and probes the portable
-runtime's Zstandard/CRC32 APIs before staging. It refuses an incompatible runtime
-instead of packaging an app whose Desktop adapters would fail later.
-It uses an explicit engine-file allowlist, lockfile-based production
-dependency installation, portable Mach-O dependency checks, and nested code
-signatures. Existing output bundles are not overwritten. Transcripts, account
-files, the general repository test suite, local Git history and private configuration
-are not bundled. The Mod's explicitly allowlisted native test fixture is included
-with its plugin payload for native validation.
-Generated bundles, archives and signing details stay outside the repository.
+The builder packages the Rust executable and allowlisted native Mod host assets,
+checks Mach-O architecture/system-library dependencies, complete catalogs and
+icon output, then signs native children and verifies the complete bundle.
+Existing output bundles are not overwritten. It does not package the JavaScript
+engine, a Node distribution or npm dependencies. The OpenAI-signed Codex Desktop
+Node remains the required native process-chain host through a narrow embedded
+bootstrap; it is not the Claudex engine.
+
+Transcripts, account files, the general repository test suite, local Git history
+and private configuration are not bundled. The Mod's explicitly allowlisted
+native test fixture remains in its payload for native validation. Generated
+bundles, archives and signing details stay outside the repository. Source
+migration remains incomplete until the [Rust completion contract](rust-migration.md)
+is met; a candidate bundle is not a published or installed release.
 
 Automated setup tests use isolated private directories and injected installers.
 They verify scope defaults, missing prerequisites, account holds, ownership
