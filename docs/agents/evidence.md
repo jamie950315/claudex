@@ -6,6 +6,61 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Rust runtime follow-up (2026-10-16)
+
+Authorized native synchronization acceptance used a dedicated two-message
+synthetic genesis, real NativeAdapter plan/apply and signed archive packets,
+then three real model turns: Claude -> Codex -> the same Claude owner, followed
+by a final managed Codex snapshot. The recall prompts did not repeat the seed
+values; both models recalled them and the preceding model's marker, ending
+with the exact requested roundtrip result. All three turns used no tools.
+The current native histories both matched the complete ten-message committed
+canonical checkpoint, with no incomplete tail or pending transaction. Normal
+owner close/reopen retained the Claude native and Remote Control identities;
+the harness drained and exited 0. Claude responses reported `claude-opus-5-5`,
+and the Codex turn's native context reported `gpt-6.1-sol`. Native versions were
+Codex `0.162.0-alpha.17.2` and Claude Code `2.1.283`; the Rust owner used the
+native stream-json/control protocol, not the JavaScript Agent SDK package.
+
+The final reply was observed in the installed Claude Desktop accessibility
+tree under the same Remote Control URL. Computer Use denied Codex UI access,
+and Claude pixel capture remained stale, so neither Codex GUI rendering nor
+pixel-level rendering or GUI prompt submission was established. Native model
+dispatch used the native protocol and existing verified shared backend. This used
+an explicitly composed private Runtime, not CLI enrollment, an installed Rust
+launcher activation or app-tools authorization. Existing apps and services were
+not replaced or restarted; private histories and receipts remain outside Git.
+
+Authorized real-model collaboration acceptance used the release runtime at
+`e7bdaf0`, an independent broker and an empty read-only workspace, with
+notifications off and no model or effort overrides. Five native invocations
+verified Codex-to-Claude child delegation and result acknowledgement,
+Claude-to-Codex child delegation and result acknowledgement, and two consecutive
+handoffs under one logical task ID (`Codex -> Claude -> Codex`, generations
+1, 2 and 3). Exact canary results and the final combined result matched;
+ownership transferred only after successful native completion and process exit.
+All five native process groups exited and the broker drained with exit 0.
+The runtimes were Codex CLI `0.162.0-alpha.17.2` and Claude Code `2.1.283`.
+Claude main responses reported `claude-opus-5-5`; Codex main-response model
+metadata was not reported. This establishes the tested read-only work protocol,
+not Desktop synchronization, writable delegation or completion-wake delivery.
+
+A fixed `e7bdaf0` JavaScript reference and Rust release comparison on one
+Apple M5 Pro Mac used alternating paired samples and identical history inputs
+with equal portable messages and canonical fingerprints. CLI help/status
+medians improved from 62-67 ms to 5.4-6.5 ms (30 pairs per workload); six
+decode/portable/fingerprint workloads improved 1.88-3.68 times (12 pairs each).
+Large Claude processing was 90.59 -> 24.61 ms, with process peak RSS
+508.85 -> 80.19 MiB; large Codex processing was 90.06 -> 27.43 ms,
+481.42 -> 138.18 MiB. The Codex fixtures were large-payload two-message
+snapshots, not long multi-turn Desktop pipelines. Normal empty-broker list RPC
+medians regressed from 0.0884 to 0.1539 ms/request, while idle resident memory
+fell from 72.20 to 11.63 MiB. The Rust RPC included additional renderer
+publication diagnostics, so that comparison did not have identical complete
+responses or proven equal work. These are bounded CPU/latency/process-memory
+measurements on a shared-use machine, not model-response, whole-app or battery
+measurements. Private inputs and raw records remain outside the repository.
+
 
 ## From cache-warming.md
 

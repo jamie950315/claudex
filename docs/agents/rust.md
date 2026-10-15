@@ -33,6 +33,13 @@ host assets, not produce an apparently usable bundle with missing commands.
 Do not replace the installed app, restart native work, run model inference or
 publish this branch as part of source migration.
 
+An explicitly composed Runtime may use `new_with_shared_transport_root` to
+admit an existing verified Codex backend through a separate read-only transport
+root. The default remains the runtime root. Packet keys, archives, owners,
+ledgers and mutation journals stay in the runtime root; native-home, socket and
+ownership admission proofs are unchanged. This does not activate a new Desktop
+launcher or establish app-tools authorization.
+
 The root CLI composes the domain crates directly. `app` uses the concrete native
 setup runtime; `warm-hook` and `mod-bridge` use the ordinary authenticated broker
 transport with their own Codex and Claude controller identities. The companion

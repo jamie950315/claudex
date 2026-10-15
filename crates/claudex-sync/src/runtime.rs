@@ -183,6 +183,7 @@ struct OwnerEntry {
 }
 pub struct Runtime {
     pub options: Options,
+    shared_transport_root: PathBuf,
     key: Vec<u8>,
     client: Mutex<Option<CodexClient>>,
     native_version: Mutex<Option<String>>,
@@ -221,10 +222,27 @@ pub struct NativeAdapter {
 }
 impl Runtime {
     pub fn new(options: Options) -> Result<Arc<Self>> {
+        let shared_transport_root = options.root.clone();
+        Self::initialize(options, shared_transport_root)
+    }
+    /// Reuse an independently verified shared backend without moving this
+    /// runtime's packet key, archives, owners, ledger or mutation journals.
+    pub fn new_with_shared_transport_root(
+        options: Options,
+        shared_transport_root: PathBuf,
+    ) -> Result<Arc<Self>> {
+        ensure!(
+            shared_transport_root.is_absolute(),
+            "Shared transport root must be absolute."
+        );
+        Self::initialize(options, shared_transport_root)
+    }
+    fn initialize(options: Options, shared_transport_root: PathBuf) -> Result<Arc<Self>> {
         let key = packet_key(&options.root)?;
         let (native_events, _) = tokio::sync::broadcast::channel(4096);
         Ok(Arc::new(Self {
             options,
+            shared_transport_root,
             key,
             client: Mutex::new(None),
             native_version: Mutex::new(None),
@@ -291,7 +309,7 @@ impl Runtime {
             return Ok(client.clone());
         }
         let session = claudex_core::shared_codex::connect(
-            &self.options.root,
+            &self.shared_transport_root,
             &self.options.codex_home,
             self.options.version_policy,
             self.options
@@ -1988,6 +2006,51 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shared_transport_root_default_preserves_relative_runtime_root() -> Result<()> {
+        let cwd = std::env::current_dir()?;
+        let temp = tempfile::tempdir_in(&cwd)?;
+        let base = storage::private_directory(temp.path())?;
+        let options = Options::from_config(&base, &json!({"codexHome":base,"claudeHome":base}))?;
+        let relative_root = temp.path().strip_prefix(&cwd)?.join("runtime");
+        assert!(!relative_root.is_absolute());
+        let runtime = Runtime::new(Options {
+            root: relative_root.clone(),
+            ..options
+        })?;
+        assert_eq!(runtime.options.root, relative_root);
+        assert_eq!(runtime.shared_transport_root, relative_root);
+        assert!(relative_root.join("packet-key").is_file());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn shared_transport_root_defaults_locally_and_explicit_root_keeps_state_private()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let base = storage::private_directory(temp.path())?;
+        let private = storage::private_directory(base.join("private"))?;
+        let existing = storage::private_directory(base.join("existing"))?;
+        let codex = storage::private_directory(base.join("codex"))?;
+        let claude = storage::private_directory(base.join("claude"))?;
+        let options =
+            Options::from_config(&private, &json!({"codexHome":codex,"claudeHome":claude}))?;
+        let default = Runtime::new(options.clone())?;
+        assert_eq!(default.shared_transport_root, private);
+        let explicit = Runtime::new_with_shared_transport_root(options.clone(), existing.clone())?;
+        assert_eq!(explicit.shared_transport_root, existing);
+        assert_eq!(explicit.options.root, private);
+        assert_eq!(explicit.bridge().root, private);
+        assert!(private.join("packet-key").is_file());
+        assert_eq!(fs::read_dir(&existing)?.count(), 0);
+        // No manifest or fallback backend may be created when admission fails.
+        assert!(explicit.client().await.is_err());
+        assert_eq!(fs::read_dir(&existing)?.count(), 0);
+        assert!(!private.join("codex-shared").exists());
+        assert!(
+            Runtime::new_with_shared_transport_root(options, PathBuf::from("relative")).is_err()
+        );
+        Ok(())
+    }
     #[test]
     fn archive_refresh_carries_full_history_and_exact_prefix_without_inventing_turns() -> Result<()>
     {
