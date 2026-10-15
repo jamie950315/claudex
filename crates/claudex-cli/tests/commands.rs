@@ -1,0 +1,97 @@
+use anyhow::Result;
+use serde_json::{Value, json};
+use std::{
+    fs,
+    path::Path,
+    process::{Command, Output},
+};
+
+fn cli(root: &Path, args: &[&str]) -> Result<Output> {
+    Ok(Command::new(env!("CARGO_BIN_EXE_claudex"))
+        .args(args)
+        .arg("--root")
+        .arg(root)
+        .output()?)
+}
+fn value(output: Output) -> Result<Value> {
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+#[test]
+fn fresh_rust_cli_initializes_inspects_and_preserves_existing_configuration() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("private");
+    let codex = temp.path().join("codex");
+    let claude = temp.path().join("claude");
+    fs::create_dir(&codex)?;
+    fs::create_dir(&claude)?;
+    let args = [
+        "init",
+        "--codex-home",
+        codex.to_str().unwrap(),
+        "--claude-home",
+        claude.to_str().unwrap(),
+        "--all-projects",
+    ];
+    let initialized = value(cli(&root, &args)?)?;
+    assert_eq!(initialized["allProjects"], true);
+    assert_eq!(initialized["watching"], false);
+    let before = fs::read(root.join("config.json"))?;
+    let duplicate = cli(&root, &args)?;
+    assert!(!duplicate.status.success());
+    assert_eq!(fs::read(root.join("config.json"))?, before);
+    let status = value(cli(&root, &["status"])?)?;
+    assert_eq!(status["mode"], "legacy");
+    assert_eq!(status["versionPolicy"], "strict");
+    assert_eq!(status["conversations"], json!([]));
+    assert_eq!(status["pending"], Value::Null);
+    assert_eq!(
+        value(cli(&root, &["version-policy", "warn"])?)?["versionPolicy"],
+        "warn"
+    );
+    assert_eq!(value(cli(&root, &["status"])?)?["versionPolicy"], "warn");
+    Ok(())
+}
+
+#[test]
+fn command_status_selects_desktop_ledger_without_exposing_transcripts() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path();
+    fs::write(
+        root.join("config.json"),
+        r#"{"version":1,"mode":"desktop"}"#,
+    )?;
+    fs::write(
+        root.join("desktop-state.json"),
+        r#"{"version":2,"conversations":{"example":{"id":"example","title":"Placeholder"}},"records":[],"pending":{"phase":"prepared","record":{"nativeId":"native-placeholder","side":"codex"}},"audit":[]}"#,
+    )?;
+    let state = value(cli(root, &["status"])?)?;
+    assert_eq!(state["mode"], "desktop");
+    assert_eq!(state["conversations"][0]["id"], "example");
+    assert_eq!(
+        state["pending"],
+        json!({"phase":"prepared","nativeId":"native-placeholder","side":"codex"})
+    );
+    assert!(!state.to_string().contains("messages"));
+    Ok(())
+}
+
+#[test]
+fn help_and_version_do_not_create_state_or_run_native_providers() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("absent");
+    let result = cli(&root, &["--help"])?;
+    assert!(result.status.success());
+    assert!(!root.exists());
+    let version = Command::new(env!("CARGO_BIN_EXE_claudex"))
+        .arg("--version")
+        .output()?;
+    assert!(version.status.success());
+    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 1.4.8");
+    assert!(!root.exists());
+    Ok(())
+}

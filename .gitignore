@@ -8,3 +8,4 @@ coverage/
 *.zip
 .claudex-app-*/
 AGENTS.local.md
+target/

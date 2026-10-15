@@ -35,6 +35,8 @@ fixtures use placeholder paths and IDs.
 
 - Node.js 22.15+ (22.x) or 23.8+, ES modules; install with `npm ci`.
 - Run `npm test` for the coordinator and adapter contracts.
+- The Rust migration lives in the Cargo workspace. Read `docs/agents/rust.md`
+  before changing its crates, integration entry points or packaging.
 - Native integration checks use isolated temporary homes and synthetic transcripts.
 - Machine-specific notes (hosts, local paths, archives) belong in the untracked `AGENTS.local.md`; read it when present and keep such details out of tracked files.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
@@ -88,6 +90,7 @@ keep this file to project-wide rules and this index, and add a row for a new gui
 
 | Guide | Read before working on |
 | --- | --- |
+| [rust.md](docs/agents/rust.md) | Rust workspace, migration parity, native command integration and Rust packaging |
 | [app.md](docs/agents/app.md) | `native/ClaudexApp`, `bin/claudex-app.mjs`, app-owned Mod installation, window/menu/Quit, localization, signature checks, the CLI-only status display |
 | [sync-events.md](docs/agents/sync-events.md) | Hooks, the sync-events inbox, watchers and event scheduling, Codex/Claude adapter rules, late command completions, `native-empty-turn.mjs`, native command envelopes |
 | [lifecycle.md](docs/agents/lifecycle.md) | `bin/claudex.mjs`, discovery and enrollment, untrack/resume, project moves, holds and pending recovery, dependency anchors, collection, `split-original`, `archive-original`, supervisor and locks |
