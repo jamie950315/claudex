@@ -300,17 +300,28 @@ test('a settings change during awaited inspection cannot return an apparently us
   assert.deepEqual(f.events, [{ type: 'invalidated', reason: 'settings-changed' }]); await handle.close();
 });
 
-test('no observed settings snapshot can be mistaken for a dispatch-ready prompt baseline', async () => {
+test('the validated resume baseline permits first dispatch without a prior prompt snapshot', async () => {
   const f = fixture(); const handle = await f.native.connect(target, event => f.events.push(event)); handle.listen();
   assert.equal(handle.settingsReady, false);
-  const preflights = f.ownerCloses();
-  await assert.rejects(handle.preflight(), /native-settings-unobserved/);
-  await assert.rejects(handle.inspect(), /native-settings-unobserved/);
-  assert.equal(f.ownerCloses(), preflights);
+  assert.equal(handle.dispatchReady, true);
+  const owner = await handle.preflight(); owner.close();
+  assert.equal((await handle.inspect()).fingerprint, handle.state.fingerprint);
   assert.deepEqual(f.events, []);
   f.emit('thread/settings/updated', { threadSettings: structuredClone(settings) });
   assert.equal(handle.settingsReady, true);
-  const owner = await handle.preflight(); owner.close(); await handle.close();
+  assert.equal(handle.dispatchReady, true);
+  await handle.close(); assert.equal(handle.dispatchReady, false);
+});
+
+test('first-dispatch resume settings must retain the confirmed model and known effort', async () => {
+  for (const change of [
+    { model: 'different-model' }, { effort: 'high' },
+    { collaborationMode: { mode: 'default', settings: { ...settings.collaborationMode.settings, model: 'different-model' } } },
+  ]) {
+    const f = fixture({ settings: { ...structuredClone(settings), ...change } });
+    await assert.rejects(f.native.connect(target, () => {}), /settings changed during rejoin/);
+    assert.equal(f.closes(), 1);
+  }
 });
 
 test('an accepted unreported baseline is dispatch-ready and its next snapshot is a change', async () => {

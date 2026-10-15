@@ -274,7 +274,10 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         effort: state.effort === 'native-default' ? null : digest(canonical(state.effort)) };
       // thread/read metadata can retain null/default effort while resume reports
       // the resolved value. Keep that metadata fingerprint independent.
-      if (resumed.cwd !== expected.cwd) fail('native settings changed during rejoin');
+      if (resumed.cwd !== expected.cwd || resumed.model !== state.model
+        || state.effort !== 'native-default' && resumed.reasoningEffort !== state.effort
+        || resumed.collaborationMode !== null && resumed.collaborationMode.settings.model !== state.model)
+        fail('native settings changed during rejoin');
       for (const hashes of earlySettings) { compareSettings(hashes); if (invalidated) break; }
       earlySettings = [];
       if (invalidated) fail('native settings invalidated during rejoin');
@@ -291,6 +294,9 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         initialTurn = { id: turn.id, startedAt, status: turn.status };
       }
       return { state: checked, initialTurn,
+        // Rejoining validated this existing owner's permissions and identity.
+        // Resolved prompt settings may arrive only with our first warm turn.
+        get dispatchReady() { return !closed && !invalidated && securitySettings !== null && confirmedSettings !== null; },
         get settingsReady() { return !closed && !invalidated && (fullSettings !== null || unreported); },
         /** A model turn observed from its start without any settings snapshot
          * proves a runtime that reports settings only on change (0.162). The
@@ -312,14 +318,12 @@ export function createCodexCacheNative({ syncRoot, codexHome, clientFactory,
         },
         async inspect() {
           if (closed || invalidated) fail('observer unavailable');
-          if (fullSettings === null && !unreported) fail('native-settings-unobserved');
           const result = await read(connection, expected, nativeVersion);
           if (closed || invalidated) fail('observer unavailable');
           return result;
         },
         async preflight() {
           if (closed || invalidated) fail('observer unavailable');
-          if (fullSettings === null && !unreported) fail('native-settings-unobserved');
           const handle = await owner(expected);
           if (closed || invalidated || handle.ownerClientId !== state.ownerClientId) { handle.close?.(); fail('native owner changed or observer unavailable'); }
           return handle;

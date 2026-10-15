@@ -8,6 +8,7 @@ const MAX_POLICIES = 64, MAX_ATTEMPTS = 2048, MAX_BYTES = 2 * 1024 * 1024;
 const SETTLED = new Set(['rejected', 'revoked', 'verified', 'failed']);
 const OUTPUT_RESERVATION = 128;
 const READ_OVERHEAD = 256;
+const PRIME_DISPATCH_MS = 120000;
 // Shipping Mod instance IDs include their creation time. A retired time floor
 // fences forgotten callbacks without retaining every session for the process's life.
 const bindingTime = id => {
@@ -47,7 +48,10 @@ function sampleValue(value, now, provider) {
     'inputTokens', 'cacheReadTokens', 'cacheWriteTokens', 'outputTokens', 'stopReason',
     ...(value.attemptId === undefined ? [] : ['attemptId'])].map(key => [key, value[key]]));
 }
-const prefix = sample => sample.cacheReadTokens + sample.cacheWriteTokens;
+// Codex need not report cache writes. The actual request's input size can size
+// the next reservation/timer without inventing a cache read, write or hit.
+const prefix = (sample, provider) => provider === 'codex' ? sample.inputTokens
+  : sample.cacheReadTokens + sample.cacheWriteTokens || sample.inputTokens;
 const windowMs = (sample, policy) => policy?.ttlPreference === '5m' ? Math.min(sample.ttlMs, 300000) : sample.ttlMs;
 const expires = (sample, policy) => sample.startedAt + windowMs(sample, policy);
 const nextAt = (sample, policy) => policy?.provider === 'codex'
@@ -67,6 +71,7 @@ function validate(state, provider) {
       && integer(p.maxOutputTokens, 1, 1000000) && integer(p.maxMinutes, 1, 10080)
       && (p.fixedEnd === undefined || p.fixedEnd === true) && (p.restartedAt === undefined || integer(p.restartedAt))
       && (p.compact === undefined || typeof p.compact === 'boolean')
+      && (p.primeAt === undefined || integer(p.primeAt))
       && (p.model === null || word(p.model)) && (p.effort === null || word(p.effort))
       && (p.ttlMs === null || (provider === 'codex' ? p.ttlMs === 1800000 : [300000, 3600000].includes(p.ttlMs)))
       && (provider === 'codex'
@@ -80,16 +85,19 @@ function validate(state, provider) {
     requireValue(ids.has(a.sessionId) && word(a.id) && !attempts.has(a.id) && integer(a.generation, 1)
       && integer(a.epoch) && integer(a.createdAt) && integer(a.expiresAt) && a.expiresAt > a.createdAt
       && integer(a.nextAt) && integer(a.reservedReadTokens, 1) && integer(a.reservedOutputTokens, 1)
-      && integer(a.requiredPrefixTokens, 1) && a.reservedReadTokens >= a.requiredPrefixTokens
-      && word(a.sampleId) && word(a.model) && word(a.effort)
+      && integer(a.requiredPrefixTokens, a.kind === 'prime' ? 0 : 1) && a.reservedReadTokens >= a.requiredPrefixTokens
+      && (a.kind === 'prime' ? a.sampleId === null || word(a.sampleId) : word(a.sampleId))
+      && (a.kind === 'prime' ? a.model === null && a.effort === null && a.requiredPrefixTokens === 0 : word(a.model) && word(a.effort))
       && ['reserved', 'dispatching', 'submitted', 'rejected', 'uncertain', 'revoked', 'verified', 'failed'].includes(a.state)
       && (a.authorizedAt === undefined || integer(a.authorizedAt))
-      && (a.kind === undefined || a.kind === 'compact') && (a.priorReadTokens === undefined || integer(a.priorReadTokens))
+      && (a.kind === undefined || ['prime', 'compact'].includes(a.kind)) && (a.priorReadTokens === undefined || integer(a.priorReadTokens))
       && (a.actual === undefined || ['cacheReadTokens', 'cacheWriteTokens', 'inputTokens', 'outputTokens'].every(key => integer(a.actual[key])))
       && (a.responseIds === undefined || Array.isArray(a.responseIds) && a.responseIds.length <= 64
         && a.responseIds.every(word) && new Set(a.responseIds).size === a.responseIds.length)
       && (a.cacheVerified === undefined || provider === 'codex' && typeof a.cacheVerified === 'boolean'
-        && (!a.cacheVerified || integer(a.authorizedAt) && a.responseIds?.length > 0 && a.actual !== undefined)));
+        && (!a.cacheVerified || integer(a.authorizedAt) && a.responseIds?.length > 0 && a.actual !== undefined))
+      && (a.responseVerified === undefined || provider === 'codex' && typeof a.responseVerified === 'boolean'
+        && (!a.responseVerified || integer(a.authorizedAt) && a.responseIds?.length > 0 && a.actual !== undefined)));
     attempts.add(a.id);
   }
   const requests = new Set();
@@ -188,20 +196,29 @@ export class CacheWarmManager {
       readTokens: rows.reduce((sum, a) => sum + (a.actual?.cacheReadTokens ?? (['rejected', 'revoked'].includes(a.state) ? 0 : a.reservedReadTokens)), 0),
       outputTokens: rows.reduce((sum, a) => sum + (a.actual?.outputTokens ?? (['rejected', 'revoked'].includes(a.state) ? 0 : a.reservedOutputTokens)), 0) };
   }
+  usableSample(p, b) {
+    return Boolean(b?.sample && successful(b.sample) && prefix(b.sample, this.provider) && this.now() < expires(b.sample, p));
+  }
+  needsPrime(p, b) {
+    return p?.primeAt !== undefined && !this.usableSample(p, b) && this.attempts(p.sessionId, p.generation).length === 0;
+  }
   reason(p, b, due = false) {
     if (this.closed) return 'broker-stopping';
     if (!p?.enabled) return p?.reason ?? 'disabled';
     if (this.now() >= p.until) return 'duration-limit';
     if (!b || b.cwd !== p.cwd) return 'awaiting-native-binding';
     if (b.phase !== 'idle') return b.phase === 'ended' ? 'native-ended' : 'busy';
-    if (!b.sample) return 'awaiting-evidence';
-    if (!successful(b.sample)) return 'native-output-not-complete';
-    if (!prefix(b.sample)) return 'no-cache-prefix';
-    if (this.now() >= expires(b.sample, p)) return 'cache-expired';
     if (this.pending(p.sessionId)) return 'attempt-pending';
     const totals = this.totals(p);
     if (totals.refreshes >= p.maxRefreshes) return 'refresh-limit';
     if (totals.outputTokens + OUTPUT_RESERVATION > p.maxOutputTokens) return 'output-budget';
+    // Explicit enrollment authorizes its own first request. Old usage is useful
+    // for timing and hit measurement, not a prerequisite for making that request.
+    if (this.needsPrime(p, b)) return this.now() >= p.primeAt + PRIME_DISPATCH_MS ? 'attempt-expired' : null;
+    if (!b.sample) return 'awaiting-evidence';
+    if (!successful(b.sample)) return 'native-output-not-complete';
+    if (!prefix(b.sample, this.provider)) return 'no-cache-prefix';
+    if (this.now() >= expires(b.sample, p)) return 'cache-expired';
     if (due && this.now() < nextAt(b.sample, p)) return 'not-due';
     return null;
   }
@@ -214,7 +231,7 @@ export class CacheWarmManager {
   /** When that compaction is due, or null. Never after the cache expired. */
   compaction(p, b) {
     if (this.closed || !p?.enabled || !this.compactsAtEnd(p) || !b || b.cwd !== p.cwd || b.phase !== 'idle'
-      || !b.sample || !successful(b.sample) || !prefix(b.sample) || this.pending(p.sessionId)) return null;
+      || !b.sample || !successful(b.sample) || !prefix(b.sample, this.provider) || this.pending(p.sessionId)) return null;
     const at = nextAt(b.sample, p);
     // The limit is used up, or the next request would fall after its end.
     const ended = this.now() >= p.until || this.totals(p).refreshes >= p.maxRefreshes || at >= p.until;
@@ -231,14 +248,15 @@ export class CacheWarmManager {
       cacheResults: { count: reads.length, firstAt: known ? Math.min(...times) : null, lastAt: known ? Math.max(...times) : null },
       phase: b?.phase ?? null, native: { phase: b?.phase ?? 'unbound' }, totals: this.totals(p),
       sample: b?.sample ? clone(b.sample) : null,
-      nextAt: !reason && b?.sample ? nextAt(b.sample, p) : null,
+      prime: !reason && this.needsPrime(p, b),
+      nextAt: !reason ? this.needsPrime(p, b) ? p.primeAt : b?.sample ? nextAt(b.sample, p) : null : null,
       compactAtEnd: this.compactsAtEnd(p), compactAt: this.compaction(p, b),
       effectiveTtlMs: b?.sample ? windowMs(b.sample, p) : null,
       budgetKind: 'admission-reservation-not-a-native-token-cap' };
   }
   result(p, more = {}) {
     const policy = p ? this.presentation(p) : null;
-    return { policy, nextAt: policy?.nextAt ?? null, compactAt: policy?.compactAt ?? null, reason: policy?.reason ?? 'disabled', ...more };
+    return { policy, nextAt: policy?.nextAt ?? null, prime: policy?.prime ?? false, compactAt: policy?.compactAt ?? null, reason: policy?.reason ?? 'disabled', ...more };
   }
   async list() {
     return this.transaction(() => {
@@ -323,6 +341,9 @@ export class CacheWarmManager {
         ...(input.compact === undefined ? {} : { compact: input.compact }),
         until: this.now() + maxMinutes * 60000, updatedAt: this.now(), reason: input.enabled ? null : 'disabled',
         model: b?.sample?.model ?? null, effort: b?.sample?.effort ?? null, ttlMs: b?.sample?.ttlMs ?? null };
+      if (input.enabled && !this.usableSample(value, b)) {
+        value.primeAt = this.now(); value.model = null; value.effort = null; value.ttlMs = null;
+      }
       // Disabling revokes authorization without erasing this enrollment's
       // bounds/accounting. Only a newly confirmed enable starts a new budget.
       // A new enrollment starts its own accounting. Settled attempts of this
@@ -331,7 +352,7 @@ export class CacheWarmManager {
       if (input.enabled) this.state.attempts = this.state.attempts.filter(a => a.sessionId !== input.sessionId
         || a.generation >= value.generation || !SETTLED.has(a.state));
       if (p && !input.enabled) Object.assign(p, { enabled: false, updatedAt: this.now(), reason: 'disabled' });
-      else if (p) { delete p.fixedEnd; delete p.restartedAt; delete p.compact; Object.assign(p, value); }
+      else if (p) { delete p.fixedEnd; delete p.restartedAt; delete p.compact; delete p.primeAt; Object.assign(p, value); }
       else { p = value; this.state.policies.push(p); }
       if (input.requestId) this.state.requests.push({ requestId: input.requestId, sessionId: p.sessionId, generation: p.generation, payload });
       await this.save(); return this.result(p, { replayed: false });
@@ -406,17 +427,20 @@ export class CacheWarmManager {
           // entries are still alive, and this request covers the prefix again.
           const covers = sample.cacheReadTokens >= a.requiredPrefixTokens || this.provider === 'claude'
             && a.priorReadTokens !== undefined && sample.cacheReadTokens > a.priorReadTokens
-            && prefix(sample) >= a.requiredPrefixTokens;
-          const verified = a.state !== 'failed' && successful(sample) && sample.model === a.model && sample.effort === a.effort && covers;
+            && prefix(sample, this.provider) >= a.requiredPrefixTokens;
+          const primed = a.kind === 'prime';
+          const verified = a.state !== 'failed' && successful(sample) && (primed
+            ? prefix(sample, this.provider) > 0 : sample.model === a.model && sample.effort === a.effort && prefix(sample, this.provider) > 0);
+          const outcome = primed ? 'native-cache-primed' : covers ? 'native-cache-hit' : 'native-cache-refreshed';
           if (this.provider === 'codex' && verified) {
-            // Per-request cache hits are candidates only. The private service
+            // Per-request successful responses are candidates only. The private service
             // drains every exact usage delta before publishing the own idle
             // boundary for the successfully completed native turn.
-            a.cacheVerified = true;
-            a.reason = 'native-cache-hit-pending-completion';
+            a.responseVerified = true; a.cacheVerified = !primed && covers;
+            a.reason = `${outcome}-pending-completion`;
           } else {
             a.state = verified ? 'verified' : 'failed';
-            a.reason = verified ? 'native-cache-hit' : 'native-cache-verification-failed';
+            a.reason = verified ? outcome : 'native-cache-verification-failed';
           }
           changed = true;
           const p = this.policy(a.sessionId), totals = this.totals(p);
@@ -425,11 +449,12 @@ export class CacheWarmManager {
           }
         }
         if (this.provider === 'codex' && own && input.phase === 'idle' && input.epoch > a.epoch
-          && ['dispatching', 'submitted'].includes(a.state) && a.cacheVerified && a.responseIds?.length) {
-          a.state = 'verified'; a.reason = 'native-cache-hit'; changed = true;
+          && ['dispatching', 'submitted'].includes(a.state) && (a.responseVerified || a.cacheVerified) && a.responseIds?.length) {
+          a.state = 'verified'; a.reason = a.kind === 'prime' ? 'native-cache-primed' : a.cacheVerified ? 'native-cache-hit' : 'native-cache-refreshed'; changed = true;
         }
       }
       const p = this.policy(input.sessionId);
+      if (p?.primeAt !== undefined && !ownAttemptId && this.usableSample(p, b)) { delete p.primeAt; changed = true; }
       if (p?.enabled && (replaced || input.phase === 'ended')) { p.enabled = false; p.reason = 'native-binding-changed'; changed = true; }
       // By user decision a message of the user's own either ends the schedule
       // or restarts its whole limit. A response that is not a warm request, in
@@ -462,7 +487,7 @@ export class CacheWarmManager {
       // final answer. These busy steps refresh usage evidence, not the timer;
       // they are not a failed warming attempt and must not revoke its opt-in.
       const ordinaryToolStep = !ownAttemptId && input.phase === 'busy' && sample?.stopReason === 'tool_use';
-      if (p?.enabled && sample && ((!successful(sample) && !ordinaryToolStep) || !prefix(sample))) {
+      if (p?.enabled && sample && ((!successful(sample) && !ordinaryToolStep) || !prefix(sample, this.provider))) {
         p.enabled = false; p.reason = !successful(sample) ? 'native-output-not-complete' : 'no-cache-prefix'; changed = true;
       }
       if (p?.enabled && sample) {
@@ -501,7 +526,7 @@ export class CacheWarmManager {
         const a = { id: randomUUID(), kind: 'compact', sessionId: p.sessionId, cwd: p.cwd, instanceId: b.instanceId,
           epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: at,
           expiresAt: expires(b.sample, p), sampleId: b.sample.id, model: b.sample.model, effort: b.sample.effort,
-          state: 'reserved', requiredPrefixTokens: prefix(b.sample), reservedReadTokens: prefix(b.sample) + READ_OVERHEAD,
+          state: 'reserved', requiredPrefixTokens: prefix(b.sample, this.provider), reservedReadTokens: prefix(b.sample, this.provider) + READ_OVERHEAD,
           reservedOutputTokens: OUTPUT_RESERVATION };
         this.state.attempts.push(a); await this.save();
         return { claimed: true, attempt: { id: a.id, kind: 'compact', expiresAt: a.expiresAt } };
@@ -509,15 +534,18 @@ export class CacheWarmManager {
       const reason = stopped ? 'app-stopped' : !b || b.epoch !== input.epoch ? 'native-binding-changed' : this.reason(p, b, true);
       if (reason) return { claimed: false, reason, nextAt: p ? this.presentation(p).nextAt : null, compactAt: bound ? this.compaction(p, b) : null };
       if (this.state.attempts.length >= MAX_ATTEMPTS) throw error('CACHE_WARM_CAPACITY', 'Cache-warming attempt capacity is exhausted.');
+      const prime = this.needsPrime(p, b);
       const a = { id: randomUUID(), sessionId: p.sessionId, cwd: p.cwd, instanceId: b.instanceId,
-        epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: nextAt(b.sample, p),
-        expiresAt: Math.min(expires(b.sample, p), p.until), sampleId: b.sample.id, model: b.sample.model, effort: b.sample.effort,
-        state: 'reserved', requiredPrefixTokens: prefix(b.sample), reservedReadTokens: prefix(b.sample) + READ_OVERHEAD,
+        ...(prime ? { kind: 'prime' } : {}),
+        epoch: b.epoch, generation: p.generation, createdAt: this.now(), nextAt: prime ? p.primeAt : nextAt(b.sample, p),
+        expiresAt: Math.min(prime ? p.primeAt + PRIME_DISPATCH_MS : expires(b.sample, p), p.until),
+        sampleId: b.sample?.id ?? null, model: prime ? null : b.sample.model, effort: prime ? null : b.sample.effort,
+        state: 'reserved', requiredPrefixTokens: prime ? 0 : prefix(b.sample, this.provider), reservedReadTokens: (prime ? 0 : prefix(b.sample, this.provider)) + READ_OVERHEAD,
         // What the preceding request itself re-read: older entries, not its own.
-        priorReadTokens: b.sample.cacheReadTokens,
+        ...(prime ? {} : { priorReadTokens: b.sample.cacheReadTokens }),
         reservedOutputTokens: OUTPUT_RESERVATION };
       this.state.attempts.push(a); await this.save();
-      return { claimed: true, attempt: { id: a.id, prompt: CACHE_WARM_PROMPT, nextAt: a.nextAt, expiresAt: a.expiresAt } };
+      return { claimed: true, attempt: { id: a.id, ...(prime ? { kind: 'prime' } : {}), prompt: CACHE_WARM_PROMPT, nextAt: a.nextAt, expiresAt: a.expiresAt } };
     });
   }
   async check(input) {
@@ -530,7 +558,7 @@ export class CacheWarmManager {
       if (a.state !== 'reserved') return { ready: false, reason: 'attempt-already-consumed' };
       const reason = this.closed ? 'broker-stopping' : stopped ? 'app-stopped'
         : !p?.enabled || p.generation !== a.generation ? 'policy-changed'
-          : !b || b.epoch !== a.epoch || input.epoch !== a.epoch || b.phase !== 'idle' || b.sample?.id !== a.sampleId ? 'native-activity-changed'
+          : !b || b.epoch !== a.epoch || input.epoch !== a.epoch || b.phase !== 'idle' || (b.sample?.id ?? null) !== a.sampleId ? 'native-activity-changed'
             // The compaction follows the end of the limit, so only its cache window bounds it.
             : this.now() >= a.expiresAt || a.kind !== 'compact' && this.now() >= p.until ? 'attempt-expired' : null;
       if (reason) { a.state = 'revoked'; a.reason = reason; await this.save(); return { ready: false, reason }; }

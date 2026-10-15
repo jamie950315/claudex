@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.30
+# Claudex native companion, 0.8.31
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -6,7 +6,9 @@ A warm-up with a policy adds its limits and whether it compacts at the end.
 Technical JSON remains available only through the advanced diagnostic commands.
 
 Use `/claudex:warm on [5m|1h]` (also `ttl=5m|ttl=1h`) to enable directly, without
-a second confirmation command. `/claudex:warm off` stops warming;
+a second confirmation command or another ordinary message. Leave the conversation
+open: when no usable recent request exists, Claudex sends its own initial request
+after the command finishes, then refreshes periodically. `/claudex:warm off` stops warming;
 `/claudex:warm status` or no arguments inspects it. Only this loaded Claude
 session is targeted. The shortcut never changes shared startup preferences or
 remembered TTL choices, and off leaves the native TTL unchanged. The namespaced
@@ -54,7 +56,7 @@ session. Codex Desktop has a separate experimental best-effort CLI opt-in;
 the Mod does not control Codex warming or its TTL. See the source repository's
 `docs/cache-warming.md` for its limitations and explicit confirmation.
 
-Claudex.app 1.4.7 installs and maintains this bundled companion during setup and
+Claudex.app 1.4.8 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
 never installs or configures it. Existing disabled/receiver preferences, other
 plugins and newer installed versions are preserved. Installed files and fresh
@@ -110,7 +112,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.30-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.31-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local

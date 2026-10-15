@@ -22,7 +22,8 @@ async function fixture(t) {
     async connect(_params, onEvent) {
       calls++; connected = true; listener = onEvent;
       listeners.push(onEvent);
-      return { state: { ...state }, initialTurn: { id: 'seed', startedAt: now, status: 'inProgress' },
+      return { state: { ...state }, initialTurn: { id: 'seed', startedAt: now, status: state.phase === 'idle' ? 'completed' : 'inProgress' },
+        get dispatchReady() { return true; },
         get settingsReady() { return settingsReady; },
         acceptUnreportedSettings() { if (acceptsUnreported) settingsReady = true; },
         listen() {}, async close() { connected = false; },
@@ -119,45 +120,94 @@ test('Codex timer dispatches once to the owner and verifies only completed nativ
   assert.equal(f.connected, false); await f.fire(); assert.equal(f.dispatches, 1);
 });
 
-test('a baseline-only first normal turn waits for fresh usage instead of fabricating a sample', async t => {
+test('a baseline-only enrollment turn autonomously primes without another user message', async t => {
   const f = await fixture(t); await f.enable();
   await f.emit({ type: 'usage', turnId: 'seed', tokenUsage: { total: initial, last: initial }, at: f.now });
+  f.state.phase = 'idle';
   await f.emit({ type: 'complete', turnId: 'seed', status: 'completed', completedAt: f.now });
   assert.equal(f.connected, true); assert.equal((await f.service.list()).policies[0].sample, null);
-  await f.emit({ type: 'start', turnId: 'normal-next', startedAt: f.now });
-  await f.usage('normal-next', next); f.state.phase = 'idle';
-  await f.emit({ type: 'complete', turnId: 'normal-next', status: 'completed', completedAt: f.now });
+  assert.equal((await f.service.list()).policies[0].nextAt, f.now);
+  await f.fire(); assert.equal(f.dispatches, 1);
+  assert.equal((await f.service.list()).attempts[0].kind, 'prime');
+  await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });
+  await f.usage('warm', next);
+  await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+  assert.equal((await f.service.list()).attempts[0].reason, 'native-cache-primed');
+});
+
+test('an idle enrollment primes from its own first native response with no ordinary message or sample', async t => {
+  const f = await fixture(t); f.state.phase = 'idle'; f.settingsReady = false; f.acceptsUnreported = true;
+  const enabled = await f.enable({ maxRefreshes: 2 });
+  assert.equal(enabled.awaitingFreshUsage, false); assert.equal(enabled.policy.sample, null);
+  assert.equal(enabled.nextAt, f.now);
+  await f.fire(); assert.equal(f.dispatches, 1);
+  await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });
+  await f.usage('warm', next);
+  await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+  const result = await f.service.list();
+  assert.equal(result.attempts[0].reason, 'native-cache-primed');
+  assert.equal(result.policies[0].totals.readTokens, next.cachedInputTokens);
+  assert.equal(result.policies[0].totals.outputTokens, next.outputTokens);
   assert.ok((await f.service.list()).policies[0].nextAt > f.now);
+  await f.fire(); assert.equal(f.dispatches, 2);
 });
 
-test('a model turn seen from its start without a settings snapshot makes the rejoin baseline usable', async t => {
+test('the first autonomous prime keeps uncertain delivery and missing-start accounting unreplayable', async t => {
+  for (const failure of ['uncertain', 'missing-start', 'timeout']) {
+    const f = await fixture(t); f.state.phase = 'idle';
+    await f.enable({ maxRefreshes: 2 });
+    if (failure === 'uncertain') f.hook = async () => ({ status: 'uncertain' });
+    await f.fire(); assert.equal(f.dispatches, 1);
+    if (failure === 'missing-start') {
+      await f.usage('warm', next);
+      await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+    }
+    if (failure === 'timeout') await f.fire();
+    const result = await f.service.list();
+    assert.equal(result.attempts[0].state, 'uncertain');
+    assert.equal(result.attempts[0].actual, undefined);
+    await f.fire(); assert.equal(f.dispatches, 1);
+  }
+});
+
+test('cold first requests and later cache misses keep warming without fabricated cache accounting', async t => {
+  const f = await fixture(t); f.state.phase = 'idle';
+  await f.enable({ maxRefreshes: 3 }); await f.fire();
+  const cold = { ...next, cachedInputTokens: 0, cacheWriteInputTokens: 0 };
+  await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });
+  await f.usage('warm', cold);
+  await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+  let result = await f.service.list();
+  assert.equal(result.attempts[0].reason, 'native-cache-primed');
+  assert.equal(result.policies[0].enabled, true); assert.equal(result.policies[0].totals.readTokens, 0);
+  assert.equal(result.policies[0].sample.cacheReadTokens, 0); assert.equal(result.policies[0].sample.cacheWriteTokens, 0);
+  assert.equal(result.policies[0].nextAt, result.policies[0].sample.startedAt + 25 * 60000);
+  await f.fire(); assert.equal(f.dispatches, 2);
+  await f.emit({ type: 'start', turnId: 'warm', startedAt: f.now });
+  await f.usage('warm', cold);
+  await f.emit({ type: 'complete', turnId: 'warm', status: 'completed', completedAt: f.now });
+  result = await f.service.list();
+  assert.equal(result.attempts[1].reason, 'native-cache-refreshed');
+  assert.equal(result.attempts[1].cacheVerified, false);
+  assert.equal(result.policies[0].enabled, true); assert.equal(result.policies[0].totals.readTokens, 0);
+  await f.fire(); assert.equal(f.dispatches, 3);
+});
+
+test('a command-only enrollment turn schedules its own prime without native prompt settings', async t => {
   const f = await fixture(t); f.settingsReady = false; f.acceptsUnreported = true;
-  await f.enable(); await f.seed();
-  // The enrollment turn was not observed from its start and proves nothing.
-  let p = (await f.service.list()).policies[0];
-  assert.equal(p.nextAt, null); assert.equal(p.nativeReason, 'awaiting-native-settings');
-  // Nor does a turn without native usage, such as a prompt a hook blocked.
-  await f.emit({ type: 'start', turnId: 'blocked', startedAt: f.now });
-  await f.emit({ type: 'complete', turnId: 'blocked', status: 'completed', completedAt: f.now });
-  assert.equal((await f.service.list()).policies[0].nativeReason, 'awaiting-native-settings');
-  await f.emit({ type: 'start', turnId: 'unreported', startedAt: f.now });
-  await f.usage('unreported', next);
-  await f.emit({ type: 'complete', turnId: 'unreported', status: 'completed', completedAt: f.now });
-  p = (await f.service.list()).policies[0]; assert.ok(p.nextAt > f.now);
-  assert.equal(f.dispatches, 0);
+  await f.enable(); f.state.phase = 'idle';
+  await f.emit({ type: 'complete', turnId: 'seed', status: 'completed', completedAt: f.now });
+  const p = (await f.service.list()).policies[0];
+  assert.equal(p.sample, null); assert.equal(p.nextAt, f.now);
+  await f.fire(); assert.equal(f.dispatches, 1);
 });
 
-test('mid-turn enrollment waits for a native settings snapshot instead of arming an unusable timer', async t => {
+test('native request evidence schedules normally without a prompt-settings snapshot prerequisite', async t => {
   const f = await fixture(t); f.settingsReady = false;
   await f.enable(); await f.seed();
-  let p = (await f.service.list()).policies[0];
-  assert.equal(p.enabled, true); assert.equal(p.nextAt, null); assert.equal(p.nativeReason, 'awaiting-native-settings');
-  f.settingsReady = true;
-  await f.emit({ type: 'start', turnId: 'settings-observed', startedAt: f.now });
-  await f.usage('settings-observed', next);
-  await f.emit({ type: 'complete', turnId: 'settings-observed', status: 'completed', completedAt: f.now });
-  p = (await f.service.list()).policies[0]; assert.ok(p.nextAt > f.now);
-  assert.equal(f.dispatches, 0);
+  const p = (await f.service.list()).policies[0];
+  assert.equal(p.enabled, true); assert.ok(p.nextAt > f.now);
+  await f.fire(); assert.equal(f.dispatches, 1);
 });
 
 test('busy state, changed configuration and app-stop suppress native warming', async t => {

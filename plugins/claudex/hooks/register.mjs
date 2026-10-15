@@ -159,14 +159,14 @@ export function register(on, options = {}) {
   on('turn.start', async ($, e, next) => { await cacheWarm.turnStart(e); return next(e); });
   on('turn.step', async function* ($, e, next) {
     let ticket = null;
-    try { ticket = await cacheWarm.stepStart(e); } catch { cacheWarm.invalidate(); }
+    try { ticket = await cacheWarm.stepStart(e); } catch { await cacheWarm.invalidate(); }
     const result = yield* next(e);
-    try { await cacheWarm.stepEnd(ticket, result); } catch { cacheWarm.invalidate(); }
+    try { await cacheWarm.stepEnd(ticket, result); } catch { await cacheWarm.invalidate(); }
     return result;
   });
   on('tool.call', async ($, e, next) => cacheWarm.deniesTool(e)
     ? { deny: 'Tools are disabled for this explicitly authorized cache-warming turn. Reply only OK.' } : next(e));
-  on('config.set', async ($, e, next) => { cacheWarm.invalidate(); return next(e); });
+  on('config.set', async ($, e, next) => { await cacheWarm.invalidate(); return next(e); });
   // The native result of a compaction is the evidence for the one Claudex asked for.
   on('session.compact', async ($, e, next) => {
     const result = await next(e);

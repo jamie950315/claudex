@@ -10,18 +10,27 @@ function validate(value) {
 }
 const equal = (a, b) => fields.every(key => a[key] === b[key]);
 
-/** Live native cumulative/last agreement, not an upstream response ID. */
+/** Live native cumulative/last agreement, not an upstream response ID.
+ * A caller that observed its exact dispatched request from native turn start
+ * can account for its first reported `last` without inventing prior totals. */
 export function createCodexUsageCounter(threadId) {
   if (typeof threadId !== 'string' || !threadId) throw new Error('An exact native thread is required.');
   let baseline = null, failed = false;
   return {
-    observe(event) {
+    observe(event, { firstRequest = false } = {}) {
       if (failed) throw new Error('Native usage continuity was lost; start a new observation.');
       try {
         if (event?.threadId !== threadId || typeof event.turnId !== 'string' || !event.turnId)
           throw new Error('Native usage identity changed.');
         const total = validate(event.tokenUsage?.total), last = validate(event.tokenUsage?.last);
-        if (!baseline) { baseline = { total, last }; return { state: 'baseline' }; }
+        if (!baseline) {
+          if (firstRequest && (last.totalTokens <= 0 || fields.some(key => last[key] > total[key])))
+            throw new Error('Native first-request usage exceeds its cumulative totals.');
+          baseline = { total, last };
+          if (!firstRequest) return { state: 'baseline' };
+          return { state: 'sample', sampleId: createHash('sha256').update(JSON.stringify([threadId, event.turnId, total])).digest('hex'),
+            provenance: 'native-last-request', upstreamResponseIdAvailable: false, usage: last };
+        }
         if (equal(total, baseline.total)) {
           if (!equal(last, baseline.last)) throw new Error('Repeated native totals changed their last-request usage.');
           return { state: 'duplicate' };

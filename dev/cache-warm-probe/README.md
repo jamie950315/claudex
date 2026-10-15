@@ -176,22 +176,35 @@ never resumed or replayed.
 ### Actual native Mod acceptance
 
 `native.mjs` runs the shipping companion and real Unix broker in a new private
-root. It verifies native `warm status`, `on`, and `confirm` as zero-model local
-commands, then allows one seed turn and one timer-triggered warm turn. It requires
+root. Its default mode sends one ordinary seed turn before enabling, verifies
+native `warm status`, `on`, and `confirm` as zero-model local commands, then allows
+one timer-triggered warm turn. It requires
 an explicit, user-authorized process-only `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`;
 it never writes that setting globally. Use `--run` only after inference approval.
 
+`native.mjs --run --autostart --native-context --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
+instead verifies the break-time workflow without an ordinary seed message. It
+sends only local status and `/claudex:warm on 5m rounds=2 compact=off`, then waits
+for the Mod's autonomous initial request and its periodic request about four
+minutes later. Both must complete through the real broker, with exactly two
+verified attempts and a refresh-limit stop, before a local off and owned-process
+cleanup. The initial request may write a cold cache; successful native usage
+starts the interval without requiring a cache hit. This is two automatic model
+turns, not a retention comparison against a no-refresh control. It uses the same
+separately authorized process-only function-hooks option.
+
 `native.mjs --run --ttl-sync --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
 instead verifies real native TTL synchronization without waiting for a timer.
-In one isolated process it confirms 1h, sends one ordinary fixture request,
+In one isolated process it confirms the settings-only `warm ttl 1h`, sends one ordinary fixture request,
 checks the one-hour cache-creation bucket, then confirms 5m and checks the
-five-minute bucket with one more request. Local commands must use zero model
+five-minute bucket with one more request after settings-only `warm ttl 5m`.
+Local commands must use zero model
 turns, off must preserve the selected TTL, and no automatic attempt may occur.
 This is exactly two explicit model requests, not a one-hour retention experiment.
 
 `native.mjs --run --compact --root "$NEW_PRIVATE_DIRECTORY" --claude "$CLAUDE_BINARY"`
 verifies the compaction that follows a finished warm-up. It sends two ordinary
-seed turns, waits for the one timer-triggered warm turn, then sends nothing
+seed turns before enabling, waits for the one timer-triggered warm turn, then sends nothing
 and requires the loaded Mod to compact once inside that request's cache
 window: a verified `compact` attempt, a policy ended as `compacted`, exactly
 one native `compact_boundary`, and one more ordinary reply afterwards. It

@@ -45,9 +45,10 @@ interval 4 or 55 minutes by TTL, Codex 25). By user decision exactly one of
 `rounds=N` (at most 500), `for=DURATION` (at most 168 hours) or
 `until=HH:MM|DD:HH:MM` (the next occurrence, within 168 hours) is accepted,
 never a combination. By user decision an `on` command without a limit warms
-for four hours, exactly as `for=4h` (4 requests at a 1h TTL, 60 at 5m, 9 on
-Codex); the advanced `/claudex warm on` and CLI keep their 60-minute,
-3-request defaults. By user decision that default is one broker setting
+for four hours, exactly as `for=4h` (up to 5 requests at a 1h TTL, 60 at 5m,
+10 on Codex, including an initial cold-cache request when needed); the advanced
+`/claudex warm on` and CLI keep their 60-minute, 3-request defaults. By user
+decision that default is one broker setting
 shared by Claude, Codex and the app: `defaultWarmLimit` in the collaboration
 ledger, read and written only through controller `cache_warm_settings` (never
 a managed worker, and writes refuse while the app is stopped). The Mod Cache
@@ -115,13 +116,18 @@ reason instead of compacting. The summary adds a sixth line for a policy whose
 broker reports `compactAtEnd`. The advanced Codex CLI has no flag and follows
 the shared setting. The message is a response that is not a warm
 request, in a later turn than the one that first gave the binding evidence;
-the first turn after enrollment only supplies evidence, and a turn start or a
-command that makes no model request never counts. Saving changes neither
+the first observed request (including an own prime) supplies timing rather than
+restarting the limit, and a turn start or a command that makes no model request
+never counts. Saving changes neither
 the TTL nor a running policy and enrolls nothing. Whether the saved limit fits
 a session's interval is decided, and refused explicitly, when warming is
-enabled; an unreachable broker fails the `on` command instead of guessing. A time limit allows the requests that fit in it; rounds
-must fit in 168 hours. A limit no request fits in, or one needing more than
-500 requests, is refused with its reason instead of being shortened. The
+enabled; an unreachable broker fails the `on` command instead of guessing. A time
+limit allows the requests that fit in it; rounds must fit in 168 hours. A duration
+limit includes the initial request at time zero when needed; its request cap is
+ceil(duration / interval). Rounds keep their conservative
+floor(168 hours / interval) fit because an existing cache may defer the first
+request. A limit needing more than 500 requests is refused with its reason
+instead of being shortened. The
 broker bounds are maxRefreshes 1..500 and maxMinutes 1..10080. The attempt
 ledger keeps its 2048-record, 2 MiB size: a new enrollment drops that
 conversation's settled attempts (rejected, revoked, verified, failed) of
@@ -169,7 +175,10 @@ with the attempt) while its read plus write covers that prefix again: real
 2.1.293 and 2.1.295 sessions never re-read the last user message of the
 preceding request. Reading no more than was cached before that request is
 not a hit; an attempt without `priorReadTokens` and Codex keep the
-whole-prefix rule. Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
+whole-prefix rule. A completed request without a measured hit still supplies timing and continues
+warming; call it `native-cache-refreshed`, never a hit. Codex measures the prior
+prefix against the whole inputTokens count, not only its cached subset.
+Keep plugin origin, final idle/draft/lifecycle fences, no replay after an
 uncertain submission, read-only status and explicit bounded authorization. The
 Claude warming window defaults to one hour; users can choose
 `ttl=5m` or `ttl=1h` in the confirmed native command. Confirmation synchronizes
@@ -179,9 +188,22 @@ Lock timer dispatch, respect forced/managed constraints, pause the old policy on
 change, check exact idle/context immediately before writing and verify readback
 before enabling. Report partial application without rollback or replay; off
 retains the native TTL choice. Label an assumed window `configured-window`, not
-verified provider retention. Changes retire prior local evidence and wait for a
-fresh request. Token reservations
-limit admission, not native output; count recovery requests even after a policy
+verified provider retention. Changes retire prior local evidence. By user decision (2026-10-15), an explicit
+`on` never requires another ordinary user message. If enrollment has no usable
+recent request (including an expired cache or a changed TTL), it authorizes its
+own initial request as soon as the control command finishes and the native
+conversation is idle. Keep this `kind: prime` in the same durable one-use
+claim/check/receipt path, with a two-minute enable-time dispatch deadline bounded
+by the policy end. Its unknown model/effort/sample and prefix stay null/zero;
+never fabricate usage. Capture the current independent native configuration
+fingerprint before arming the timer. Its actual successful completion and usage
+seed the next interval; `native-cache-primed` is not a cache-hit claim. The prime
+counts toward rounds, duration and actual output. A fresh existing request can
+still schedule normally. Never use this path to catch up missed refreshes,
+retry uncertain delivery or auto-resume after restart. A native configuration
+invalidation immediately suspends the Claude client and disables its broker
+policy, even during the first request; later accounting cannot re-enable it.
+Token reservations limit admission, not native output; count recovery requests even after a policy
 stops. A native accepted prompt has no atomic dequeue API; preserve that limit.
 Native 2.1.286 suppresses a plugin's own prompt hook and frames its text before
 turn.start. Require the existing one-use dispatch plus exact original/native
@@ -227,15 +249,20 @@ maxOutputTokens=256. The 30-minute configured-window is a local evidence bound,
 not native TTL configuration or retention proof; measure from native turn start
 and refuse expired long-turn evidence. Model/effort observations are configured
 metadata, not independent response-model proof. A baseline counter is not a
-sample: require fresh exact usage deltas and native completion. Preserve native
+sample: require fresh exact native request usage and completion. For an own prime observed
+from exact start and matched returned turn ID, the first native last-request
+usage is directly accounted and its cumulative total becomes the baseline;
+never fabricate previous totals. Subsequent samples keep exact cumulative/last
+agreement. Preserve native
 settings-snapshot semantics: idle resume fields are not an already-observed
 prompt baseline. Validate the independent permission/provider/plugin hash from
 resume, then bind the first native snapshot to confirmed model/cwd and any known
-effort. Native default instructions may resolve on that first ordinary turn;
-no snapshot means no dispatch. Codex 0.162 reports settings only when they
+effort. Native default instructions may resolve on the initial warm turn. The
+independently validated resume security/model/directory/known-effort baseline
+permits that first dispatch without a prompt-settings snapshot or human turn. Codex 0.162 reports settings only when they
 change (observed: none on two unchanged turns, one on an effort change before
-its turn). A model turn observed from its start, with native usage and no
-snapshot, therefore makes the rejoin response the baseline, and the next
+its turn). A model turn (including the own prime) observed from its start, with native
+usage and no snapshot, therefore makes the rejoin response the baseline, and the next
 snapshot is a change that revokes warming. The enrollment turn and turns
 without usage never establish this. Identical subsequent snapshots are not changes;
 later full-fingerprint changes still revoke warming. Keep instruction text out
@@ -268,5 +295,6 @@ automated tests; it submits literal native input, never the wrapped app-origin
 wake payload, and stops on uncertainty or model activity. Composer keystrokes,
 autocomplete and rendered pixels remain unverified; do not promote native
 backend/output evidence into visual UI or cache-retention proof.
-Mid-turn enrollment
-with no native settings snapshot waits without a dispatch timer.
+A control-only enrollment turn is not usage evidence. After its idle completion,
+an enabled prime schedules itself without an ordinary message or settings
+snapshot; owner, identity, permission and final dispatch proofs stay mandatory.

@@ -13,9 +13,10 @@ import { CollaborationHub } from '../../src/collaboration-hub.mjs';
 import { serveCollaborationSocket } from '../../src/collaboration-transport.mjs';
 import { createTokenLimitEvidence } from './token-limit-evidence.mjs';
 
-const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' }, 'ttl-sync': { type: 'boolean' }, compact: { type: 'boolean' }, 'native-context': { type: 'boolean' } } });
+const { values } = parseArgs({ options: { root: { type: 'string' }, claude: { type: 'string' }, run: { type: 'boolean' }, autostart: { type: 'boolean' }, 'ttl-sync': { type: 'boolean' }, compact: { type: 'boolean' }, 'native-context': { type: 'boolean' } } });
 assert(values.root && values.claude, 'Supply a new private --root and the native --claude executable.');
 assert(process.env.CLAUDE_CODE_ENABLE_FUNCTION_HOOKS === '1', 'An explicitly authorized process-only native Mod opt-in is required.');
+assert(!values.autostart || values.run && !values.compact && !values['ttl-sync'], 'Autostart needs --run and cannot be combined with another experiment.');
 const root = await realpath(values.root), binary = await realpath(values.claude);
 const stat = await lstat(root);
 assert(stat.isDirectory() && stat.uid === process.getuid() && (stat.mode & 0o077) === 0 && (await readdir(root)).length === 0);
@@ -32,7 +33,7 @@ const emit = data => console.log(JSON.stringify({ at: new Date().toISOString(), 
 const evidence = createTokenLimitEvidence(), queue = [];
 const sessions = new Set(); let child, active, consume, pending, wake, ended = false, failure;
 const env = { ...process.env, CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: '1', CLAUDE_CODE_PROMPT_CACHE_TTL: '5m',
-  CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_MAX_OUTPUT_TOKENS: values.compact ? '4000' : '128', CLAUDE_CODE_EFFORT_LEVEL: 'medium' };
+  CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL: '5m', CLAUDE_CODE_MAX_OUTPUT_TOKENS: values.compact || values.autostart ? '4000' : '128', CLAUDE_CODE_EFFORT_LEVEL: 'medium' };
 for (const key of ['CLAUDEX_COLLABORATION_WORKER', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
   'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX',
   'CLAUDE_CODE_USE_FOUNDRY', 'ENABLE_PROMPT_CACHING_1H', 'FORCE_PROMPT_CACHING_5M', 'DISABLE_PROMPT_CACHING']) delete env[key];
@@ -119,14 +120,48 @@ try {
   assert.equal(status.local.enabled, false);
   assert.equal(report.native.at(-1).turns, 0, 'Status must not invoke a model.');
   if (!values.run) report.outcome = 'native-status-only';
+  else if (values.autostart) {
+    // This is the user's leave-for-a-break workflow: no ordinary seed or
+    // follow-up prompt, only on. The loaded Mod owns both subsequent requests.
+    await send('/claudex:warm on 5m rounds=2 compact=off');
+    const sent = report.dispatchedUserMessages, deadline = Date.now() + 330000;
+    let first;
+    while (Date.now() < deadline) {
+      assert(!failure, failure?.message);
+      const state = await hub.cacheWarm.list();
+      const bad = state.attempts.find(a => ['failed', 'uncertain', 'rejected', 'revoked'].includes(a.state));
+      assert(!bad, JSON.stringify(bad));
+      if (!first && state.attempts[0]?.state === 'verified' && state.policies[0]?.phase === 'idle') {
+        first = report.afterPrime = state;
+        assert.equal(first.attempts[0].kind, 'prime');
+        assert.equal(first.attempts[0].reason, 'native-cache-primed');
+        assert.equal(first.policies[0].enabled, true);
+        assert(Number.isSafeInteger(first.policies[0].nextAt));
+        emit({ kind: 'autonomous-prime-completed', nextAt: first.policies[0].nextAt });
+      }
+      if (state.attempts.length === 2 && state.attempts.every(a => a.state === 'verified') && state.policies[0]?.phase === 'idle') {
+        report.afterPeriodic = state; break;
+      }
+      await delay(1000);
+    }
+    assert(first, 'No autonomous prime completed.');
+    assert(report.afterPeriodic, 'No second periodic warm completed.');
+    assert.equal(report.dispatchedUserMessages, sent, 'No human message may seed or drive the warm-up.');
+    assert.equal(report.afterPeriodic.policies[0].totals.refreshes, 2);
+    assert.equal(report.afterPeriodic.policies[0].reason, 'refresh-limit');
+    await delay(300); await send('/claudex:warm off');
+    report.afterOff = await hub.cacheWarm.list();
+    assert.equal(report.afterOff.policies[0].enabled, false);
+    report.outcome = 'native-autonomous-prime-and-periodic-verified';
+  }
   else if (values['ttl-sync']) {
     report.ttlSync = [];
     for (const ttl of ['1h', '5m']) {
-      const preview = jsonReply(await send(`/claudex warm on ttl=${ttl} maxMinutes=2 maxRefreshes=1 maxOutputTokens=256`));
+      const preview = jsonReply(await send(`/claudex warm ttl ${ttl}`));
       assert.equal(preview.state, 'confirmation-required');
       assert.equal(report.native.at(-1).turns, 0);
       const confirmed = jsonReply(await send(preview.confirm));
-      assert.equal(confirmed.policy.enabled, true);
+      assert.equal(confirmed.state, 'ttl-applied');
       assert.equal(confirmed.nativeCacheSync.value, ttl);
       assert.equal(confirmed.nativeCacheSync.scope, 'current-process');
       assert.equal(report.native.at(-1).turns, 0);
@@ -150,25 +185,24 @@ try {
     report.outcome = 'native-ttl-sync-verified';
   }
   else {
+    const ttlPreview = jsonReply(await send('/claudex warm ttl 5m'));
+    await send(ttlPreview.confirm);
+    const seed = Array.from({ length: 180 }, (_, i) => `Fixture ${i}: amber cedar lake north. This sentence is stable inert reference data.`).join('\n') + '\nReply only OK.';
+    const first = await send(seed);
+    assert(!first.receipt.isError && first.receipt.text?.trim() === 'OK');
+    if (values.compact) {
+      await delay(1500);
+      const second = await send('Reply only OK again.');
+      assert(!second.receipt.isError && second.receipt.text?.trim() === 'OK');
+      report.secondSeedUsage = second.receipt.usage;
+    }
+    await delay(300); // Settle native completion hooks before the idle command.
     const preview = jsonReply(await send('/claudex warm on ttl=5m maxMinutes=10 maxRefreshes=1 maxOutputTokens=256'));
     assert.equal(preview.state, 'confirmation-required');
     assert.equal(report.native.at(-1).turns, 0);
     const confirmed = jsonReply(await send(preview.confirm));
     assert.equal(confirmed.policy.enabled, true);
     assert.equal(report.native.at(-1).turns, 0);
-    const seed = Array.from({ length: 180 }, (_, i) => `Fixture ${i}: amber cedar lake north. This sentence is stable inert reference data.`).join('\n') + '\nReply only OK.';
-    const first = await send(seed);
-    assert(!first.receipt.isError && first.receipt.text?.trim() === 'OK');
-    if (values.compact) {
-      // Claude Code 2.1.295 was observed re-reading less than the whole prefix
-      // its first request of a session wrote (7,922 of 8,449 tokens), which the
-      // broker rightly refuses as a full-prefix hit. A second ordinary turn
-      // gives the schedule evidence from an established conversation.
-      await delay(1500);
-      const second = await send('Reply only OK again.');
-      assert(!second.receipt.isError && second.receipt.text?.trim() === 'OK');
-      report.secondSeedUsage = second.receipt.usage;
-    }
     // Native result frames can precede completion-hook settlement. Await the
     // independent broker evidence rather than racing that asynchronous boundary.
     let before;

@@ -9,6 +9,31 @@ or reset the preserved failed or uncertain records mentioned here.
 
 ## From cache-warming.md
 
+Authorized autonomous-start acceptance (2026-10-15, App 1.4.8 / Mod 0.8.31)
+used independent test conversations, with no ordinary seed or follow-up message:
+
+- Claude Code 2.1.295, Sonnet 5.5/medium, isolated staged Mod and real Unix
+  broker: local `/claudex:warm on 5m rounds=2 compact=off` automatically produced
+  a verified prime (11,819 cache-write tokens, zero cache reads, 4 output tokens),
+  then a verified periodic request about four minutes later (11,803 cache reads,
+  120 writes, 4 output tokens). Exactly two native responses, one session, no
+  retries or native errors, refresh-limit stop, local off, and owned-process
+  exit were verified. The process-only function-hooks opt-in was explicitly
+  authorized; no global policy was changed.
+- Installed Codex Desktop 0.162.0-alpha.17.2, GPT-6.1 Sol/xhigh: the trusted native
+  hook intercepted literal `/claudex:warm on rounds=2 compact=off` without model
+  activity. The existing Desktop owner then completed one autonomous prime with
+  an `OK` reply, no tools, 31,842 input tokens, zero cached tokens and 22 output
+  tokens. The broker verified that exact native completion and scheduled the
+  next request at its start plus 25 minutes. Literal off completed locally and
+  left no timer. Only this one automatic model turn was run; the 25-minute
+  follow-up was scheduled, not awaited.
+
+These runs establish no-extra-message enrollment and autonomous scheduling, not
+cache retention beyond a provider's TTL. The normal signed-app Quit/reopen
+upgrade installed 1.4.8 and app-managed Mod 0.8.31; existing Claude sessions were
+not restarted and can retain their older loaded Mod until a normal reload.
+
 Authorized Desktop 0.160.0 backend acceptance after native trust verified seven blocked local command turns (status/on/confirm/off), native hook-time primary/turn checks, structured output and no token-usage events or assistant/tool history items. The test policy ended disabled/unbound with zero refresh attempts and no timer.
 
 Authorized 1.2.6 native acceptance verified a 25-minute same-owner OK refresh (36,096 cached input / 5 output tokens), exact accounting and the one-refresh limit. At about 31 minutes both warmed and untouched controls still hit; retain the inconclusive extension result, not a guaranteed native TTL claim. Detailed version-scoped evidence is in docs/claude-mod-validation.md.

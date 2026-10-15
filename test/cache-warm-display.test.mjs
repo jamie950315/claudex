@@ -46,28 +46,28 @@ test('a policy with a round limit shows how much of the chosen limits is used', 
 test('one of rounds, a duration or a clock time becomes the existing bounds', () => {
   const noon = new Date(2026, 0, 30, 12, 0).getTime(), parse = (words, intervalMinutes = 55) => parseWarmLimits(words, { intervalMinutes, now: noon });
   // No limit means four hours, like for=4h.
-  assert.deepEqual(parse(['ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 240, maxRefreshes: 4 } });
+  assert.deepEqual(parse(['ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 240, maxRefreshes: 5 } });
   assert.deepEqual(parse([], 4).bounds, { maxMinutes: 240, maxRefreshes: 60 });
   assert.deepEqual(parse([], 25).bounds, parse(['for=4h'], 25).bounds);
   assert.deepEqual(parse(['rounds=5', 'ttl=1h']), { rest: ['ttl=1h'], bounds: { maxMinutes: 10080, maxRefreshes: 5 } });
   assert.deepEqual(parse(['rounds=500'], 4).bounds, { maxMinutes: 10080, maxRefreshes: 500 });
-  assert.deepEqual(parse(['for=3h']).bounds, { maxMinutes: 180, maxRefreshes: 3 });
-  assert.deepEqual(parse(['for=1h30m']).bounds, { maxMinutes: 90, maxRefreshes: 1 });
-  assert.deepEqual(parse(['for=168h']).bounds, { maxMinutes: 10080, maxRefreshes: 183 });
-  assert.deepEqual(parse(['until=18:30']).bounds, { maxMinutes: 390, maxRefreshes: 7, fixedEnd: true });
+  assert.deepEqual(parse(['for=3h']).bounds, { maxMinutes: 180, maxRefreshes: 4 });
+  assert.deepEqual(parse(['for=1h30m']).bounds, { maxMinutes: 90, maxRefreshes: 2 });
+  assert.deepEqual(parse(['for=168h']).bounds, { maxMinutes: 10080, maxRefreshes: 184 });
+  assert.deepEqual(parse(['until=18:30']).bounds, { maxMinutes: 390, maxRefreshes: 8, fixedEnd: true });
   // A clock time already passed today is the same time tomorrow.
-  assert.deepEqual(parse(['until=11:00']).bounds, { maxMinutes: 1380, maxRefreshes: 25, fixedEnd: true });
+  assert.deepEqual(parse(['until=11:00']).bounds, { maxMinutes: 1380, maxRefreshes: 26, fixedEnd: true });
   assert.deepEqual(parse(['until=12:20'], 4).bounds, { maxMinutes: 20, maxRefreshes: 5, fixedEnd: true });
   // A day of the month: later this month, else the next month that has that day.
-  assert.deepEqual(parse(['until=31:18:30']).bounds, { maxMinutes: 1830, maxRefreshes: 33, fixedEnd: true });
-  assert.deepEqual(parse(['until=2:09:00']).bounds, { maxMinutes: 4140, maxRefreshes: 75, fixedEnd: true });
+  assert.deepEqual(parse(['until=31:18:30']).bounds, { maxMinutes: 1830, maxRefreshes: 34, fixedEnd: true });
+  assert.deepEqual(parse(['until=2:09:00']).bounds, { maxMinutes: 4140, maxRefreshes: 76, fixedEnd: true });
   assert.throws(() => parse(['until=20:09:00']), /more than 168 hours away/);
   assert.throws(() => parseWarmLimits(['until=31:09:00'], { intervalMinutes: 55, now: new Date(2026, 0, 31, 12, 0).getTime() }), /more than 168 hours away/);
   for (const words of [['rounds=0'], ['rounds=501'], ['rounds=1000'], ['for='], ['for=169h'], ['for=0m'], ['for=1.5h'],
     ['until=24:00'], ['until=9'], ['until=32:10:00'], ['until=0:10:00']]) assert.throws(() => parse(words), /Limits/);
   for (const words of [['rounds=2', 'rounds=3'], ['for=2h', 'until=15:00'], ['rounds=3', 'for=2h'], ['until=15:00', 'rounds=3']])
     assert.throws(() => parse(words), /Choose only one limit/);
-  assert.throws(() => parse(['for=30m']), /No warm request fits in 30 min/);
+  assert.deepEqual(parse(['for=30m']).bounds, { maxMinutes: 30, maxRefreshes: 1 });
   assert.throws(() => parse(['rounds=200']), /200 warm requests cannot fit in 168 hours at one every 55 min; the most is 183/);
   assert.throws(() => parse(['for=40h'], 4), /would take 600 warm requests; the limit is 500 \(2000 min/);
 });

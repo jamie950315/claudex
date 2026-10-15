@@ -111,7 +111,7 @@ export function createCacheWarmClient() {
     if (Object.hasOwn(reply ?? {}, 'policy')) b.enabled = reply.policy?.enabled === true;
     // With no further warm request, the one compaction at the end may be due.
     const at = Number.isFinite(reply?.nextAt) ? reply.nextAt : reply?.compactAt;
-    if (!b.enabled || b.phase !== 'idle' || !b.sample || !Number.isFinite(at)) return;
+    if (!b.enabled || b.phase !== 'idle' || !Number.isFinite(at)) return;
     const now = await b.host.now();
     if (!current(b, epoch)) return;
     // No sleep catch-up: even an overdue timer must pass the broker's expiry gate.
@@ -257,8 +257,15 @@ export function createCacheWarmClient() {
     },
     invalidate() {
       const b = binding; if (!b) return;
+      const wasEnabled = b.enabled;
       cancel(b); b.epoch++; b.pending = null; b.sample = null; confirmation = null;
+      b.enabled = false; b.suspended = true;
       b.reason = 'native-configuration-changed';
+      // A prime has no prior model sample to compare. Revoke its policy at the
+      // configuration boundary itself; a later response may still be charged,
+      // but must never authorize another request under the changed settings.
+      if (wasEnabled) return call(b, 'configure', { enabled: false, instanceId: b.instanceId })
+        .catch(() => fault(b, 'native-configuration-revocation-unconfirmed'));
     },
     async sessionCommand(host, words, origin) {
       if (!words.length) words = ['status'];
@@ -440,6 +447,15 @@ export function createCacheWarmClient() {
           }
           // Explicit confirmation first registers this exact live instance. Default-off
           // starts and status reads never create a broker observer or policy.
+          // Capture current configuration independently of usage: the command
+          // may be the last thing the user does before leaving. A first warm
+          // request can establish the sample without another message from them.
+          const config = await host.cacheConfiguration(b.ttlPreference);
+          await guard();
+          if (b.sampleFingerprint !== config.fingerprint) {
+            b.epoch++; configureEpoch = b.epoch; b.sample = null; b.publishedSampleId = null;
+          }
+          b.sampleFingerprint = config.fingerprint;
           const initialSample = b.sample;
           const bound = await call(b, 'observe', { ...fields(b), sequence: ++b.sequence, phase: b.phase,
             ...(initialSample ? { sample: initialSample } : {}) });

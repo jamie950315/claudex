@@ -28,7 +28,10 @@ Supported human commands:
   whether the conversation is compacted once when the limit is reached, shortly
   before the last cached window expires. Without it the setting saved in
   Claudex applies, which is on by default.
-- No second confirmation command is needed.
+- No second confirmation command or ordinary user message is needed. If there
+  is no usable recent request, warming sends its own first request immediately
+  after local activation. It counts toward the chosen limit; a cold cache may
+  require a full-price read before later requests can reuse it.
 - `/claudex:warm off` stops warming, leaving this session's native TTL unchanged.
 - `/claudex:warm status` (or no arguments) inspects without enabling anything.
 

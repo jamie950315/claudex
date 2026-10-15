@@ -36,7 +36,8 @@ test('empty inspection is read-only, provider support and native binding are exp
   await f.observe();
   await assert.rejects(f.enable({ requestId: undefined }), /requestId/);
   const configured = await f.enable();
-  assert.equal(configured.reason, 'awaiting-evidence'); assert.equal(configured.policy.native.phase, 'idle');
+  assert.equal(configured.reason, 'scheduled'); assert.equal(configured.policy.native.phase, 'idle');
+  assert.equal(configured.prime, true); assert.equal(configured.nextAt, f.now());
 });
 
 test('off preserves enrollment bounds and accounting instead of showing a new zero budget', async t => {
@@ -49,6 +50,48 @@ test('off preserves enrollment bounds and accounting instead of showing a new ze
   assert.equal(stopped.policy.maxReadTokens, before.maxReadTokens);
   assert.deepEqual(stopped.policy.totals, before.totals);
   assert.equal((await f.check(claimed.attempt.id)).ready, false);
+});
+
+test('explicit enable primes missing or expired usage itself and then refreshes without a human turn', async t => {
+  for (const expired of [false, true]) {
+    const f = await fixture(t);
+    await f.observe(expired ? { sample: f.sample() } : {});
+    if (expired) f.tick(300000);
+    const enabled = await f.enable();
+    assert.equal(enabled.prime, true); assert.equal(enabled.nextAt, f.now());
+    const { attempt } = await f.claim();
+    assert.equal(attempt.kind, 'prime');
+    assert.equal((await f.claim()).reason, 'attempt-pending');
+    assert.equal((await f.check(attempt.id)).ready, true);
+    assert.equal((await f.check(attempt.id)).ready, false);
+    await f.receipt(attempt.id, 'submitted'); f.tick(1000);
+    const result = await f.observe({ epoch: 1, attemptId: attempt.id, sample: f.sample({ cacheWriteTokens: 0, inputTokens: 6000 }) });
+    assert.equal(result.policy.enabled, true); assert.equal(result.prime, false); assert.ok(result.nextAt > f.now());
+    const entry = (await f.manager.list()).attempts[0];
+    assert.equal(entry.state, 'verified'); assert.equal(entry.reason, 'native-cache-primed');
+    assert.equal(entry.requiredPrefixTokens, 0); assert.equal(entry.model, null);
+    assert.equal(entry.actual.inputTokens, 6000); assert.equal(entry.actual.cacheWriteTokens, 0);
+    assert.deepEqual(result.policy.cacheResults, { count: 0, firstAt: null, lastAt: null });
+    f.tick(result.nextAt - f.now());
+    const next = await f.claim({ epoch: 1 }); assert.equal(next.claimed, true); assert.equal(next.attempt.kind, undefined);
+  }
+});
+
+test('prime retains exact lifecycle, revocation, dispatch deadline and restart no-replay', async t => {
+  for (const scenario of ['off', 'activity', 'expiry', 'restart']) {
+    const f = await fixture(t); await f.observe(); await f.enable();
+    const { attempt } = await f.claim();
+    if (scenario === 'off') await f.manager.configure({ ...identity, provider: 'claude', enabled: false });
+    if (scenario === 'activity') await f.observe({ epoch: 1, phase: 'busy' });
+    if (scenario === 'expiry') f.tick(120000);
+    if (scenario === 'restart') {
+      await f.check(attempt.id); await f.receipt(attempt.id, 'submitted');
+      f.manager = await new CacheWarmManager({ root: f.root, now: f.now }).initialize();
+      assert.equal((await f.manager.list()).attempts[0].state, 'uncertain');
+    }
+    assert.equal((await f.check(attempt.id)).ready, false);
+    assert.equal((await f.claim()).claimed, false);
+  }
 });
 
 test('reservation and one-use authorization do not prove a hit; native own sample does', async t => {
@@ -94,7 +137,7 @@ test('unrelated activity after native authorization preserves uncertainty and st
   assert.equal(list.attempts[0].state, 'uncertain'); assert.equal(list.policies[0].enabled, false);
 });
 
-test('a hit that proves nothing new, native max_tokens, or model change cannot certify warming', async t => {
+test('cache misses refresh without claiming a hit; native failure and model changes still stop warming', async t => {
   // The preceding request re-read 3,000 tokens of older entries and wrote 3,000 of its own.
   const run = async change => {
     const f = await fixture(t);
@@ -107,11 +150,15 @@ test('a hit that proves nothing new, native max_tokens, or model change cannot c
     return { result, attempt: (await f.manager.list()).attempts[0] };
   };
   // Only what was cached before that request, or a prefix this request does not cover again.
-  for (const change of [{ cacheReadTokens: 3000 }, { cacheReadTokens: 2999, cacheWriteTokens: 3100 }, { cacheReadTokens: 5000, cacheWriteTokens: 900 },
-    { stopReason: 'max_tokens' }, { model: 'different-model' }]) {
+  for (const change of [{ stopReason: 'max_tokens' }, { model: 'different-model' }]) {
     const { result, attempt } = await run(change);
     assert.equal(result.policy.enabled, false, JSON.stringify(change));
     assert.equal(attempt.state, 'failed');
+  }
+  for (const change of [{ cacheReadTokens: 3000 }, { cacheReadTokens: 2999, cacheWriteTokens: 3100 }, { cacheReadTokens: 5000, cacheWriteTokens: 900 }]) {
+    const { result, attempt } = await run(change);
+    assert.equal(result.policy.enabled, true); assert.equal(attempt.state, 'verified');
+    assert.equal(attempt.reason, 'native-cache-refreshed');
   }
   // Claude Code re-reads all but the tail of the preceding request: its own entries are alive.
   for (const change of [{}, { cacheReadTokens: 5949, cacheWriteTokens: 155 }, { cacheReadTokens: 3001, cacheWriteTokens: 2999 }]) {
@@ -124,7 +171,7 @@ test('a hit that proves nothing new, native max_tokens, or model change cannot c
   const saved = JSON.parse(await readFile(join(f.root, 'cache-warm.json'), 'utf8')); delete saved.attempts[0].priorReadTokens;
   f.manager.state.attempts[0] = saved.attempts[0]; f.tick(1000);
   await f.observe({ epoch: 1, attemptId: attempt.id, sample: f.sample({ cacheReadTokens: 5999, cacheWriteTokens: 80 }) });
-  assert.equal((await f.manager.list()).attempts[0].state, 'failed');
+  assert.equal((await f.manager.list()).attempts[0].reason, 'native-cache-refreshed');
 });
 
 test('enable request idempotency never resets duration, counts, or budgets', async t => {
@@ -264,7 +311,8 @@ test('duration and admission output budgets prevent a native authorization', asy
 test('large prefixes and accumulated actual reads have no limit, including legacy finite journals', async t => {
   for (const provider of ['claude', 'codex']) {
     const f = await fixture(t, { provider });
-    const sample = more => ({ ...(provider === 'codex' ? codexSample(f) : f.sample()), ...more });
+    const sample = more => ({ ...(provider === 'codex' ? codexSample(f) : f.sample()), ...more,
+      ...(provider === 'codex' ? { inputTokens: (more.cacheReadTokens ?? 0) + (more.cacheWriteTokens ?? 0) } : {}) });
     await f.observe({ sample: sample({ cacheWriteTokens: 300000 }) });
     const enabled = await f.enable({ provider, bestEffort: true, maxMinutes: 120, maxReadTokens: 1 });
     assert.equal(enabled.policy.maxReadTokens, null);
@@ -507,8 +555,25 @@ test('a warming tool-use response still fails and never borrows the ordinary-wor
   assert.equal((await f.manager.list()).attempts[0].state, 'failed');
 });
 
-const codexSample = f => f.sample({ model: 'codex-fixture', ttlMs: 1800000, ttlSource: 'configured-window' });
+const codexSample = f => f.sample({ model: 'codex-fixture', ttlMs: 1800000, ttlSource: 'configured-window', inputTokens: 6000 });
 const codexEnable = (f, more = {}) => f.enable({ provider: 'codex', bestEffort: true, ...more });
+
+test('Codex partial cache reads never shrink the full request prefix or become a false hit', async t => {
+  const f = await fixture(t, { provider: 'codex' });
+  await f.observe(); await codexEnable(f);
+  for (const [index, inputTokens, cacheReadTokens] of [[0, 10000, 0], [1, 11000, 1000], [2, 12000, 1000]]) {
+    const { attempt } = await f.claim({ epoch: index });
+    assert.equal(attempt.kind, index === 0 ? 'prime' : undefined);
+    const saved = (await f.manager.list()).attempts.at(-1);
+    assert.equal(saved.requiredPrefixTokens, index === 0 ? 0 : inputTokens - 1000);
+    await f.check(attempt.id, { epoch: index }); await f.receipt(attempt.id, 'submitted'); f.tick(1000);
+    const result = await f.observe({ epoch: index + 1, attemptId: attempt.id, sample: f.sample({
+      model: 'codex-fixture', ttlMs: 1800000, ttlSource: 'configured-window', inputTokens, cacheReadTokens, cacheWriteTokens: 0 }) });
+    assert.equal(result.policy.enabled, true);
+    assert.equal((await f.manager.list()).attempts.at(-1).reason, index === 0 ? 'native-cache-primed' : 'native-cache-refreshed');
+    if (index < 2) f.tick(result.nextAt - f.now());
+  }
+});
 
 test('Codex ledgers require explicit best-effort consent and cannot configure a native TTL', async t => {
   const f = await fixture(t, { provider: 'codex' }); await f.observe({ sample: codexSample(f) });

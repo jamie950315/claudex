@@ -49,9 +49,9 @@ export function parseWarmLimits(words, { intervalMinutes, now }) {
   }
   if (minutes < 1 || minutes > WARM_MAX_MINUTES) throw invalid();
   const fixedEnd = seen.has('until') ? { fixedEnd: true } : {};
-  if (minutes < intervalMinutes)
-    throw new Error(`No warm request fits in ${minutes} min: the first one is due ${intervalMinutes} min after a reply.`);
-  const fitting = Math.floor(minutes / intervalMinutes);
+  // A cold enrollment sends its own initial request at time zero. It counts
+  // toward the same limit; later requests must start strictly before the end.
+  const fitting = Math.ceil(minutes / intervalMinutes);
   if (fitting > WARM_MAX_ROUNDS)
     throw new Error(`${minutes} min would take ${fitting} warm requests; the limit is ${WARM_MAX_ROUNDS} (${WARM_MAX_ROUNDS * intervalMinutes} min at this interval).`);
   return { rest, bounds: { maxMinutes: minutes, maxRefreshes: fitting, ...fixedEnd } };

@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.4.7 and Claude Mod 0.8.30 provide bounded, per-conversation cache warming.
+Claudex 1.4.8 and Claude Mod 0.8.31 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,10 +16,18 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.30 companion and
-a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
+Use the intended existing conversation with a freshly loaded 0.8.31 companion and
+a 1.4.8 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
+
+Before a break, send `/claudex:warm on` once and leave the conversation open.
+You do not need to send an ordinary message first or afterwards. When no usable
+recent request is available, Claudex sends its own initial `OK` request as soon
+as the control command has finished and the conversation is idle, then refreshes
+periodically. An existing fresh request can supply the first refresh deadline
+instead. A cold or expired cache may require a full-price read on the first
+request. That request counts toward the same request and output limits.
 
 The session-only shortcut is:
 
@@ -47,11 +55,13 @@ One limit you choose, on Claude and on Codex:
 Use exactly one of them; a combination is refused. A time limit allows as many
 requests as fit in it: one every 55 minutes at a 1h TTL, every 4 minutes at 5m,
 every 25 minutes on Codex. `rounds` must fit in 168 hours at that interval (at
-most 183 at a 1h TTL, 403 on Codex). A time shorter than one interval, a time
+most 183 at a 1h TTL, 403 on Codex). A time
 that would need more than 500 requests, or an end more than 168 hours away is
 refused with the reason instead of being silently shortened. Without any of
-these, `/claudex:warm on` warms for four hours, exactly as `for=4h`: up to 4
-requests at a 1h TTL, 60 at 5m and 9 on Codex. A five-minute TTL therefore
+these, `/claudex:warm on` warms for four hours, exactly as `for=4h`: up to 5
+requests at a 1h TTL, 60 at 5m and 10 on Codex, including an initial cold-cache
+request when needed. With an already fresh cache, only requests due before the
+end are sent. A five-minute TTL therefore
 uses far more plan quota than the other two; choose a limit to change that.
 The advanced `/claudex warm on` and the CLI keep their own defaults of 60
 minutes and 3 requests.
@@ -89,7 +99,7 @@ context for your next message.
 - **When**: at the time the next warm request would have been due. In Claude
   that is 5 minutes before the last request's cache window ends at a 1h TTL
   and 1 minute before at 5m; with `for=4h` at 1h it is 55 minutes after the
-  fourth request. In Codex it is 25 minutes after the last warm request
+  last request. In Codex it is 25 minutes after the last warm request
   started, inside the 30-minute window Claudex assumes. Either can be later
   than the limit's own end time.
 - **How, Claude**: the Mod runs the native `/compact` command, with no
@@ -144,8 +154,8 @@ Choose one `on` form and send it once. It directly applies the session TTL and
 enables warming; no second confirmation or token is required. `ttl=5m` and
 `ttl=1h` are also supported. The native identity, idle-state, TTL-policy and
 one-use transaction checks still run internally. This explicit command consents
-to later bounded warm turns using native plan quota; it does not immediately
-request a model response.
+to later bounded warm turns using native plan quota; the local command itself makes no model request, but it authorizes the
+automatic initial request immediately afterwards when one is needed.
 With no TTL argument, the saved startup preference supplies the TTL, or 1h
 when none is saved. With no arguments at all, the command shows status.
 Only this native session is targeted, automatically; session IDs and paths
@@ -183,7 +193,8 @@ five-minute writes under the account's billing mode.
 Changing TTL requires an idle native turn. Claudex locks the timer, pauses the
 old policy when changing configuration, applies the native setting and verifies
 readback before enabling the matching policy. A changed TTL retires old samples
-and waits for fresh response evidence. Forced-five-minute and managed-policy
+and, when enabling, sends its own initial request to establish the next deadline.
+Forced-five-minute and managed-policy
 constraints are respected; conflicting choices fail explicitly. If application
 or readback fails, local warming stops and reports that the native TTL may have
 changed; there is no silent rollback or retry. Status reports native configuration
@@ -211,9 +222,12 @@ provider-enforced per-request cap**: native output or recovery can exceed a
 reservation. Each reservation includes the preceding cached prefix plus 256
 read tokens and 128 output tokens; final native usage replaces that estimate.
 
-An ordinary completed native request must supply usable usage evidence before
-warming can be scheduled. Enabling does not send an immediate model request or
-reconstruct old history. Missing evidence remains an explicit waiting state.
+Prior usage is not required to start. Enabling with no usable recent request
+authorizes one initial warm request through the same one-use dispatch path. Its
+actual native completion and usage establish the next deadline; no transcript
+scan or fabricated usage is needed. An ordinary response can also supply timing
+when already available. A successful request continues the schedule even when
+it misses the cache; cache-hit reporting remains based on actual cache reads.
 
 Stop the current conversation with:
 
@@ -375,8 +389,9 @@ current in-progress turn before calling the existing private controller. This
 also refuses a subagent hook that reports its parent's session ID. It never
 reads the supplied transcript path or searches histories. Missing or ambiguous
 context refuses the command rather than guessing a target. Direct activation retains
-all existing best-effort limits and waits for fresh ordinary usage evidence;
-the local control command itself is not a cache-refresh sample.
+all existing best-effort limits and starts its own first warm request after
+the local command completes. The control command itself is not a cache-refresh
+sample and no extra user message is needed.
 
 Validation covers actual hook-process parsing, native-context fixtures, private
 Unix RPC, installation migration and independent trust diagnostics.
@@ -485,20 +500,17 @@ An already-running turn is not killed and completed tool actions are not undone.
   turn start plus `refreshMinutes`. A turn already lasting 30 minutes cannot
   supply fresh evidence for this window.
   Different models and native account routes may retain caches for less time;
-  choose the interval accordingly. A miss stops subsequent warming rather than
-  certifying the assumed window.
-- The initial cumulative counter is only a baseline. Scheduling waits for fresh
-  exact native usage deltas and successful native completion; it does not infer
-  usage from an old transcript, status timestamp or duplicate notification.
-  Enrollment during an existing turn may need the next ordinary turn's settings
-  snapshot. Until then it remains `awaiting-native-settings`, without arming a
-  refresh timer. Unchanged native settings notifications do not disable warming;
-  actual changes after the first validated snapshot still do.
-  Codex 0.162 sends that notification only when settings change. There, the
-  first ordinary model turn observed from its start establishes the settings
-  Codex returned on rejoin as the baseline, so two ordinary turns can be needed
-  after enabling before a refresh is scheduled; any later settings
-  notification stops warming.
+  choose the interval accordingly. A miss is recorded as a refresh, not a hit,
+  and the successful request can establish the next scheduling deadline.
+- A first own warm turn observed from its exact native start and returned turn
+  ID uses the native `last` request usage for accounting, then checks subsequent
+  cumulative deltas. It never invents a prior counter or cache write.
+  Rejoining validates the existing owner's permissions, model, directory and
+  known effort before dispatch; the first full prompt-settings snapshot binds
+  its additional fields. Later changes still revoke warming. On runtimes such
+  as 0.162 that report settings only when they change, a wholly observed first
+  warm turn can establish the rejoin baseline itself. Neither path requires an
+  ordinary user message or treats the control command as model usage.
 Model/effort metadata describes configured values, not independently verified
 execution-model evidence.
 
@@ -551,21 +563,20 @@ draft is never edited; after skipping that opportunity, normal new activity can
 establish a fresh schedule.
 
 A dispatch requires a current enabled policy, exact instance and activity epoch,
-fresh cache evidence, remaining budget and an unexpired deadline. The broker
+remaining budget and an unexpired deadline. Its initial request needs no prior
+usage sample; later timing comes from the most recent successful request. The broker
 durably consumes its dispatch authorization before the Mod submits once through
 the official `prompt.submit` API, retaining plugin origin rather than pretending
 to be a human. Known warm-turn tool calls are refused without changing the
 model's tool definitions. A queued/submitted receipt is not a cache hit.
-Only fresh native usage covering the preceding cached prefix verifies warming.
-Since 1.4.2 a Claude warm request also verifies when it re-read more than the
-preceding request itself had re-read and its own read plus write covers that
-prefix again: Claude Code 2.1.293 and 2.1.295 do not re-read the last user
-message of the preceding request, so a reply without tool calls left every
-warm request 49 to 528 tokens short and stopped warming as
-`native-cache-verification-failed`. Reading only what was already cached
-before the preceding request still fails. Codex keeps the whole-prefix rule.
-Cache miss, output-limit recovery, model/effort/TTL changes, uncertainty or an
-actual budget overrun stop future warming rather than silently retrying.
+A successful, exactly attributed native response establishes the next deadline.
+Cache hits are measured separately: native reads must cover the preceding
+prefix (the complete input token count on Codex), or, in Claude, read more than the preceding request itself read while
+read plus write covers that prefix again. The initial cold request is labeled
+`native-cache-primed`; a subsequent successful request without a proven hit is
+`native-cache-refreshed`. Neither is called a hit or stops merely for missing
+cache counters. Output-limit recovery, model/effort/TTL changes, uncertainty or
+an actual budget overrun still stop future warming.
 
 App-stop, broker shutdown, session end and lifecycle changes revoke authorization.
 The broker does not restore stale native observations after a restart; interrupted

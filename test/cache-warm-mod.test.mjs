@@ -134,7 +134,7 @@ test('namespaced shortcut applies TTL only to its session, never the shared reme
 test('the shortcut turns rounds, a duration or a clock time into the confirmed bounds', async () => {
   const origin = { kind: 'composer' };
   for (const [words, expected] of [[['on', '5m', 'rounds=6'], { maxRefreshes: 6, maxMinutes: 10080 }],
-    [['on', 'for=3h'], { maxRefreshes: 3, maxMinutes: 180 }], [['on'], { maxRefreshes: 4, maxMinutes: 240 }],
+    [['on', 'for=3h'], { maxRefreshes: 4, maxMinutes: 180 }], [['on'], { maxRefreshes: 5, maxMinutes: 240 }],
     [['on', '5m'], { maxRefreshes: 60, maxMinutes: 240 }], [['on', '5m', 'for=40m'], { maxRefreshes: 10, maxMinutes: 40 }]]) {
     const f = await fixture(), result = await f.client.sessionCommand(f.host, words, origin);
     assert.equal(result.state, 'enabled');
@@ -151,7 +151,7 @@ test('the shortcut turns rounds, a duration or a clock time into the confirmed b
     assert.ok(JSON.stringify(f.calls.findLast(call => JSON.stringify(call).includes('maxRefreshes'))).includes('"fixedEnd":true'));
   }
   const f = await fixture();
-  for (const words of [['on', 'for=10m'], ['on', '5m', 'for=40h'], ['on', 'rounds=0'], ['on', 'for=1h', 'until=23:00'], ['on', 'rounds=2', 'for=3h'], ['on', 'rounds=200'], ['off', 'rounds=2']])
+  for (const words of [['on', 'for=0m'], ['on', '5m', 'for=40h'], ['on', 'rounds=0'], ['on', 'for=1h', 'until=23:00'], ['on', 'rounds=2', 'for=3h'], ['on', 'rounds=200'], ['off', 'rounds=2']])
     await assert.rejects(f.client.sessionCommand(f.host, words, origin));
   assert.equal(f.calls.length, 0);
 });
@@ -173,8 +173,8 @@ test('a saved default limit replaces four hours for commands without one, throug
   assert.ok(bounds().includes('"maxRefreshes":7') && bounds().includes('"maxMinutes":10080'), bounds());
   // An explicit limit still wins over the saved default.
   await f.client.sessionCommand(f.host, ['on', 'for=2h'], origin);
-  assert.ok(bounds().includes('"maxRefreshes":2') && bounds().includes('"maxMinutes":120'), bounds());
-  for (const word of ['until=11:18:30', 'for=200h', 'rounds=0', 'ttl=1h', 'for=1m'])
+  assert.ok(bounds().includes('"maxRefreshes":3') && bounds().includes('"maxMinutes":120'), bounds());
+  for (const word of ['until=11:18:30', 'for=200h', 'rounds=0', 'ttl=1h', 'for=0m'])
     await assert.rejects(f.client.command(f.host, ['limit', word], origin), /limit|Limits|fits/i);
   await assert.rejects(f.client.command(f.host, ['limit', 'for=8h'], { kind: 'plugin' }), /explicit native user/);
   // Valid for one TTL is enough to save; the other TTL refuses it when warming is enabled.
@@ -440,7 +440,7 @@ test('warming defaults off and status neither configures nor observes', async ()
   assert.equal(f.submits, 0);
 });
 
-test('confirmed five-minute choice is persisted and waits for fresh window-specific evidence', async () => {
+test('confirmed five-minute choice retires old usage but arms its own first warm request', async () => {
   const f = await fixture();
   f.host.cacheConfiguration = async preference => {
     const ttl = cacheWarmTtl({ preference }); return { ttl, fingerprint: JSON.stringify(ttl) };
@@ -454,12 +454,13 @@ test('confirmed five-minute choice is persisted and waits for fresh window-speci
   assert.equal(f.calls.find(item => item.action === 'configure' && item.params.enabled).params.ttl, '5m');
   assert.equal((await f.host.readCacheTtl()).value, '5m');
   assert.equal(f.calls.find(item => item.action === 'observe').params.sample, undefined);
-  assert.equal(f.timers.length, 0);
+  assert.equal(f.timers.length, 1);
+  await f.fire(); assert.equal(f.submits, 1);
   await f.seed('after-window-change');
   const sample = f.calls.findLast(item => item.action === 'observe' && item.params.sample)?.params.sample;
   assert.equal(sample.ttlMs, 300000);
   assert.equal(sample.ttlSource, 'configured-window');
-  assert.equal(f.timers.length, 1);
+  assert.equal(f.timers.length, 2);
 });
 
 test('changing the window cannot invalidate an in-flight native turn', async () => {
@@ -636,6 +637,65 @@ test('native client integrates with the real policy ledger from opt-in through v
   assert.equal(status.policies[0].totals.outputTokens, 4);
   assert.equal(f.client.snapshot().enabled, true);
   assert.ok(status.policies[0].nextAt > f.now);
+});
+
+test('on autonomously primes a cold, expired or TTL-changed session and continues its timer', async t => {
+  for (const scenario of ['cold', 'expired', 'ttl-change']) {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-prime-')));
+    await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
+    const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+    for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
+    if (scenario !== 'cold') await f.seed();
+    if (scenario === 'expired') f.now += 3600000;
+    const result = await f.client.sessionCommand(f.host, ['on', ...(scenario === 'ttl-change' ? ['5m'] : [])], { kind: 'composer' });
+    assert.equal(result.prime, true); assert.equal(f.submits, 0);
+    assert.equal(f.timers.at(-1).due, f.now);
+    await f.fire(); assert.equal(f.submits, 1);
+    const ticket = await f.client.stepStart({ turnId: 'warm-0', index: 0, effort: 'medium' });
+    f.now += 1000;
+    await f.client.stepEnd(ticket, { usage: { ...usage, input_tokens: 6000, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }, stopReason: 'end_turn' });
+    await f.client.turnComplete({ turnId: 'warm-0', reason: 'answer' });
+    const status = await manager.list();
+    assert.equal(status.attempts[0].reason, 'native-cache-primed');
+    assert.equal(status.policies[0].enabled, true);
+    assert.ok(status.policies[0].nextAt > f.now);
+    assert.equal(status.policies[0].totals.refreshes, 1);
+    assert.equal(status.policies[0].totals.readTokens, 0);
+    await f.fire(); assert.equal(f.submits, 2);
+  }
+});
+
+test('the first automatic warm retains draft and configuration guards without a prior sample', async t => {
+  for (const scenario of ['draft', 'settings', 'off']) {
+    const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-prime-guard-')));
+    await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
+    const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+    for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
+    await f.client.sessionCommand(f.host, ['on'], { kind: 'composer' });
+    if (scenario === 'draft') f.draft = 'Unsent user text';
+    if (scenario === 'settings') f.fingerprint = 'different-model';
+    if (scenario === 'off') await f.client.sessionCommand(f.host, ['off'], { kind: 'composer' });
+    await f.fire(); assert.equal(f.submits, 0); assert.equal((await manager.list()).attempts.length, 0);
+  }
+});
+
+test('configuration invalidation during prime cannot adopt a different model and resume warming', async t => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-prime-config-')));
+  await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
+  const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+  for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
+  await f.client.sessionCommand(f.host, ['on'], { kind: 'composer' });
+  await f.fire(); assert.equal(f.submits, 1);
+  await f.client.invalidate(); f.fingerprint = 'other-model-medium';
+  const ticket = await f.client.stepStart({ turnId: 'warm-0', index: 0, effort: 'medium' });
+  f.now += 1000;
+  await f.client.stepEnd(ticket, { usage: { ...usage, model: 'other-model' }, stopReason: 'end_turn' });
+  await f.client.turnComplete({ turnId: 'warm-0', reason: 'answer' });
+  assert.equal(f.client.snapshot().enabled, false); assert.equal(f.client.snapshot().suspended, true);
+  const result = await manager.list();
+  assert.equal(result.policies[0].enabled, false); assert.equal(result.policies[0].nextAt, null);
+  assert.equal(result.policies[0].totals.outputTokens, 4);
+  await f.fire(); assert.equal(f.submits, 1);
 });
 
 test('already-started native recovery remains accounted after the policy disables itself', async t => {

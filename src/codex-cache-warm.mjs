@@ -76,7 +76,7 @@ export class CodexCacheWarmer {
     return { ...result, bestEffort: true, limitations: risks,
       providerStatus: { ...result.providerStatus, closed: this.closed || result.providerStatus.closed,
         ...(this.failure ?? {}), bindings: this.bindings.size },
-      usageProvenance: 'native-cumulative-delta', modelEvidence: 'configured-thread-settings', upstreamResponseIds: false,
+      usageProvenance: 'native-request-and-cumulative-delta', modelEvidence: 'configured-thread-settings', upstreamResponseIds: false,
       policies: result.policies.filter(match).map(p => ({ ...p, nativeReason: this.bindings.get(p.sessionId)?.reason ?? this.nativeReasons.get(p.sessionId) ?? p.reason })),
       attempts: result.attempts.filter(match) };
   }
@@ -135,9 +135,11 @@ export class CodexCacheWarmer {
         const reply = await this.manager.configure({ provider: 'codex', ...this.fields(b), ...bounds(p), bestEffort: true,
           enabled: true, requestId: `codex-confirm:${p.confirmationId}` });
         b.enabled = reply.policy.enabled;
+        b.reason = reply.reason;
         this.expire(b, reply.policy.until);
         b.handle.listen();
-        return { ...reply, bestEffort: true, risks, awaitingFreshUsage: true };
+        if (Number.isFinite(reply.nextAt)) this.schedule(b, reply.nextAt);
+        return { ...reply, bestEffort: true, risks, awaitingFreshUsage: false };
       } catch (error) { await this.detach(b); throw error; }
     });
   }
@@ -169,7 +171,9 @@ export class CodexCacheWarmer {
     return result;
   }
   sample(b, event) {
-    const result = b.counter.observe({ threadId: b.sessionId, turnId: event.turnId, tokenUsage: event.tokenUsage });
+    const firstRequest = b.attempt?.kind === 'prime' && b.warmTurnId === event.turnId
+      && b.turn?.id === event.turnId && b.turn.observedStart === true;
+    const result = b.counter.observe({ threadId: b.sessionId, turnId: event.turnId, tokenUsage: event.tokenUsage }, { firstRequest });
     if (result.state !== 'sample') return;
     if (!b.turn || b.turn.id !== event.turnId || !Number.isSafeInteger(b.turn.startedAt)) throw new Error('native-turn-evidence-unavailable');
     if (b.samples.length >= 64) throw new Error('native-response-capacity');
@@ -219,20 +223,18 @@ export class CodexCacheWarmer {
     if (!b.turn || b.turn.id !== e.turnId) return this.fail(b, 'native-completion-identity-changed', true);
     b.completion?.cancel(); b.completion = null;
     const own = Boolean(b.attempt);
-    // Only a whole model turn seen from its start shows that the runtime does
-    // not report unchanged settings; the enrollment turn itself proves nothing.
-    if (!own && b.handle.settingsReady !== true && b.turn.observedStart && b.turn.usage)
+    // Our initial warm turn can resolve prompt settings too. A whole observed
+    // model turn without a snapshot establishes the change-only runtime case;
+    // an intercepted enrollment command with no request establishes nothing.
+    if (b.handle.settingsReady !== true && b.turn.observedStart && b.turn.usage)
       b.handle.acceptUnreportedSettings?.();
-    if (!own && b.handle.settingsReady !== true) {
-      // Mid-turn enrollment can observe usage before the next settings snapshot.
-      // Keep waiting; do not advertise an executable timer with no prompt baseline.
-      b.phase = 'idle'; b.turn = null; b.samples = []; b.epoch++;
-      b.reason = 'awaiting-native-settings'; await this.observe(b); return;
-    }
     if (!b.samples.length) {
       if (own) return this.fail(b, 'native-usage-unavailable', true);
       b.phase = 'idle'; b.turn = null; b.reason = 'awaiting-evidence';
-      await this.observe(b); return;
+      const reply = await this.observe(b);
+      b.reason = reply.reason;
+      if (Number.isFinite(reply.nextAt)) this.schedule(b, reply.nextAt);
+      return;
     }
     const samples = own ? b.samples : b.samples.slice(-1);
     for (const sample of samples) await this.observe(b, { ...sample,
