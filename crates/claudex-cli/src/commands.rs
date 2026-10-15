@@ -29,15 +29,117 @@ pub const HELP:&str="Claudex: bounded conversation synchronization and opt-in mo
   claudex desktop handoffs enable|disable|status
   claudex status-app install|status
   claudex collaboration help
+  claudex app inspect|setup|startup|stop|stop-status
+  claudex app build --source-root PATH --executable PATH --output PATH
+  claudex mod stage --source-root PATH --output PATH
 
 Global: --root PATH (default ~/.local/share/claudex).
 Original histories and uncertain native operations are never discarded or replayed.
 ";
 
 pub async fn run(raw: &[String]) -> Result<()> {
+    if raw.first().map(String::as_str) == Some("codex-host") {
+        let code = crate::launcher::run_host(&raw[1..]).await?;
+        if code < 0 {
+            // Native-only passthrough preserves native signal termination after
+            // its ownership lease has been released, not an invented exit code.
+            unsafe {
+                libc::signal(-code, libc::SIG_DFL);
+                libc::raise(-code);
+            }
+            std::process::exit(128 - code);
+        }
+        if code != 0 {
+            std::process::exit(code);
+        }
+        return Ok(());
+    }
     if raw == ["--version"] {
         println!("claudex {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
+    }
+    // Domain parsers own their options. Do not reject their flags in the root
+    // parser first; preserve global root options even before the command.
+    if let Some(index) = command_index(raw) {
+        if raw[index] == "app" {
+            let mut domain = raw.to_vec();
+            domain.remove(index);
+            return crate::app_runtime::run(&domain).await;
+        }
+        if raw[index] == "warm-hook" {
+            let mut domain = raw.to_vec();
+            domain.remove(index);
+            return claudex_app::warm_hook::stdio(&domain, &crate::mod_rpc::CodexRpc).await;
+        }
+        if raw[index] == "mod" || raw[index] == "providers" {
+            let mut domain = raw.to_vec();
+            let action = domain.remove(index);
+            domain.insert(0, action);
+            return claudex_app::run(&domain).await;
+        }
+        if raw[index] == "sync-hook" {
+            return crate::sync_hook::run(raw).await;
+        }
+        if raw[index] == "mod-bridge" {
+            let mut domain = raw.to_vec();
+            domain.remove(index);
+            return claudex_app::mod_bridge::stdio(&domain, &crate::mod_rpc::BrokerRpc).await;
+        }
+        if raw[index] == "collaboration" {
+            let mut domain = raw.to_vec();
+            domain.remove(index);
+            let (action, root) = claudex_work::cli::command_and_root(&domain)?;
+            if action == "help" {
+                return claudex_work::run(&domain).await;
+            }
+            let home = home()?;
+            let root = root.map(|path| crate::args::absolute(&path)).transpose()?;
+            let root = root.unwrap_or_else(|| {
+                std::env::var_os("CLAUDEX_HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| home.join(".local/share/claudex"))
+                    .join("collaboration")
+            });
+            let sync_root = root
+                .parent()
+                .context("Collaboration root has no parent synchronization root.")?
+                .to_owned();
+            let homes = crate::native_clients::Homes::read(&sync_root, &home)?;
+            let integration = std::sync::Arc::new(
+                crate::integration::NativeIntegration::with_work_root(sync_root, root, homes),
+            );
+            let result = claudex_work::run_with_integration(&domain, integration.clone()).await;
+            // Also drain initialization when a later startup step refuses.
+            let closed = claudex_work::Integration::close(integration.as_ref()).await;
+            result?;
+            return closed;
+        }
+        if matches!(
+            raw[index].as_str(),
+            "track"
+                | "sync"
+                | "watch"
+                | "gc"
+                | "recover"
+                | "abort"
+                | "archive-original"
+                | "untrack"
+                | "resume-tracking"
+                | "split-original"
+                | "hooks"
+        ) {
+            if raw[index] == "watch" {
+                let root_args = Args::parse(raw, &["root"], &["help"])?;
+                let root = root_args.root()?;
+                let config = read_json_or(root.join("config.json"), Value::Null)?;
+                if !root_args.flag("help") && config["mode"] == "desktop" {
+                    let lifecycle =
+                        std::sync::Arc::new(crate::desktop_watch::DesktopWatch::new(home()?)?);
+                    return claudex_sync::commands::run_with(raw, Some(lifecycle)).await;
+                }
+            }
+            return claudex_sync::run(raw).await;
+        }
     }
     let args = Args::parse(
         raw,
@@ -55,6 +157,8 @@ pub async fn run(raw: &[String]) -> Result<()> {
             "record-id",
             "expected-count",
             "expected-digest",
+            "source-root",
+            "cli",
         ],
         &["help", "watch", "all-projects"],
     )?;
@@ -106,6 +210,38 @@ pub async fn run(raw: &[String]) -> Result<()> {
         }
         "doctor" => output(&doctor(&config).await?),
         "recover-lock" => output(&recover_lock(&root, &config, args.flag("watch"))?),
+        "status-app" => {
+            let home = home()?;
+            let runner = claudex_app::platform::SystemRunner;
+            match args.positionals.get(1).map(String::as_str) {
+                Some("status") => {
+                    output(&claudex_app::status_app::status(&root, &home, &runner).await?)
+                }
+                Some("install") => {
+                    let executable = std::env::current_exe()?;
+                    let resources = crate::resources::locate(
+                        &executable,
+                        args.value("source-root").map(Path::new),
+                    )?;
+                    let source = resources.engine.join("native/ClaudexStatus");
+                    let identity = std::env::var("CLAUDEX_SIGNING_IDENTITY").ok();
+                    output(
+                        &claudex_app::status_app::install(
+                            &claudex_app::status_app::InstallOptions {
+                                root: &root,
+                                home: &home,
+                                source: &source,
+                                identity: identity.as_deref(),
+                                start: true,
+                            },
+                            &runner,
+                        )
+                        .await?,
+                    )
+                }
+                _ => bail!("Use status-app install or status."),
+            }
+        }
         "service" => {
             let action = args
                 .positionals
@@ -154,6 +290,11 @@ pub async fn run(raw: &[String]) -> Result<()> {
             output(&result)
         }
         "service-supervise" => {
+            let worker = args
+                .value("cli")
+                .map(|path| crate::args::absolute(Path::new(path)))
+                .transpose()?
+                .unwrap_or(std::env::current_exe()?);
             let (send, receive) = tokio::sync::watch::channel(false);
             let signals = tokio::spawn(async move {
                 let mut terminate =
@@ -165,17 +306,110 @@ pub async fn run(raw: &[String]) -> Result<()> {
                 std::future::pending::<Result<()>>().await
             });
             let result = crate::service::supervise(
-                crate::service::SupervisorOptions::new(root, std::env::current_exe()?),
+                crate::service::SupervisorOptions::new(root, worker),
                 receive,
             )
             .await;
             signals.abort();
             result.map(|_| ())
         }
-        _ => bail!(
-            "Rust command integration is not implemented yet: {command}. No legacy JavaScript runtime was started."
-        ),
+        "desktop" => match args.positionals.get(1).map(String::as_str) {
+            Some("folders") => {
+                let home = home()?;
+                output(&crate::desktop_controls::folders(
+                    &root,
+                    &config,
+                    args.positionals
+                        .get(2)
+                        .map(String::as_str)
+                        .unwrap_or("status"),
+                    &crate::desktop_controls::NativeFolderResources {
+                        root: &root,
+                        home: &home,
+                    },
+                )?)
+            }
+            Some("handoffs") => output(&crate::desktop_controls::handoffs(
+                &root,
+                &config,
+                args.positionals
+                    .get(2)
+                    .map(String::as_str)
+                    .unwrap_or("status"),
+            )?),
+            Some("install") => {
+                let legacy = read_json_or(
+                    root.join("state.json"),
+                    json!({"records":[],"pending":null}),
+                )?;
+                if !legacy["pending"].is_null()
+                    || legacy["records"].as_array().is_some_and(|a| !a.is_empty())
+                {
+                    bail!(
+                        "Legacy conversations require an explicit migration; originals and mappings were preserved."
+                    );
+                }
+                let result = crate::desktop::install(
+                    &crate::desktop::InstallOptions {
+                        root: root.clone(),
+                        engine: std::env::current_exe()?,
+                        node: None,
+                        binary: args
+                            .value("codex-binary")
+                            .unwrap_or("/Applications/ChatGPT.app/Contents/Resources/codex")
+                            .into(),
+                    },
+                    &crate::service::NativeCommands,
+                    &claudex_core::codex_layout::OpenAiVerifier,
+                )
+                .await?;
+                let mut next = config.clone();
+                next["mode"] = json!("desktop");
+                next["allProjects"] = json!(true);
+                next["projects"] = json!([]);
+                next["contextMode"] = config
+                    .get("contextMode")
+                    .cloned()
+                    .unwrap_or(json!("archive"));
+                next["claudeBinary"] = json!(
+                    args.value("claude-binary")
+                        .or(config["claudeBinary"].as_str())
+                        .unwrap_or("claude")
+                );
+                write_json(root.join("config.json"), &next)?;
+                output(&result)
+            }
+            Some("uninstall") => {
+                let result =
+                    crate::desktop::uninstall(&root, &crate::service::NativeCommands).await?;
+                let mut next = config;
+                next["mode"] = json!("legacy");
+                write_json(root.join("config.json"), &next)?;
+                output(&result)
+            }
+            _ => bail!("Use desktop install or desktop uninstall."),
+        },
+        _ => bail!("Unknown command: {command}. Run claudex --help."),
     }
+}
+/// Locate the command without interpreting domain-specific arguments.
+pub fn command_index(raw: &[String]) -> Option<usize> {
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == "--root" {
+            i += 2;
+            continue;
+        }
+        if raw[i].starts_with("--root=") {
+            i += 1;
+            continue;
+        }
+        if raw[i].starts_with('-') {
+            return None;
+        }
+        return Some(i);
+    }
+    None
 }
 pub fn output(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
@@ -277,7 +511,7 @@ pub fn recover_lock(root: &Path, config: &Value, watch: bool) -> Result<Value> {
     fs::remove_file(path)?;
     Ok(json!({"cleared":true,"pendingTransactionPreserved":true}))
 }
-async fn bounded_version(binary: &str) -> Result<String> {
+pub(crate) async fn bounded_version(binary: &str) -> Result<String> {
     let mut child = Command::new(binary)
         .arg("--version")
         .stdin(Stdio::null())

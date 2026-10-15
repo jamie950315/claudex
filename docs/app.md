@@ -3,8 +3,8 @@
 [Back to README](../README.md)
 
 Current source: **Claudex.app 1.4.8**, with **Claude Mod 0.8.32** bundled.
-The `codex/rust-refactor` branch is an incomplete runtime migration, not a new
-published release.
+The `codex/rust-refactor` branch uses the native Rust runtime with the Swift UI.
+Its development-signed candidate is not a published or installed release.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -373,7 +373,7 @@ On the Rust migration branch, maintainers build the complete native engine with
 Cargo and use Xcode's Swift compiler plus an available signing identity:
 
 ```sh
-cargo build --release -p claudex-cli
+cargo build --locked --release -p claudex-cli
 target/release/claudex app build \
   --source-root /absolute/claudex-checkout \
   --executable /absolute/claudex-checkout/target/release/claudex \
@@ -393,9 +393,10 @@ bootstrap; it is not the Claudex engine.
 Transcripts, account files, the general repository test suite, local Git history
 and private configuration are not bundled. The Mod's explicitly allowlisted
 native test fixture remains in its payload for native validation. Generated
-bundles, archives and signing details stay outside the repository. Source
-migration remains incomplete until the [Rust completion contract](rust-migration.md)
-is met; a candidate bundle is not a published or installed release.
+bundles, archives and signing details stay outside the repository. The
+[Rust completion contract](rust-migration.md) preserves the original runtime
+capabilities; installed Desktop and model acceptance remain separate from source
+parity and candidate packaging checks.
 
 Automated setup tests use isolated private directories and injected installers.
 They verify scope defaults, missing prerequisites, account holds, ownership

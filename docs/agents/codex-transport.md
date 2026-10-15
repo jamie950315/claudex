@@ -29,12 +29,14 @@ unstable listings and permission errors cannot prove absence. Existing native
 relationships and uncertain reads still block explicitly with the source's exact
 identity; no retry, native loading or write is used to establish disappearance.
 
-Shared Codex transport installs for the next normal app start: `bin/claudex-codex.mjs` preserves
-native Desktop args/env, starts a public Unix WS listener, and forwards JSONL
-unchanged. Do not use a prestarted WS_URL override: it loses Desktop app-tools
+Shared Codex transport installs for the next normal app start: the embedded
+signed-Node host in `crates/claudex-cli/host/codex-host.mjs` preserves native
+Desktop args/env, while the Rust `codex-host` sidecar owns the public Unix WS
+listener and forwards JSONL unchanged. `bin/claudex-codex.mjs` is the explicit
+Node compatibility entry to that host. Do not use a prestarted WS_URL override: it loses Desktop app-tools
 injection. The native CODEX_CLI_PATH launcher is the intended activation path;
 never restart active user work. Login window restoration can start Desktop
-before LaunchAgents, bypassing the launcher; src/codex-desktop-relaunch.mjs then
+before LaunchAgents, bypassing the launcher; `crates/claudex-cli/src/relaunch.rs` then
 quits (never kills) and background-reopens that exact process once, immediately
 when the override is active and no Codex turn is running (user activity does
 not delay it). WS clients share the backend and can retire idle
@@ -79,7 +81,7 @@ at Resources/cua_node/bin/node. Normal startup detects this package even with a
 stale recorded flat path. Unknown packaging fails explicitly, never selecting
 an unrelated CLI. This does not certify every new protocol or migrate credentials.
 
-Runtime compatibility is centralized in src/codex-versions.mjs. The .16.4 app
+Runtime compatibility is centralized in `crates/claudex-core/src/version.rs`. The .16.4 app
 update passed isolated native contracts and signed-Node launcher initialization.
 Under strict policy an unknown runtime uses original native Desktop transport under the same
 exclusive owner lease, labeled transportMode:native, with no shared socket.

@@ -15,7 +15,7 @@ maturity label. A synchronization configuration without `mode` selects this path
 The `desktop install` command selects the shared Desktop coordinator instead.
 
 CLI-only synchronization uses the Codex runtime allowlist in
-`src/codex-versions.mjs` and validated Claude Code baselines `2.1.210` and
+`crates/claudex-core/src/version.rs` and validated Claude Code baselines `2.1.210` and
 `2.1.281`. Manual initialization defaults to strict version checks. An explicit
 `warn` policy permits attempts on other versions without version-only warnings;
 it never waives native writer or history checks. New graphical installations use
@@ -24,9 +24,9 @@ it never waives native writer or history checks. New graphical installations use
 ## CLI-only setup
 
 ```sh
-npm ci --ignore-scripts
-node bin/claudex.mjs init --all-projects
-node bin/claudex.mjs watch
+cargo build --locked --release -p claudex-cli
+bin/claudex init --all-projects
+bin/claudex watch
 ```
 
 `--all-projects` automatically discovers activity across both native stores,
@@ -45,8 +45,8 @@ than choosing which history to discard.
 Stop a foreground watcher before installing the synchronization service:
 
 ```sh
-node bin/claudex.mjs service install
-node bin/claudex.mjs service status
+bin/claudex service install
+bin/claudex service status
 ```
 
 The service manages the coordinator selected by the root's configuration.

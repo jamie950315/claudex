@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 use std::{
     fs,
+    os::unix::fs::PermissionsExt,
     path::Path,
     process::{Command, Output},
 };
@@ -12,6 +13,40 @@ fn cli(root: &Path, args: &[&str]) -> Result<Output> {
         .arg("--root")
         .arg(root)
         .output()?)
+}
+
+#[test]
+fn supervisor_entry_preserves_an_explicit_worker_executable() -> Result<()> {
+    let temp = tempfile::tempdir_in("/tmp")?;
+    let base = temp.path().canonicalize()?;
+    let root = base.join("state");
+    claudex_core::storage::private_directory(&root)?;
+    claudex_core::storage::write_json(root.join("config.json"), &json!({"version":1}))?;
+    let worker = base.join("synthetic-worker");
+    fs::write(
+        &worker,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CLAUDEX_TEST_ARGS\"\n",
+    )?;
+    fs::set_permissions(&worker, fs::Permissions::from_mode(0o700))?;
+    let arguments = base.join("arguments");
+    let output = Command::new(env!("CARGO_BIN_EXE_claudex"))
+        .args(["service-supervise", "--root"])
+        .arg(&root)
+        .arg("--cli")
+        .arg(&worker)
+        .env("CLAUDEX_TEST_ARGS", &arguments)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(arguments)?,
+        format!("watch\n--root\n{}\n", root.display())
+    );
+    assert!(!root.join("service-supervisor.lock").exists());
+    Ok(())
 }
 fn value(output: Output) -> Result<Value> {
     assert!(
@@ -92,6 +127,22 @@ fn help_and_version_do_not_create_state_or_run_native_providers() -> Result<()> 
         .output()?;
     assert!(version.status.success());
     assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 1.4.8");
+    for arguments in [
+        &["app", "--help"][..],
+        &["app", "build", "--help"][..],
+        &["collaboration", "help"][..],
+        &["watch", "--help"][..],
+        &["hooks", "--help"][..],
+    ] {
+        let result = cli(&root, arguments)?;
+        assert!(
+            result.status.success(),
+            "{arguments:?}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!result.stdout.is_empty());
+        assert!(!root.exists(), "{arguments:?} created state during help");
+    }
     assert!(!root.exists());
     Ok(())
 }

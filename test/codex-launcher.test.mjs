@@ -10,9 +10,14 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { CodexWebSocketClient } from '../src/codex-websocket.mjs';
 import { DesktopRuntime } from '../src/desktop-runtime.mjs';
-import { sharedServerArguments, SUPPORTED_CODEX_VERSION } from '../bin/claudex-codex.mjs';
+import { sharedServerArguments } from './helpers/codex-launcher-reference.mjs';
+import { SUPPORTED_CODEX_VERSIONS } from '../src/codex-versions.mjs';
+const SUPPORTED_CODEX_VERSION = SUPPORTED_CODEX_VERSIONS[0];
 
-const launcher = fileURLToPath(new URL('../bin/claudex-codex.mjs', import.meta.url));
+// Run the same native transport contracts against either runtime while the
+// Rust migration is in progress. The fixture never invokes model inference.
+const rustEngine = process.env.CLAUDEX_TEST_RUST_ENGINE;
+const launcher = fileURLToPath(new URL(rustEngine ? '../crates/claudex-cli/host/codex-host.mjs' : '../bin/claudex-codex.mjs', import.meta.url));
 const wsModule = new URL('../node_modules/ws/wrapper.mjs', import.meta.url).href;
 
 async function fixture(t) {
@@ -58,7 +63,7 @@ process.on('SIGTERM',()=>{ for(const socket of wss.clients)socket.terminate(); s
     await rm(root, { recursive: true, force: true });
   });
   const start = (args, entry = launcher) => {
-    const child = spawn(process.execPath, [entry, ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [entry, ...(rustEngine ? [rustEngine] : []), ...args], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     child.done = new Promise(resolveExit => child.once('exit', (code, signal) => resolveExit({ code, signal })));
     child.errors = '';
     child.stderr.on('data', data => { child.errors += data; });
@@ -108,6 +113,7 @@ test('a verified patch update shares the backend using its exact runtime version
   const child = start(['app-server', '--analytics-default-enabled']);
   const record = await ready(state);
   assert.equal(record.cliVersion, env.CLAUDEX_SYNTHETIC_CODEX_VERSION);
+  assert.equal(record.pid, child.pid, 'the signed host owns the lease until its native child exits');
   assert.ok(record.socketPath);
   child.stdin.end();
   assert.equal((await child.done).code, 0);
@@ -143,7 +149,8 @@ test('explicit warn policy shares an unvalidated runtime while strict clients st
   const child = start(['app-server', '--analytics-default-enabled']);
   const record = await ready(state);
   assert.equal(record.transportMode, undefined);
-  assert.match(child.errors, /versionPolicy=warn.*attempting shared transport/);
+  if (rustEngine) assert.equal(child.errors, '');
+  else assert.match(child.errors, /versionPolicy=warn.*attempting shared transport/);
   const permissive = await new DesktopRuntime({ root: state, codexHome: root, claudeHome: root, versionPolicy: 'warn' }).initialize();
   const strict = await new DesktopRuntime({ root: state, codexHome: root, claudeHome: root }).initialize();
   try {

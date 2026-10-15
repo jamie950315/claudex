@@ -2,6 +2,17 @@
 
 Contributor rules moved out of AGENTS.md; they are binding. Scope: Ancillary tails, compaction, forks and parallel-tool graphs, and Claude image originals and sidecars.
 
+Canonical messages contain authored turns and the native local-command envelopes
+that the codec projects into turns. Known native context and bookkeeping rows
+(`mode`, `permission-mode`, `attachment`, `cost-state`, `atis-latch`, `agent-name`,
+`relocated`, `ai-title`, and `file-history-delta`) do not become additional
+canonical messages. In particular, attachments can carry queued prompts, images,
+file contents, instructions and hook context; they are not necessarily empty or
+duplicates of an authored turn. Preserve their original native bytes, but do not
+change the existing packet or checkpoint contract to transport them as authored
+messages. Truly unknown semantic content remains whole as inert labeled data,
+under the project-wide native reading rule.
+
 - Unmanaged Claude originals may end in native transcript-only task notifications.
   Accept these as ancillary tails only with system provenance, exact queue evidence
   and a parent chain from the completed assistant. Preserve their original bytes

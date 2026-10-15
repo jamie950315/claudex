@@ -14,17 +14,26 @@ async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = { version = "0.3", features = ["sink"] }
+flate2 = "1"
 hex = "0.4"
 libc = "0.2"
+oxc_allocator = "=0.90.0"
+oxc_ast = "=0.90.0"
+oxc_parser = "=0.90.0"
+oxc_semantic = "=0.90.0"
+oxc_span = "=0.90.0"
 regex = "1"
 ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+serde_stacker = "0.1"
 sha2 = "0.10"
 tempfile = "3"
+tar = "0.4"
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.28"
 uuid = { version = "1", features = ["v4", "serde"] }
+url = "2"
 zstd = "0.13"
 
 [profile.release]

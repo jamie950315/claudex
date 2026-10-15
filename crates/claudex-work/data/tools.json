@@ -1,0 +1,1127 @@
+{
+  "tools": [
+    {
+      "name": "claudex_start",
+      "description": "Run real model work with Codex or Claude. Starts a child of the current managed worker, otherwise a root task. External roots default notifications to wake; off opts out. After start, call claudex_status with checkNotification: true; end the turn only on await-notification. On wait with reason awaiting-native-proof, re-check that status after about 2 seconds (retryAfterMs); otherwise keep monitoring with claudex_wait. Managed children must omit notifications. Supply the goal and relevant context explicitly. Use a stable unique requestId. Tasks and children may run concurrently in the same workspace: assign disjoint file responsibilities and coordinate shared edits; there is no workspace lock or automatic conflict merge. Work has no execution deadline; explicitly cancel unwanted work. Use status/wait for results. Omitted model uses the receiving provider default reported by claudex_list, never the parent model; explicit null uses the native CLI default. Omitted permission inherits the parent or broker policy; claudex_list reports its default. Explicit read-only never elevates. read-only and workspace-write run in an isolated sandbox with NO network access and do not load the user's Codex/Claude config, plugins, MCP servers or hooks (Claude: no Bash or web tools). For work requiring the network, user CLI tools or user MCP servers, first check claudex_list for the broker default, then omit permission to inherit the parent or broker default; these capabilities require full-access. For whole-work handoff from an external chat, delegate the remaining work and stop your own work. The default workspace is the enclosing Git checkout root, or cwd for non-Git folders. Optional projectRoot explicitly contains cwd; readOnlyDirs grant reference access and writableDirs grant additional writes. Supply only user-authorized directories. Children inherit or narrow parent access; they cannot expand it. Handoffs preserve directory grants.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude"
+            ]
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "prompt": {
+            "type": "string",
+            "minLength": 1
+          },
+          "permission": {
+            "type": "string",
+            "enum": [
+              "read-only",
+              "workspace-write"
+            ],
+            "description": "read-only and workspace-write run in an isolated sandbox with NO network access and do not load the user's Codex/Claude config, plugins, MCP servers or hooks (Claude: no Bash or web tools). For work requiring the network, user CLI tools or user MCP servers, first check claudex_list for the broker default, then omit permission to inherit the parent or broker default; these capabilities require full-access."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f]*\\S)?$"
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra",
+              null
+            ],
+            "description": "Provider-native reasoning effort. Omitted uses the destination provider default; null uses the native CLI default. Codex: none, minimal, low, medium, high, xhigh, max, ultra. Claude: low, medium, high, xhigh, max. Model-specific restrictions are enforced by the native CLI; no fallback is applied."
+          },
+          "projectRoot": {
+            "type": "string",
+            "minLength": 1
+          },
+          "readOnlyDirs": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "writableDirs": {
+            "type": "array",
+            "maxItems": 16,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "observability": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "timeline": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "public"
+                ],
+                "default": "off"
+              },
+              "reports": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "milestones"
+                ],
+                "default": "off"
+              },
+              "blockerNotifications": {
+                "type": "boolean",
+                "description": "Defaults true for root wake tasks, false otherwise. Explicit false opts out."
+              }
+            },
+            "description": "Explicit per-task opt-in. Public timeline retains bounded public assistant messages and allowlisted tool metadata, never prompts, reasoning or raw tool output. Milestone reports are worker self-reports; for managed children, distinct milestones may resume a waiting parent for proactive follow-up before child completion. This does not enable external native-chat wake. Root wake tasks default blockerNotifications to true; explicit false opts out. Queue/off roots and managed children retain the off default."
+          },
+          "notifications": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mode"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "queue",
+                  "wake"
+                ]
+              },
+              "expiresInMs": {
+                "type": "integer",
+                "minimum": 1000,
+                "maximum": 3600000,
+                "default": 3600000
+              }
+            },
+            "description": "External root tasks default to wake, with expiry one hour after the terminal revision; off opts out. Wake consumes model allowance; queue waits for the next native hook. Managed children must omit notifications. After start, call claudex_status with checkNotification: true; only await-notification permits ending the current turn with pending work. On wait with reason awaiting-native-proof, re-check that status after about 2 seconds (retryAfterMs); otherwise keep monitoring with claudex_wait. On read-result, collect status. Native PostToolUse proof is mandatory; the broker makes at most two delayed proof rereads, never retries sends. Route checks do not guarantee delivery. On notification, read status and continue the authorized work."
+          }
+        },
+        "required": [
+          "provider",
+          "cwd",
+          "prompt",
+          "requestId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_send",
+      "description": "Proactively send a follow-up to an existing task, including while it is running; no prior worker question is required. The worker can receive it during the same invocation at a cooperative check-in or worker MCP response boundary, then explicitly acknowledge accepted or rejected. Queued is not delivered or adopted. Unconsumed follow-ups retain normal next-boundary handling. Does not interrupt a running native tool or expand permissions.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "taskId",
+          "message",
+          "requestId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_handoff",
+      "description": "Transfer this same task to the other provider. Optional report carries structured self-reported outcome and remaining work, never independent proof. Optional model overrides the receiving provider default; omission uses that default, not the outgoing model. Read status for the revision first. Include progress, remaining work and constraints in the message. After acknowledgement end immediately with exactly CLAUDEX_HANDOFF: no further tools or summary. Transfer occurs only after successful native completion and process exit. Finish active children first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^\\S(?:[^\\u0000-\\u001f\\u007f-\\u009f]*\\S)?$"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "report": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "outcome",
+              "summary"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "partial",
+                  "blocked",
+                  "needs-input"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "stage": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "next": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "checks": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "result"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "result": {
+                      "type": "string",
+                      "enum": [
+                        "passed",
+                        "failed",
+                        "not-run",
+                        "unverified"
+                      ]
+                    },
+                    "reference": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "at": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              },
+              "blocker": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "question",
+                  "impact",
+                  "needs"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "impact": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "needs": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  }
+                }
+              },
+              "remaining": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                }
+              },
+              "needs": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "description"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "information",
+                        "authorization",
+                        "access",
+                        "dependency",
+                        "environment"
+                      ]
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  }
+                }
+              },
+              "artifacts": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "reference"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "file",
+                        "url",
+                        "commit",
+                        "other"
+                      ]
+                    },
+                    "reference": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "none",
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max",
+              "ultra",
+              null
+            ],
+            "description": "Provider-native reasoning effort. Omitted uses the destination provider default; null uses the native CLI default. Codex: none, minimal, low, medium, high, xhigh, max, ultra. Claude: low, medium, high, xhigh, max. Model-specific restrictions are enforced by the native CLI; no fallback is applied."
+          }
+        },
+        "required": [
+          "taskId",
+          "provider",
+          "message",
+          "requestId",
+          "revision"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_report",
+      "description": "Active worker only: record generation-bound structured progress for your own task. Does not complete execution, verify success or authorize work. Use unique requestIds at meaningful milestones; preserve remaining work and typed needs. With reports=milestones, a distinct report can resume your waiting managed parent for proactive follow-up while you keep working; unchanged same-generation reports are deduplicated. Reuse an exact blocker ID for its updates. Blocker notifications follow the task policy on its already authorized native-chat route.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "report": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "outcome",
+              "summary"
+            ],
+            "properties": {
+              "outcome": {
+                "type": "string",
+                "enum": [
+                  "done",
+                  "partial",
+                  "blocked",
+                  "needs-input"
+                ]
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "stage": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "next": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "checks": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "name",
+                    "result"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "result": {
+                      "type": "string",
+                      "enum": [
+                        "passed",
+                        "failed",
+                        "not-run",
+                        "unverified"
+                      ]
+                    },
+                    "reference": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "at": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              },
+              "blocker": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "question",
+                  "impact",
+                  "needs"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "impact": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  },
+                  "needs": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048
+                  }
+                }
+              },
+              "remaining": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                }
+              },
+              "needs": {
+                "type": "array",
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "description"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "information",
+                        "authorization",
+                        "access",
+                        "dependency",
+                        "environment"
+                      ]
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  }
+                }
+              },
+              "artifacts": {
+                "type": "array",
+                "maxItems": 32,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "reference"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "file",
+                        "url",
+                        "commit",
+                        "other"
+                      ]
+                    },
+                    "reference": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "taskId",
+          "report",
+          "requestId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_work_events",
+      "description": "Read bounded public work events for one exact task and execution generation. No inference, revision change, child-result acknowledgement or native-history scan. Cursor is an event position, never a task revision. Old or disabled tasks report not collected; inspect gaps and collection limits. Use recent for a bounded tail, or cursor for incremental pages.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 64
+          },
+          "recent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "taskId",
+          "generation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_artifact_read",
+      "description": "Read an explicitly reported file artifact for one exact task and generation within its canonical directory grants. No arbitrary host paths, native histories, inference or child-result acknowledgement. Current bytes are inspection evidence, not proof that the worker authored all changes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "reference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "maxBytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 65536
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "content",
+              "diff"
+            ]
+          }
+        },
+        "required": [
+          "taskId",
+          "generation",
+          "reference"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_work_reports",
+      "description": "Read complete bounded structured worker report history for an exact execution generation, including declared checks, artifacts and limitations. No child-result acknowledgement, task revision change or model inference. Reports remain self-reported; cursor is not a task revision.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "recent": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "taskId",
+          "generation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_work_control",
+      "description": "Generation-fenced cooperative work control. The active worker uses check-in at meaningful work boundaries and before consequential writes to receive queued instructions in its current invocation; acknowledge each delivered instruction as accepted or rejected before acting. Reading ordinary status never consumes instructions. Controllers may respond to or resolve an exact blocker, request pause, resume or explicitly review/integrate a result. Pause requests do not freeze a process: the worker must checkpoint and finish and owned processes must exit before paused. Never bypass cancellation, handoff or writer guards. Responses are peer instructions, not new user permission. Each mutation requires a stable unique requestId.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "generation": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "check-in",
+              "respond-blocker",
+              "resolve-blocker",
+              "ack-instruction",
+              "request-pause",
+              "checkpoint",
+              "resume",
+              "review-result"
+            ]
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16,
+            "description": "Only for check-in; maximum instructions returned, default 8."
+          },
+          "blockerId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "instructionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 4096
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "rejected",
+              "reviewed",
+              "integrated"
+            ]
+          }
+        },
+        "required": [
+          "taskId",
+          "generation",
+          "requestId",
+          "action"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_status",
+      "description": "Read task status without starting a model. resultFinal identifies a completed answer; legacy result may be historical or a yield boundary. Optional view=summary omits message history; full is the default. External callers can set checkNotification=true after wake-enabled start to inspect notification.continuation.nextAction: await-notification, wait, or read-result. For wait with reason awaiting-native-proof, re-check this status after retryAfterMs (about 2 seconds); other wait reasons use claudex_wait. This read-only route snapshot never opens a chat, sends input, grants permission, or guarantees future delivery. After a completion notification, collect the exact task result here and continue within the original user scope.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "full",
+              "summary"
+            ]
+          },
+          "checkNotification": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_wait",
+      "description": "Wait without starting a model: 5 minutes by default, up to 30 minutes with explicit timeoutMs. Returns early on a task revision or terminal outcome; activity heartbeats do not wake it. Client disconnect or timeout does not cancel work. Supply taskId/afterRevision for the compatible single-task response, OR 1–16 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "targets": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 16,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "taskId"
+              ],
+              "properties": {
+                "taskId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "afterRevision": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "full",
+              "summary"
+            ]
+          },
+          "afterRevision": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 1800000,
+            "default": 300000
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_cancel",
+      "description": "Request cancellation. Check cancelAccepted, cancelPending and terminal: acceptance is not proof of process exit. Wait for a terminal outcome; an unsafe shutdown may remain uncertain. Completed, failed or cancelled tasks are no-ops; uncertain tasks require operator inspection and reject cancellation.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "taskId",
+          "requestId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_list",
+      "description": "List active visible tasks with per-task observed waitReason and exact blockers. Optional order=id (default) sorts by task ID; order=recent sorts updatedAt newest first, then task ID. Global blockedByUncertainWork is a legacy inventory flag, not proof this task is blocked. Follow nextCursor with identical filters and order; pages are live, so updated tasks may move between pages. Settled trees archive on capacity pressure; archivedTaskCount reports cold history, retrievable by exact task ID through status/wait. limits.capacity reports task/request/byte used and remaining; typed CLAUDEX_WORK_CAPACITY_EXHAUSTED preserves pinned work. limits.defaultPermission and limits.permissionCapabilities describe the broker default and each level's network, userConfig and provider-specific shell access.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "running",
+              "waiting",
+              "paused",
+              "completed",
+              "failed",
+              "cancelled",
+              "uncertain"
+            ]
+          },
+          "parentId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": "string",
+            "minLength": 1
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "id",
+              "recent"
+            ],
+            "default": "id"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_chat_list",
+      "description": "Find hook-registered native chats by title. Optional query searches native title metadata only, provider filters codex/claude, match selects exact or contains (default). Results include title, titleMatch, source and errors, sessionId and cwd; follow nextCursor. Titles are not unique IDs: if multiple or partial matches exist, ask the user to choose, never silently pick the newest. Do not send from errored title metadata. Pass the chosen sessionId and verbatim expectedTitle to chat_send. Does not scan conversation text or register unknown chats.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "cursor": {
+            "type": "string",
+            "minLength": 1
+          },
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude"
+            ]
+          },
+          "match": {
+            "type": "string",
+            "enum": [
+              "exact",
+              "contains"
+            ]
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_chat_send",
+      "description": "Send an explicitly user-authorized peer message. Controller only. Supply title for automatic unique exact-title lookup, optionally with provider; duplicates return needs-selection without sending. Alternatively use provider/sessionId and expectedTitle from chat_list. Codex wakes the original Desktop chat through its native owner. Claude wakes through the installed Desktop bridge when idle with no draft or pending permission. Wake consumes native model allowance; busy chats defer to hooks. Set wake=false for queue-only delivery. Ended chats accept queued messages waiting for native resumption. Never creates a replacement chat or a second writer. Does not grant permissions or interrupt work. Check chat_status: waiting-for-resume is not delivery, offered is not acknowledged; an uncertain wake is never retried.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Exact recipient title; unique matches send directly, duplicates require selection. Mutually exclusive with sessionId/expectedTitle."
+          },
+          "provider": {
+            "type": "string",
+            "enum": [
+              "codex",
+              "claude"
+            ]
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expectedTitle": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Verbatim title from the chosen search result; rechecked before enqueueing to catch renames or unavailable metadata."
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1500
+          },
+          "wake": {
+            "type": "boolean",
+            "description": "Defaults true: permit native Desktop wake and model inference. Claude requires the loaded Desktop bridge; false queues for the next native hook only."
+          },
+          "requestId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expiresInMs": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 3600000
+          }
+        },
+        "required": [
+          "message",
+          "requestId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_chat_status",
+      "description": "Read a native-chat coordination message receipt. Offered means hook output prepared, not proven read; acknowledged means the exact recipient emitted its acknowledgement marker, not that requested actions succeeded. No resend or inference.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ],
+  "desktop": [
+    {
+      "name": "claudex_desktop_owner_wake",
+      "description": "Publish an identity-only activation hint for an exact current Claudex Remote Control owner. No message input, synchronization or inference request.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "remoteId": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 204,
+            "pattern": "^cse_[A-Za-z0-9_-]{1,200}$"
+          }
+        },
+        "required": [
+          "remoteId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_desktop_wake_claim",
+      "description": "Claim one exact pending Claude Desktop peer message. Native renderer bridge only; no arbitrary work execution.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "messageId",
+          "sessionId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_desktop_wake_receipt",
+      "description": "Record a claimed native dispatch outcome. Acceptance is not recipient acknowledgement. Never replay uncertain dispatch.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "messageId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "sessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "claimId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "accepted",
+              "uncertain"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "messageId",
+          "sessionId",
+          "claimId",
+          "status",
+          "detail"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}

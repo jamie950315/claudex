@@ -16,7 +16,11 @@ Claudex provides two independent capabilities:
 Collaboration runs models using your native accounts. Synchronization transports
 history without asking a model to generate a reply or summarize it.
 
-Current build: **Claudex.app 1.4.8**, bundling **Claude Mod 0.8.31**.
+Current source: **Claudex.app 1.4.8**, bundling **Claude Mod 0.8.32**.
+The `codex/rust-refactor` branch uses the native Rust runtime with the Swift UI.
+It is an unreleased source candidate; the published release below remains the
+supported download. Installed Desktop and model acceptance are separate from
+the branch's synthetic and read-only parity checks.
 Latest published release: **1.4.8** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.4.8)
 · [Release notes](docs/releases/1.4.8.md).
 App and Mod versions are separate. Guides on `main` describe current behavior;
@@ -27,8 +31,11 @@ documents viewed under a release tag remain that release's original snapshot.
 - Apple Silicon and macOS 13 or later for the published app, with ChatGPT/Codex
   and Claude desktop apps already installed.
 - Native account access for the Codex and Claude Code workflows you want to use.
-- Node.js `22.15+` (22.x) or `23.8+`, and Git only for command-line/source installation; the macOS app
-  bundles its runtime and can supply missing CLI components.
+- Rust `1.88+` and Git for source installation. The macOS app bundles its native
+  engine and can supply missing CLI components.
+- Node.js `22.15+` (22.x) or `23.8+` only for explicit Node compatibility entry
+  points, host tooling, and the JavaScript reference tests. The normal source
+  launcher runs the Rust engine directly.
 - For Desktop synchronization, the native desktop applications and compatible
   runtimes listed under [Compatibility and verification](#compatibility-and-verification).
 
@@ -68,11 +75,11 @@ defaults, and durable action receipts. Writes require preview and confirmation.
 It uses the existing broker; it does not replace conversation synchronization,
 MCP, native hooks, or Desktop folder/archive integrations.
 
-The bundled Mod is **0.8.31**. It provides native delivery for wake-enabled messages, public work
+The bundled Mod is **0.8.32**. It provides native delivery for wake-enabled messages, public work
 views and loaded-version diagnostics. `mod-self` delivers to the recipient's own
 loaded Mod; the older `mod` route requires another eligible loaded sender.
 Route selection, receiver opt-ins and per-message wake intent remain separate.
-Inspect them with `node bin/claudex.mjs collaboration native-wake`; change a route
+Inspect them with `bin/claudex collaboration native-wake`; change a route
 only after its own native activation acceptance. New brokers default to `mod-self`;
 new or never-configured receiver options default to enabled. Explicit false and
 existing routes remain unchanged. Native replies can consume model allowance.
@@ -83,7 +90,7 @@ External MCP root tasks default completion notifications to wake; explicit
 delivery guards remain required; there is no feature-flag, permission or native
 inbound-policy bypass.
 
-Stage it with `node bin/claudex-mod.mjs stage --root /absolute/private/root --output /new/marketplace`,
+Stage it with `bin/claudex mod stage --root /absolute/private/root --output /new/marketplace`,
 then follow the guide's native validation and plugin installation steps. Staging
 does not install or enable it. Native peer delivery requires explicit opt-in and
 separate recipient/ACK acceptance; do not upgrade a running sync runtime merely
@@ -102,17 +109,25 @@ This remains available for development and manually managed installations.
 ```sh
 git clone https://github.com/jamie950315/claudex.git
 cd claudex
-npm ci --ignore-scripts
+cargo build --locked --release -p claudex-cli
 ```
 
-Run the commands below from the repository directory. Choose collaboration,
-synchronization, or both; installing one does not enable the other.
+Run the commands below from the repository directory. `bin/claudex` executes
+`target/release/claudex`; it never builds or downloads an engine at startup.
+Use an absolute `CLAUDEX_RUST_ENGINE` to select another already-built binary.
+The npm `claudex` command uses the same native launcher; `npm run build` is a
+convenience alias for the Cargo command above. Existing explicit
+`node bin/*.mjs` commands are thin compatibility hosts for Rust, not the old
+JavaScript engine.
+
+Choose collaboration, synchronization, or both; installing one does not enable
+the other.
 
 ## Collaborate across models
 
 ```sh
-node bin/claudex.mjs collaboration install
-node bin/claudex.mjs collaboration status
+bin/claudex collaboration install
+bin/claudex collaboration status
 ```
 
 This installs an independent background broker and registers the `claudex-work`
@@ -147,7 +162,7 @@ Choose the workspace-write-enabled option at first
 installation if required:
 
 ```sh
-node bin/claudex.mjs collaboration install --allow-write
+bin/claudex collaboration install --allow-write
 ```
 
 Do not run this as a hot policy change against an already loaded broker. Existing
@@ -187,11 +202,11 @@ cancellation, workspace ownership, and failure handling.
 For a **fresh synchronization state root**:
 
 ```sh
-node bin/claudex.mjs init --all-projects
-node bin/claudex.mjs desktop install
-node bin/claudex.mjs service install
-node bin/claudex.mjs status
-node bin/claudex.mjs doctor
+bin/claudex init --all-projects
+bin/claudex desktop install
+bin/claudex service install
+bin/claudex status
+bin/claudex doctor
 ```
 
 Initialization does not overwrite existing configuration. Desktop installation
@@ -232,7 +247,7 @@ synchronization runtime allowlist.
 | --- | --- | --- |
 | Cross-model collaboration | Codex CLI `0.158.0-alpha.2.1`; Claude Code `2.1.283` | Both-direction child delegation and result return, parent resumption after file edits, and consecutive owner transfers under one task ID. |
 | Cooperative in-flight follow-up | Codex CLI `0.159.0-alpha.12.1`; Claude Code `2.1.283` | Both real supervisor/child directions accepted a proactive instruction and completed in generation one, without a child blocker or duplicate invocation. |
-| Claude Mod | Bundled `0.8.31`; Desktop Code `2.1.286`, documented Mod API baseline `2.1.287` | Cache settings pane and commands for native 1h/5m TTL and session-only, remember-last or fixed-default persistence. Warming remains default-off. Source/synthetic checks and native activation are separate; see the [cache-warming guide](docs/cache-warming.md). Installed and loaded versions are separate. |
+| Claude Mod | Bundled `0.8.32`; Desktop Code `2.1.286`, documented Mod API baseline `2.1.287` | Cache settings pane and commands for native 1h/5m TTL and session-only, remember-last or fixed-default persistence. Warming remains default-off. Source/synthetic checks and native activation are separate; see the [cache-warming guide](docs/cache-warming.md). Installed and loaded versions are separate. |
 | Codex cache warming | Desktop native runtime `0.160.0` or later, experimental best-effort | CLI opt-in and a separately trusted `/claudex:warm` text-command hook for the current loaded primary chat. Native backend acceptance verified seven local command turns without model output or usage; rendered UI remains unverified. No draft-state or per-turn no-tools control; no native TTL setting. A prior native enrollment verified one refresh but not retention extension. See [limits and confirmation](docs/cache-warming.md#codex-desktop-experimental-best-effort). This does not expand the synchronization allowlist. |
 | Desktop synchronization | Strict Codex baseline `0.155.0-alpha.16.3` / `.16.4`; Claude Code `2.1.281` with SDK `0.3.281` | Native conversation delivery, real Desktop alternation, supported compaction and image cases, identity preservation, and bounded snapshot retirement. |
 
@@ -270,8 +285,17 @@ Important boundaries:
 - [Contributor instructions](AGENTS.md): implementation and verification contracts.
 
 ```sh
-npm test
+cargo test --locked --workspace
+
+# Optional Node host checks and legacy behavioral references:
+npm ci --ignore-scripts
+npm run test:entrypoints
+npm run test:reference
 ```
+
+`npm test` runs the Rust workspace and the thin entry-point checks. The separate
+reference command runs the preserved JavaScript contracts in an isolated
+temporary checkout; it is not a product runtime path.
 
 Automated tests use synthetic work or no-inference native checks. Real model
 acceptance is separately authorized; passing a fixture is not proof of a live
