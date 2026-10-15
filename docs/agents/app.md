@@ -71,12 +71,16 @@ Keep the `completion-delivery` checklist row and the separate `completionDeliver
 report field independent of broker write readiness and loaded Mod activation.
 Use the broker's diagnostic origin-hook trust, selected provider routes,
 recipient readiness and concrete next step. Missing/stale/unobserved evidence
-stays unknown/waiting; an unspecified exact recipient is never ready. These
+stays unknown/waiting. By user decision (2026-10-15) the row is ready once both
+origin hooks are trusted and a loaded, enabled Claude receiver is observed
+admitting own-inbox delivery; Codex recipients are knowable only per task and do
+not gate it, but an explicit Codex waiting state does. A row that can never be
+ready hides real faults behind a permanent waiting state. These
 observations grant no dispatch authority or delivery guarantee, enable no
 receiver preference and bypass no native trust review. Present known broker
 next-step codes as readable localized instructions while preserving the original
-diagnostic report; a global `observed` receiver never means an exact recipient
-is `ready`.
+diagnostic report; in the report a global `observed` receiver never means an
+exact recipient is `ready`, which only the task's own status check establishes.
 Predecessor archival without a verified idle replacement owner (including an
 evicted owner) is a typed `owner_not_idle` wait after archive intents are revoked,
 not a history conflict or an actionable setup failure. Keep idle verification

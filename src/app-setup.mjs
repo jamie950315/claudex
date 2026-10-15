@@ -394,13 +394,18 @@ export class AppSetup {
       originHooks: { state: 'unknown', codex: { state: 'unknown' }, claude: { state: 'unknown' } },
       recipientReadiness: { claude: { state: 'unknown', reason: 'broker-unobserved' }, codex: { state: 'unknown', reason: 'broker-unobserved' } },
       nextStep: 'Completion delivery capability is unavailable. Start or update the collaboration broker, then refresh status.' };
+    // The capability reports a Claude receiver as 'observed' once a loaded,
+    // enabled Mod admits own-inbox delivery; Codex recipients are only knowable
+    // per task (exact native owner), so they cannot gate this global row.
     const completionReady = completionDelivery.diagnosticOnly === true && completionDelivery.deliveryGuaranteed === false
-      && completionDelivery.originHooks?.state === 'ready' && ['codex', 'claude'].every(provider =>
-        completionDelivery.originHooks[provider]?.state === 'ready' && completionDelivery.recipientReadiness?.[provider]?.state === 'ready');
+      && completionDelivery.originHooks?.state === 'ready'
+      && ['codex', 'claude'].every(provider => completionDelivery.originHooks[provider]?.state === 'ready')
+      && ['observed', 'ready'].includes(completionDelivery.recipientReadiness?.claude?.state)
+      && completionDelivery.recipientReadiness?.codex?.state !== 'waiting';
     rows.push(component('completion-delivery', 'Completion delivery', completionReady ? 'ready' : 'waiting',
-      (completionNextSteps.get(completionDelivery.nextStep) ?? completionDelivery.nextStep) || (completionReady
-        ? 'Origin hooks and the selected recipient routes report ready. Each message still requires native receipt.'
-        : 'Check the exact task notification status for origin hook trust, the selected route and recipient readiness.'), 'diagnostics'));
+      completionReady ? 'Origin hooks and the selected recipient routes report ready. Each message still requires native receipt.'
+        : (completionNextSteps.get(completionDelivery.nextStep) ?? completionDelivery.nextStep)
+          || 'Check the exact task notification status for origin hook trust, the selected route and recipient readiness.', 'diagnostics'));
     let folderSetup;
     try {
       const config = await appPrivateJSON(join(this.root, 'config.json'));

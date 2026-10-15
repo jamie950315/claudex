@@ -136,7 +136,9 @@ installation attempts; installed resources still require activation checks.
 The **Completion delivery** checklist entry is separate from collaboration broker
 and Mod installation readiness. Its diagnostic report includes Codex/Claude
 origin-hook trust, the selected provider routes, recipient readiness and a
-concrete next step. Missing or stale observations remain unknown. An exact
+concrete next step. Missing or stale observations remain unknown. The entry is
+ready when both origin hooks are trusted and a loaded Claude receiver admits
+completion wakes; Codex recipients are checked per task. An exact
 recipient still needs the task's notification status check, even when the
 broker accepts new work. This capability report does not send input or prove
 receipt. New or never-configured Mod receiver options default to enabled during

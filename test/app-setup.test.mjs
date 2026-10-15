@@ -208,17 +208,17 @@ test('completion capability is separate from broker and loaded Mod readiness', a
   assert.deepEqual(report.modSettings, { nativeWake: false, selfWake: false });
   completionDelivery.originHooks.state = 'ready';
   completionDelivery.originHooks.codex = { configured: true, trusted: true, state: 'ready' };
-  completionDelivery.recipientReadiness.claude.state = 'ready';
+  completionDelivery.recipientReadiness.claude.state = 'waiting';
   report = await setup.inspect();
-  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting', 'an unspecified exact recipient stays unknown');
-  completionDelivery.recipientReadiness.codex.state = 'ready';
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting', 'an unready Claude receiver keeps the row waiting');
   completionDelivery.recipientReadiness.claude.state = 'observed';
   report = await setup.inspect();
-  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting', 'a global receiver observation is not recipient readiness');
-  completionDelivery.recipientReadiness.claude.state = 'ready';
-  report = await setup.inspect();
   row = report.components.find(row => row.id === 'completion-delivery');
-  assert.equal(row.state, 'ready');
+  assert.equal(row.state, 'ready', 'an observed Claude receiver is ready; Codex recipients are per task');
+  assert.equal(row.detail, 'Origin hooks and the selected recipient routes report ready. Each message still requires native receipt.');
+  completionDelivery.recipientReadiness.codex.state = 'waiting';
+  report = await setup.inspect();
+  assert.equal(report.components.find(row => row.id === 'completion-delivery').state, 'waiting', 'an explicit Codex waiting state still blocks');
   assert.ok(events.every(([kind]) => kind === 'auth-codex' || kind === 'auth-claude'), 'inspection only reads account status');
 });
 
