@@ -235,6 +235,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
     discoveryCompletedAt, discoveryDurationMs, maxDiscoveryGapMs, lastSync, slowestSync,
     currentOperation, checkingConversationCount, checkedConversationCount: checkedConversations.size,
     reusedVerificationCount: reusedConversations.size, fullVerificationCount,
+    coldVerificationCache: proofCache?.diagnostics?.() ?? null,
     activePrioritySyncs, activeDirtyCount: activeDirty.size, folderProjection, localHandoff, rendererAdapters, claudeDesktopRestart,
     synchronization: blocked || hookBlock ? 'blocked' : blockedConversations.size ? 'degraded' : latestFields.waiting ? 'waiting' : 'ready',
     ...blockingStatus(), ...latestFields, blocked: blocked ?? hookBlock,
@@ -248,6 +249,7 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
       blockedSourceCount: progress.blockedSourceCount, blockedSources: progress.blockedSources,
       folderProjection: presentationHealth(progress.folderProjection), localHandoff: presentationHealth(progress.localHandoff),
       rendererAdapters: progress.rendererAdapters, hookStatus: progress.hookStatus,
+      coldVerificationCache: progress.coldVerificationCache && { state: progress.coldVerificationCache.state, reason: progress.coldVerificationCache.reason },
       foregroundComplete: progress.foregroundCompletedAt !== null, initialSweepComplete: progress.initialSweepCompletedAt !== null });
     // Progress is disposable diagnostics. Coalesce rapid updates while keeping
     // every changed conflict/reason visible immediately. The next poll or 10s
@@ -965,9 +967,11 @@ export async function runDesktopWatch({ root, bridge, runtime, config, signal, p
         }
       }
       await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: null,
+        coldVerificationCache: proofCache?.diagnostics?.() ?? null,
         ...blockingStatus() });
     } catch (error) {
-      await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error) });
+      await writeStatus(statusPath, { mode: 'desktop', running: false, pid: process.pid, startedAt, stoppedAt: now(), error: reason(error),
+        coldVerificationCache: proofCache?.diagnostics?.() ?? null });
       // A busy ClaudeOwner must keep its live handle; closing it can interrupt user work.
       throw error;
     } finally { bridge.interlude = priorInterlude; await rendererMaintenance?.close(); }

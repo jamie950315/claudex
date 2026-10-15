@@ -17,7 +17,7 @@ export const MOD_STAGE_FILES = [
   'plugins/claudex/skills/claudex-workflow/SKILL.md',
   'plugins/claudex/skills/warm/SKILL.md',
   'bin/claudex-mod-bridge.mjs', 'src/claude-mod-bridge.mjs',
-  'src/claude-mod-storage.mjs', 'src/claude-mod-protocol.mjs',
+  'src/claude-mod-storage.mjs', 'src/claude-mod-protocol.mjs', 'src/claude-mod-journal.mjs',
   'src/claude-mod-wake-outbox.mjs', 'src/claude-mod-self-inbox.mjs',
   'src/collaboration-transport.mjs', 'src/collaboration-effort.mjs', 'src/collaboration-outcome.mjs',
   'src/collaboration-permissions.mjs',
@@ -46,7 +46,7 @@ export function validateModCatalogSource(source) {
 }
 /** Stage only into a new user-selected directory. No settings, services or apps are modified. */
 export async function stageClaudeMod({ output, stateRoot, nodeBinary = process.execPath,
-  repoRoot = SOURCE, nativeWake = false, selfWake = false } = {}) {
+  repoRoot = SOURCE, nativeWake = true, selfWake = true } = {}) {
   absolute(output); absolute(stateRoot); absolute(nodeBinary);
   output = resolve(output);
   const parent = await realpath(dirname(output));

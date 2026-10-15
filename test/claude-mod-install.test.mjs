@@ -65,7 +65,7 @@ test('stager packages an explicit allowlist and private absolute defaults', asyn
   const manifest = JSON.parse(await readFile(join(report.plugin, '.claude-plugin', 'plugin.json')));
   assert.equal(manifest.userConfig.stateRoot.default, f.state);
   assert.equal(manifest.userConfig.nodeBinary.default, f.node);
-  assert.equal(manifest.userConfig.nativeWake.default, false);
+  assert.equal(manifest.userConfig.nativeWake.default, true);
   assert.equal(report.synchronizationPolicy, 'unchanged'); assert.equal(report.automaticInstallation, false);
   assert.deepEqual(await readdir(f.state), before);
   assert.equal((await lstat(f.output)).mode & 0o777, 0o700);
@@ -108,10 +108,11 @@ test('stage rejects unsafe state roots and source symlinks', async t => {
   await rm(target); await symlink(join(f.repo, 'src', 'collaboration-transport.mjs'), target);
   await assert.rejects(stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node }), { code: 'STAGE_SOURCE' });
 });
-test('native receipt staging requires explicit opt-in', async t => {
+test('staging can explicitly disable either receiver default', async t => {
   const f = await fixture(t);
-  const report = await stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node, nativeWake: true });
-  assert.equal(report.nativeWake, true);
+  const report = await stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node, nativeWake: false, selfWake: false });
+  assert.equal(report.nativeWake, false);
+  assert.equal(report.selfWake, false);
 });
 
 test('stage rejects symlinked source parents before creating output', async t => {
@@ -122,4 +123,15 @@ test('stage rejects symlinked source parents before creating output', async t =>
   await symlink(moved, original);
   await assert.rejects(stageClaudeMod({ output: f.output, stateRoot: f.state, repoRoot: f.repo, nodeBinary: f.node }), { code: 'STAGE_SOURCE' });
   await assert.rejects(lstat(f.output), { code: 'ENOENT' });
+});
+
+
+test('CLI staging supports an explicit receiver opt-out without disabling the other default', async t => {
+  const f = await fixture(t);
+  const cli = fileURLToPath(new URL('../bin/claudex-mod.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, [cli, 'stage', '--root', f.state, '--output', f.output, '--node', f.node, '--no-native-wake'], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  const report = JSON.parse(result.stdout);
+  assert.equal(report.nativeWake, false);
+  assert.equal(report.selfWake, true);
 });

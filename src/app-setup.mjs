@@ -351,7 +351,8 @@ export class AppSetup {
         : item.state === 'missing' || item.state === 'update-available' ? 'missing' : 'blocked',
       messages[item.state] ?? messages.blocked, item.state === 'disabled' ? 'mod-enable' : 'mod-setup'));
       modInfo = { bundledVersion: item.bundledVersion ?? null, installedVersion: item.installedVersion ?? null,
-        managerVersion: runtime.version ?? null, loadedVersion: null, reason: String(item.reason ?? '').slice(0, 128), route: null };
+        managerVersion: runtime.version ?? null, loadedVersion: null, reason: String(item.reason ?? '').slice(0, 128), route: null,
+        ...(item.journals ? { journals: item.journals } : {}) };
       if (item.state === 'ready') {
         const observation = await this.modActivationStatus();
         const current = observation?.diagnosticOnly === true && observation.provenance === 'mod-self-reported' && !observation.brokerStopping

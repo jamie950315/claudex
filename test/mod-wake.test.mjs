@@ -26,6 +26,8 @@ async function setup(t) {
 }
 test('route is captured per message, survives restart and does not reinterpret idempotent sends', async t => {
   const f = await setup(t);
+  assert.equal((await f.call('native_wake')).route, 'mod-self');
+  await f.call('native_wake', { route: 'renderer' });
   const old = await f.send('old'); assert.equal(old.wakeRoute, 'renderer');
   await f.call('native_wake', { route: 'mod' });
   const current = await f.send('new'); assert.equal(current.wakeRoute, 'mod');

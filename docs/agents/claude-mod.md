@@ -48,7 +48,11 @@ Mod start defaults to read-only and only permits sandboxed levels; previews
 and receipts must expose capabilities and SANDBOX_NO_NETWORK before confirmation.
 Omitting permission here retains read-only, not the broker default; network work
 uses the existing agent/operator workflow with an authorized full-access default.
-Since 0.3.1, explicit selfWake accompanies nativeWake; both default to false.
+Since 0.8.30, nativeWake and selfWake default to true. By explicit user decision
+(2026-10-15), setup/startup fill only never-configured keys, independently for
+both known native identities; preserve explicit false and disabled plugins.
+Native replies may consume model allowance. New brokers default to mod-self;
+preserve existing selected routes and every queued message's captured route.
 `collaboration native-wake --route mod-self|mod|renderer` captures the route on
 new wake-enabled Claude messages; existing messages and receipts keep their
 original route. The same loaded recipient Mod can receive with both opt-ins and
@@ -57,7 +61,7 @@ route. Closed/unloaded recipients wait for normal native resume, not a new owner
 Never flip an unvalidated installation's route until native activation acceptance
 passes. Isolated CLI rollout refusal
 does not invalidate a loaded Desktop Mod and must not be overridden to pass a
-test. New installations still default off; keep the Traditional Chinese bundle.
+test. Keep native policy/trust guards and the Traditional Chinese bundle.
 Open the installed Claudex
 app by its exact /Applications/Claudex.app path, not a same-named test bundle.
 Each loaded eligible session makes one bounded event-backed broker wait, never a
@@ -114,3 +118,21 @@ unchanged guards.
 Those historical cross-session results do not certify mod-self. Preserve earlier manual
 all-tools-removed offered/uncertain evidence; never reset or replay it. Untitled
 or unverified Desktop metadata remains refused.
+
+## Companion journal capacity
+
+The action, self-dispatch and wake-outbox journals retain at most 2048 active
+records each. Capacity pressure archives one settled record before publishing a
+new one. Preserve exact ID/fingerprint/claim lookup and conflicts across active
+and archive storage; never scan archives or discard their evidence. Completed
+actions and expired uncommitted previews are settled. A self-dispatch is settled
+only after proven pre-write refusal, or submitted plus its exact confirmed
+submitted receipt. Done outbox records are eligible except uncertain outcomes.
+Pending, dispatching and uncertain records never retire. Archive publication is
+durable before active removal; interrupted duplicates must match exactly.
+Per-record locks fence archival against mutations; a private journal lock
+serializes capacity reservations and can reclaim only proven-dead holders.
+Unverifiable/stale action locks remain protected. Unsafe/malformed storage fails
+closed. Expose typed counts and capacity states through doctor/app diagnostics;
+JOURNAL_CAPACITY_EXHAUSTED refuses a new record and never authorizes dispatch
+or replay. A receipt-storage failure after dispatch remains uncertain.

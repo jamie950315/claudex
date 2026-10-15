@@ -24,7 +24,11 @@ or a provider directory's npm settings. Native runtime guards and accounts remai
 Show installed payload/version and fresh loaded-Mod self-report separately.
 mod_wake_status is controller-only, bounded and content-free, never a dispatch
 lease or delivery proof. Old/expired observers cannot certify current activation.
-App receiver controls require explicit confirmation, preserve per-task notification policy,
+Since Mod 0.8.30, installation/setup/startup fill nativeWake/selfWake=true only
+for never-configured keys, independently for both native identities; preserve
+explicit false, disabled plugins and selected routes. Native replies may consume
+model allowance. App receiver controls require explicit confirmation, preserve
+per-task notification policy,
 and never change native routes/policy or restart Claude. Existing SDK sessions may
 retain old plugin roots; a new ordinary session loads the installed update.
 

@@ -11,7 +11,7 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
   let lastStatus;
   const report = reason => { if (reason !== lastStatus) { lastStatus = reason; onStatus(reason); } };
   report('loaded');
-  const attempted = new Set();
+  const attempted = new Map();
   function decode(result, limit) {
     if (!result || typeof result.contents !== 'string' || result.isTail || result.contents.length > limit)
       throw new Error('Desktop wake metadata is unavailable or truncated');
@@ -82,20 +82,30 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
       const manifest = decode(await readManifest(), 256 * 1024);
       if (manifest?.version !== 1 || !Array.isArray(manifest.messages) || manifest.messages.length > 64)
         throw new Error('Desktop wake manifest is invalid');
+      for (const [id, expiresAt] of attempted) if (expiresAt <= now()) attempted.delete(id);
       for (const message of manifest.messages) {
         valid(message);
         if (!running || ticket !== generation) break;
         if (message.expiresAt <= now() || attempted.has(message.messageId)) continue;
-        const before = await inspect(message);
-        if (!before || !running || ticket !== generation) continue;
-        const current = await native.getSession(message.localSessionId);
-        const blocked = idleBlock(current, message);
-        if (blocked) { report(`waiting: ${blocked}`); continue; }
-        if (current.lastActivityAt !== before.lastActivityAt) { report('waiting: activity changed'); continue; }
-        if (hasDraft(message.localSessionId)) { report('waiting: draft'); continue; }
+        let before;
+        try {
+          before = await inspect(message);
+          if (!before || !running || ticket !== generation) continue;
+          const current = await native.getSession(message.localSessionId);
+          const blocked = idleBlock(current, message);
+          if (blocked) { report(`waiting: ${blocked}`); continue; }
+          if (current.lastActivityAt !== before.lastActivityAt) { report('waiting: activity changed'); continue; }
+          if (hasDraft(message.localSessionId)) { report('waiting: draft'); continue; }
+        } catch {
+          // This candidate has not been claimed. An unavailable native read
+          // must not prevent an independent later recipient from being checked.
+          report('waiting: native metadata unavailable');
+          continue;
+        }
+        if (!running || ticket !== generation || message.expiresAt <= now()) continue;
         // Mark before the claim request: unknown claim outcomes are never retried
         // by this renderer, and the broker never grants a claim twice.
-        attempted.add(message.messageId);
+        attempted.set(message.messageId, message.expiresAt);
         const claim = await call(message, 'claudex_desktop_wake_claim', { messageId: message.messageId, sessionId: message.sessionId });
         if (claim?.claimed !== true) continue;
         if (claim.messageId !== message.messageId || !wakeUuid(claim.claimId)
@@ -113,8 +123,8 @@ export function createClaudeChatWakeRuntime({ readManifest, native, registryRoot
         await call(message, 'claudex_desktop_wake_receipt', { messageId: message.messageId, sessionId: message.sessionId, claimId: claim.claimId, status, detail });
         break;
       }
-      const active = new Set(manifest.messages.map(message => message.messageId));
-      for (const id of attempted) if (!active.has(id)) attempted.delete(id);
+      // A fair publication can temporarily omit a claimed candidate. Keep its
+      // unknown outcome fenced until expiry, not only while it is on this page.
     } catch (error) { onError(String(error?.message ?? error).slice(0, 300)); }
     finally { inFlight = false; if (running) timer = setTimer(poll, intervalMs); }
   }

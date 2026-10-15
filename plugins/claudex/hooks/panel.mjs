@@ -115,6 +115,17 @@ export function renderPanel({ ui, state, controller, host, options, wake, t, lan
     if (state.detail?.defaultModels) body.push(section(t('Provider defaults'), [
       ...modelFields(state.detail), details('models', state.detail),
     ]));
+    if (state.doctor?.journals) body.push(section(t('Receipt storage'), [
+      ...[['actions', t('Action receipts')], ['selfDispatch', t('Own-inbox dispatches')], ['wakeOutbox', t('Outcome receipts')]].flatMap(([key, label]) => {
+        const journal = state.doctor.journals[key];
+        if (!journal) return [];
+        return [field(label, Number.isSafeInteger(journal.active)
+          ? t('{active}/{limit} active · {remaining} free', journal) : t('Not verified')),
+          ...(journal.state === 'capacity-exhausted' ? [text(t('Capacity exhausted. Pending and uncertain records are preserved.'))]
+            : journal.state === 'retention-available' ? [muted(t('Settled receipts will archive when space is needed.'))]
+              : journal.state === 'unavailable' ? [text(t('Receipt storage could not be verified. Inspect diagnostics.'))] : [])];
+      }), details('journals', state.doctor.journals),
+    ]));
     body.push(section(t('Session & runtime'), [field(t('Engine'), state.version?.version),
       ...(state.context ? [field(t('Directory'), state.context.cwd)] : []),
       details('session', { session: state.context, runtime: state.version, usage: state.usage, doctor: state.doctor,

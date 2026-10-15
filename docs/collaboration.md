@@ -4,7 +4,7 @@
 
 Run commands from the repository directory. This guide covers execution, not
 history synchronization; the two capabilities use separate services and state.
-Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.29;
+Current behavior is described for Claudex 1.4.7 and its bundled Mod 0.8.30;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -105,14 +105,16 @@ for an external root caller; a managed child must omit `notifications`:
     "reports": "milestones",
     "blockerNotifications": true
   },
-  "notifications": { "mode": "wake", "expiresInMs": 600000 }
+  "notifications": { "mode": "wake", "expiresInMs": 3600000 }
 }
 ```
 
-All three visibility options default off. Public timeline collection does not authorize
-native-chat notifications, and notifications do not enable content collection. Root blocker
-notifications additionally require the existing native call/result origin proof
-and an explicit queue/wake notification policy. Managed parents use the child-work
+Timeline and reports default off. Root tasks using wake notifications default
+blockerNotifications to true; set it to false to opt out. Queue/off roots and
+managed children keep blocker notifications off unless explicitly enabled.
+Public timeline collection does not authorize native-chat notifications, and
+notifications do not enable content collection. Root blocker notifications still
+require the existing native call/result origin proof and a queue/wake policy. Managed parents use the child-work
 protocol instead of borrowing an external controller's native chat authority.
 
 The public timeline contains native assistant messages and allowlisted tool
@@ -352,6 +354,8 @@ readable without reports or backfilling.
 
 MCP errors retain readable text and expose
 `structuredContent.error: {code, message}`; code is null for legacy untyped errors.
+Typed capacity errors also expose resource, used and limit without arbitrary
+error payloads.
 Controller requestId namespaces remain provider-scoped for receipt compatibility.
 Use globally distinctive IDs per conversation/operation; identical generic IDs
 from two chats of the same provider share a receipt, while different input is
@@ -361,9 +365,11 @@ External MCP root `start` accepts optional `notifications: {mode, expiresInMs}`.
 Omission defaults to wake; explicit off opts out. Queue uses ordinary next-hook
 delivery, while wake permits the existing native wake route and consumes model
 allowance. The start receipt exposes `notificationMode: "wake"` even when defaulted.
-Expiry defaults to ten
-minutes after the task's terminal revision, or the selected blocker transition
-when separately opted in, bounded to 1 second–1 hour. A long
+Expiry defaults to one hour after the task's terminal revision, or the selected
+blocker transition, bounded to 1 second–1 hour. The existing receiver contract
+has no durable receive-ready boundary: readiness can change before the one-use
+claim, which occurs after the absolute mailbox deadline is saved. The clock
+therefore retains its transition-time start, reported as expiryStartsAt. A long
 app-stop hold cannot renew that deadline when the broker resumes.
 Managed workers must omit notifications; their children use the child-result
 contract without origin notifications. Manual CLI `request start` and Mod
@@ -390,6 +396,9 @@ cannot use completion capacity. Existing dispatched/uncertain intents are never
 resent. All intent identities are retained under the work ledger's existing
 capacity bounds. Expired or proven not-sent notifications are counted as `missed`;
 results remain available through status even when their wake was missed.
+`notification.unreadResult` remains true for an expired terminal wake until its
+exact receipt is acknowledged or that generation is explicitly reviewed.
+Reading status does not fabricate a native ACK or renew expiry.
 Notification `deliveries` join exact current mailbox/archive receipts, showing
 queued, offered, acknowledged or expired separately from `dispatchState`,
 `dispatchPhase` and any fixed `failureCode`. `failed-not-sent` requires exact
@@ -611,11 +620,20 @@ Sending defaults to `wake: true`; this can consume native account allowance.
 untrusted-app input route, inheriting settings. An unloaded original is opened by
 exact native deep link before owner discovery; no CLI writer is created. A busy
 owner refuses before injection and the message stays queued. Claude uses the
-route captured on each new message: `renderer` when no route was selected,
-`mod-self` for the explicitly enabled recipient's own inbox, or `mod` for an
-eligible separate sender. Mod installation and the app's receiver controls do
-not change that route. See [Claude Mod setup](claude-mod.md) for the two Mod
+route captured on each new message: `mod-self` by default for the recipient's
+own inbox, `renderer` when explicitly selected, or `mod` for an
+eligible separate sender. Setup fills never-set receiver choices with nativeWake
+and selfWake enabled; explicit false and a previously selected route are preserved.
+Existing messages retain their captured routes. Receiver controls do not switch routes. See [Claude Mod setup](claude-mod.md) for the two Mod
 routes and their independent acceptance requirements.
+
+Renderer wake publication is bounded to 64 identities / 240 KiB.
+`rendererWakeManifest` in list/status shows total, eligible, omitted, unavailable
+and bytes. A metadata-only five-second rotation prevents a busy first page
+from starving the backlog; the earliest queued expiry also republishes the
+manifest. Startup/resume recovers publication, while app-stop and broker close
+fence it. This rotates opportunities, not native sends, and keeps each message's
+claim and recipient draft/idle guards.
 
 For the `renderer` route specifically, Claude uses a
 structurally validated renderer plus the dedicated `claudex-desktop-wake` Desktop MCP
@@ -690,12 +708,14 @@ history are never removed. A later native hook can register forgotten metadata
 again through the normal path.
 
 Acknowledged or expired message/receipt pairs move to a private archive when
-capacity is needed; unresolved wake outcomes remain active. Archived receipts
+count or projected serialized-byte capacity is needed; unresolved wake outcomes
+remain active. Archived receipts
 are retained indefinitely, so exact message status and sender-scoped request-ID
 deduplication still work after restart. The active journal stays bounded; the
 archive grows with retained receipts. If all slots remain protected, registration
 or enqueueing fails explicitly. `claudex collaboration status` and the native
-Mod delivery diagnostics expose `chatMailbox` counts and capacity flags;
+Mod delivery diagnostics expose `chatMailbox` counts and capacity flags, plus
+usedBytes, byteLimit and remainingBytes;
 notification continuation reports `mailbox-capacity-exhausted` when a missing
 origin cannot register. Existing saturated journals recover on the next hook
 without manual state editing. No raw hook prompt or transcript is stored. Hook
@@ -929,9 +949,23 @@ image transfer, exact native-context migration, or automatic source-chat archiva
 is implied by the work protocol.
 
 Defaults allow up to 64 concurrent workers, delegation depth three, twelve native executions per
-task, 1,000 tasks, 10,000 idempotency receipts and a 32 MiB ledger. Context and native
-output are separately bounded. Capacity errors are explicit; no history or receipt
-is silently pruned. Work has no elapsed-time execution timeout; long-running
+task, 1,000 active tasks, 10,000 active idempotency receipts and a 32 MiB compact
+ledger. List/status `limits.capacity` reports used, remaining and limit for tasks,
+requests and bytes; task status also reports remaining native transitions. Context
+and native output are separately bounded.
+
+Capacity pressure archives unchanged, fully settled task trees and exact request
+receipts under private work-archive storage. Pending/uncertain work and unresolved
+notifications stay active. Archives retain messages, reports, events, native
+execution evidence and original request replay/conflict decisions indefinitely.
+`claudex_list` is an active inventory and reports `archivedTaskCount`. Use the exact
+task ID with status/wait (including multi-wait) to read cold history; a new valid
+follow-up restores the completed tree through the normal bounded commit path.
+Interrupted publication leaves active history authoritative. If all remaining
+records are protected, CLAUDEX_WORK_CAPACITY_EXHAUSTED refuses atomically rather
+than dropping evidence. Archive disk usage grows with retained history.
+
+Work has no elapsed-time execution timeout; long-running
 native invocations continue until completion, failure or explicit cancellation.
 The bounded wait/socket request timeouts only end the caller's wait, not the work.
 These limits are not a monetary spending guarantee; native account quotas still apply.

@@ -28,7 +28,7 @@ export async function completionDeliveryCapability(hub) {
     : !codex?.configured || !claude?.configured ? 'run-setup-to-install-origin-hooks'
       : !codex.trusted ? 'review-exact-PostToolUse-hook-in-Codex-hooks'
         : !claude.enabled ? 'enable-Claude-hooks' : 'check-task-origin-proof';
-  const route = hub.state.nativeWakeRoute ?? 'renderer', observed = modWakeStatus(hub);
+  const route = hub.state.nativeWakeRoute ?? 'mod-self', observed = modWakeStatus(hub);
   let receiver;
   if (route === 'mod-self') {
     const enabled = observed.receiver.bothEnabledCount > 0;

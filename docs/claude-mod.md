@@ -1,10 +1,15 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.29
+## Current companion: 0.8.30
 
 Claudex.app 1.4.7 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.30 defaults new or never-configured receiver options to enabled,
+preserving each explicit false and the selected route. New brokers use `mod-self`.
+Native replies can consume model allowance. Settled action, own-dispatch and
+outbox records move to exact-lookup archives under active-capacity pressure;
+pending and uncertain evidence remains active and is never replayed.
 Version 0.8.29 distinguishes an unset native inbound policy, an unavailable
 settings read and an unrecognized value in content-free loaded observations.
 An earlier delivery does not certify the current effective native policy;
@@ -177,13 +182,18 @@ The recipient's own loaded Mod obtains its already-authorized broker message and
 uses native own-child inbox delivery. Historical 0.3.1 acceptance used
 both opt-ins enabled and route `mod-self`; a single Desktop session produced the
 requested Sonnet 5.5 reply and real Stop ACK after normal restart. Its original
-unsent draft remained unchanged. Source defaults remain off. Exact native policy,
+unsent draft remained unchanged. That release defaulted receivers off; current
+defaults are enabled where no preference was saved. Exact native policy,
 RPC, test and Desktop evidence is recorded in [validation](claude-mod-validation.md).
 
 Three settings are distinct: plugin `nativeWake: true` starts the listener,
 plugin `selfWake: true` enables own-inbox delivery, and
 `collaboration native-wake --route mod-self` selects that route for newly queued
-Claude messages whose `wake` is true. Queue-only messages remain queue-only.
+Claude messages whose `wake` is true. New installations and app startup/setup
+fill only never-configured receiver keys with true, separately for each native
+configuration identity. Explicit false, disabled plugins and selected routes are
+preserved. A new broker defaults to `mod-self`; it does not migrate old messages.
+Queue-only messages remain queue-only.
 Existing `mod` and `renderer` messages keep their original route and receipts;
 changing the setting never migrates or replays them.
 
@@ -237,9 +247,21 @@ without blocking other targets; connection recovery backs off to thirty seconds.
 Unsafe receipt storage stops the listener and remains visible for inspection.
 
 The outbox is `<root>/mod-wake-receipts/`; own-inbox dispatch intents are in
-`<root>/mod-self-dispatch/`. Each has a 2048-record bound (the mailbox limit is
-lower). Completed outcomes and receive-once evidence are retained. Keep them and
-the original mailbox when investigating. Never remove a claim to force redelivery.
+`<root>/mod-self-dispatch/`. Together with `<root>/mod-companion/`, each has a
+2048-active-record bound, not a lifetime receipt limit. When a new record needs
+space, the journal archives one settled record under its private `archive/`
+directory before removing the active copy. Exact receipt/claim lookup and
+conflict checks read both locations without scanning archives. Archives are
+retained indefinitely. Completed actions and expired uncommitted previews are
+eligible; dispatching/uncertain actions, pending receipts and uncertain done
+receipts stay active. A submitted self-dispatch is eligible only after its exact
+submitted outcome receipt is confirmed; proven pre-write refusals are also
+settled. The Mod Overview and app diagnostics expose content-free active counts,
+remaining capacity and retention/exhaustion states. If no safe slot exists,
+`JOURNAL_CAPACITY_EXHAUSTED` refuses the new record. If receipt storage fails
+after native dispatch, its outcome remains uncertain; it is never resent. Preserve
+all three journals and the original mailbox when investigating. Never remove
+a claim or archived receipt to force redelivery.
 
 Claudex.app handles ordinary installation, updates and explicit receiver controls;
 these do not automatically change the broker route or certify delivery on a new
@@ -314,7 +336,7 @@ while inspecting another installation's local state.
 | Defaults | Read and reviewed update of models, efforts, and bounded permission default | Full-access remains outside the companion |
 | Native chat lookup | Search, exact ID selection, expected title, page cursor | Duplicate titles and unavailable metadata stay visible |
 | Peer messages | Reviewed `chat_send`, queue-only default | `wake: true` is an explicit escalation to potentially billable native work |
-| Native receipt | Explicit own-inbox `mod-self` or cross-session `mod` adapter | Disabled by default; socket submission, queue acceptance and Stop ACK differ |
+| Native receipt | Explicit own-inbox `mod-self` or cross-session `mod` adapter | Enabled unless explicitly disabled; socket submission, queue acceptance and Stop ACK differ |
 | Handoff | Appends a reviewed instruction draft; bundled workflow skill | Owning workers keep the existing handoff protocol and revision fence |
 | Lossless conversation sync | Existing core and complete-turn checkpoints | No transcript export/import is implemented through Mod APIs |
 | Sidebar folders/archive/title organization | Existing structural integrations | New native pane complements these features |
@@ -382,7 +404,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.29-review"
+STAGE="$PARENT/claudex-0.8.30-review"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -402,18 +424,18 @@ Use the independently selected native validation executable:
 CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" --version
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
-# The own-inbox test explicitly exercises both opt-ins. Use a separate,
-# never-installed test candidate; keep the ordinary shipping stage off.
-TEST_STAGE="$PARENT/claudex-0.8.29-native-tests"
+# Use a separate, never-installed native test candidate. Both receiver options
+# default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
+TEST_STAGE="$PARENT/claudex-0.8.30-native-tests"
 node bin/claudex-mod.mjs stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"
 ```
 
 Those commands are offline Mod validation/test operations, not model prompts.
-The full kit requires that test-only opt-in configuration; running its own-inbox
-acceptance case against the default-disabled shipping stage correctly cannot
-deliver peer text. Test staging does not enable either option in an installed Mod.
+The full kit exercises the default-enabled own-inbox configuration. An explicitly
+disabled test candidate cannot deliver peer text. Test staging changes no installed
+Mod preference, and the kit stubs model/native delivery operations.
 Inspect emitted types for that exact build when an API differs from the public
 GitHub type snapshot. Preserve the report and resolve validation errors before
 installation; preserve the existing synchronization policy throughout.
@@ -429,7 +451,8 @@ instead of these manual commands:
 
 Use `/plugin configure claudex@claudex-local` to verify the state root, Node
 executable and intended `nativeWake` and `selfWake` values, including overrides
-retained from prior installs. Keep them false for an unvalidated installation.
+retained from prior installs. Both default to true; use the native manager to
+retain an explicit false when opting out. Validate a new runtime separately.
 For own-inbox activation, both must be true. Open a fresh suitable native Code
 session or reload plugins using the runtime's normal command. The deployer should preserve active work and avoid
 restarting apps/services merely to make a validation screenshot.
@@ -567,7 +590,8 @@ request. Canonical payload fingerprints point to the same outstanding intent
 across UI reloads and exact-session changes. An equivalent uncertain intent is
 blocked, including from another native controller session. Prepared previews
 expire after ten minutes; a completed operation can be deliberately prepared
-again as new work. The configured root stores at most 2048 action receipts.
+again as new work. The configured root stores at most 2048 active action receipts
+and retains exact archived receipts indefinitely.
 
 `completed` describes the broker request's successful return. It establishes no
 claim that a delegated task finished, a recipient acknowledged, or cancellation
@@ -577,8 +601,9 @@ require inspection. The helper never retries a mutation automatically.
 Receipts and intent pointers live under `<root>/mod-companion/`. They contain
 private action bodies and bounded broker results, with mode 0600 in an
 owner-private directory. They contain no copied controller token. Preserve this
-directory during investigation; manage retention explicitly after all uncertain
-requests are reconciled. A stale action lock is evidence to inspect, not a reason
+directory, its `intents/` exact-fingerprint index and its `archive/` during
+investigation. Demand-driven retention never removes pending/uncertain evidence.
+A stale action lock is evidence to inspect, not a reason
 to blindly remove a file or resend a prompt.
 
 Use `/claudex receipt UUID` in the original exact controller session/cwd to read a
@@ -590,14 +615,16 @@ or mark work resolved simply to make the pane appear healthy.
 
 ## Native delivery and manual Inbox inspection
 
-For a new installation, keep `nativeWake` and `selfWake` false until the automatic
-acceptance gate above is completed. The Mod never fabricates SessionStart/Stop,
+New installations default `nativeWake` and `selfWake` to true; app startup/setup
+fill only keys never explicitly configured. Saved false remains off. Native
+activation acceptance remains required for a new runtime. The Mod never
+fabricates SessionStart/Stop,
 approves permissions or invokes `prompt.submit`. Own-inbox native ingress is
 framed as non-human peer input, not as the user's words. Automatic delivery handles
 only existing wake-authorized broker messages and can cause the recipient's normal model work; that is not free of
 inference. It does not initiate unrelated work or inspect native histories.
 
-When explicitly enabled, Inbox reads only the broker's bounded identity manifest.
+When enabled, Inbox reads only the broker's bounded identity manifest.
 Chats can select a Claude recipient and inspect its pending messages. The
 controller's session/cwd and the recipient's session/cwd are distinct fields;
 `mod-self` requires them to match exactly, while `mod` requires another session.

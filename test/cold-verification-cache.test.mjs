@@ -12,6 +12,14 @@ const id = '12345678-1234-1234-1234-123456789abc';
 const key = Buffer.alloc(32, 7);
 const messages = [{ role: 'user', content: [{ type: 'text', text: 'hello' }] },
   { role: 'assistant', content: [{ type: 'text', text: 'done' }] }];
+const fixtureId = i => `${i.toString(16).padStart(8, '0')}-0000-4000-8000-000000000000`;
+const envelope = (cache, payload) => JSON.stringify({ payload, mac: cache.mac(payload) });
+async function populate(cache, count, payload) {
+  for (let i = 0; i < count; i += 32) await Promise.all(Array.from({ length: Math.min(32, count - i) }, (_, offset) => {
+    const id = fixtureId(i + offset);
+    return writeFile(join(cache.directory, `${id}.json`), envelope(cache, { ...payload, id }), { mode: 0o600 });
+  }));
+}
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), 'cold-verification-'));
@@ -138,4 +146,107 @@ test('a cache file replaced by a FIFO after inspection is a miss without waiting
   syncBuiltinESMExports();
   assert.equal(await cache.load(id, data.signature, data.context), null);
   assert.ok((await lstat(path)).isFIFO());
+});
+
+test('proof capacity reclaims only authenticated invalidated entries and fences old proof resurrection across restart', async t => {
+  const { root, cache, data, path } = await fixture(t);
+  const old = await readFile(path, 'utf8'), liveId = fixtureId(5000), nextId = fixtureId(5001);
+  assert.equal(await cache.store(liveId, data), true);
+  const livePath = join(cache.directory, `${liveId}.json`), live = await readFile(livePath, 'utf8');
+  await cache.invalidate(id);
+  await populate(cache, 4094, { version: 1, epoch: cache.epoch, invalidated: true });
+  const asset = data.files[0].path, assetBefore = await lstat(asset, { bigint: true });
+  assert.equal(await cache.store(nextId, data), true);
+  assert.equal(cache.diagnostics().state, 'ready');
+  assert.equal(cache.diagnostics().entries, 2);
+  assert.equal(cache.diagnostics().reclaimedEntries, 4095);
+  assert.equal(await readFile(livePath, 'utf8'), live, 'A live proof is not deleted or rewritten.');
+  assert.equal((await lstat(asset, { bigint: true })).mtimeNs, assetBefore.mtimeNs);
+  assert.ok(await cache.load(nextId, data.signature, data.context));
+  assert.equal(await cache.load(liveId, data.signature, data.context), null, 'The new fence requires fresh verification of earlier proofs.');
+  await writeFile(path, old, { mode: 0o600 });
+  // Coalescing an invalidation after collection still relies on the durable
+  // generation: it must not need to recreate the collected tombstone.
+  assert.equal(await cache.invalidate(id), true);
+  assert.equal(await readFile(path, 'utf8'), old);
+  const restarted = new ColdVerificationCache({ root, key, now: () => 1000 });
+  assert.equal(await restarted.load(id, data.signature, data.context), null);
+  assert.ok(await restarted.load(nextId, data.signature, data.context));
+  assert.equal(await restarted.store(id, data), true);
+  assert.ok(await restarted.load(id, data.signature, data.context));
+});
+
+test('full live proof capacity reports entry exhaustion and never removes valid proofs', async t => {
+  const { cache, data, path } = await fixture(t);
+  const proof = JSON.parse(await readFile(path, 'utf8')).payload;
+  await populate(cache, 4095, proof);
+  assert.equal(await cache.store(fixtureId(5000), data), false);
+  assert.equal(cache.diagnostics().state, 'capacity');
+  assert.equal(cache.diagnostics().disabled, false);
+  assert.equal(cache.diagnostics().capacityReached, true);
+  assert.equal(cache.diagnostics().reason, 'entry-capacity');
+  assert.equal(cache.diagnostics().entries, 4096);
+  assert.equal(cache.diagnostics().reclaimedEntries, 0);
+  assert.equal(cache.diagnostics().limits.entries, 4096);
+  assert.ok(await cache.load(id, data.signature, data.context));
+});
+
+test('interrupted tombstone collection keeps its revocation fence and restart reclaims only the revoked generation', async t => {
+  const { root, cache, data, path } = await fixture(t);
+  const oldProof = await readFile(path, 'utf8');
+  await cache.invalidate(id);
+  await populate(cache, 4095, { version: 1, epoch: cache.epoch, invalidated: true });
+  const publish = cache.publish.bind(cache);
+  cache.publish = async (...args) => {
+    const result = await publish(...args);
+    if (args[0] === '.revocation.json') throw new Error('fixture crash after durable fence');
+    return result;
+  };
+  assert.equal(await cache.store(fixtureId(5000), data), false);
+  const fencePath = join(cache.directory, '.revocation.json'), fence = await readFile(fencePath, 'utf8');
+  assert.equal(cache.diagnostics().reclaimedEntries, 0);
+  await writeFile(path, oldProof, { mode: 0o600 });
+  const restarted = new ColdVerificationCache({ root, key, now: () => 1000 });
+  assert.equal(await restarted.load(id, data.signature, data.context), null);
+  assert.equal(await restarted.store(fixtureId(5000), data), true);
+  assert.equal(restarted.diagnostics().reclaimedEntries, 4096);
+  assert.equal(await readFile(fencePath, 'utf8'), fence, 'Already revoked entries need no second generation rotation.');
+  assert.ok(await restarted.load(fixtureId(5000), data.signature, data.context));
+});
+
+test('byte and per-file exhaustion expose separate reasons without deleting live proofs', async t => {
+  const { cache, path } = await fixture(t);
+  const proof = JSON.parse(await readFile(path, 'utf8')).payload;
+  const fileBytes = 16 * 1024 * 1024;
+  assert.equal(await cache.write(fixtureId(5000), { ...proof, padding: 'x'.repeat(fileBytes) }), false);
+  assert.equal(cache.diagnostics().reason, 'file-capacity');
+  for (let i = 0; i < 4; i++) {
+    const targetId = i ? fixtureId(i) : id;
+    const payload = { ...proof, id: targetId, padding: '' };
+    payload.padding = 'x'.repeat(fileBytes - Buffer.byteLength(envelope(cache, payload)));
+    const text = envelope(cache, payload);
+    assert.equal(Buffer.byteLength(text), fileBytes);
+    await writeFile(join(cache.directory, `${targetId}.json`), text, { mode: 0o600 });
+  }
+  assert.equal(await cache.write(fixtureId(5000), { ...proof, id: fixtureId(5000) }), false);
+  const status = cache.diagnostics();
+  assert.equal(status.reason, 'byte-capacity');
+  assert.equal(status.entries, 4); assert.equal(status.bytes, 64 * 1024 * 1024);
+  assert.equal(status.reclaimedEntries, 0);
+});
+
+test('unsafe proof storage is diagnosed and invalidation during a load cannot return an old proof', async t => {
+  const { cache, data } = await fixture(t);
+  const validate = cache.validateFiles.bind(cache);
+  cache.validateFiles = async (...args) => {
+    cache.validateFiles = validate;
+    const result = await validate(...args);
+    assert.equal(await cache.invalidate(id), true);
+    return result;
+  };
+  assert.equal(await cache.load(id, data.signature, data.context), null);
+  await chmod(cache.directory, 0o755);
+  assert.equal(await cache.store(id, data), false);
+  assert.equal(cache.diagnostics().disabled, true);
+  assert.equal(cache.diagnostics().reason, 'storage-unavailable');
 });

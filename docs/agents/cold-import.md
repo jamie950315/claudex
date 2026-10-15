@@ -44,6 +44,22 @@ conversations and dirty cold imports run before the fair cold-validation sweep.
 Proof misses run full verification directly; only failed reads require durable
 revocation. A successful refresh replaces its proof once, without a preceding
 tombstone flush. Restoring an old context never revives a failed proof.
+The cache's content-free `diagnostics()` is published as `coldVerificationCache`
+in watcher status, including after shutdown: state/reason, entry and byte usage,
+limits, capacity and disabled flags, and reclaimed-entry count. Counts are the
+last bounded write inventory, not a new scan on every status read. Capacity
+refusal leaves existing valid proofs usable; misses still run full verification.
+On capacity pressure, reclaim only authenticated tombstones or proofs already
+revoked by the persistent generation fence. Before deleting a current-generation
+tombstone, atomically publish and fsync a fresh authenticated `.revocation.json`
+generation. Earlier proofs then need full verification; their files remain
+untouched until a later capacity pass can reclaim the revoked entries. Bind
+fresh proofs to that generation and recheck it on reads/publication, so restoring
+old proof bytes or context after tombstone collection cannot revive them.
+Keep the fence across restarts and interrupted reclamation, serialize proof
+mutations, and recheck exact private single-link file identities before removal.
+This reclamation touches only the derived cold-verification directory, never
+dependency anchors, native histories or authoritative history-assets.
 The injected non-event test harness refreshes discovery and changed work between
 complete cold operations after two seconds, not the entire unchanged foreground
 queue. Production completion-event mode instead services bounded exact durable

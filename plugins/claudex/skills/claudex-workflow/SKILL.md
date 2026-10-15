@@ -54,8 +54,9 @@ handoff along with the complete message, then obey the end-turn boundary.
 
 At delegation, explicitly choose `observability: {timeline: "public", reports:
 "milestones", blockerNotifications: false}` when the task needs public work
-tracking. Timeline/reports otherwise default to `"off"` and blocker notifications
-to `false`. Public collection retains bounded
+tracking. Timeline/reports otherwise default to `"off"`. Root wake tasks default
+blocker notifications to true; explicit false opts out. Queue/off roots and
+managed children retain the false default. Public collection retains bounded
 assistant messages and allowlisted tool metadata, never hidden reasoning,
 prompts, raw tool payloads or arbitrary stdout/stderr. Provider granularity is
 real, not simulated token streaming. Keep secrets out of public reports.
@@ -78,7 +79,7 @@ are observational and do not acknowledge child results. Use status/wait for
 authoritative outcomes and retain bounded waits instead of frequent global polls.
 
 For a blocker, report `outcome:"blocked"|"needs-input"` plus
-`blocker:{id?,question,impact,needs}`. Reuse its exact ID for updates. Only explicit
+`blocker:{id?,question,impact,needs}`. Reuse its exact ID for updates. Effective
 `blockerNotifications:true` plus an authorized root notification route permits
 mid-work native notices. Managed parents use the child protocol, never controller
 chat authority. Read the exact task after a notice; no notice grants new authority.
@@ -126,7 +127,7 @@ checkout diffs do not prove worker authorship. Use explicit `review-result` with
 decision `reviewed` or `integrated` only after doing that work; viewing a pane,
 reading a file or receiving an outcome is not automatic integration.
 
-External MCP root starts default to wake, with expiry ten minutes after the
+External MCP root starts default to wake, with expiry one hour after the
 terminal revision; `notifications: {mode: "off"}` opts out. Explicit queue waits
 for the next native hook; wake consumes native model allowance. Managed children
 must omit notifications; the Mod's prepare/confirm starts stay off because they

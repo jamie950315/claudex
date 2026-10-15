@@ -151,6 +151,10 @@ one last error/recovery per phase and counters saturating at 1,000,000,000;
 reads are bounded to 16 KiB. A matching successful operation marks recovery
 without erasing the recorded error. Ignored payloads are not origin failures
 or successful origin verification. These files never authorize native work.
+Mailbox hooks use the same projected-byte and count-pressure safe archival as
+controller enqueueing. A typed MAILBOX_CAPACITY_EXHAUSTED (including byte
+pressure) remains MAILBOX_CAPACITY_EXHAUSTED in hook health; never copy arbitrary
+error properties or suppress independent sync hints after a mailbox refusal.
 
 Concurrent error writers use the existing private lock. If it cannot be acquired,
 retain one exclusive content-free 256-byte-bounded

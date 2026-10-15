@@ -9,5 +9,5 @@ export function notificationPolicy(value) {
       || value.expiresInMs < 1000 || value.expiresInMs > 3600000))
     throw Object.assign(new Error('Notifications require off, queue or wake and a bounded expiry.'),
       { code: 'CLAUDEX_INVALID_NOTIFICATION_POLICY' });
-  return value.mode === 'off' ? { mode: 'off' } : { mode: value.mode, expiresInMs: value.expiresInMs ?? 600000 };
+  return value.mode === 'off' ? { mode: 'off' } : { mode: value.mode, expiresInMs: value.expiresInMs ?? 3600000 };
 }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, mkdtemp, readFile, realpath, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runDesktopWatch } from '../src/desktop-watch.mjs';
@@ -104,6 +104,20 @@ test('a new watcher reuses signed unchanged cold verification beyond the former 
   const progress = f.statuses.findLast(status => status.running);
   assert.equal(progress.checkedConversationCount, 1);
   assert.notEqual(progress.initialSweepCompletedAt, null);
+});
+
+test('watcher diagnostics expose unavailable proof storage while full verification remains usable', async t => {
+  const f = await fixture(t); await f.run(); f.clear();
+  await chmod(join(f.root, 'cold-verification'), 0o755);
+  f.context.codexVersion = 'new-version';
+  await f.run();
+  assert.equal(f.events.filter(event => event === 'sync').length, 1);
+  const progress = f.statuses.findLast(status => status.running);
+  assert.equal(progress.blockedConversationCount, 0);
+  assert.equal(progress.coldVerificationCache.state, 'disabled');
+  assert.equal(progress.coldVerificationCache.reason, 'storage-unavailable');
+  assert.equal(progress.coldVerificationCache.limits.entries, 4096);
+  assert.deepEqual(f.statuses.at(-1).coldVerificationCache, progress.coldVerificationCache);
 });
 
 test('an inactive unchanged unfinished native tail stays withheld without decoding its full prefix again', async t => {

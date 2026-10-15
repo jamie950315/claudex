@@ -1,4 +1,4 @@
-# Claudex native companion, 0.8.29
+# Claudex native companion, 0.8.30
 
 Namespaced warming replies use four localized text lines: state/TTL, cache-prefix
 tokens and warm budgets, first cache result, and next warm time or waiting reason.
@@ -54,7 +54,7 @@ session. Codex Desktop has a separate experimental best-effort CLI opt-in;
 the Mod does not control Codex warming or its TTL. See the source repository's
 `docs/cache-warming.md` for its limitations and explicit confirmation.
 
-Claudex.app 1.2.20 installs and maintains this bundled companion during setup and
+Claudex.app 1.4.7 installs and maintains this bundled companion during setup and
 normal startup through the official native plugin manager. Read-only inspection
 never installs or configures it. Existing disabled/receiver preferences, other
 plugins and newer installed versions are preserved. Installed files and fresh
@@ -89,8 +89,9 @@ separate event cursors; viewing them never acknowledges a child result. File
 inspection and working-tree-versus-index diffs retain unknown authorship rather
 than attributing shared-checkout edits to one worker. Human mutations in the pane
 still use the complete prepare/confirm workflow; this is not a confirmation gate
-for a managed worker's authorized MCP workflow. Public collection and blocker wakes
-remain separate per-task opt-ins, disabled by default.
+for a managed worker's authorized MCP workflow. Public collection stays off by
+default. Blocker wakes default on for root wake tasks; explicit false opts out.
+Queue/off roots and managed children retain the off default.
 
 AI collaboration uses the existing MCP delegation, multi-task wait, structured
 worker report and handoff tools. The pane remains optional for human inspection
@@ -109,7 +110,7 @@ neither path forcibly interrupts a long native tool or opens a second writer.
 For developer validation or a CLI-only installation, stage from the repository:
 
 ```sh
-node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.29-marketplace
+node bin/claudex-mod.mjs stage --root /absolute/private/claudex-root --output /new/claudex-0.8.30-marketplace
 ```
 
 Use the resulting `plugins/claudex` directory for native validation and local
@@ -135,10 +136,13 @@ it only redraws the pane; it does not dispatch work, restart services
 or discard unsubmitted form text or a pending action preview. Native identifiers,
 model names, user content and unknown diagnostics stay unchanged.
 
-Automatic delivery is off by default. After the separate runtime and Desktop
-acceptance gates, configure both `nativeWake: true` and `selfWake: true`, and
-select `collaboration native-wake --route mod-self` for newly queued wake-enabled
-messages. The same Mod in the recipient session receives its own authorized
+Automatic delivery defaults to enabled: new installs and app startup/setup fill
+only never-configured `nativeWake` and `selfWake` keys with true, separately for
+both native configuration identities. Explicit false and disabled plugins stay
+disabled. New brokers default to `mod-self`; existing routes are preserved.
+Delivery can trigger a native reply and consume model allowance. Separate runtime
+and Desktop acceptance gates still apply to newly queued wake-enabled messages.
+The same Mod in the recipient session receives its own authorized
 broker messages: no second loaded session, extra Mod or SendMessage tool is
 required. A closed/unloaded recipient still waits for its normal native resume;
 the feature does not create an extra model session.
@@ -182,3 +186,10 @@ See `docs/claude-mod.md`, `docs/claude-mod-handoff.md`, and
 the Node executable and configuration: a native Mod runs with the current user's
 local permissions. Helper requests carry operation data on stdin; controller
 capabilities stay in the private broker root.
+
+Each Mod journal retains at most 2048 active records. Capacity pressure archives
+one settled action/dispatch/outbox record under its private `archive/` directory,
+retaining exact receipt and claim lookup indefinitely. Pending and uncertain
+records never retire. Overview shows content-free counts and capacity state;
+`JOURNAL_CAPACITY_EXHAUSTED` refuses new records when every slot is protected.
+Keep archives, intent indexes and the original mailbox during recovery.

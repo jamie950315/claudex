@@ -8,6 +8,12 @@ const MAX_POLICIES = 64, MAX_ATTEMPTS = 2048, MAX_BYTES = 2 * 1024 * 1024;
 const SETTLED = new Set(['rejected', 'revoked', 'verified', 'failed']);
 const OUTPUT_RESERVATION = 128;
 const READ_OVERHEAD = 256;
+// Shipping Mod instance IDs include their creation time. A retired time floor
+// fences forgotten callbacks without retaining every session for the process's life.
+const bindingTime = id => {
+  const match = /^warm-([0-9]+)-[A-Za-z0-9-]+$/.exec(id);
+  return match && integer(Number(match[1])) ? Number(match[1]) : null;
+};
 const live = new Set(['reserved', 'dispatching', 'submitted']);
 const clone = value => structuredClone(value);
 const integer = (value, min = 0, max = Number.MAX_SAFE_INTEGER) => Number.isSafeInteger(value) && value >= min && value <= max;
@@ -106,7 +112,8 @@ export class CacheWarmManager {
     this.provider = provider;
     this.root = root; this.path = join(root, provider === 'codex' ? 'codex-cache-warm.json' : 'cache-warm.json'); this.now = now; this.stopped = stopped;
     this.state = { version: 1, policies: [], attempts: [], requests: [] };
-    this.bindings = new Map(); this.retired = new Map(); this.serial = Promise.resolve();
+    this.bindings = new Map(); this.retired = new Map(); this.retiredBefore = -1; this.legacyRetired = false; this.serial = Promise.resolve();
+    this.failure = null;
     this.closed = false; this.initialized = false; this.exists = false;
   }
   async initialize() {
@@ -139,12 +146,35 @@ export class CacheWarmManager {
     } catch (cause) {
       // Never authorize from an in-memory state whose durable publication failed.
       this.closed = true;
+      this.failure = { code: 'CACHE_WARM_STORAGE_FAILED', reason: 'storage-failed' };
+      this.stopPolicies('storage-failed');
       throw cause;
     }
   }
   policy(id) { return this.state.policies.find(p => p.sessionId === id); }
   attempts(id, generation) { return this.state.attempts.filter(a => a.sessionId === id && (generation === undefined || a.generation === generation)); }
   pending(id) { return this.attempts(id).find(a => live.has(a.state)); }
+  stopPolicies(reason) {
+    for (const p of this.state.policies) if (p.enabled) { p.enabled = false; p.reason = reason; p.updatedAt = this.now(); }
+    for (const a of this.state.attempts) if (live.has(a.state)) {
+      a.state = a.state === 'reserved' ? 'revoked' : 'uncertain'; a.reason = reason;
+    }
+  }
+  retiredBinding(input) {
+    const key = JSON.stringify([input.sessionId, input.instanceId]), time = bindingTime(input.instanceId);
+    return this.retired.has(key) || (time === null ? this.legacyRetired : time <= this.retiredBefore);
+  }
+  retireBinding(b) {
+    const key = JSON.stringify([b.sessionId, b.instanceId]), time = bindingTime(b.instanceId);
+    this.retired.set(key, time);
+    while (this.retired.size > MAX_POLICIES) {
+      // Retire opaque legacy IDs first; after that floor they cannot re-register.
+      const [old, timestamp] = [...this.retired].sort((a, b) => (a[1] ?? -1) - (b[1] ?? -1))[0];
+      if (timestamp === null) this.legacyRetired = true;
+      else this.retiredBefore = Math.max(this.retiredBefore, timestamp);
+      this.retired.delete(old);
+    }
+  }
   binding(input) {
     const b = this.bindings.get(input.sessionId);
     return b && b.cwd === input.cwd && b.instanceId === input.instanceId ? b : null;
@@ -213,6 +243,8 @@ export class CacheWarmManager {
   async list() {
     return this.transaction(() => {
       const result = { providers: { claude: 'native-mod-only', codex: this.provider === 'codex' ? 'experimental-best-effort' : 'unsupported' },
+        providerStatus: { provider: this.provider, closed: this.closed, reason: this.failure?.reason ?? (this.closed ? 'broker-stopped' : null),
+          code: this.failure?.code ?? null, bindings: this.bindings.size, retiredBindings: this.retired.size },
         policies: this.state.policies.map(p => this.presentation(p)), attempts: [],
         attemptCount: this.state.attempts.length, attemptsTruncated: false };
       let bytes = Buffer.byteLength(JSON.stringify(result));
@@ -315,18 +347,13 @@ export class CacheWarmManager {
     const ownAttemptId = input.attemptId ?? sample?.attemptId;
     return this.transaction(async () => {
       if (this.closed) return { observed: false, reason: 'broker-stopping' };
-      const old = this.bindings.get(input.sessionId), retired = this.retired.get(input.sessionId) ?? new Set();
-      if (retired.has(input.instanceId) || old && old.instanceId === input.instanceId
+      const old = this.bindings.get(input.sessionId);
+      if ((!old || old.instanceId !== input.instanceId) && this.retiredBinding(input) || old && old.instanceId === input.instanceId
         && (input.sequence <= old.sequence || input.epoch < old.epoch || old.cwd !== input.cwd))
         return { observed: false, reason: 'stale-observation' };
-      if (!old && !this.retired.has(input.sessionId)
-        && new Set([...this.bindings.keys(), ...this.retired.keys()]).size >= MAX_POLICIES)
+      if (!old && this.bindings.size >= MAX_POLICIES)
         throw error('CACHE_WARM_CAPACITY', 'Native binding capacity is exhausted.');
       const replaced = old && old.instanceId !== input.instanceId;
-      if (replaced) {
-        if (retired.size >= 64) throw error('CACHE_WARM_CAPACITY', 'Retired native binding capacity is exhausted.');
-        retired.add(old.instanceId); this.retired.set(input.sessionId, retired);
-      }
       const repeated = Boolean(sample && old?.instanceId === input.instanceId && old.sample?.id === sample.id);
       if (repeated && JSON.stringify(sample) !== JSON.stringify(old.sample))
         return { observed: false, reason: 'changed-sample' };
@@ -445,9 +472,9 @@ export class CacheWarmManager {
         }
       }
       if (input.phase === 'ended') {
-        if (retired.size >= 64) throw error('CACHE_WARM_CAPACITY', 'Retired native binding capacity is exhausted.');
-        retired.add(input.instanceId); this.retired.set(input.sessionId, retired); this.bindings.delete(input.sessionId);
+        this.retireBinding(b); this.bindings.delete(input.sessionId);
       } else this.bindings.set(input.sessionId, b);
+      if (replaced) this.retireBinding(old);
       if (changed) await this.save();
       return this.result(p, { observed: true, bound: input.phase !== 'ended' });
     });
@@ -533,14 +560,12 @@ export class CacheWarmManager {
       await this.save(); return clone(a);
     });
   }
-  async close() {
+  async close(failure = null) {
     this.closed = true;
+    if (failure) this.failure = { code: failure.code, reason: failure.reason };
     return this.transaction(async () => {
-      let changed = false;
-      for (const a of this.state.attempts) if (live.has(a.state)) {
-        a.state = a.state === 'reserved' ? 'revoked' : 'uncertain'; a.reason = 'broker-stopped'; changed = true;
-        const p = this.policy(a.sessionId); p.enabled = false; p.reason = a.reason;
-      }
+      const changed = this.state.policies.some(p => p.enabled) || this.state.attempts.some(a => live.has(a.state));
+      this.stopPolicies(failure?.reason ?? 'broker-stopped');
       this.bindings.clear(); if (changed) await this.save();
     });
   }

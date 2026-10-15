@@ -477,3 +477,129 @@ test('unsafe archive storage blocks capacity recovery without changing evidence'
   assert.equal(await readFile(join(root, 'state.json'), 'utf8'), before);
   assert.equal((await mailbox.status(sent.messageId)).state, 'queued');
 });
+
+const BYTE_LIMIT = 8 * 1024 * 1024;
+const pretty = state => `${JSON.stringify(state, null, 2)}\n`;
+function bytePressureState(directory, { settled = true, smallOldest = 0 } = {}) {
+  const now = Date.now();
+  const state = { version: 1, chats: [chatRecord('target', directory, 'active', now)], messages: [], receipts: [] };
+  for (let i = 0; i < 900; i++) {
+    const message = addMessage(state, 'target', i, { message: i < smallOldest ? 'small' : '"'.repeat(1500),
+      state: settled ? 'acknowledged' : 'offered', offeredAt: now - 2000,
+      ...(settled ? { acknowledgedAt: now - 1000 + i } : {}) });
+    state.receipts[i].payload = JSON.stringify(['claude', 'target', message.message, 3600000]);
+  }
+  while (Buffer.byteLength(pretty(state)) > BYTE_LIMIT - 1000) { state.messages.pop(); state.receipts.pop(); }
+  // Fill only the remaining byte budget with valid metadata, not extra pairs.
+  for (let i = 0; ; i++) {
+    const padding = chatRecord(`padding-${i}`, '/', 'active', now);
+    state.chats.push(padding);
+    const remaining = BYTE_LIMIT - 1000 - Buffer.byteLength(pretty(state));
+    if (remaining < 0) { state.chats.pop(); break; }
+    padding.cwd += 'x'.repeat(Math.min(4095, remaining));
+    if (remaining <= 4095) break;
+  }
+  return state;
+}
+
+test('projected serialized bytes archive settled pairs below the count limit, preserving pinned records and exact replay', async t => {
+  const { root, mailbox, directory } = await fixture(t);
+  const state = bytePressureState(directory);
+  state.messages[0].wake = { state: 'uncertain', claimId, at: Date.now(), detail: 'Unknown dispatch outcome' };
+  // Keep the pressure fixture below the on-disk reader limit after pinning.
+  state.chats.at(-1).cwd = '/';
+  await writeFile(join(root, 'state.json'), pretty(state), { mode: 0o600 });
+  await writeFile(join(root, 'wake-manifest.json'), JSON.stringify({ version: 1, messages: [{
+    messageId: 'message-1', sessionId: 'target', expiresAt: Date.now() + 600000,
+  }] }), { mode: 0o600 });
+  const beforeCount = state.messages.length;
+  assert.ok(beforeCount < 1024);
+  const args = { fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target',
+    message: '"'.repeat(1500), requestId: 'byte-pressure' };
+  await mailbox.send(args);
+  const raw = await readFile(join(root, 'state.json'), 'utf8'), active = JSON.parse(raw);
+  assert.ok(Buffer.byteLength(raw) <= BYTE_LIMIT);
+  assert.equal(active.messages.length, beforeCount);
+  assert.ok(active.messages.some(message => message.messageId === 'message-0'));
+  assert.ok(active.messages.some(message => message.messageId === 'message-1'));
+  assert.equal(active.messages.some(message => message.messageId === 'message-2'), false);
+  const restarted = new ChatMailbox({ root });
+  assert.equal((await restarted.status('message-2')).state, 'acknowledged');
+  assert.equal((await restarted.send({ ...args, message: '"'.repeat(1500), requestId: 'request-2', expiresInMs: 3600000 })).messageId, 'message-2');
+  await assert.rejects(restarted.send({ ...args, requestId: 'request-2', message: 'different' }), /different payload/);
+  const diagnostics = await restarted.diagnostics();
+  assert.equal(diagnostics.usedBytes, Buffer.byteLength(raw));
+  assert.equal(diagnostics.byteLimit, BYTE_LIMIT);
+  assert.equal(diagnostics.remainingBytes, BYTE_LIMIT - Buffer.byteLength(raw));
+});
+
+test('byte retention plans enough oldest pairs for a large new message and also covers registration writes', async t => {
+  const { root, mailbox, directory } = await fixture(t);
+  const state = bytePressureState(directory, { smallOldest: 5 });
+  await writeFile(join(root, 'state.json'), pretty(state), { mode: 0o600 });
+  await mailbox.send({ fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target',
+    message: '"'.repeat(1500), requestId: 'large' });
+  const active = JSON.parse(await readFile(join(root, 'state.json'), 'utf8'));
+  for (let i = 0; i < 6; i++) assert.equal(active.messages.some(message => message.messageId === `message-${i}`), false);
+  assert.equal((await mailbox.status('message-0')).state, 'acknowledged');
+  assert.ok(Buffer.byteLength(pretty(active)) <= BYTE_LIMIT);
+  // A hook registration can consume bytes even when neither count is full.
+  await writeFile(join(root, 'state.json'), pretty(state), { mode: 0o600 });
+  await mailbox.register({ provider: 'claude', sessionId: 'new-registration', cwd: `/${'y'.repeat(4095)}`, event: 'SessionStart' });
+  const registered = JSON.parse(await readFile(join(root, 'state.json'), 'utf8'));
+  assert.ok(registered.chats.some(chat => chat.nativeId === 'new-registration'));
+  assert.ok(registered.messages.length < state.messages.length);
+  assert.ok(Buffer.byteLength(pretty(registered)) <= BYTE_LIMIT);
+});
+
+test('byte pressure without a safe pair refuses with typed projected usage and leaves the journal unchanged', async t => {
+  const { root, mailbox, directory } = await fixture(t);
+  const state = bytePressureState(directory, { settled: false });
+  const raw = pretty(state);
+  await writeFile(join(root, 'state.json'), raw, { mode: 0o600 });
+  const phases = [];
+  await assert.rejects(mailbox.send({ fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target',
+    message: '"'.repeat(1500), requestId: 'blocked-bytes' }, { onPhase: phase => phases.push(phase) }), error => {
+    assert.equal(error.code, 'MAILBOX_CAPACITY_EXHAUSTED');
+    assert.equal(error.resource, 'bytes');
+    assert.ok(error.used > BYTE_LIMIT); assert.equal(error.limit, BYTE_LIMIT);
+    return true;
+  });
+  assert.equal(phases.includes('mailbox-commit'), false);
+  assert.equal(await readFile(join(root, 'state.json'), 'utf8'), raw);
+  assert.equal((await mailbox.diagnostics()).usedBytes, Buffer.byteLength(raw));
+});
+
+test('interrupted byte-pressure archival finishes exact indexes after restart without replaying native input', async t => {
+  const { root, mailbox, directory } = await fixture(t);
+  const state = bytePressureState(directory), raw = pretty(state);
+  await writeFile(join(root, 'state.json'), raw, { mode: 0o600 });
+  const lookup = mailbox.archivedRequest.bind(mailbox);
+  mailbox.archivedRequest = async (side, requestId) => {
+    if (requestId === 'request-0') throw new Error('Synthetic crash before byte-pressure request index');
+    return lookup(side, requestId);
+  };
+  const args = { fromProvider: 'codex', targetProvider: 'claude', targetSessionId: 'target',
+    message: '"'.repeat(1500), requestId: 'recover-byte-pressure' };
+  await assert.rejects(mailbox.send(args), /Synthetic crash/);
+  assert.equal(await readFile(join(root, 'state.json'), 'utf8'), raw);
+  const restarted = new ChatMailbox({ root });
+  const sent = await restarted.send(args);
+  assert.equal((await restarted.send(args)).messageId, sent.messageId);
+  assert.equal((await restarted.status('message-0')).state, 'acknowledged');
+  assert.equal((await restarted.send({ ...args, requestId: 'request-0', expiresInMs: 3600000 })).messageId, 'message-0');
+  assert.ok((await stat(join(root, 'state.json'))).size <= BYTE_LIMIT);
+});
+
+test('a new uncommitted ACK is not archived as if its changed evidence were already durable', async t => {
+  const { root, mailbox, directory } = await fixture(t);
+  const state = bytePressureState(directory, { settled: false });
+  const raw = pretty(state);
+  await writeFile(join(root, 'state.json'), raw, { mode: 0o600 });
+  await assert.rejects(mailbox.transaction(false, (current, now) => {
+    Object.assign(current.messages[0], { state: 'acknowledged', acknowledgedAt: now });
+    current.chats.push(chatRecord('new-metadata', `/${'z'.repeat(4095)}`, 'active', now));
+  }), { code: 'MAILBOX_CAPACITY_EXHAUSTED', resource: 'bytes' });
+  assert.equal(await readFile(join(root, 'state.json'), 'utf8'), raw);
+  assert.equal(await mailbox.archivedMessage('message-0'), null);
+});

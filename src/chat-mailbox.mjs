@@ -13,6 +13,13 @@ const queues = new Map();
 const events = new Set(['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']);
 const states = new Set(['queued', 'offered', 'acknowledged', 'expired']);
 const blank = () => ({ version: 1, chats: [], messages: [], receipts: [] });
+const serialize = state => `${JSON.stringify(state, null, 2)}\n`;
+const serializedBytes = state => Buffer.byteLength(serialize(state));
+// Each array record is indented four spaces in the persisted journal.
+const recordBytes = record => {
+  const value = JSON.stringify(record, null, 2);
+  return Buffer.byteLength(value) + 4 * value.split('\n').length;
+};
 const fail = message => { throw new Error(`Chat mailbox: ${message}`); };
 function provider(value) { if (!['codex', 'claude'].includes(value)) fail('invalid provider.'); return value; }
 function nativeId(value) { if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) fail('invalid native session identity.'); return value; }
@@ -327,29 +334,59 @@ export class ChatMailbox {
   async makeChatRoom(state, now, chatId) {
     if (state.chats.length < MAX_ITEMS || state.chats.some(chat => chat.chatId === chatId)) return;
     const refs = await this.references(now), candidate = this.retirementCandidates(state, now, refs)[0];
-    if (!candidate) this.capacityFailure('chat');
+    if (!candidate) this.capacityFailure('chat', state.chats.length + 1, MAX_ITEMS);
     for (const message of [...state.messages]) if (key(message.targetProvider, message.targetSessionId) === candidate.chatId)
       await this.archiveMessage(state, message);
     state.chats = state.chats.filter(chat => chat.chatId !== candidate.chatId);
   }
 
-  capacityFailure(kind) {
-    throw Object.assign(new Error(`Chat mailbox: ${kind} capacity exhausted; no safely retirable records. Inspect collaboration status.`),
-      { code: 'MAILBOX_CAPACITY_EXHAUSTED', resource: kind });
+  capacityFailure(kind, used, limit) {
+    throw Object.assign(new Error(`Chat mailbox: ${kind} capacity exhausted (${used}/${limit}); no safely retirable records. Inspect collaboration status.`),
+      { code: 'MAILBOX_CAPACITY_EXHAUSTED', resource: kind, used, limit });
+  }
+
+  async makeJournalRoom(state, now, settledSnapshot) {
+    let bytes = serializedBytes(state), count = state.messages.length;
+    if (bytes <= MAX_BYTES && count <= MAX_ITEMS && state.receipts.length <= MAX_ITEMS) return;
+    const refs = await this.references(now);
+    const settled = settledSnapshot();
+    const receipts = new Map(state.receipts.map(receipt => [receipt.messageId, receipt]));
+    const candidates = state.messages.filter(message => resolvedMessage(message) && !refs.messages.has(message.messageId)
+      && settled.get(message.messageId) === JSON.stringify(message))
+      .sort((a, b) => (a.acknowledgedAt ?? a.expiresAt) - (b.acknowledgedAt ?? b.expiresAt)
+        || a.createdAt - b.createdAt || compare(a.messageId, b.messageId));
+    const archive = [];
+    for (const message of candidates) {
+      if (bytes <= MAX_BYTES && count <= MAX_ITEMS) break;
+      // Removing the final element also removes the two array-internal newlines
+      // and closing indentation, instead of only its comma/newline separator.
+      bytes -= recordBytes(message) + recordBytes(receipts.get(message.messageId)) + (count === 1 ? 8 : 4);
+      count--;
+      archive.push(message);
+    }
+    // Prove the whole projection fits before publishing any archive records.
+    if (bytes > MAX_BYTES) this.capacityFailure('bytes', serializedBytes(state), MAX_BYTES);
+    if (count > MAX_ITEMS) this.capacityFailure('message', state.messages.length, MAX_ITEMS);
+    for (const message of archive) await this.archiveMessage(state, message);
   }
 
   diagnostics() {
     return this.transaction(false, async (state, now) => {
-      const refs = state.chats.length >= MAX_ITEMS || state.messages.length >= MAX_ITEMS
+      const usedBytes = serializedBytes(state);
+      const refs = state.chats.length >= MAX_ITEMS || state.messages.length >= MAX_ITEMS || usedBytes >= MAX_BYTES
         ? await this.references(now) : { chats: new Set(), messages: new Set() };
       const retirable = this.retirementCandidates(state, now, refs).length;
       const archivable = state.messages.filter(message => resolvedMessage(message) && !refs.messages.has(message.messageId)).length;
       const chatBlocked = state.chats.length >= MAX_ITEMS && !retirable;
       const messageBlocked = state.messages.length >= MAX_ITEMS && !archivable;
+      const byteBlocked = usedBytes >= MAX_BYTES && !archivable;
       return { diagnosticOnly: true, limit: MAX_ITEMS, staleChatMs: STALE_CHAT_MS,
         chats: state.chats.length, messages: state.messages.length, receipts: state.receipts.length,
+        usedBytes, byteLimit: MAX_BYTES, remainingBytes: Math.max(0, MAX_BYTES - usedBytes),
+        byteCapacityExhausted: byteBlocked,
         chatCapacityExhausted: chatBlocked, messageCapacityExhausted: messageBlocked,
-        reason: chatBlocked ? 'mailbox-capacity-exhausted' : messageBlocked ? 'mailbox-message-capacity-exhausted' : null };
+        reason: chatBlocked ? 'mailbox-capacity-exhausted' : messageBlocked ? 'mailbox-message-capacity-exhausted'
+          : byteBlocked ? 'mailbox-byte-capacity-exhausted' : null };
     });
   }
 
@@ -365,11 +402,20 @@ export class ChatMailbox {
         const before = JSON.stringify(state);
         const now = Date.now();
         for (const message of state.messages) if (message.state === 'queued' && message.expiresAt <= now) message.state = 'expired';
+        // Only already-settled evidence can be archived before this transaction's
+        // commit. An ACK/wake outcome first created by operation must remain
+        // active, so a lost commit cannot leave an archive conflicting with it.
+        const settled = () => {
+          const original = JSON.parse(before);
+          for (const message of original.messages) if (message.state === 'queued' && message.expiresAt <= now) message.state = 'expired';
+          return new Map(original.messages.filter(resolvedMessage).map(message => [message.messageId, JSON.stringify(message)]));
+        };
         const result = await operation(state, now);
         if (JSON.stringify(state) !== before) {
+          await this.makeJournalRoom(state, now, settled);
           validate(state);
-          const serialized = `${JSON.stringify(state, null, 2)}\n`;
-          if (Buffer.byteLength(serialized) > MAX_BYTES) fail('journal capacity exhausted; preserve and inspect existing records.');
+          const serialized = serialize(state);
+          if (Buffer.byteLength(serialized) > MAX_BYTES) this.capacityFailure('bytes', Buffer.byteLength(serialized), MAX_BYTES);
           beforeCommit?.();
           await atomicWrite(this.path, serialized);
         }
@@ -482,14 +528,6 @@ export class ChatMailbox {
       }
       const target = state.chats.find(item => item.chatId === key(targetProvider, targetSessionId));
       if (!target) fail('exact target is not registered.');
-      if (state.messages.length >= MAX_ITEMS || state.receipts.length >= MAX_ITEMS) {
-        const refs = await this.references(now);
-        const candidate = state.messages.filter(item => resolvedMessage(item) && !refs.messages.has(item.messageId))
-          .sort((a, b) => (a.acknowledgedAt ?? a.expiresAt) - (b.acknowledgedAt ?? b.expiresAt)
-            || a.createdAt - b.createdAt || compare(a.messageId, b.messageId))[0];
-        if (!candidate) this.capacityFailure('message');
-        await this.archiveMessage(state, candidate);
-      }
       await beforeEnqueue?.();
       now = Date.now();
       if (expiresAt !== undefined && (expiresAt <= now || expiresAt > now + 3600000)) fail('notification deadline expired or exceeds its bound.');

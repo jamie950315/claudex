@@ -560,3 +560,18 @@ test('cache pane applies TTL and startup preferences through explicit native UI 
   expect(seen.some(item => item.op === 'cache-warm' && item.action === 'configure' && item.params.enabled)).toBe(false)
   await ui.unmount()
 })
+
+
+test('receipt capacity is visible without expanding technical records', async ($, on) => {
+  stubs(on, false, request => request.op === 'doctor' ? { stopped: false, journals: {
+    actions: { state: 'available', active: 4, limit: 2048, remaining: 2044 },
+    selfDispatch: { state: 'retention-available', active: 2048, limit: 2048, remaining: 0 },
+    wakeOutbox: { state: 'capacity-exhausted', active: 2048, limit: 2048, remaining: 0 },
+  } } : request.method === 'list' ? { tasks: [], limits: {} } : {})
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop', props: { ...PANE.props, bodyColumns: 40 } })
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ type: 'Text', text: /4\/2048 active/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Settled receipts will archive/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Capacity exhausted/ })).toBeDefined()
+  expect(await ui.find({ key: 'details-journals' })).toBeDefined()
+})

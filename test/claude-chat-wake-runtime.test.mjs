@@ -17,7 +17,7 @@ function fixture(change = {}) {
   let sessionReads = 0;
   const result = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   const native = {
-    readFileAtCwd: async () => ({ contents: JSON.stringify(registry) }),
+    readFileAtCwd: async (...args) => change.readRegistry ? change.readRegistry(...args) : ({ contents: JSON.stringify(registry) }),
     getSession: async () => change.getSession ? change.getSession({ ...session }, ++sessionReads) : ({ ...session }),
     getBusyShellPtyKeys: async () => ({ probed: true, busy: [], unknown: [], ...change.busy }),
     mcpCallTool: async (target, server, tool, args) => {
@@ -32,7 +32,7 @@ function fixture(change = {}) {
     sendMessage: async (...args) => { sends.push(args); if (change.sendError) throw new Error('Unknown native outcome'); },
   };
   const runtime = createClaudeChatWakeRuntime({ native, registryRoot: '/registry', now: () => 1000,
-    readManifest: async () => ({ contents: JSON.stringify({ version: 1, messages: [message] }) }),
+    readManifest: async () => ({ contents: JSON.stringify({ version: 1, messages: change.messages ? change.messages(message) : [message] }) }),
     hasDraft: () => change.draft ?? false, setTimer: () => 1, clearTimer() {}, onError: error => errors.push(error),
     onStatus: status => statuses.push(status) });
   return { runtime, sends, receipts, errors, claims, statuses };
@@ -134,4 +134,40 @@ test('unknown claim outcome and previously consumed claim never send', async () 
     const f = fixture(change); f.runtime.start(); await flush(); await f.runtime.poll(); f.runtime.stop();
     assert.equal(f.claims.length, 1); assert.equal(f.sends.length, 0);
   }
+});
+
+test('unavailable metadata for one recipient does not starve a later independent recipient', async () => {
+  const otherLocal = 'local_55555555-5555-4555-8555-555555555555';
+  const f = fixture({
+    messages: message => [{ ...message, messageId: '66666666-6666-4666-8666-666666666666',
+      localSessionId: otherLocal, registryPath: `/registry/account/${otherLocal}.json` }, message],
+    readRegistry: async (_cwd, name) => {
+      if (name === `${otherLocal}.json`) throw new Error('Private native metadata is unavailable');
+      return { contents: JSON.stringify({ sessionId: localSessionId, cliSessionId: sessionId,
+        cwd: '/project', title: 'Example', isArchived: false, lastActivityAt: 100 }) };
+    },
+  });
+  f.runtime.start(); await flush(); f.runtime.stop();
+  assert.equal(f.claims.length, 1); assert.equal(f.claims[0].messageId, id);
+  assert.equal(f.sends.length, 1); assert.equal(f.receipts[0].status, 'accepted');
+  assert.ok(f.statuses.includes('waiting: native metadata unavailable'));
+  assert.deepEqual(f.errors, []);
+});
+
+test('fair page rotation cannot retry an unknown claim when its message disappears and later returns', async () => {
+  let visible = true;
+  const f = fixture({ claimError: true, messages: message => visible ? [message] : [] });
+  f.runtime.start(); await flush();
+  visible = false; await f.runtime.poll();
+  visible = true; await f.runtime.poll(); f.runtime.stop();
+  assert.equal(f.claims.length, 1); assert.equal(f.sends.length, 0);
+});
+
+test('stop during the last awaited pre-claim read cannot claim or send', async () => {
+  const f = fixture({ getSession: (session, count) => {
+    if (count === 2) f.runtime.stop();
+    return session;
+  } });
+  f.runtime.start(); await flush();
+  assert.equal(f.claims.length, 0); assert.equal(f.sends.length, 0);
 });

@@ -1,5 +1,5 @@
 import { constants } from 'node:fs';
-import { open, lstat, realpath, mkdir, rename, unlink } from 'node:fs/promises';
+import { open, lstat, realpath, mkdir, rename, unlink, link } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { insist, absolute } from './claude-mod-protocol.mjs';
@@ -68,12 +68,48 @@ export async function writeReceipt(path, value, { exclusive = false } = {}) {
   try { await rename(temporary, path); await syncDir(dirname(path)); }
   catch (error) { await unlink(temporary).catch(() => {}); throw error; }
 }
-export async function exclusiveAction(path, operation) {
+/** Recover only a proven-dead journal-lock holder. Live or legacy unknown
+ * locks stay fenced; this never changes an action's dispatch evidence. */
+async function recoverJournalLock(path) {
+  const claim = `${path}.reclaim`;
+  const stale = await lstat(claim, { bigint: true }).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+  insist(!stale, 'JOURNAL_BUSY', 'Receipt storage recovery requires inspection. Preserve its lock.');
+  const before = await lstat(path, { bigint: true }).catch(error => { if (error.code !== 'ENOENT') throw error; return null; });
+  if (!before) return;
+  const raw = await privateRead(path, { maxBytes: 256 });
+  let owner;
+  try { owner = JSON.parse(raw); } catch { insist(false, 'JOURNAL_BUSY', 'An unknown receipt-storage lock requires inspection.'); }
+  insist(owner?.version === 1 && Number.isSafeInteger(owner.pid) && owner.pid > 0, 'JOURNAL_BUSY');
+  const dead = () => {
+    try { process.kill(owner.pid, 0); return false; }
+    catch (error) { if (error.code === 'ESRCH') return true; if (error.code === 'EPERM') return false; throw error; }
+  };
+  insist(dead(), 'JOURNAL_BUSY', 'Another receipt-storage operation is active.');
+  insist(same(before, await lstat(path, { bigint: true })), 'FILE_CHANGED');
+  try { await link(path, claim); }
+  catch (error) { if (error.code === 'EEXIST') insist(false, 'JOURNAL_BUSY'); throw error; }
+  try {
+    const current = await lstat(path, { bigint: true }), claimed = await lstat(claim, { bigint: true });
+    insist(['dev', 'ino', 'size', 'mtimeNs', 'mode', 'uid'].every(key => current[key] === before[key] && claimed[key] === before[key])
+      && current.ctimeNs === claimed.ctimeNs && current.nlink === 2n && claimed.nlink === 2n && dead(), 'FILE_CHANGED');
+    await unlink(path); await syncDir(dirname(path));
+  } finally {
+    const named = await lstat(claim, { bigint: true }).catch(() => null);
+    if (named?.dev === before.dev && named?.ino === before.ino) await unlink(claim);
+  }
+}
+export async function exclusiveAction(path, operation, { recoverDead = false } = {}) {
   let handle;
   try { handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
-  catch (error) { if (error.code === 'EEXIST') return { state: 'locked', outcome: 'inspect-receipt', automaticReplay: false }; throw error; }
+  catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+    if (!recoverDead) return { state: 'locked', outcome: 'inspect-receipt', automaticReplay: false };
+    await recoverJournalLock(path);
+    try { handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600); }
+    catch (retryError) { if (retryError.code === 'EEXIST') insist(false, 'JOURNAL_BUSY'); throw retryError; }
+  }
   const before = await handle.stat({ bigint: true });
-  try { await handle.writeFile('action-lock\n'); await handle.sync(); return await operation(); }
+  try { await handle.writeFile(recoverDead ? JSON.stringify({ version: 1, pid: process.pid }) : 'action-lock\n'); await handle.sync(); return await operation(); }
   finally {
     await handle.close();
     const named = await lstat(path, { bigint: true }).catch(() => null);

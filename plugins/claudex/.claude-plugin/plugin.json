@@ -1,6 +1,6 @@
 {
   "name": "claudex",
-  "version": "0.8.29",
+  "version": "0.8.30",
   "author": { "name": "Claudex contributors" },
   "description": "AI-first Claudex session observations, reviewed operations and exact-session receipt handling.",
   "userConfig": {
@@ -14,13 +14,13 @@
     },
     "selfWake": {
       "type": "boolean", "title": "Enable current-session inbox delivery",
-      "description": "Opt this session into the separately selected mod-self route. An owned native child posts into this session's own inbox; native inbound controls and Stop ACK remain authoritative. No other sender or SendMessage tool is required. Never retries refused or uncertain messages.",
-      "default": false
+      "description": "Enable this session for the default mod-self route. Explicit saved false remains off. An owned native child posts into this session's own inbox; native inbound controls and Stop ACK remain authoritative. No other sender or SendMessage tool is required. Never retries refused or uncertain messages.",
+      "default": true
     },
     "nativeWake": {
       "type": "boolean", "title": "Enable automatic native delivery",
-      "description": "Deliver explicitly wake-enabled broker messages through the official session API when the broker selects the Mod route. Existing Stop hooks retain ACK handling. Unknown outcomes are never resent.",
-      "default": false
+      "description": "Deliver wake-enabled broker messages through the selected Mod route. Enabled by default; native replies can consume model allowance. Explicit saved false remains off. Existing Stop hooks retain ACK handling. Unknown outcomes are never resent.",
+      "default": true
     }
   }
 }

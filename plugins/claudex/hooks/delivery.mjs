@@ -1,7 +1,7 @@
 const same = (a, b) => a?.sessionId === b?.sessionId && a?.cwd === b?.cwd;
 const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 // Loaded-code evidence, not marketplace configuration or an undocumented host API.
-export const MOD_VERSION = '0.8.29';
+export const MOD_VERSION = '0.8.30';
 export const MOD_BUILD = 'observer-v1';
 
 /** One lifecycle-local reporter; no text, tool arguments, or history inspection. */
@@ -139,7 +139,7 @@ export function createNativeWakePump({ enabled = false } = {}) {
     } catch (error) {
       if (ticket === epoch) {
         if (error.code === 'APP_STOPPED') { show({ status: 'paused-by-app' }); delay = 30000; }
-        else if (['UNSAFE_ROOT', 'UNSAFE_FILE', 'INVALID_RECEIPT', 'JOURNAL_FULL'].includes(error.code)) {
+        else if (['UNSAFE_ROOT', 'UNSAFE_FILE', 'INVALID_RECEIPT', 'JOURNAL_FULL', 'JOURNAL_CAPACITY_EXHAUSTED'].includes(error.code)) {
           stop(); show({ status: `blocked-${error.code}`, lastOutcome: state.lastOutcome });
         } else { show({ status: 'connection-or-receipt-recovery' }); delay = [1000, 5000, 15000, 30000][Math.min(failures++, 3)]; }
       }

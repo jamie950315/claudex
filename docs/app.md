@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current development build: **Claudex.app 1.4.7**, with **Claude Mod 0.8.29** bundled.
+Current development build: **Claudex.app 1.4.7**, with **Claude Mod 0.8.30** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -139,8 +139,11 @@ origin-hook trust, the selected provider routes, recipient readiness and a
 concrete next step. Missing or stale observations remain unknown. An exact
 recipient still needs the task's notification status check, even when the
 broker accepts new work. This capability report does not send input or prove
-receipt. New Mod receiver opt-ins remain off; enabling them requires the
-existing explicit confirmation and does not change the selected route.
+receipt. New or never-configured Mod receiver options default to enabled during
+setup/startup; explicit false stays off. Manual receiver changes require the
+existing confirmation and do not change the selected route. Native replies may
+consume model allowance. New brokers default to `mod-self`; existing routes and
+already-queued message routes remain unchanged.
 
 ## Claude Mod lifecycle
 
@@ -179,7 +182,9 @@ Advanced diagnostics shows bundled, installed, manager and observed Mod versions
 plus **Install or update Claude Mod**. An intentionally disabled Mod stays disabled
 until **Enable Claude Mod** is selected. Receiver permission has a separate explicit
 confirmation and preserves per-task notification policy and the existing delivery
-route. Normal status refresh is read-only; it never starts installation, a model,
+route. Setup/startup fill only never-configured receiver keys, separately for
+`claudex@claudex-local` and `claudex@inline`; saved false stays false. Normal status
+refresh is read-only; it never starts installation, a model,
 or a native test suite. Runtime feature-flag overrides used in explicitly authorized
 developer tests are never applied by setup.
 

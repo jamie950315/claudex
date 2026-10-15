@@ -150,6 +150,24 @@ proof. It enters a cache once the dialog has been opened and, before this
 rule, then replaced the real target while still reporting installed. In all 21
 saved builds (2026-09-24 to 2026-10-10) the correct target is in that static
 closure of 61 to 68 modules, and the rule changes no other selection.
+
+Renderer wake publication caps the actual serialized manifest at 64 messages and
+240 KiB, including metadata. Publish count/total/eligible/omitted/unavailable,
+byteLimit and nextPublicationAt; the publisher's diagnostics also expose bytes.
+Rotate eligible recipients fairly across bounded pages when capacity omits any,
+skipping an oversized candidate rather than hiding every later recipient. The
+broker owns one metadata-only timer: rotate backlog after five seconds or publish
+at the earliest queued expiry, whichever comes first. Clear and fence it on
+close/app-stop, and republish through normal startup/resume/send/receipt paths.
+Publication rechecks the current queued identities under the mailbox lock after
+awaited native mapping reads; a lifecycle fence runs immediately before writing.
+This timer never claims a message, retries a native send or relaxes idle/draft
+guards. Unavailable pre-claim recipient metadata does not block independent
+later candidates. Retain attempted claim identities until their original expiry
+across page rotation; an omitted page is not permission to retry an unknown
+claim. New Claude wake messages capture the selected route (default mod-self);
+existing absent per-message routes retain legacy renderer semantics.
+
 The observed August owner component is wrapped by the uniquely imported public
 React.memo with exactly one component argument and no comparator. Only that
 wrapper exposes the component to the existing identity/send/client proofs;

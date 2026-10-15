@@ -11,6 +11,8 @@ import { CollaborationHub } from '../src/collaboration-hub.mjs';
 import { createOriginVerifier } from '../src/collaboration-origin.mjs';
 import { serveCollaborationSocket, runCollaborationMcp } from '../src/collaboration-transport.mjs';
 import { sessionPath } from '../src/claude.mjs';
+import { createModBridge } from '../src/claude-mod-bridge.mjs';
+import { deliverNativeWake } from '../plugins/claudex/hooks/delivery.mjs';
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const TURN = 'native-turn-1';
@@ -194,9 +196,35 @@ for (const [provider, claudeKind] of [['codex'], ['claude', 'desktop'], ['claude
     // they are protocol tests, not model-generated/native acceptance evidence.
     const offered = await f.hook({ hook_event_name: 'Stop' });
     assert.equal(offered.code, 0); assert.equal(offered.stderr, '');
-    const output = JSON.parse(offered.stdout);
-    assert.match(provider === 'claude' ? output.hookSpecificOutput.additionalContext : output.reason,
-      new RegExp(`CLAUDEX_ACK:${message.messageId}`));
+    if (provider === 'claude' && !deferred) {
+      assert.equal(message.wakeRoute, 'mod-self');
+      assert.equal(offered.stdout, '', 'ordinary hooks cannot bypass the captured own-inbox route');
+      assert.equal((await f.hub.chatMailbox.status(message.messageId)).state, 'queued');
+      const own = { sessionId: ID, cwd: f.parent }, writes = [];
+      f.hub.claudeWakeManifest = { verify: async sessionId => {
+        assert.equal(sessionId, ID); return { cwd: f.parent };
+      } };
+      const bridge = createModBridge({ root: f.parent, allowNativeWake: true, allowSelfWake: true,
+        rpc: request => f.hub.dispatch(request), inspectInbox: async () => ({ ready: true }),
+        submitInbox: async (text, { beforeWrite }) => {
+          assert.equal(await beforeWrite(), true); writes.push(text);
+          return { state: 'submitted', reason: 'socket-written', automaticReplay: false };
+        } });
+      const outcome = await deliverNativeWake({ selfEnabled: true, worker: async () => false,
+        inbound: async () => 'allow', context: async () => own, bridge, redraw() {},
+        tools: async () => assert.fail('Own-inbox reception never needs SendMessage'),
+        sendSession: async () => assert.fail('No peer-send fallback') }, own, own, message.messageId, () => true, 'mod-self');
+      assert.equal(outcome.state, 'submitted'); assert.equal(writes.length, 1);
+      const ids = JSON.parse(writes[0].split('\n')[1]);
+      const received = await bridge({ version: 1, op: 'wake-self-receive', context: own,
+        target: own, route: 'mod-self', ...ids });
+      assert.equal(received.ready, true);
+      assert.match(received.context, new RegExp(`CLAUDEX_ACK:${message.messageId}`));
+    } else {
+      const output = JSON.parse(offered.stdout);
+      assert.match(provider === 'claude' ? output.hookSpecificOutput.additionalContext : output.reason,
+        new RegExp(`CLAUDEX_ACK:${message.messageId}`));
+    }
     assert.equal((await f.hub.chatMailbox.status(message.messageId)).state, 'offered');
     assert.deepEqual(await f.hook({ hook_event_name: 'Stop', stop_hook_active: true,
       last_assistant_message: `CLAUDEX_ACK:${message.messageId}` }), { code: 0, stdout: '', stderr: '' });

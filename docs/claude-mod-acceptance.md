@@ -1,6 +1,6 @@
 # Claude Mod acceptance and deployment gates
 
-This is the reusable checklist for the current Claudex.app 1.4.7 / Mod 0.8.29
+This is the reusable checklist for the current Claudex.app 1.4.7 / Mod 0.8.30
 workflow. Start with [the current handoff](claude-mod-handoff.md) and
 [app lifecycle](app.md#claude-mod-lifecycle). Mark a gate as passed only with
 observed evidence on the
@@ -13,7 +13,10 @@ not a painted Desktop pane.
    through the official manager. Read-only inspections must perform no install,
    configuration write or model work.
 2. Preserve verified legacy sources, other plugins, previous caches, both native
-   configuration identities and explicit disabled/wake preferences. Same-name
+   configuration identities and explicit disabled/wake preferences. Verify fresh
+   receivers default true and startup/setup fill only never-configured keys;
+   one identity's explicit false must not affect the other identity's unset key.
+   Same-name
    marketplace add may migrate a verified source; never remove the marketplace.
 3. Exercise an empty-profile manager bootstrap using its pinned package integrity,
    disabled package scripts and distinct private npm configuration files. A
@@ -112,9 +115,10 @@ Record the exact `claude --version` used; it must support Mods. The public basel
 is 2.1.287; actual 2.1.286 Desktop runtime validation/registration also passed
 without added flags. Verify capabilities rather than inferring a hard refusal
 from the version number alone. Stage against an
-isolated private root. Keep nativeWake/selfWake false in the shipping stage; use
-a separate never-installed test stage with both enabled for the kit's own-inbox
-case. The source plugin intentionally has empty configuration defaults and is not
+isolated private root. Shipping receiver defaults are true; explicit
+`--no-native-wake` and `--no-self-wake` stage an opt-out. Use a separate
+never-installed test stage with both enabled for the kit's own-inbox case.
+The source plugin intentionally has empty machine configuration defaults and is not
 the installable machine configuration.
 
 Use the separate `STAGE` and `TEST_STAGE` directories from
@@ -127,7 +131,7 @@ claude plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 claude plugin test "$TEST_STAGE/plugins/claudex"
 ```
 
-Read the emitted types and validation errors. The current source includes 23 native
+Read the emitted types and validation errors. The current source includes 26 native
 kit tests; record the executed count and candidate version rather than reusing
 the historical 0.3.1 count of 12. The 0.7.1 kit passed on Desktop Code 2.1.286 with
 an explicitly approved isolated test-process function-hooks option. Do not apply
@@ -244,8 +248,9 @@ with read-only tasks. Keep any existing sync watcher and user work unchanged.
 
 ### Own-inbox mod-self route
 
-Source defaults are nativeWake=false and selfWake=false. Enabling both and
-selecting mod-self authorizes only already wake-enabled messages for the exact
+Source defaults are nativeWake=true and selfWake=true; explicit saved false is
+preserved per identity. New brokers default to mod-self. These settings authorize
+only already wake-enabled messages for the exact
 current native session. The same Mod receives its message; do not install a
 second Mod or create another model process to satisfy this gate.
 
@@ -272,8 +277,9 @@ semantics, user permissions and all original histories intact.
 
 ### Retained cross-session mod route
 
-For an unvalidated installation, keep nativeWake=false until its required
-recipient cases have actual evidence. The reviewed local installation has passed
+For an unvalidated runtime, verify its required recipient cases before relying
+on native delivery; retain an explicit nativeWake=false when opting out.
+The reviewed local installation has passed
 the documented cases; its current primary route is mod-self, while this earlier
 cross-session route remains separately available.
 Enabling native receipt can trigger recipient model work and uses account quota.

@@ -2,9 +2,12 @@
 
 Contributor rules moved out of AGENTS.md; they are binding. Scope: The work graph, MCP facade, chat mailbox and native wake, worker execution and permissions, observability, diagnostics, notifications, uncertainty resolution and acceptance evidence.
 
-Work observability is broker-owned and independently opt-in per task:
+Work observability is broker-owned and independently configured per task:
 `observability.timeline=public`, `reports=milestones`, and `blockerNotifications`.
-Defaults collect no native public content and authorize no intermediate wake.
+Defaults collect no native public content. By explicit user decision (2026-10-15),
+external root tasks whose effective notification mode is wake default
+blockerNotifications to true; explicit false opts out. Queue/off roots and
+managed children retain the off default. Preserve saved policies on existing tasks.
 Keep public work events separate from content-free activity; allow only native
 assistant messages and tool identity/status/exit metadata, never prompts,
 reasoning, tool payloads or arbitrary output. Event reads use task/generation
@@ -74,6 +77,8 @@ Queue-only, unbound, stopped, ended and unobservable routes continue waiting.
 External root notifications default to wake; off explicitly opts out. Main reads
 authoritative status after reception.
 MCP errors retain typed code and readable text through structuredContent.error.
+Capacity errors additionally retain only fixed resource plus safe-integer used/limit
+through Unix RPC and MCP; never serialize arbitrary error properties.
 Worker-only report is generation-fenced and explicitly self-reported, never
 verified goal completion or a replacement for completed/resultFinal. Handoff
 reports preserve author provenance and normal completion/process-exit guards.
@@ -88,7 +93,8 @@ RPC. By explicit user decision (2026-10-15), external root start defaults to wak
 when the broker has a native origin verifier: omitting notifications must not lose
 the caller's completion wake. This supersedes the earlier default-off decision.
 Explicit off opts out; explicit queue retains next-hook delivery. Default wake
-uses the existing ten-minute expiry after the terminal revision and is visible as
+uses a one-hour expiry after the terminal revision by explicit user decision
+(2026-10-15), within the unchanged 1-second to 1-hour bound and is visible as
 notificationMode in the start receipt. Preserve the original omitted arguments
 in the native request fingerprint. No message is created before independent
 native call/result origin proof. Managed children omit notifications and retain
@@ -156,6 +162,14 @@ dispatched/uncertain records remain no-replay.
 All terminal failure paths update updatedAt at the transition. Status joins exact
 active/archive mailbox receipts, showing queued/offered/acknowledged/expired and
 the separate dispatch state; it never manufactures an ACK or extends a TTL.
+By explicit user decision (2026-10-15), expiry should begin when reception becomes
+possible if the existing contract can prove that boundary. It cannot: readiness is
+a volatile diagnostic, while the one-use receiver claim happens after the
+write-ahead intent and mailbox deadline. Keep the existing terminal/blocker
+transition start and absolute fences; never renew an offered/uncertain message.
+Expose expiryStartsAt and unreadResult. An expired wake stays unread until its
+exact terminal receipt is acknowledged or that generation is explicitly reviewed;
+ordinary status reads do not manufacture a native receipt.
 Notification intents record a fixed dispatch phase and typed failure code. Only
 an internal preflight or mailbox-guard phase proves failed-not-sent; entering the
 mailbox commit boundary or an unknown/native dispatch remains uncertain. Never
@@ -237,9 +251,12 @@ tasks, unexpired unsuppressed terminal notifications awaiting publication, and
 dispatching/uncertain deliveries. Publish changed task-origin pins under the
 same mailbox lock before the work ledger becomes visible; this prevents hooks
 from retiring an origin concurrently with binding or reopening its task.
-On message/receipt pressure, archive the oldest acknowledged or expired pair
-(terminal time, createdAt, then messageId), excluding unresolved wakes and
-unexpired manifest references. A chat retirement archives all its resolved pairs
+On projected serialized-byte pressure as well as message/receipt count pressure,
+plan enough oldest acknowledged or expired pairs (terminal time, createdAt,
+then messageId) to fit the complete 1,024-pair/8-MiB journal, including its
+actual pretty JSON plus newline. Exclude unresolved wakes, unexpired manifest
+references and any ACK/wake outcome first created by the uncommitted operation.
+Prove the complete projection fits before publishing archives. A chat retirement archives all its resolved pairs
 before removing its metadata. Preserve exact message and request lookup records
 durably under the private mailbox archive before removing an active pair. Keep
 archives indefinitely: status and sender-scoped request-ID replay/conflict checks
@@ -250,7 +267,8 @@ bounded by existing journal limits; archive size grows with retained receipts.
 If no safe slot exists, refuse with MAILBOX_CAPACITY_EXHAUSTED without changing
 the journal. Hooks report explicit capacity stderr while preserving sync hints.
 Controller collaboration list/status inventory and mod_wake_status expose
-content-free chatMailbox counts and capacity flags; notification continuation
+content-free chatMailbox counts and capacity flags, usedBytes/byteLimit/remainingBytes
+and byteCapacityExhausted; notification continuation
 reports mailbox-capacity-exhausted for a missing origin when registration is
 blocked. This is diagnostic evidence, never dispatch permission. Malformed or
 unsafe reference/archive storage fails closed and is never repaired by deletion.
@@ -303,6 +321,16 @@ only proven pre-dispatch refusal may restore queued state. Unknown dispatch is
 never resent. Serialize wake-manifest snapshots and publication so older metadata
 reads cannot replace newer queued messages or receipts. Native acceptance is not
 hook acknowledgement or work completion.
+The renderer manifest keeps its 64-entry/240-KiB serialized bound and exposes
+count/total/eligible/omitted/unavailable/bytes plus nextPublicationAt in broker
+list/status. Rotate omitted queued messages fairly at five-second metadata
+boundaries, preserving per-message claims and all native idle/draft guards.
+A single broker timer republishes at the earliest queued expiry or rotation;
+startup recovers queued renderer metadata, send/receipt refreshes it, app-stop
+and close clear/fence it, and the existing resume marker rearms it. Publication
+reads metadata only and never retries native sends. Recheck app-stop/epoch under
+the mailbox retention lock before replacing a manifest. Publication failure is
+explicit unavailable with a fixed code, not a claim of native delivery.
 Its root is separate from sync state. Installation uses a separately journaled
 LaunchAgent and native MCP registration, never edits native conversation stores
 or restarts active apps. Controller capabilities are private files; worker
@@ -428,6 +456,27 @@ native invocation. Shutdown drains an already queued pump before taking its work
 snapshot and prevents any new native dispatch. Storage, context, concurrency, depth
 and generation limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
+
+Work-ledger capacity covers active tasks (1,000), active request receipts
+(10,000) and compact serialized state (32 MiB). List and status expose used,
+limit and remaining for each; status also exposes the used/remaining transition
+budget. On projected count or byte pressure, durably archive exact request
+receipts and unchanged, completely settled root trees before their active removal.
+Never retire running, ready, waiting, paused or uncertain work, a live worker,
+a pending handoff/checkpoint, unexpired origin binding/publication, a recent
+quota intent, or an unresolved mailbox/wake receipt. Preserve full messages,
+execution evidence, reports, instructions and events in immutable private tree
+snapshots. Exact task locators and actor-scoped request keys avoid lifetime scans.
+Active work.json remains authoritative after interrupted archive publication;
+redundant evidence is retained. Unsafe/malformed archives fail closed.
+The bounded list explicitly reports inventoryScope=active and archivedTaskCount;
+exact status, single/multi-wait and work evidence reads also find archived tasks.
+A valid new operation on archived completed work restores its whole tree through
+the normal commit/capacity path, preserving original follow-up/handoff semantics.
+Do not execute a replayed request, alter its fingerprint/result, reset a generation
+or discard an uncertain outcome. If protected work leaves no safe space, return
+CLAUDEX_WORK_CAPACITY_EXHAUSTED atomically. Archives have no expiry; their disk
+usage grows with retained history, outside active-ledger bounds.
 
 Controller-only `request resolve` may close an inspected uncertain
 invocation as failed, never successful or replayable. Require exact revision and

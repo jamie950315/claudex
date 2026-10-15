@@ -1,11 +1,12 @@
 # Claude Mod integration validation
 
-The current source target is Claude Mod 0.8.29 in Claudex.app 1.4.7. The version-scoped
+The current source target is Claude Mod 0.8.30 in Claudex.app 1.4.7. The version-scoped
 cache-warm acceptance below used isolated staged sessions and did not update the installed
 app, global preferences or existing conversations. Version-scoped installation
 checkpoints remain historical evidence, not claims about the current installation.
 The earlier reviewed Mac used `nativeWake=true`, `selfWake=true` and broker route
-`mod-self`; source defaults remain false. Installation, native invocation and
+`mod-self`; that review used explicit opt-ins. Current receiver defaults are
+enabled, preserving explicit saved false. Installation, native invocation and
 actual Desktop display are separate evidence.
 Private IDs, transcripts and evidence directories remain outside this repository.
 

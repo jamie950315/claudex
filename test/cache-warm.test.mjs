@@ -359,6 +359,38 @@ test('stale observation, sample, and retired instance cannot renew a timer', asy
   assert.equal((await f.manager.list()).policies[0].enabled, false);
 });
 
+test('retired bindings release capacity while bounded tombstones fence old sessions and replaced instances', async t => {
+  const f = await fixture(t), m = f.manager;
+  const observe = (i, phase, sessionId = `retired-${i}`) => m.observe({ sessionId, cwd: identity.cwd,
+    instanceId: `warm-${i}-fixture`, epoch: 0, sequence: phase === 'ended' ? 2 : 1, phase });
+  for (let i = 1; i <= 160; i++) {
+    assert.equal((await observe(i, 'idle')).observed, true);
+    assert.equal((await observe(i, 'ended')).observed, true);
+  }
+  assert.equal(m.bindings.size, 0); assert.equal(m.retired.size, 64);
+  assert.equal((await observe(1, 'idle')).reason, 'stale-observation');
+  for (let i = 161; i <= 320; i++) assert.equal((await observe(i, 'idle', 'replaced')).observed, true);
+  assert.equal(m.bindings.size, 1); assert.equal(m.retired.size, 64);
+  assert.equal((await observe(161, 'idle', 'replaced')).reason, 'stale-observation');
+  assert.equal(m.bindings.get('replaced').instanceId, 'warm-320-fixture');
+  const status = await m.list();
+  assert.equal(status.providerStatus.bindings, 1); assert.equal(status.providerStatus.retiredBindings, 64);
+});
+
+test('the retirement floor preserves active older bindings, rejects forgotten legacy callbacks, and keeps the live limit', async t => {
+  const f = await fixture(t), m = f.manager;
+  await f.observe();
+  for (let i = 0; i < 70; i++) await m.observe({ sessionId: `old-${i}`, cwd: identity.cwd,
+    instanceId: `legacy-${i}`, epoch: 0, sequence: 1, phase: 'ended' });
+  assert.equal((await f.observe()).observed, true, 'An admitted legacy binding keeps its contract.');
+  assert.equal((await m.observe({ sessionId: 'old-0', cwd: identity.cwd, instanceId: 'legacy-0',
+    epoch: 1, sequence: 2, phase: 'idle' })).reason, 'stale-observation');
+  for (let i = 1; i < 64; i++) await m.observe({ sessionId: `live-${i}`, cwd: identity.cwd,
+    instanceId: `warm-${i}-live`, epoch: 0, sequence: 1, phase: 'idle' });
+  await assert.rejects(m.observe({ sessionId: 'overflow', cwd: identity.cwd, instanceId: 'warm-100-live',
+    epoch: 0, sequence: 1, phase: 'idle' }), { code: 'CACHE_WARM_CAPACITY' });
+});
+
 test('native-setting hour TTL uses a five-minute margin; malformed observations are rejected', async t => {
   const f = await fixture(t);
   const sample = f.sample({ ttlMs: 3600000, ttlSource: 'native-setting' });
@@ -401,6 +433,11 @@ test('a failed durable save closes dispatch even if native observations remain i
   await assert.rejects(f.claim());
   assert.equal((await f.claim()).claimed, false);
   assert.equal((await f.manager.list()).policies[0].reason, 'broker-stopping');
+  const status = await f.manager.list();
+  assert.equal(status.providerStatus.closed, true);
+  assert.equal(status.providerStatus.reason, 'storage-failed');
+  assert.equal(status.providerStatus.code, 'CACHE_WARM_STORAGE_FAILED');
+  assert.equal(status.policies[0].enabled, false);
 });
 
 test('close consumes dispatch and leaves read-only status available without native bindings', async t => {

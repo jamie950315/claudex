@@ -16,11 +16,12 @@ async function fixture(t) {
   let total = initial, compactions = 0, expecting = false, compactHook;
   const state = { sessionId: ID, cwd: '/fixture', model: 'fixture-model', effort: 'medium',
     fingerprint: 'fixture-fingerprint', ownerClientId: OWNER, phase: 'busy', nativeVersion: '0.160.0' };
-  const timers = [];
+  const timers = [], listeners = [];
   const native = {
     async inspect() { calls++; return { ...state }; },
     async connect(_params, onEvent) {
       calls++; connected = true; listener = onEvent;
+      listeners.push(onEvent);
       return { state: { ...state }, initialTurn: { id: 'seed', startedAt: now, status: 'inProgress' },
         get settingsReady() { return settingsReady; },
         acceptUnreportedSettings() { if (acceptsUnreported) settingsReady = true; },
@@ -55,7 +56,7 @@ async function fixture(t) {
     if (!timer) return;
     timer.cancelled = true; now = timer.due + delay; timer.callback(); await service.serial;
   }
-  return { service, root, state, timers, emit, usage, seed, enable, fire,
+  return { service, root, state, timers, listeners, emit, usage, seed, enable, fire, tick(ms) { now += ms; },
     get compactions() { return compactions; }, get expecting() { return expecting; }, set compactHook(value) { compactHook = value; },
     get now() { return now; }, get connected() { return connected; }, get calls() { return calls; }, get dispatches() { return dispatches; },
     set hook(value) { hook = value; }, set preflightHook(value) { preflightHook = value; }, set stopped(value) { stopped = value; },
@@ -229,6 +230,52 @@ test('unknown delivery, missing completion and disconnect never replay a Codex t
     assert.equal((await f.service.list()).attempts[0].state, 'uncertain');
     await f.fire(); assert.equal(f.dispatches, 1);
   }
+});
+
+test('Codex retires more than 64 sessions and repeated bindings without reviving old callbacks', async t => {
+  const f = await fixture(t);
+  for (let i = 1; i <= 72; i++) {
+    const sessionId = `${i.toString(16).padStart(8, '0')}-1111-4111-8111-111111111111`;
+    await f.enable({ sessionId, maxMinutes: 1 });
+    await f.service.off({ sessionId, cwd: '/fixture' });
+    f.tick(60001);
+  }
+  for (let i = 0; i < 72; i++) {
+    await f.enable();
+    await f.service.off({ sessionId: ID, cwd: '/fixture' });
+  }
+  await f.enable();
+  const before = await f.service.list();
+  for (const old of f.listeners.slice(0, -1)) old({ type: 'invalidated', reason: 'stale-callback' });
+  await f.service.serial;
+  assert.deepEqual(await f.service.list(), before);
+  assert.equal(f.service.bindings.size, 1);
+  assert.equal(f.service.manager.bindings.size, 1);
+  assert.equal(f.service.manager.retired.size, 64);
+  assert.ok(f.service.nativeReasons.size <= 64);
+  assert.equal(f.dispatches, 0);
+});
+
+test('an asynchronous provider failure visibly closes every policy and preserves unrelated pending uncertainty', async t => {
+  const f = await fixture(t); await f.enable(); await f.seed(); await f.fire();
+  assert.equal(f.dispatches, 1);
+  await f.enable({ sessionId: OWNER });
+  f.service.manager.configure = async () => { throw new Error('fixture disable failure'); };
+  await f.emit({ type: 'invalidated', reason: 'fixture disconnect' });
+  const status = await f.service.list();
+  assert.equal(status.providerStatus.closed, true);
+  assert.equal(status.providerStatus.reason, 'native-service-failed');
+  assert.equal(status.providerStatus.code, 'CACHE_WARM_PROVIDER_FAILED');
+  assert.equal(status.providerStatus.phase, 'native-events');
+  assert.equal(status.providerStatus.cleanupFailed, false);
+  assert.equal(status.policies.length, 2);
+  assert.ok(status.policies.every(p => !p.enabled && p.nextAt === null && p.compactAt === null));
+  assert.equal(status.attempts[0].state, 'uncertain');
+  assert.equal(f.service.bindings.size, 0);
+  for (const timer of f.timers) if (!timer.cancelled) timer.callback();
+  await f.service.serial;
+  assert.equal(f.dispatches, 1);
+  await assert.rejects(f.enable(), /stopped/);
 });
 
 test('native events arriving inside dispatch are attributed after the exact returned turn ID', async t => {

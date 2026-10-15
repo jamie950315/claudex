@@ -137,6 +137,22 @@ comes from native actual-read observations in the complete current-generation
 ledger, never a reservation or a truncated attempt listing. Formatting and
 language discovery cannot enroll, refresh or change budgets. Advanced diagnostic
 commands retain their structured response for operators.
+Native binding capacity is 64 concurrent bindings, not a lifetime session count.
+Detach ended/settled Codex observers and remove their live binding entries; an
+uncertain attempt remains in the durable ledger without replay. Keep at most 64
+retired instance tombstones in each manager. Before forgetting a tombstone,
+advance the admission floor for the shipping `warm-<creationMs>-<nonce>` IDs;
+unknown instances at or below that floor cannot bind again. Already admitted
+older instances retain their sequence/epoch checks. Once opaque legacy IDs have
+been forgotten, refuse unknown opaque IDs rather than accepting an old callback.
+Codex allocates monotonically increasing instance times and additionally fences
+every queued callback by exact observer object identity. This is stale-callback
+fencing, not dispatch authority. List exposes `providerStatus.closed`, `reason`
+and `code`; a provider-wide async failure cancels every timer, stops all policies
+and closes observers, revoking reservations and preserving dispatched attempts as
+uncertain. Storage-publication failures stop all in-memory policies even when
+their durable shutdown cannot be saved. No failed service automatically restarts
+or retries native input.
 By user decision, read tokens have no admission or actual-usage limit on either
 provider. Keep their reservations and native usage accounting, exposing
 maxReadTokens:null and counted/unlimited in summaries. Validate legacy numeric

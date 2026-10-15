@@ -1,13 +1,13 @@
 import { join } from 'node:path';
-import { readdir, lstat } from 'node:fs/promises';
+import { lstat } from 'node:fs/promises';
 import { randomUUID, createHash } from 'node:crypto';
 import { privateDir, privateJSON, privateRead, writeReceipt, exclusiveAction } from './claude-mod-storage.mjs';
 import { validateRequest, validateParams, sameContext, insist, ModError, identity, context, record } from './claude-mod-protocol.mjs';
 import { createWakeOutbox } from './claude-mod-wake-outbox.mjs';
+import { createModJournal, inspectModJournals } from './claude-mod-journal.mjs';
 import { inspectSelfInbox, submitSelfInbox } from './claude-mod-self-inbox.mjs';
 import { collaborationCapabilities, SANDBOX_PERMISSION_DESCRIPTION, MOD_PERMISSION_GUIDANCE } from './collaboration-permissions.mjs';
 const TTL = 10 * 60 * 1000;
-const JOURNAL_LIMIT = 2048;
 const RPC_TIMEOUT = 12000;
 const canonical = value => Array.isArray(value) ? value.map(canonical) : record(value)
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
@@ -58,6 +58,8 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
   const collaborationRoot = join(root ?? '', 'collaboration');
   const journalRoot = join(root ?? '', 'mod-companion');
   const pathFor = id => join(journalRoot, `${identity(id, true)}.json`);
+  const actions = createModJournal(root, 'actions', { now, validate: (value, name) => assertReceipt(value, name.slice(0, -5)) });
+  const selfDispatch = createModJournal(root, 'selfDispatch', { now });
   async function stopState() {
     const value = await privateJSON(join(root, 'app-stop.json'), { optional: true, maxBytes: 4096 });
     if (value !== null) insist(value.version === 1 && typeof value.stopped === 'boolean' && (value.resuming === undefined || typeof value.resuming === 'boolean'), 'INVALID_STOP_STATE', 'Application stop state requires inspection.');
@@ -85,7 +87,8 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
   }
   async function receipt(id) {
     await privateDir(journalRoot);
-    return assertReceipt(await privateJSON(pathFor(id), { maxBytes: 2 * 1024 * 1024 }), id);
+    identity(id, true);
+    return assertReceipt(await actions.read(`${id}.json`), id);
   }
   const outbox = createWakeOutbox(root, request => requestRpc('mod_wake_receipt', {
     source: request.context, target: request.target, messageId: request.messageId,
@@ -105,6 +108,7 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
       return { version: 1, root, stopped: await stopState(), socketPresent, nodeVersion: process.version,
         nativeWakeEnabled: allowNativeWake, synchronizationPolicy: 'unchanged',
+        journals: await inspectModJournals(root, { now }),
         compatibility: { documentedModBaseline: '2.1.287', versionLoadGate: false,
           synchronizationAcceptance: 'separate-required-check' },
         note: 'A socket pathname is presence evidence. Refresh task status to verify a broker response. Keep existing hooks and renderer fallbacks.' };
@@ -151,9 +155,12 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       }
       // A durable intent pointer fences equivalent unknown actions across UI reloads/sessions.
       const fingerprint = fingerprintOf(request.method, normalized);
-      const intentPath = join(journalRoot, `intent-${fingerprint}.json`);
+      const intentRoot = join(journalRoot, 'intents');
+      await privateDir(intentRoot, true);
+      const intentPath = join(intentRoot, `intent-${fingerprint}.json`);
       return exclusiveAction(join(journalRoot, `intent-${fingerprint}.lock`), async () => {
-        const intent = await privateJSON(intentPath, { optional: true, maxBytes: 4096 });
+        const currentIntent = await privateJSON(intentPath, { optional: true, maxBytes: 4096 });
+        const intent = currentIntent ?? await privateJSON(join(journalRoot, `intent-${fingerprint}.json`), { optional: true, maxBytes: 4096 });
         if (intent) {
           insist(intent.version === 1 && typeof intent.id === 'string', 'INVALID_RECEIPT');
           const previous = await receipt(intent.id);
@@ -165,15 +172,16 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
             return publicReceipt(previous);
           }
         }
-        insist((await readdir(journalRoot)).filter(name => /^[0-9a-f-]{36}\.json$/.test(name)).length < JOURNAL_LIMIT,
-          'JOURNAL_FULL', 'Preserve the bounded action journal; perform operator-led retention before adding actions.');
-        const id = randomUUID(), preparedAt = now();
-        const params = { ...normalized, ...(request.method === 'models' ? {} : { requestId: `mod:${id}` }) };
-        const saved = { version: 1, id, fingerprint, method: request.method, params, context: request.context,
-          state: 'prepared', preparedAt, expiresAt: preparedAt + TTL };
-        await writeReceipt(pathFor(id), saved, { exclusive: true });
-        await writeReceipt(intentPath, { version: 1, id }, { exclusive: intent === null });
-        return publicReceipt(saved);
+        return actions.transaction(async () => {
+          await actions.reserve();
+          const id = randomUUID(), preparedAt = now();
+          const params = { ...normalized, ...(request.method === 'models' ? {} : { requestId: `mod:${id}` }) };
+          const saved = { version: 1, id, fingerprint, method: request.method, params, context: request.context,
+            state: 'prepared', preparedAt, expiresAt: preparedAt + TTL };
+          await writeReceipt(pathFor(id), saved, { exclusive: true });
+          await writeReceipt(intentPath, { version: 1, id }, { exclusive: currentIntent === null });
+          return publicReceipt(saved);
+        });
       });
     }
     if (request.op === 'commit') {
@@ -232,13 +240,15 @@ export function createModBridge({ root, rpc = nativeRpc, now = Date.now,
       return exclusiveAction(join(directory, `${request.claimId}.lock`), async () => {
         const path = join(directory, `${request.claimId}.json`);
         const identity = { context: request.context, target: request.target, messageId: request.messageId, claimId: request.claimId, route: request.route };
-        const saved = await privateJSON(path, { optional: true });
+        const saved = await selfDispatch.read(`${request.claimId}.json`, { optional: true });
         if (saved) {
           insist(saved.version === 1 && JSON.stringify(saved.identity) === JSON.stringify(identity), 'INVALID_RECEIPT');
           return saved.outcome ?? { state: 'uncertain', reason: 'dispatch-recorded', automaticReplay: false };
         }
-        insist((await readdir(directory)).filter(name => name.endsWith('.json')).length < JOURNAL_LIMIT, 'JOURNAL_FULL');
-        await writeReceipt(path, { version: 1, identity }, { exclusive: true });
+        await selfDispatch.transaction(async () => {
+          await selfDispatch.reserve();
+          await writeReceipt(path, { version: 1, identity }, { exclusive: true });
+        });
         const outcome = await submitInbox(payload, { beforeWrite: async () => {
           const guard = await requestRpc('mod_wake_check', wakeParams);
           insist(guard?.ready === true, 'INVALID_RECEIPT', 'Self dispatch readiness was not confirmed.');

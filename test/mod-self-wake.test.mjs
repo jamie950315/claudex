@@ -232,7 +232,7 @@ test('renderer cannot claim or publish own-inbox messages', async t => {
   const manifest = createClaudeChatWakeManifest({ root: f.root, mappings: async (_, ids) => {
     assert.deepEqual(ids, []); return new Map();
   } });
-  assert.deepEqual(await manifest.publish(f.hub.chatMailbox), { count: 0 });
+  assert.equal((await manifest.publish(f.hub.chatMailbox)).count, 0);
   const saved = JSON.parse(await readFile(join(f.root, 'chat-mailbox', 'wake-manifest.json')));
   assert.deepEqual(saved.messages, []);
 });
@@ -340,4 +340,20 @@ test('own-inbox claim, outcome and receive authorization cross the real private 
   const status = await f.call('chat_status', { messageId: message.messageId });
   assert.equal(status.state, 'offered');
   assert.ok(Number.isSafeInteger(status.wake.receiveClaimedAt));
+});
+
+
+test('an unset broker route admits only the default own-inbox flow without writing a route preference', async t => {
+  const f = await fixture(t);
+  assert.equal(f.hub.state.nativeWakeRoute, undefined);
+  assert.equal((await f.call('native_wake')).route, 'mod-self');
+  const message = await f.send('unset-own-default');
+  assert.equal(message.wakeRoute, 'mod-self');
+  const waiting = await f.call('mod_wake_wait', { source: own, self: true, timeoutMs: 0 });
+  assert.equal(waiting.messages[0].messageId, message.messageId);
+  const outcome = await deliverNativeWake(f.host(), own, own, message.messageId, () => true, 'mod-self');
+  assert.equal(outcome.state, 'submitted');
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.hub.state.nativeWakeRoute, undefined);
+  assert.equal((await f.call('chat_status', { messageId: message.messageId })).wake.state, 'submitted');
 });

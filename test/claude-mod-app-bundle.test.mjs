@@ -33,7 +33,7 @@ test('copied app engine can stage the companion using only its packaged sources'
   await copyAllowed(repo, engine);
   for (const name of ENGINE_PLUGIN_FILES) assert.deepEqual(await readFile(join(engine, name)), await readFile(join(repo, name)));
   const result = await stageClaudeMod({ output: join(root, 'stage'), stateRoot, repoRoot: engine, nodeBinary: await realpath(process.execPath) });
-  assert.equal(result.nativeWake, false);
+  assert.equal(result.nativeWake, true);
   assert.equal(result.automaticInstallation, false);
   assert.equal(result.synchronizationPolicy, 'unchanged');
   assert.ok(existsSync(join(engine, 'bin', 'claudex-mod.mjs')));

@@ -74,6 +74,10 @@ export function notificationPresentation(task, receipts = new Map()) {
     && waiting.generation === target.generation && waiting.blockerId === target.blockerId
     && waiting.blockerRevision === target.blockerRevision ? waiting : null;
   return { mode: value.policy.mode, expiresInMs: value.policy.expiresInMs,
+    expiryStartsAt: 'terminal-or-blocker-transition',
+    unreadResult: terminal.has(task.status) && task.resultReview?.generation !== task.generation
+      && !value.deliveries.some(delivery => (delivery.kind ?? 'terminal') === 'terminal'
+        && delivery.revision === task.revision && receipts.get(delivery.messageId)?.state === 'acknowledged'),
     bindingStatus: value.origin ? 'verified' : value.challengeExpiresAt <= Date.now() ? 'expired' : 'awaiting-native-proof',
     origin: structuredClone(value.origin), deliveries: value.deliveries.map(delivery => {
       const receipt = receipts.get(delivery.messageId);
@@ -109,7 +113,7 @@ export async function inspectNotificationContinuation(hub, task) {
   const limit = notificationLimit(hub.state, n);
   if (limit) return result('wait', limit.reason);
   if (await stopped(hub)) return result('wait', 'app-stopped');
-  const route = n.origin.provider === 'claude' ? hub.state.nativeWakeRoute ?? 'renderer' : 'native-owner';
+  const route = n.origin.provider === 'claude' ? hub.state.nativeWakeRoute ?? 'mod-self' : 'native-owner';
   const chat = (await hub.chatMailbox.list()).find(value => value.provider === n.origin.provider
     && value.sessionId === n.origin.sessionId && value.cwd === n.origin.cwd);
   if (!chat) return result('wait', (await hub.chatMailbox.diagnostics()).chatCapacityExhausted
@@ -145,7 +149,7 @@ export async function inspectNotificationContinuation(hub, task) {
   const current = hub.state.tasks[task.id];
   if (current && terminal.has(current.status)) return result('read-result', 'task-terminal');
   if (!current || current.revision !== task.revision || !sameOrigin(current.notification?.origin, n.origin)
-    || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'renderer') !== route))
+    || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'mod-self') !== route))
     return result('wait', 'task-or-route-changed');
   if (await stopped(hub)) return result('wait', 'app-stopped');
   const latest = (await hub.chatMailbox.list()).find(value => value.provider === n.origin.provider
@@ -155,7 +159,7 @@ export async function inspectNotificationContinuation(hub, task) {
   if (hub.closed) return result('wait', 'app-stopped');
   if (final && terminal.has(final.status)) return result('read-result', 'task-terminal');
   if (!final || final.revision !== task.revision || !sameOrigin(final.notification?.origin, n.origin)
-    || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'renderer') !== route))
+    || (n.origin.provider === 'claude' && (hub.state.nativeWakeRoute ?? 'mod-self') !== route))
     return result('wait', 'task-or-route-changed');
   const finalLimit = notificationLimit(hub.state, final.notification);
   if (finalLimit) return result('wait', finalLimit.reason);
@@ -473,8 +477,8 @@ export function observeNotificationResume(hub) {
   const local = stateFor(hub);
   local.watcher = watch(dirname(hub.root), (_event, filename) => {
     if (filename === null || String(filename) === 'app-stop.json') void stopped(hub).then(held => {
-      if (held) { stopOriginRechecks(hub); clearQuotaTimer(hub); }
-      else scheduleNotifications(hub);
+      if (held) { stopOriginRechecks(hub); clearQuotaTimer(hub); hub.suspendClaudeWakePublication?.(); }
+      else { scheduleNotifications(hub); void hub.refreshClaudeWakeManifest?.(); }
     }).catch(error => { hub.closed = true; stopOriginRechecks(hub); hub.emit('fatal', error); hub.emit('change'); });
   });
   local.watcher.on('error', error => { hub.closed = true; stopOriginRechecks(hub); hub.emit('fatal', error); hub.emit('change'); });

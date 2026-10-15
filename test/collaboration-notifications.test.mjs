@@ -151,15 +151,15 @@ test('explicit off and unbound tasks never notify; exact root proof queues only 
   assert.equal(f.hub.running.size, 0); assert.equal(f.hub.state.tasks[off.taskId].notification, undefined);
 });
 
-test('external root omission defaults to visible wake with the existing expiry and exact proof', async t => {
+test('external root omission defaults to visible wake with one-hour expiry and exact proof', async t => {
   let wakes = 0;
   const f = await fixture(t, { chatWake: async () => { wakes++; return { status: 'busy' }; } });
   const params = { provider: 'claude', cwd: f.parent, prompt: 'Default completion wake', requestId: 'default-wake' };
   const task = await f.call('start', params);
   assert.equal(task.notificationMode, 'wake');
   assert.match(task.originChallenge, /^[a-f0-9]{64}$/);
-  assert.deepEqual(notificationPolicy(), { mode: 'wake', expiresInMs: 600000 });
-  assert.equal((await f.call('status', { taskId: task.taskId })).notification.expiresInMs, 600000);
+  assert.deepEqual(notificationPolicy(), { mode: 'wake', expiresInMs: 3600000 });
+  assert.equal((await f.call('status', { taskId: task.taskId })).notification.expiresInMs, 3600000);
   assert.equal((await f.call('start', params)).originChallenge, task.originChallenge);
   await f.complete(task); await drainNotifications(f.hub);
   assert.equal(wakes, 0, 'default wake still requires independent native origin proof');
@@ -167,7 +167,7 @@ test('external root omission defaults to visible wake with the existing expiry a
   await f.bind(task);
   await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
   const value = f.hub.state.tasks[task.taskId], delivery = value.notification.deliveries[0];
-  assert.equal(delivery.expiresAt, value.updatedAt + 600000);
+  assert.equal(delivery.expiresAt, value.updatedAt + 3600000);
   const message = await f.call('chat_status', { messageId: delivery.messageId });
   assert.equal(message.wakeRequested, true); assert.equal(wakes, 1);
   const { createHash } = await import('node:crypto');
@@ -506,7 +506,7 @@ for (const failure of ['permission', 'maxSteps']) test(`${failure} failure start
   await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'queued');
   const value = f.hub.state.tasks[task.taskId];
   assert.equal(value.status, 'failed'); assert.ok(value.updatedAt >= now);
-  assert.equal(value.notification.deliveries[0].expiresAt, value.updatedAt + 600000);
+  assert.equal(value.notification.deliveries[0].expiresAt, value.updatedAt + 3600000);
   assert.equal(value.notification.deliveries[0].state, 'queued');
 });
 
@@ -617,8 +617,39 @@ test('closing clears a throttled notification timer and held expiry is visible b
   const clear = t.mock.method(globalThis, 'clearTimeout');
   await f.hub.close();
   assert.ok(clear.mock.calls.some(call => call.arguments[0] != null));
-  t.mock.timers.tick(600001); await new Promise(resolve => setImmediate(resolve));
+  t.mock.timers.tick(3600001); await new Promise(resolve => setImmediate(resolve));
   assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 16);
   const status = await f.call('status', { taskId: task.taskId });
   assert.equal(status.notification.pending.state, 'expired'); assert.equal(status.notification.missed, 1);
+});
+
+test('root wake blockers default on; explicit off and queue defaults stay unchanged', async t => {
+  const f = await fixture(t);
+  const wake = await f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'Default blocker wake', requestId: 'wake-blocker-default' });
+  assert.equal(f.hub.state.tasks[wake.taskId].observability.blockerNotifications, true);
+  const off = await f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'Explicit opt-out', requestId: 'blocker-opt-out',
+    observability: { timeline: 'public', blockerNotifications: false } });
+  assert.equal(f.hub.state.tasks[off.taskId].observability.blockerNotifications, false);
+  const queue = await f.start('queue-blocker-default');
+  assert.equal(f.hub.state.tasks[queue.taskId].observability.blockerNotifications, false);
+  await assert.rejects(f.call('start', { provider: 'claude', cwd: f.parent, prompt: 'Bad observability', requestId: 'invalid-observe', observability: null }),
+    { code: 'CLAUDEX_INVALID_OBSERVABILITY' });
+  assert.equal(notificationPolicy({ mode: 'wake', expiresInMs: 1000 }).expiresInMs, 1000);
+  assert.throws(() => notificationPolicy({ mode: 'wake', expiresInMs: 3600001 }), { code: 'CLAUDEX_INVALID_NOTIFICATION_POLICY' });
+});
+
+test('expired wake remains an unread terminal result in status without renewal or replay', async t => {
+  const f = await fixture(t);
+  const task = await f.start('expired-unread', { mode: 'wake', expiresInMs: 1000 }); await f.bind(task);
+  await f.hub.mutate(state => { const value = state.tasks[task.taskId]; value.status = 'completed'; value.revision++;
+    value.updatedAt = Date.now() - 2000; value.result = { text: 'Still available', generation: 0, provider: 'claude' }; });
+  await until(() => f.hub.state.tasks[task.taskId].notification.deliveries[0]?.state === 'expired');
+  const status = await f.call('status', { taskId: task.taskId });
+  assert.equal(status.notification.unreadResult, true); assert.equal(status.notification.missed, 1);
+  assert.equal(status.notification.expiryStartsAt, 'terminal-or-blocker-transition');
+  assert.equal(status.result.text, 'Still available');
+  const deadline = status.notification.deliveries[0].expiresAt;
+  await f.call('status', { taskId: task.taskId });
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 1);
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries[0].expiresAt, deadline);
 });

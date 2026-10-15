@@ -1,6 +1,6 @@
 # Claude Mod integration: deployment handoff
 
-Current operational handoff: Claudex.app 1.4.7 and Mod 0.8.29. Version-scoped
+Current operational handoff: Claudex.app 1.4.7 and Mod 0.8.30. Version-scoped
 observations below retain their original review dates. The companion is integrated;
 do not reapply any historical downloaded patch. Read AGENTS.md, [the guide](claude-mod.md),
 [acceptance gates](claude-mod-acceptance.md) and [validation](claude-mod-validation.md).
@@ -19,7 +19,10 @@ do not reapply any historical downloaded patch. Read AGENTS.md, [the guide](clau
   panel evidence is recorded in validation; it does not manufacture a new wake ACK.
 - Preserve both known plugin identities, language preferences, explicit disabled
   and wake settings, previous versions and app-owned journals. New installations
-  keep wake defaults off, and the app never changes native routes automatically.
+  enable only receiver keys never explicitly configured; saved false stays off.
+  New brokers default to `mod-self`; the app preserves existing routes. Native
+  replies consume model allowance. Settled Mod journal records archive on capacity
+  pressure with exact lookup; pending/uncertain records remain active.
 - Reuse applicable unchanged evidence and test changed inputs. Do not alter
   runtime allowlists, native trust, accounts or user work to make checks pass.
 
@@ -34,7 +37,7 @@ one eligible waiter automatically delivered a new authorized message to that sam
 session. Sonnet 5.5 returned the requested nonce and real Stop ACK in 4.253 seconds;
 the actual Desktop displayed the peer message and reply while retaining its
 original unsent draft. No second sender or SendMessage tool is needed for this
-route. Source defaults remain false.
+route. At that historical checkpoint, source defaults were false.
 
 The full repository regression passed 1,325 cases with zero failures and 23
 existing opt-in skips before the final narrow queued-hook exclusion; the final
@@ -153,7 +156,8 @@ response. Keep safe recoverable app backups and private evidence outside Git.
 Open the installed `/Applications/Claudex.app` by its exact path: development
 bundles can share its display name, so name-only application lookup is insufficient.
 
-New installations keep both options off until authorized target-runtime acceptance.
+New installations default both receiver options to enabled, preserving explicit
+saved false. Validate each new target runtime before relying on native delivery.
 The reviewed Mac uses the explicit mod-self route after native and Desktop acceptance.
 Do not alter a shared native CLI or versionPolicy merely to load the companion.
 

@@ -719,3 +719,19 @@ test('a locally re-signed Claude app is ready and labeled as a local build', asy
   assert.equal(row.state, 'ready');
   assert.equal(row.detail, 'The installed app is a locally re-signed build of the official app.');
 });
+
+
+test('read-only Mod inspection retains typed journal capacity in the diagnostic report', async t => {
+  const { setup, events } = await fixture(t);
+  const journals = { diagnosticOnly: true,
+    actions: { state: 'available', active: 4, limit: 2048, remaining: 2044, settled: 2, protected: 2 },
+    selfDispatch: { state: 'retention-available', active: 2048, limit: 2048, remaining: 0, settled: 1, protected: 2047 },
+    wakeOutbox: { state: 'capacity-exhausted', active: 2048, limit: 2048, remaining: 0, settled: 0, protected: 2048 } };
+  setup.modInspect = async () => ({ state: 'ready', bundledVersion: '0.8.30', installedVersion: '0.8.30', journals,
+    modSettings: { inline: { nativeWake: true, selfWake: true } } });
+  const report = await setup.inspect();
+  assert.deepEqual(report.modInfo.journals, journals);
+  assert.deepEqual(JSON.parse(JSON.stringify(report)).modInfo.journals, journals, 'serialized app diagnostics retain counts');
+  assert.equal(report.components.find(row => row.id === 'claude-mod').state, 'ready', 'capacity is separate from installation');
+  assert.ok(!events.some(([kind]) => kind === 'mod-install' || kind === 'mod-runtime'));
+});

@@ -1,8 +1,9 @@
+import { WorkArchive, workCapacity } from './collaboration-archive.mjs';
 import { EventEmitter } from 'node:events';
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { lstat } from 'node:fs/promises';
 import { isAbsolute, join, dirname } from 'node:path';
-import { privateDirectory, readJSON, writeJSON, publishExclusive } from './storage.mjs';
+import { privateDirectory, readJSON, atomicWrite, publishExclusive } from './storage.mjs';
 import { readFile } from 'node:fs/promises';
 import { validateCollaborationEffort } from './collaboration-effort.mjs';
 import { resolveCollaborationWorkspace, revalidateWorkspace, workspacesConflict } from './collaboration-workspace.mjs';
@@ -161,6 +162,7 @@ export class CollaborationHub extends EventEmitter {
       if (!Number.isSafeInteger(value) || value < 1 || value > max) throw new Error(`Invalid ${name}.`);
     }
     Object.assign(this, { root, run, mcp, allowWrite: allowWrite || allowFullAccess, allowFullAccess, defaultPermission, maxWorkers, maxDepth, maxSteps, maxTasks, maxRequests, maxStateBytes, inspectProcessGroup, inspectProcesses });
+    this.workArchive = new WorkArchive(root);
     this.serial = Promise.resolve(); this.running = new Map(); this.closed = false; this.pumping = false;
     this.chatMailbox = new ChatMailbox({ root: join(root, 'chat-mailbox') });
     this.chatTitleResolver = chatTitleResolver;
@@ -168,6 +170,7 @@ export class CollaborationHub extends EventEmitter {
     this.chatWake = chatWake;
     this.chatWakeProbe = chatWakeProbe;
     this.claudeWakeManifest = claudeWakeManifest;
+    this.claudeWakeEpoch = 0;
     this.claudeOwnerWake = claudeOwnerWake;
     this.originVerifier = originVerifier;
     this.modWaiters = 0;
@@ -193,6 +196,7 @@ export class CollaborationHub extends EventEmitter {
 
   async initialize() {
     this.root = await privateDirectory(this.root);
+    this.workArchive = new WorkArchive(this.root);
     // Read when a message arrives, so a change applies to running schedules too.
     const onUserMessage = () => this.state?.warmOnUserMessage ?? 'continue';
     const compactAfterWarm = () => this.state?.compactAfterWarm ?? true;
@@ -223,12 +227,15 @@ export class CollaborationHub extends EventEmitter {
     try {
       const file = await lstat(this.path);
       if (!file.isFile() || file.isSymbolicLink() || file.uid !== process.getuid() || file.nlink !== 1
-        || (file.mode & 0o777) !== 0o600 || file.size > this.maxStateBytes) throw new Error('Unsafe collaboration ledger.');
+        || (file.mode & 0o777) !== 0o600 || file.size > this.maxStateBytes + 1) throw new Error('Unsafe collaboration ledger.');
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     this.state = await readJSON(this.path, { version: 1, tasks: {}, requests: {} });
     this.serializedState = JSON.stringify(this.state);
     if (this.state?.version !== 1 || !this.state.tasks || !this.state.requests
       || Array.isArray(this.state.tasks) || Array.isArray(this.state.requests)) throw new Error('Unsupported collaboration ledger.');
+    if (this.state.archive !== undefined && (!this.state.archive || Object.keys(this.state.archive).sort().join(',') !== 'requests,tasks'
+      || Object.values(this.state.archive).some(value => !Number.isSafeInteger(value) || value < 0)))
+      fail('CLAUDEX_WORK_ARCHIVE_UNSAFE', 'Malformed work archive inventory was preserved.');
     if (Object.hasOwn(this.state, 'defaultModels')) defaultModels(this.state.defaultModels);
     if (Object.hasOwn(this.state, 'defaultEfforts')) defaultEfforts(this.state.defaultEfforts);
     if (Object.hasOwn(this.state, 'defaultWarmLimit') && typeof this.state.defaultWarmLimit !== 'string')
@@ -293,6 +300,9 @@ export class CollaborationHub extends EventEmitter {
     observeNotificationResume(this);
     await this.cacheWarm.initialize();
     await this.codexCacheWarm.initialize();
+    if (this.claudeWakeManifest && (await this.chatMailbox.pendingWakes())
+      .some(message => message.targetProvider === 'claude' && !['mod', 'mod-self'].includes(message.wakeRoute)))
+      await this.refreshClaudeWakeManifest();
     return this;
   }
 
@@ -407,15 +417,18 @@ export class CollaborationHub extends EventEmitter {
   async commit(fn) {
     const state = copy(this.state);
     const value = await fn(state);
-    const serialized = JSON.stringify(state);
+    let serialized = JSON.stringify(state);
     if (serialized === this.serializedState) return value;
-    if (Buffer.byteLength(serialized) > this.maxStateBytes) throw new Error('Collaboration ledger capacity reached; no history was discarded.');
+    if (!workCapacity(this, state).available) {
+      await this.workArchive.makeRoom(this, state);
+      serialized = JSON.stringify(state);
+    }
     // Hooks read the durable work ledger under this same mailbox lock when
     // retiring chats. Publish newly protected origins before releasing it.
     const now = Date.now();
     if (JSON.stringify(notificationChatReferences(state, now)) !== JSON.stringify(notificationChatReferences(this.state, now)))
-      await this.chatMailbox.transaction(true, () => writeJSON(this.path, state));
-    else await writeJSON(this.path, state);
+      await this.chatMailbox.transaction(true, () => atomicWrite(this.path, serialized + '\n'));
+    else await atomicWrite(this.path, serialized + '\n');
     this.state = state; this.serializedState = serialized; this.emit('change'); scheduleNotifications(this);
     return value;
   }
@@ -528,7 +541,7 @@ export class CollaborationHub extends EventEmitter {
       if (actor.task.pendingHandoff || actor.task.cancelRequested || actor.task.pause?.state === 'checkpoint') throw new Error('Worker has relinquished ownership; further mutations are refused.');
       const controls = { ...params, taskId: actor.task.id, generation: actor.task.generation, action: 'check-in' };
       const key = digest(`${actor.key}:${params.requestId}`);
-      if (!this.state.requests[key]) {
+      if (!this.state.requests[key] && !await this.workArchive.request(key)) {
         const preview = checkInInstructions(actor.task, controls, { apply: false });
         // Response-boundary empty reads must not consume the durable request
         // journal or publish revisions. Newly queued work remains for the next
@@ -558,7 +571,7 @@ export class CollaborationHub extends EventEmitter {
       if (method === 'desktop_wake_receipt') {
         if (!['accepted', 'uncertain'].includes(params.status)) throw new Error('Invalid Desktop wake receipt.');
         const result = await this.chatMailbox.finishWake(params.messageId, { claimId: params.claimId, state: params.status, detail: params.detail });
-        await this.claudeWakeManifest.publish(this.chatMailbox);
+        await this.refreshClaudeWakeManifest();
         return result;
       }
       if (this.closed) throw new Error('Broker is stopping.');
@@ -661,7 +674,7 @@ export class CollaborationHub extends EventEmitter {
       await notificationFence?.check();
       let receipt = await this.chatMailbox.send({ fromProvider: actor.peer, targetProvider,
         targetSessionId, message: params.message, requestId: params.requestId, wakeRequested: params.wake !== false,
-        ...(targetProvider === 'claude' && params.wake !== false ? { wakeRoute: this.state.nativeWakeRoute ?? 'renderer' } : {}),
+        ...(targetProvider === 'claude' && params.wake !== false ? { wakeRoute: this.state.nativeWakeRoute ?? 'mod-self' } : {}),
         ...(params.expiresInMs === undefined ? {} : { expiresInMs: params.expiresInMs }) },
       notificationFence ? { expiresAt: notificationFence.expiresAt, beforeEnqueue: notificationFence.check,
         onPhase: notificationFence.onPhase } : undefined);
@@ -669,7 +682,11 @@ export class CollaborationHub extends EventEmitter {
       if (['mod', 'mod-self'].includes(receipt.wakeRoute) && receipt.state === 'queued') { wakeStatus = 'waiting-for-mod'; this.emit('chat-wake'); }
       if (params.wake !== false && targetProvider === 'claude' && !['mod', 'mod-self'].includes(receipt.wakeRoute) && this.claudeWakeManifest && receipt.state === 'queued') {
         notificationFence?.onPhase('wake-preflight', receipt.messageId);
-        try { await notificationFence?.check(); await this.claudeWakeManifest.publish(this.chatMailbox); wakeStatus = 'waiting-for-desktop'; }
+        try {
+          await notificationFence?.check();
+          const publication = await this.refreshClaudeWakeManifest();
+          wakeStatus = publication === null ? 'unavailable' : 'waiting-for-desktop';
+        }
         catch { wakeStatus = 'unavailable'; }
       }
       if (params.wake !== false && targetProvider === 'codex' && this.chatWake && receipt.state === 'queued') {
@@ -743,13 +760,15 @@ export class CollaborationHub extends EventEmitter {
       if (params.checkNotification && actor.task)
         fail('CLAUDEX_ACCESS_DENIED', 'Only an external controller may inspect its native continuation route.');
       const response = await this.readTask(envelope);
-      if (params.checkNotification) response.notification.continuation = await inspectNotificationContinuation(this, this.state.tasks[params.taskId]);
+      const task = this.state.tasks[params.taskId] ?? await this.workArchive.task(params.taskId);
+      if (params.checkNotification) response.notification.continuation = await inspectNotificationContinuation(this, task);
+      response.rendererWakeManifest = this.claudeWakePublication ?? this.claudeWakeManifest?.diagnostics?.() ?? null;
       response.completionDelivery = taskCompletionDelivery(await completionDeliveryCapability(this),
-        this.state.tasks[params.taskId], response.notification.continuation);
+        task, response.notification.continuation);
       return response;
     }
     if (method === 'work_events' || method === 'artifact_read' || method === 'work_reports') {
-      const task = this.state.tasks[params.taskId];
+      const task = this.state.tasks[params.taskId] ?? await this.workArchive.task(params.taskId);
       this.allowed(actor, task, this.state);
       if (method === 'work_events') return queryWorkEvents(task, params);
       if (method === 'work_reports') return queryWorkReports(task, params);
@@ -798,13 +817,17 @@ export class CollaborationHub extends EventEmitter {
       return { tasks: page.map(task => ({ id: task.id, parentId: task.parentId, owner: task.owner, status: task.status,
         projectRoot: task.projectRoot ?? task.cwd, waitReason: this.waitReason(task),
         revision: task.revision, updatedAt: task.updatedAt, ...taskPresentation(task) })),
+        inventoryScope: 'active', archivedTaskCount: this.state.archive?.tasks ?? 0,
         totalCount: tasks.length, nextCursor: remaining.length > page.length
           ? Buffer.from(JSON.stringify({ filter, after: order === 'id' ? last.id : { updatedAt: last.updatedAt, id: last.id } })).toString('base64url') : null,
-        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps, allowWrite: this.permissionCeiling() >= 1,
+        limits: { maxWorkers: this.maxWorkers, maxDepth: this.maxDepth, maxSteps: this.maxSteps,
+          maxTasks: this.maxTasks, maxRequests: this.maxRequests, maxStateBytes: this.maxStateBytes,
+          capacity: workCapacity(this), archive: copy(this.state.archive ?? { tasks: 0, requests: 0 }), allowWrite: this.permissionCeiling() >= 1,
           allowFullAccess: this.permissionCeiling() >= 2, defaultPermission: this.effectiveDefaultPermission(),
           permissionCapabilities: Object.fromEntries(COLLABORATION_PERMISSIONS.map(level => [level, collaborationCapabilities(level)])),
           defaultModels: copy(this.state.defaultModels), defaultEfforts: copy(this.state.defaultEfforts), allProjects: true },
         blockedByUncertainWork: Object.values(this.state.tasks).some(task => task.status === 'uncertain'),
+        rendererWakeManifest: this.claudeWakePublication ?? this.claudeWakeManifest?.diagnostics?.() ?? null,
         completionDelivery: await completionDeliveryCapability(this),
         ...(!actor.task ? { chatMailbox: await this.chatMailbox.diagnostics() } : {}),
         uncertainTasks: Object.values(this.state.tasks).filter(task => task.status === 'uncertain').slice(0, 20)
@@ -814,17 +837,17 @@ export class CollaborationHub extends EventEmitter {
     if (method === 'wait' && params.targets !== undefined) return this.waitMany(envelope);
     if (method === 'wait') {
       if (params.view !== undefined && !['full', 'summary'].includes(params.view)) throw new Error('Invalid task view.');
-      this.allowed(actor, this.state.tasks[params.taskId], this.state);
+      const current = this.state.tasks[params.taskId] ?? await this.workArchive.task(params.taskId);
+      this.allowed(actor, current, this.state);
       if (actor.task?.id === params.taskId) throw new Error('A worker cannot wait on its own running task. Finish the native turn instead.');
       const timeoutMs = params.timeoutMs === undefined ? DEFAULT_WAIT_MS : params.timeoutMs;
       if (!validWaitTimeout(timeoutMs)
         || params.afterRevision !== undefined && (!Number.isSafeInteger(params.afterRevision) || params.afterRevision < 0)) throw new Error('Invalid wait bounds.');
-      const current = this.state.tasks[params.taskId];
       const baseline = params.afterRevision ?? current.revision;
       const signal = envelope.signal;
       let timedOut = false;
-      const ready = () => terminal.has(this.state.tasks[params.taskId].status)
-        || this.state.tasks[params.taskId].revision > (params.afterRevision ?? current.revision);
+      const ready = () => terminal.has((this.state.tasks[params.taskId] ?? current).status)
+        || (this.state.tasks[params.taskId] ?? current).revision > (params.afterRevision ?? current.revision);
       if (!ready() && timeoutMs) await new Promise(resolve => {
         const done = () => {
           clearTimeout(timer); this.off('change', changed);
@@ -842,13 +865,15 @@ export class CollaborationHub extends EventEmitter {
     if (this.closed) throw new Error('Broker is stopping; new mutations are refused.');
     requestId(params.requestId);
     // Resolve the caller-selected workspace before entering the serialized journal transaction.
-    let workspace, startPermission, startNotifications;
+    let workspace, startPermission, startNotifications, startObservability;
     if (method === 'start') {
       // Only external roots with an origin proof mechanism default to wake.
       // Preserve the original params for exact native call/result fingerprints.
       const notifications = startNotifications = notificationPolicy(params.notifications === undefined
         && (actor.task || typeof this.originVerifier !== 'function') ? { mode: 'off' } : params.notifications);
-      const observability = observabilityPolicy(params.observability);
+      const chosenObservability = observabilityPolicy(params.observability);
+      const observability = startObservability = { ...chosenObservability,
+        blockerNotifications: params.observability?.blockerNotifications ?? (!actor.task && notifications.mode === 'wake') };
       if (observability.blockerNotifications && !actor.task && notifications.mode === 'off')
         fail('CLAUDEX_ORIGIN_UNAVAILABLE', 'External blocker notifications require a queue or wake notification policy.');
       if (notifications.mode !== 'off' && (actor.task || typeof this.originVerifier !== 'function'))
@@ -863,12 +888,12 @@ export class CollaborationHub extends EventEmitter {
     const result = await this.mutate(async state => {
       const actor = this.actor(envelope, state);
       const key = digest(`${actor.key}:${params.requestId}`);
-      if (state.requests[key]) {
-        if (state.requests[key].fingerprint !== fingerprint) fail('CLAUDEX_REQUEST_ID_CONFLICT', 'requestId was reused with different input.');
-        return { ...copy(state.requests[key].result), replayed: true };
+      const priorRequest = state.requests[key] ?? await this.workArchive.request(key);
+      if (priorRequest) {
+        if (priorRequest.fingerprint !== fingerprint) fail('CLAUDEX_REQUEST_ID_CONFLICT', 'requestId was reused with different input.');
+        return { ...copy(priorRequest.result), replayed: true };
       }
       if (actor.task?.pendingHandoff || actor.task?.cancelRequested || actor.task?.pause?.state === 'checkpoint') throw new Error('Worker has relinquished ownership; further mutations are refused.');
-      if (Object.keys(state.requests).length >= this.maxRequests) throw new Error('Request journal capacity reached; no idempotency records were discarded.');
       let task;
       let cancelAccepted = false;
       let extraReceipt = {};
@@ -884,7 +909,6 @@ export class CollaborationHub extends EventEmitter {
           throw new Error('Worker capacity reached. Wait for existing children instead of creating a dependency that cannot run.');
         const depth = actor.task ? actor.task.depth + 1 : 0;
         if (depth > this.maxDepth) throw new Error('Delegation depth limit reached.');
-        if (Object.keys(state.tasks).length >= this.maxTasks) throw new Error('Task capacity reached; existing work was preserved.');
         task = { id: randomUUID(), parentId: actor.task?.id ?? null, returnTo: actor.task?.id ?? actor.peer,
           owner: params.provider, ...workspace, permission, model: selectedModel, effort: selectedEffort, depth, generation: 0,
           status: 'ready', revision: 1, createdAt: Date.now(), updatedAt: Date.now(), active: null,
@@ -892,7 +916,7 @@ export class CollaborationHub extends EventEmitter {
             { from: actor.task?.id ?? actor.peer, kind: 'request', text: params.prompt, at: Date.now() },
           ] };
         state.tasks[task.id] = task;
-        task.observability = observabilityPolicy(params.observability);
+        task.observability = startObservability;
         initializeWorkEvents(task, task.observability);
         if (startNotifications.mode !== 'off') task.notification = createTaskNotification(startNotifications, key);
         if (params.permission !== undefined && permissionRank(permission) < permissionRank(this.effectiveDefaultPermission(state))) {
@@ -900,6 +924,7 @@ export class CollaborationHub extends EventEmitter {
             message: `Permission was narrowed below the broker default. ${SANDBOX_PERMISSION_DESCRIPTION}` };
         }
       } else {
+        if (!state.tasks[params.taskId] && !actor.task) await this.workArchive.restore(state, params.taskId);
         task = state.tasks[params.taskId]; this.allowed(actor, task, state);
         // Review/closure annotates the same completed result. Do not manufacture
         // an unread child outcome, renew its expiry or wake its origin again.
@@ -1013,6 +1038,44 @@ export class CollaborationHub extends EventEmitter {
     for (const [id, active] of this.running) if (this.state.tasks[id].cancelRequested) active.controller.abort();
     this.schedule();
     return result;
+  }
+
+  suspendClaudeWakePublication() {
+    this.claudeWakeEpoch++;
+    clearTimeout(this.claudeWakeTimer); this.claudeWakeTimer = null;
+  }
+
+  async refreshClaudeWakeManifest() {
+    if (!this.claudeWakeManifest || this.closed) return null;
+    clearTimeout(this.claudeWakeTimer); this.claudeWakeTimer = null;
+    const epoch = this.claudeWakeEpoch;
+    const beforePublish = async () => {
+      const hold = await readAppStopState(dirname(this.root));
+      if (this.closed || epoch !== this.claudeWakeEpoch || hold?.stopped || hold?.resuming)
+        fail('CLAUDEX_WAKE_PUBLICATION_HELD', 'Renderer wake publication is held.');
+    };
+    const previous = this.claudeWakePublishing ?? Promise.resolve();
+    const operation = previous.then(async () => {
+      await beforePublish();
+      const result = await this.claudeWakeManifest.publish(this.chatMailbox, { beforePublish });
+      await beforePublish();
+      this.claudeWakePublication = result ? { state: 'published', ...result } : null;
+      clearTimeout(this.claudeWakeTimer);
+      if (Number.isSafeInteger(result?.nextPublicationAt)) {
+        this.claudeWakeTimer = setTimeout(() => {
+          this.claudeWakeTimer = null;
+          void this.refreshClaudeWakeManifest();
+        }, Math.max(1, result.nextPublicationAt - Date.now()));
+        this.claudeWakeTimer.unref?.();
+      }
+      return result;
+    }).catch(error => {
+      this.claudeWakePublication = { state: error.code === 'CLAUDEX_WAKE_PUBLICATION_HELD' ? 'held' : 'unavailable',
+        reason: error.code === 'CLAUDEX_WAKE_PUBLICATION_HELD' ? 'app-stopped-or-publication-stale' : 'manifest-publication-failed' };
+      return null;
+    });
+    this.claudeWakePublishing = operation;
+    return operation;
   }
 
   schedule() {
@@ -1288,14 +1351,16 @@ export class CollaborationHub extends EventEmitter {
       || new Set(targets.map(target => target.taskId)).size !== targets.length)
       fail('CLAUDEX_INVALID_WAIT', 'Wait requires 1–16 distinct targets and valid bounds; do not mix single-task fields.');
     const actor = this.actor(envelope);
+    const snapshots = new Map(await Promise.all(targets.map(async target => [target.taskId,
+      this.state.tasks[target.taskId] ?? await this.workArchive.task(target.taskId)])));
     const selected = targets.map(target => {
-      const task = this.state.tasks[target.taskId];
+      const task = snapshots.get(target.taskId);
       this.allowed(actor, task, this.state);
       if (actor.task?.id === task.id) fail('CLAUDEX_SELF_WAIT', 'A worker cannot wait on its own running task.');
       return { ...target, baseline: target.afterRevision ?? task.revision };
     });
     const ready = target => {
-      const task = this.state.tasks[target.taskId];
+      const task = this.state.tasks[target.taskId] ?? snapshots.get(target.taskId);
       return terminal.has(task.status) || task.revision > target.baseline;
     };
     let timedOut = false;
@@ -1325,7 +1390,14 @@ export class CollaborationHub extends EventEmitter {
     // acknowledgement commits, in the same serialized step as the read.
     return this.serialized(async () => {
       if (envelope.signal?.aborted) throw new Error('Collaboration wait connection closed.');
-      const state = this.state;
+      const state = { ...this.state, tasks: { ...this.state.tasks } };
+      const archived = new Set();
+      for (const { taskId } of targets) if (!state.tasks[taskId]) {
+        const tree = await this.workArchive.tree(taskId);
+        if (tree) for (const [id, task] of Object.entries(tree.tasks)) {
+          if (!state.tasks[id]) { state.tasks[id] = task; archived.add(id); }
+        }
+      }
       const actor = this.actor(envelope, state);
       const acknowledgements = [];
       const responses = await Promise.all(targets.map(async ({ taskId, afterRevision, baseline }) => {
@@ -1352,6 +1424,10 @@ export class CollaborationHub extends EventEmitter {
           changed: task.revision > (baseline ?? afterRevision ?? -1), timedOut };
         if (includeOutcome) { response.result = copy(task.result ?? null); response.error = task.error ?? null; }
       }
+      response.archived = archived.has(task.id);
+      response.limits = { maxSteps: this.maxSteps, transitionBudget: { used: task.generation,
+        remaining: Math.max(0, this.maxSteps - task.generation) }, capacity: workCapacity(this),
+        archive: copy(this.state.archive ?? { tasks: 0, requests: 0 }) };
       response.waitReason = this.waitReason(task, state);
       const messageIds = (task.notification?.deliveries ?? []).flatMap(delivery => delivery.messageId ? [delivery.messageId] : []);
       response.notification = notificationPresentation(task, messageIds.length ? await this.chatMailbox.statuses(messageIds) : undefined);
@@ -1390,6 +1466,8 @@ export class CollaborationHub extends EventEmitter {
 
   async close() {
     this.closed = true; this.emit('change');
+    this.suspendClaudeWakePublication();
+    await this.claudeWakePublishing;
     stopOriginRechecks(this);
     let cacheCloseError;
     try { await this.cacheWarm?.close(); } catch (error) { cacheCloseError = error; }

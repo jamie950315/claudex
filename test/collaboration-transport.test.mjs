@@ -91,6 +91,27 @@ test('dispatcher failure remains an error and is not retried', async t => {
   assert.equal(calls, 1);
 });
 
+test('capacity details survive Unix RPC and MCP without exposing arbitrary error data', async t => {
+  const { root } = await fixture(t, async () => {
+    throw Object.assign(new Error('Capacity exhausted'), { code: 'MAILBOX_CAPACITY_EXHAUSTED',
+      resource: 'bytes', used: 8388609, limit: 8388608, privateData: 'PRIVATE' });
+  });
+  await assert.rejects(callCollaboration({ root, peer: 'codex', method: 'chat_send', params: {} }), error => {
+    assert.equal(error.resource, 'bytes'); assert.equal(error.used, 8388609); assert.equal(error.limit, 8388608);
+    assert.equal(error.privateData, undefined); return true;
+  });
+  const input = new PassThrough(), output = new PassThrough(); let content = '';
+  output.on('data', chunk => { content += chunk; });
+  const running = runCollaborationMcp({ root, peer: 'codex', input, output });
+  input.end(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: {
+    name: 'claudex_chat_send', arguments: { provider: 'claude', sessionId: 'target',
+      message: 'Synthetic note', requestId: 'capacity' } } }) + '\n');
+  await running;
+  assert.deepEqual(JSON.parse(content).result.structuredContent.error, { code: 'MAILBOX_CAPACITY_EXHAUSTED',
+    message: 'Capacity exhausted', resource: 'bytes', used: 8388609, limit: 8388608 });
+  assert.doesNotMatch(content, /PRIVATE/);
+});
+
 test('a disconnected wait client releases its broker listener without cancelling queued work', async t => {
   let hub;
   const { root } = await fixture(t, envelope => hub.dispatch(envelope));

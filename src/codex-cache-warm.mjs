@@ -33,26 +33,51 @@ export class CodexCacheWarmer {
     after = (ms, callback) => { const timer = setTimeout(callback, ms); timer.unref?.(); return { cancel: () => clearTimeout(timer) }; } }) {
     this.manager = new CacheWarmManager({ root, provider: 'codex', stopped, now, onUserMessage, compactAfterWarm });
     Object.assign(this, { stopped, native, now, after });
-    this.bindings = new Map(); this.previews = new Map(); this.serial = Promise.resolve(); this.closed = false;
+    this.bindings = new Map(); this.nativeReasons = new Map(); this.previews = new Map(); this.serial = Promise.resolve(); this.closed = false; this.failure = null;
   }
   async initialize() { await this.manager.initialize(); return this; }
   enqueue(fn) { const work = this.serial.catch(() => {}).then(fn); this.serial = work; return work; }
+  background(fn, phase) {
+    const work = this.enqueue(fn).catch(() => this.providerFailure(phase));
+    this.serial = work; return work;
+  }
+  async providerFailure(phase) {
+    this.closed = true;
+    this.failure ??= { code: 'CACHE_WARM_PROVIDER_FAILED', reason: 'native-service-failed', phase };
+    this.previews.clear();
+    for (const b of this.bindings.values()) {
+      b.enabled = false; b.retired = true; this.cancel(b); b.expiry?.cancel(); b.completion?.cancel();
+    }
+    // Revocation is visible even if durable publication or native cleanup fails.
+    // In-flight attempts become uncertain, never fresh dispatch candidates.
+    const results = await Promise.allSettled([this.manager.close(this.failure),
+      ...[...this.bindings.values()].map(b => Promise.resolve().then(() => b.handle?.close()))]);
+    this.failure.cleanupFailed = results.some(result => result.status === 'rejected');
+    this.bindings.clear();
+  }
   valid(b) { return !this.closed && !b.retired && this.bindings.get(b.sessionId) === b; }
   fields(b) { return { sessionId: b.sessionId, cwd: b.cwd, instanceId: b.instanceId, epoch: b.epoch }; }
   cancel(b) { b.timer?.cancel(); b.timer = null; }
   async detach(b) {
     if (b.retired) return;
     this.cancel(b); b.expiry?.cancel(); b.completion?.cancel(); b.retired = true;
-    await b.handle?.close();
-    await this.manager.observe({ ...this.fields(b), sequence: ++b.sequence, phase: 'ended' });
+    this.nativeReasons.delete(b.sessionId); this.nativeReasons.set(b.sessionId, b.reason);
+    if (this.nativeReasons.size > 64) this.nativeReasons.delete(this.nativeReasons.keys().next().value);
+    try { await b.handle?.close(); }
+    finally {
+      await this.manager.observe({ ...this.fields(b), sequence: ++b.sequence, phase: 'ended' });
+      if (this.bindings.get(b.sessionId) === b) this.bindings.delete(b.sessionId);
+    }
   }
   async list(params = {}) {
     if (params.sessionId !== undefined || params.cwd !== undefined) identity(params);
     const result = await this.manager.list();
     const match = value => params.sessionId === undefined || value.sessionId === params.sessionId && value.cwd === params.cwd;
     return { ...result, bestEffort: true, limitations: risks,
+      providerStatus: { ...result.providerStatus, closed: this.closed || result.providerStatus.closed,
+        ...(this.failure ?? {}), bindings: this.bindings.size },
       usageProvenance: 'native-cumulative-delta', modelEvidence: 'configured-thread-settings', upstreamResponseIds: false,
-      policies: result.policies.filter(match).map(p => ({ ...p, nativeReason: this.bindings.get(p.sessionId)?.reason ?? null })),
+      policies: result.policies.filter(match).map(p => ({ ...p, nativeReason: this.bindings.get(p.sessionId)?.reason ?? this.nativeReasons.get(p.sessionId) ?? p.reason })),
       attempts: result.attempts.filter(match) };
   }
   async prepare(params, actor) {
@@ -85,21 +110,23 @@ export class CodexCacheWarmer {
       if (!this.bindings.has(p.sessionId) && this.bindings.size >= 64) throw new Error('Native cache-warm binding capacity reached.');
       const old = this.bindings.get(p.sessionId);
       if (old) await this.detach(old);
-      const b = { sessionId: p.sessionId, cwd: p.cwd, instanceId: randomUUID(), epoch: 0, sequence: 0,
+      this.bindingClock = Math.max(this.now(), (this.bindingClock ?? -1) + 1);
+      const b = { sessionId: p.sessionId, cwd: p.cwd, instanceId: `warm-${this.bindingClock}-${randomUUID()}`, epoch: 0, sequence: 0,
         fingerprint: state.fingerprint, model: state.model, effort: state.effort, phase: state.phase,
         counter: createCodexUsageCounter(p.sessionId), samples: [], enabled: false, reason: 'awaiting-evidence', turn: null };
       this.bindings.set(b.sessionId, b);
+      this.nativeReasons.delete(b.sessionId);
       try {
         b.handle = await this.native.connect(p, event => {
           if (!this.valid(b)) return;
           b.queued = (b.queued ?? 0) + 1;
           if (b.queued > 256) { b.overflow = true; return; }
-          void this.enqueue(async () => {
+          void this.background(async () => {
             b.queued--;
             if (!this.valid(b)) return;
             try { if (b.overflow) throw new Error('native-event-capacity'); await this.event(b, event); }
             catch (error) { await this.fail(b, error.message, true); }
-          }).catch(() => { this.closed = true; this.cancel(b); });
+          }, 'native-events');
         });
         if (b.handle.state.fingerprint !== p.native.fingerprint || this.now() >= p.expiresAt || this.closed || await this.stopped())
           throw new Error('Native binding changed or confirmation expired.');
@@ -225,20 +252,20 @@ export class CodexCacheWarmer {
   expire(b, until) {
     b.expiry?.cancel(); b.until = until;
     b.expiry = this.after(Math.max(0, until - this.now()), () => {
-      void this.enqueue(async () => {
+      void this.background(async () => {
         // The compaction that follows the limit can be due after its end time.
         if (!this.valid(b) || b.compacting || await this.manager.compactionAt(this.fields(b)) !== null) return;
         return this.fail(b, 'duration-limit', false);
-      }).catch(() => { this.closed = true; });
+      }, 'expiry');
     });
   }
   schedule(b, nextAt) {
     this.cancel(b);
     b.timer = this.after(Math.max(0, nextAt - this.now()), () => {
-      void this.enqueue(async () => {
+      void this.background(async () => {
         if (!this.valid(b) || !b.enabled) return;
         try { await this.tick(b); } catch (error) { await this.fail(b, error.message, true); }
-      }).catch(() => { this.closed = true; this.cancel(b); });
+      }, 'schedule');
     });
   }
   async tick(b) {
@@ -272,7 +299,7 @@ export class CodexCacheWarmer {
       if (result.status === 'accepted' && typeof result.turnId === 'string' && result.turnId) {
         outcome = 'submitted'; b.warmTurnId = result.turnId;
         b.completion = this.after(180000, () => {
-          void this.enqueue(() => this.valid(b) && this.fail(b, 'native-completion-timeout', true)).catch(() => { this.closed = true; });
+          void this.background(() => this.valid(b) && this.fail(b, 'native-completion-timeout', true), 'completion');
         });
       } else if (['busy', 'rejected', 'unavailable'].includes(result.status)) outcome = 'rejected';
     } finally {
@@ -305,8 +332,8 @@ export class CodexCacheWarmer {
       if (result.status === 'accepted') {
         outcome = 'accepted';
         b.completion = this.after(600000, () => {
-          void this.enqueue(() => this.valid(b) && b.compacting?.attemptId === attemptId
-            && this.finishCompaction(b, attemptId, 'uncertain')).catch(() => { this.closed = true; });
+          void this.background(() => this.valid(b) && b.compacting?.attemptId === attemptId
+            && this.finishCompaction(b, attemptId, 'uncertain'), 'compaction');
         });
       } else if (['busy', 'rejected', 'unavailable'].includes(result.status)) outcome = 'rejected';
     } catch { /* The outcome set before the failing step stands. */ }

@@ -4,17 +4,19 @@ import { stageClaudeMod } from '../src/claude-mod-install.mjs';
 const help = `Claudex native Mod staging (no installation or service changes)
 
 node bin/claudex-mod.mjs stage --root /absolute/claudex-root --output /new/stage-directory
-  [--node /absolute/node] [--native-wake] [--self-wake]
+  [--node /absolute/node] [--no-native-wake] [--no-self-wake]
 
 The parent of --output must exist; the output itself must be new.
 --root is the synchronization root, with collaboration/ beneath it.
---native-wake requires the separate Desktop acceptance plan.
+Receiver defaults are enabled; replies may consume model allowance.
+Explicit --no-native-wake/--no-self-wake stage a disabled receiver.
+Native delivery still requires the documented Desktop acceptance plan.
 After staging, run the native validate/test commands in docs/claude-mod.md.
 `;
 try {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+  const { values, positionals } = parseArgs({ allowPositionals: true, allowNegative: true, options: {
     root: { type: 'string' }, output: { type: 'string' }, node: { type: 'string' },
-    'native-wake': { type: 'boolean', default: false }, 'self-wake': { type: 'boolean', default: false }, help: { type: 'boolean' },
+    'native-wake': { type: 'boolean', default: true }, 'self-wake': { type: 'boolean', default: true }, help: { type: 'boolean' },
   } });
   if (values.help || positionals.length === 0) console.log(help);
   else if (positionals.length === 1 && positionals[0] === 'stage') {

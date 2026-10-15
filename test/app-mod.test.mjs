@@ -58,8 +58,8 @@ test('fresh app installation stages every dependency, configures both identities
   const result = await ensureAppMod(o);
   assert.equal(result.state, 'ready', JSON.stringify(result));
   assert.equal(result.loaded, null);
-  assert.equal(result.modSettings.inline.nativeWake, false);
-  assert.equal(result.modSettings.marketplace.selfWake, false);
+  assert.equal(result.modSettings.inline.nativeWake, true);
+  assert.equal(result.modSettings.marketplace.selfWake, true);
   assert.equal(result.modSettings.inline.stateRoot, o.root);
   const journal = JSON.parse(await readFile(join(o.root, 'app-mod', 'install.json')));
   assert.equal(journal.phase, 'complete');
@@ -72,11 +72,11 @@ test('fresh app installation stages every dependency, configures both identities
   assert.equal(model.calls.some(c => c.input || c.args.includes('add') || c.args.includes('install') || c.args.includes('update') || c.args.includes('validate')), false);
 });
 
-test('receiver is explicit, each identity preference is preserved, disabled installation stays disabled', async t => {
+test('receiver defaults preserve each explicit identity preference and disabled installations', async t => {
   const { o, model } = await fixture(t);
   await ensureAppMod(o);
-  model.configurations['claudex@inline'].nativeWake = 'true';
-  model.configurations['claudex@inline'].selfWake = 'true';
+  model.configurations['claudex@claudex-local'].nativeWake = 'false';
+  model.configurations['claudex@claudex-local'].selfWake = 'false';
   assert.equal((await ensureAppMod(o)).modSettings.marketplace.nativeWake, false);
   assert.equal((await ensureAppMod(o)).modSettings.inline.nativeWake, true);
   const activated = await ensureAppMod({ ...o, receiver: 'enabled' });
@@ -199,6 +199,8 @@ test('upgrade preserves prior source and per-identity opt-ins; newer versions ne
   const older = await versionedEngine(scratch, '0.1.0');
   assert.equal((await ensureAppMod({ ...o, engineRoot: older })).state, 'ready');
   const oldSource = model.source.path;
+  model.configurations['claudex@claudex-local'].nativeWake = 'false';
+  model.configurations['claudex@claudex-local'].selfWake = 'false';
   model.configurations['claudex@inline'].nativeWake = 'true';
   model.configurations['claudex@inline'].selfWake = 'true';
   assert.equal((await inspectAppMod(o)).state, 'update-available');
@@ -230,4 +232,48 @@ test('a pre-existing foreign cache is rejected without overwriting it', async t 
   assert.equal((await ensureAppMod(o)).reason, 'content-mismatch');
   assert.equal(model.calls.some(c => c.args.includes('install')), false);
   assert.equal(await readFile(join(path, 'foreign-file'), 'utf8'), 'preserve');
+});
+
+
+test('startup fills only never-configured receiver keys, separately for both identities', async t => {
+  const { o, model } = await fixture(t);
+  await ensureAppMod(o);
+  model.configurations['claudex@claudex-local'].nativeWake = 'false';
+  delete model.configurations['claudex@claudex-local'].selfWake;
+  delete model.configurations['claudex@inline'].nativeWake;
+  model.configurations['claudex@inline'].selfWake = 'false';
+  const before = JSON.stringify(model.configurations);
+  const observed = await inspectAppMod(o);
+  assert.equal(observed.state, 'update-available');
+  assert.equal(JSON.stringify(model.configurations), before, 'inspection does not fill defaults');
+  const result = await ensureAppMod(o);
+  assert.equal(result.state, 'ready', JSON.stringify(result));
+  assert.deepEqual(result.modSettings.marketplace.wakeConfigured, { nativeWake: true, selfWake: true });
+  assert.equal(result.modSettings.marketplace.nativeWake, false);
+  assert.equal(result.modSettings.marketplace.selfWake, true);
+  assert.equal(result.modSettings.inline.nativeWake, true);
+  assert.equal(result.modSettings.inline.selfWake, false);
+  assert.equal(model.calls.some(call => call.args.includes('native-wake')), false);
+  assert.equal(result.journals.actions.active, 0);
+  assert.equal(result.journals.selfDispatch.remaining, 2048);
+});
+
+test('upgrade replaces old source defaults only where no preference was saved', async t => {
+  const { o, model, scratch } = await fixture(t);
+  const older = await versionedEngine(scratch, '0.1.0');
+  const legacy = join(scratch, 'legacy-disabled-defaults');
+  await stageClaudeMod({ output: legacy, stateRoot: o.root, repoRoot: older, nodeBinary: o.node, nativeWake: false, selfWake: false });
+  model.source = { name: 'claudex-local', source: 'directory', path: legacy };
+  await o.run(o.claudeBinary, ['plugin', 'install', 'claudex@claudex-local'], { env: { HOME: o.home } });
+  model.configurations['claudex@inline'] = { stateRoot: o.root, nodeBinary: o.node, selfWake: 'false' };
+  model.configurations['claudex@claudex-local'] = { stateRoot: o.root, nodeBinary: o.node, nativeWake: 'false' };
+  const before = await inspectAppMod(o);
+  assert.equal(before.modSettings.inline.nativeWake, false, 'old schema default is false but not a saved choice');
+  assert.equal(before.modSettings.marketplace.selfWake, false);
+  const result = await ensureAppMod(o);
+  assert.equal(result.state, 'ready', JSON.stringify(result));
+  assert.equal(result.modSettings.inline.nativeWake, true);
+  assert.equal(result.modSettings.inline.selfWake, false);
+  assert.equal(result.modSettings.marketplace.nativeWake, false);
+  assert.equal(result.modSettings.marketplace.selfWake, true);
 });

@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { MOD_STAGE_FILES, stageClaudeMod } from './claude-mod-install.mjs';
 import { writeJSON, withLock } from './storage.mjs';
+import { inspectModJournals } from './claude-mod-journal.mjs';
 
 const ID = 'claudex@claudex-local';
 const INLINE = 'claudex@inline';
@@ -115,8 +116,8 @@ async function bundle(o) {
       requireValue(manifest.name === 'claudex' && /^\d+\.\d+\.\d+$/.test(manifest.version), 'invalid-bundle', 'The bundled Mod identity or version is invalid.');
       manifest.userConfig.stateRoot.default = o.root;
       manifest.userConfig.nodeBinary.default = o.node;
-      manifest.userConfig.nativeWake.default = false;
-      manifest.userConfig.selfWake.default = false;
+      manifest.userConfig.nativeWake.default = true;
+      manifest.userConfig.selfWake.default = true;
       bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
     }
     hashes[target(file)] = digest(bytes);
@@ -166,17 +167,22 @@ async function settings(o, installed) {
   const market = await command(o, ['plugin', 'configure', ID, '--json']);
   const inline = await command(o, [`--plugin-dir=${installed.installPath}`, 'plugin', 'configure', INLINE, '--json']);
   const parse = (data, id) => {
-    requireValue(data.pluginId === id && data.inputs && data.schema, 'native-configuration', 'The native Mod configuration could not be verified.');
+    requireValue(data.pluginId === id && data.inputs && data.schema && Array.isArray(data.configured), 'native-configuration', 'The native Mod configuration could not be verified.');
     const values = {};
     for (const name of ['stateRoot', 'nodeBinary', 'nativeWake', 'selfWake']) {
       requireValue(data.schema[name]?.type === (name.endsWith('Wake') ? 'boolean' : 'string'), 'native-configuration', 'The Mod configuration schema is unsupported.');
-      values[name] = data.inputs[name] ?? data.schema[name].default;
+      requireValue(!data.configured.includes(name) || Object.hasOwn(data.inputs, name),
+        'native-configuration', 'A saved Mod preference is missing from the native response.');
+      values[name] = Object.hasOwn(data.inputs, name) ? data.inputs[name] : data.schema[name].default;
       if (name.endsWith('Wake')) {
         requireValue([true, false, 'true', 'false'].includes(values[name]), 'native-configuration', 'The native Mod wake preference is invalid.');
         values[name] = values[name] === true || values[name] === 'true';
       }
     }
-    return { ...values, configured: ['stateRoot', 'nodeBinary', 'nativeWake', 'selfWake'].every(key => data.configured?.includes(key)) };
+    // Native inputs can include effective defaults. Only the manager's configured
+    // keys prove a saved choice; an explicit false is never replaced by a default.
+    return { ...values, wakeConfigured: Object.fromEntries(['nativeWake', 'selfWake'].map(key => [key, data.configured.includes(key)])),
+      configured: ['stateRoot', 'nodeBinary', 'nativeWake', 'selfWake'].every(key => data.configured.includes(key)) };
   };
   return { marketplace: parse(market, ID), inline: parse(inline, INLINE) };
 }
@@ -203,7 +209,7 @@ async function inspect(o, packaged) {
   if (current.installed.enabled !== true) { state = 'disabled'; reason = 'disabled-by-user'; }
   else if (relative < 0) { state = 'update-available'; reason = 'bundled-update'; }
   else if (!configReady) { state = 'update-available'; reason = 'configuration-required'; }
-  current.result = report(state, reason, packaged, current, { installPath: current.installed.installPath, modSettings: current.modSettings });
+  current.result = report(state, reason, packaged, current, { installPath: current.installed.installPath, modSettings: current.modSettings, journals: await inspectModJournals(o.root) });
   return current;
 }
 
@@ -295,8 +301,8 @@ export async function ensureAppMod(input) {
       for (const [key, id] of [['marketplace', ID], ['inline', INLINE]]) {
         const prior = existing[key];
         const values = { stateRoot: o.root, nodeBinary: o.node,
-          nativeWake: String(o.receiver === undefined ? prior.nativeWake : o.receiver === 'enabled'),
-          selfWake: String(o.receiver === undefined ? prior.selfWake : o.receiver === 'enabled') };
+          nativeWake: String(o.receiver === undefined ? prior.wakeConfigured.nativeWake ? prior.nativeWake : true : o.receiver === 'enabled'),
+          selfWake: String(o.receiver === undefined ? prior.wakeConfigured.selfWake ? prior.selfWake : true : o.receiver === 'enabled') };
         if (Object.entries(values).every(([name, value]) => String(existing[key][name]) === value) && existing[key].configured) continue;
         await command(o, [...(key === 'inline' ? [`--plugin-dir=${installed.installPath}`] : []), 'plugin', 'configure', id, '--values-stdin', '--json'], { input: values });
       }

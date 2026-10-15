@@ -1,6 +1,6 @@
 # Opt-in native cache warming
 
-Claudex 1.4.7 and Claude Mod 0.8.29 provide bounded, per-conversation cache warming.
+Claudex 1.4.7 and Claude Mod 0.8.30 provide bounded, per-conversation cache warming.
 It is **off by default**. It does not enroll all conversations, start a second
 owner, change the model or effort, extract credentials, or use another API key.
 Claude uses a loaded Code Mod session. Codex Desktop has a separate
@@ -16,7 +16,7 @@ observes and submits only into its own existing native session.
 
 ## Enable one Claude conversation
 
-Use the intended existing conversation with a freshly loaded 0.8.29 companion and
+Use the intended existing conversation with a freshly loaded 0.8.30 companion and
 a 1.2.20 or later broker. Older loaded sessions can retain the previous Mod until a normal
 new session or native reload; an installed manifest alone is not loaded-code
 acceptance. Do not restart active work merely to activate warming.
@@ -572,6 +572,14 @@ The broker does not restore stale native observations after a restart; interrupt
 dispatches remain uncertain. The private journal is bounded to 64 policies and
 2,048 attempts/confirmation receipts and fails explicitly at capacity; it never
 prunes native history or silently deletes old intent records.
+
+Advanced `cache-warm status` output includes `providerStatus`: `closed`, a
+content-free failure `reason`/`code`, and current binding counts. A provider-wide
+failure disables its schedules and cancels timers; already dispatched uncertain
+requests remain recorded and are never resent. The 64 native-binding limit counts
+concurrent bindings, so ending old sessions releases those slots. Retired observer
+callbacks cannot re-enroll or replace a current binding. A failed service requires
+normal broker recovery and a new explicit enrollment, not an automatic retry.
 
 ## Claude native limitations and acceptance
 

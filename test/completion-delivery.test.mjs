@@ -25,7 +25,7 @@ test('list and status distinguish broker availability, origin hook trust, route 
   let capability = (await f.call('list')).completionDelivery;
   assert.equal(capability.originHooks.state, 'unknown');
   assert.equal(capability.nextStep, 'wait-for-current-hook-inspection');
-  assert.deepEqual(capability.selectedRoute, { claude: 'renderer', codex: 'native-owner' });
+  assert.deepEqual(capability.selectedRoute, { claude: 'mod-self', codex: 'native-owner' });
   await f.watcher({ ...f.hooks, codex: { configured: true, trusted: false } });
   capability = (await f.call('list')).completionDelivery;
   assert.equal(capability.originHooks.codex.state, 'waiting');
