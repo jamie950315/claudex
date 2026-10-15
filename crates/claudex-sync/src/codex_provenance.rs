@@ -1244,24 +1244,36 @@ fn late_gap_activity(row: &Value) -> bool {
         return true;
     }
     row["type"] == "event_msg"
-        && p["type"].as_str().is_some_and(|s| {
-            [
-                "task_",
-                "turn_aborted",
-                "item_",
-                "user_message",
-                "agent_",
-                "exec_",
-                "mcp_",
-                "patch_",
-                "web_search",
-                "thread_goal_",
-                "error",
-                "stream_error",
-            ]
-            .iter()
-            .any(|prefix| s.starts_with(prefix))
-        })
+        && matches!(
+            p["type"].as_str(),
+            Some(
+                "task_started"
+                    | "task_complete"
+                    | "turn_aborted"
+                    | "item_started"
+                    | "item_completed"
+                    | "user_message"
+                    | "agent_message"
+                    | "agent_message_delta"
+                    | "agent_reasoning"
+                    | "agent_reasoning_delta"
+                    | "agent_reasoning_raw_content"
+                    | "agent_reasoning_raw_content_delta"
+                    | "exec_command_begin"
+                    | "exec_command_end"
+                    | "exec_command_output_delta"
+                    | "mcp_tool_call_begin"
+                    | "mcp_tool_call_end"
+                    | "patch_apply_begin"
+                    | "patch_apply_end"
+                    | "web_search_begin"
+                    | "web_search_end"
+                    | "thread_goal_updated"
+                    | "thread_goal_cleared"
+                    | "error"
+                    | "stream_error"
+            )
+        )
 }
 
 #[derive(Clone, Debug)]
@@ -2575,6 +2587,19 @@ process.stdout.write(JSON.stringify(result));
             framed("future_metadata", json!({"novel":true}), 201500, 7),
         );
         f.rows[8]["ordinal"] = json!(8);
+        write(&f.source.path, &f.rows);
+        assert!(
+            f.source
+                .late_items(&f.turns, &BTreeSet::new())
+                .unwrap()
+                .is_some()
+        );
+        f.rows[7] = framed(
+            "event_msg",
+            json!({"type":"agent_future_metadata","novel":true}),
+            201500,
+            7,
+        );
         write(&f.source.path, &f.rows);
         assert!(
             f.source
