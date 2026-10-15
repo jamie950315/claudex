@@ -137,7 +137,7 @@ export async function inspectNotificationContinuation(hub, task) {
   } else if (['mod', 'mod-self'].includes(route)) {
     const diagnosis = await modDeliveryDiagnosis(hub, { targetProvider: 'claude', targetSessionId: n.origin.sessionId,
       wakeRoute: route, state: 'queued' });
-    observation = ['receiver-observed', 'sender-observed'].includes(diagnosis?.reason)
+    observation = ['receiver-observed', 'receiver-observed-native-default', 'sender-observed'].includes(diagnosis?.reason)
       ? result('await-notification', diagnosis.reason, 'mod-self-reported')
       : { ...result('wait', diagnosis?.reason ?? 'receiver-unavailable'),
         ...(diagnosis?.detail ? { detail: diagnosis.detail } : {}),

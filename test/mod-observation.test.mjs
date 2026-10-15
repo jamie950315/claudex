@@ -156,7 +156,7 @@ test('aggregate status groups exact version and build without identities or disp
   assert.equal(status.diagnosticOnly, true); assert.equal(status.provenance, 'mod-self-reported');
   assert.deepEqual(status.versions.find(row => row.version === MOD_VERSION), { version: MOD_VERSION, build: MOD_BUILD,
     observers: 2, nativeWakeCount: 2, selfWakeCount: 1, bothEnabledCount: 1,
-    allowCount: 1, holdCount: 1, refuseCount: 0, unknownPolicyCount: 0, enabledAllowCount: 1 });
+    allowCount: 1, holdCount: 1, refuseCount: 0, unknownPolicyCount: 0, enabledAllowCount: 1, enabledDefaultCount: 0 });
   assert.equal(status.versions.find(row => row.version === '0.6.2').refuseCount, 1);
   assert.deepEqual(f.hub.state, before);
   assert.equal(modSessionObservation(f.hub, source).expiresAt, current.expiresAt);
@@ -224,7 +224,7 @@ test('native policy observations distinguish an unset setting from unavailable o
     bridge: async request => { calls.push(request); return bridge(request); } };
   await observer.start(api); t.after(() => observer.stop());
   for (const [index, [read, evidence, reason, policy]] of [
-    [async () => undefined, 'setting-unset', 'native-policy-unset', 'unknown'],
+    [async () => undefined, 'setting-unset', 'receiver-observed-native-default', 'unknown'],
     [async () => { throw new Error('NEVER_COPY_NATIVE_POLICY_FAILURE'); }, 'read-failed', 'native-policy-unavailable', 'unknown'],
     [async () => 'NEVER_COPY_NATIVE_POLICY_VALUE', 'unrecognized', 'native-policy-unrecognized', 'unknown'],
     [async () => 'hold', 'explicit', 'native-inbound-hold', 'hold'],
@@ -237,7 +237,7 @@ test('native policy observations distinguish an unset setting from unavailable o
     assert.equal(diagnosis.receiver.inboundPolicy, policy);
     assert.equal(diagnosis.receiver.inboundPolicyEvidence, evidence);
     assert.equal(diagnosis.diagnosticOnly, true);
-    if (policy === 'unknown') {
+    if (policy === 'unknown' && evidence !== 'setting-unset') {
       assert.match(diagnosis.missingEvidence, /unverified|could not read/);
       assert.match(diagnosis.nextStep, /claudex_wait/);
     } else {

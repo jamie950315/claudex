@@ -32,7 +32,7 @@ export async function completionDeliveryCapability(hub) {
   let receiver;
   if (route === 'mod-self') {
     const enabled = observed.receiver.bothEnabledCount > 0;
-    const allowed = observed.versions.some(value => value.enabledAllowCount > 0);
+    const allowed = observed.versions.some(value => value.enabledAllowCount > 0 || value.enabledDefaultCount > 0);
     receiver = { state: enabled && allowed ? 'observed' : 'waiting',
       reason: !observed.liveObserverCount ? 'no-live-receiver' : !enabled ? 'receiver-opt-ins-disabled'
         : allowed ? 'loaded-receiver-observed' : 'recipient-native-policy-unverified',

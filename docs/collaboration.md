@@ -382,9 +382,11 @@ origin. Status/wait remains the authoritative result path.
 origin-hook trust for each provider, the selected routes, recipient observations
 and a concrete next step. Broker readiness alone does not certify a completion
 wake. The app shows **Completion delivery** separately from broker setup.
-An unset native inbound policy is reported as `native-policy-unset`, with the
-missing evidence and next step; an unavailable settings read or unrecognized
-value has its own diagnosis. An earlier ACK does not prove current native policy.
+An unset native inbound policy is the native default: own-inbox dispatch stops
+only on an explicit hold or refusal, so the diagnosis reports
+`receiver-observed-native-default` and a caller may await the notification. An
+unavailable settings read or unrecognized value has its own diagnosis with the
+missing evidence and next step. An earlier ACK does not prove current native policy.
 These diagnostics do not enable receiver opt-ins or change native admission.
 
 Task and origin quotas each allow sixteen notification intents per rolling

@@ -207,7 +207,7 @@ test('Claude mod-self continuation names missing policy evidence without treatin
   const f = await fixture(t, { peer: 'claude' }), task = await f.start(); await f.bind(task);
   await f.call('native_wake', { route: 'mod-self' });
   for (const [index, [evidence, reason]] of [
-    ['setting-unset', 'native-policy-unset'], ['read-failed', 'native-policy-unavailable'],
+    ['read-failed', 'native-policy-unavailable'],
     ['unrecognized', 'native-policy-unrecognized'], [undefined, 'native-policy-unknown'],
   ].entries()) {
     await f.call('mod_wake_observe', { source: { sessionId, cwd: f.parent },
@@ -218,6 +218,17 @@ test('Claude mod-self continuation names missing policy evidence without treatin
     assert.match(result.missingEvidence, /native|inbound policy/);
     assert.match(result.nextStep, /claudex_wait/);
   }
+  assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
+});
+
+test('Claude mod-self continuation accepts an unset inbound policy as the native default the dispatch applies', async t => {
+  const f = await fixture(t, { peer: 'claude' }), task = await f.start(); await f.bind(task);
+  await f.call('native_wake', { route: 'mod-self' });
+  await f.call('mod_wake_observe', { source: { sessionId, cwd: f.parent },
+    observation: observation({ sequence: 1, inboundPolicy: 'unknown', inboundPolicyEvidence: 'setting-unset' }) });
+  const result = await f.inspect(task);
+  expect(result, 'await-notification', 'receiver-observed-native-default');
+  assert.equal(result.evidence, 'mod-self-reported');
   assert.equal(f.hub.state.tasks[task.taskId].notification.deliveries.length, 0);
 });
 

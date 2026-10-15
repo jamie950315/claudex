@@ -4,9 +4,6 @@ import { peerContext } from './chat-mailbox.mjs';
 export const MOD_OBSERVATION_TTL = 60000;
 const observations = new WeakMap();
 const missingPolicyProofs = {
-  'setting-unset': { reason: 'native-policy-unset',
-    missingEvidence: 'The loaded Mod read native settings without crossSessionInbound. Its effective native default is unverified; this is not an observed hold or refusal.',
-    nextStep: 'Keep monitoring with claudex_wait. Verified effective native inbound policy is required before relying on asynchronous completion wake; an earlier ACK does not establish the current policy.' },
   'read-failed': { reason: 'native-policy-unavailable',
     missingEvidence: 'The loaded Mod could not read native inbound policy. No native hold, refusal or allow was observed.',
     nextStep: 'Keep monitoring with claudex_wait and inspect the next normal native policy observation. No raw settings error is retained.' },
@@ -14,6 +11,11 @@ const missingPolicyProofs = {
     missingEvidence: 'The loaded Mod read an unrecognized native inbound policy value. Its effective behavior is unverified; the raw value is not retained.',
     nextStep: 'Keep monitoring with claudex_wait. Native policy support must be verified before relying on asynchronous completion wake; do not infer allow from this observation.' },
 };
+// An unset crossSessionInbound is the native default. The Mod's own-inbox dispatch
+// stops only on an explicit hold/refuse, and authorized Desktop acceptance on
+// Claude Code 2.1.295 delivered and acknowledged with the setting unset, so the
+// read-time diagnosis must not report it as a blocker the dispatch does not apply.
+export const nativeDefaultPolicy = value => value?.inboundPolicy === 'unknown' && value.inboundPolicyEvidence === 'setting-unset';
 const legacyMissingPolicyProof = { reason: 'native-policy-unknown',
   missingEvidence: 'The loaded Mod reported unknown inbound policy without a reason. An observation distinguishing an unset setting, failed read or unrecognized value is missing.',
   nextStep: 'Keep monitoring with claudex_wait. The updated Mod can report the missing reason after a normal native lifecycle boundary; an earlier ACK does not establish the current policy.' };
@@ -51,13 +53,14 @@ export function modWakeStatus(hub, now = Date.now()) {
     let entry = versions.get(key);
     if (!entry) { entry = { version: value.modVersion, build: value.modBuild ?? null, observers: 0,
       nativeWakeCount: 0, selfWakeCount: 0, bothEnabledCount: 0, allowCount: 0, holdCount: 0,
-      refuseCount: 0, unknownPolicyCount: 0, enabledAllowCount: 0 }; versions.set(key, entry); }
+      refuseCount: 0, unknownPolicyCount: 0, enabledAllowCount: 0, enabledDefaultCount: 0 }; versions.set(key, entry); }
     entry.observers++;
     if (value.nativeWake) entry.nativeWakeCount++;
     if (value.selfWake) entry.selfWakeCount++;
     if (value.nativeWake && value.selfWake) entry.bothEnabledCount++;
     entry[{ allow: 'allowCount', hold: 'holdCount', refuse: 'refuseCount', unknown: 'unknownPolicyCount' }[value.inboundPolicy]]++;
     if (value.nativeWake && value.selfWake && value.inboundPolicy === 'allow') entry.enabledAllowCount++;
+    if (value.nativeWake && value.selfWake && nativeDefaultPolicy(value)) entry.enabledDefaultCount++;
   }
   const count = predicate => live.filter(predicate).length;
   return { diagnosticOnly: true, provenance: 'mod-self-reported', observedAt: now,
@@ -86,7 +89,7 @@ export async function modDeliveryDiagnosis(hub, message) {
     if (!target || !mapped || mapped.cwd !== target.cwd) reason = 'target-unmapped';
   } catch { reason = 'target-unmapped'; }
   const observation = target ? modSessionObservation(hub, target) : null;
-  const policyProof = observation?.inboundPolicy === 'unknown'
+  const policyProof = observation?.inboundPolicy === 'unknown' && !nativeDefaultPolicy(observation)
     ? missingPolicyProofs[observation.inboundPolicyEvidence] ?? legacyMissingPolicyProof : null;
   if (!reason && hub.closed) reason = 'broker-stopping';
   if (!reason && targetChat.phase === 'ended') reason = 'waiting-for-resume';
@@ -94,7 +97,7 @@ export async function modDeliveryDiagnosis(hub, message) {
     reason = !observation ? 'no-live-receiver' : !observation.nativeWake ? 'native-wake-disabled'
       : !observation.selfWake ? 'self-delivery-disabled'
       : ['hold', 'refuse'].includes(observation.inboundPolicy) ? `native-inbound-${observation.inboundPolicy}`
-      : policyProof ? policyProof.reason : 'receiver-observed';
+      : policyProof ? policyProof.reason : nativeDefaultPolicy(observation) ? 'receiver-observed-native-default' : 'receiver-observed';
   }
   if (!reason) {
     const senders = [...records(hub).values()].filter(value => value.lifecycle === 'loaded'

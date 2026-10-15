@@ -71,8 +71,11 @@ inbound policy and inbox capability. Do not create a model session or silently
 fall back. Verify exact recipient and app-stop again before native dispatch.
 Policy observations distinguish an explicit allow/hold/refuse from an unset
 crossSessionInbound setting, a failed settings read and an unrecognized value.
-An unset setting leaves the effective native default unverified; do not infer
-allow or a current delivery guarantee from an earlier ACK. These content-free
+An unset setting is the native default, which own-inbox dispatch already admits
+(it stops only on explicit hold/refuse); by user decision after authorized
+Claude Code 2.1.295 Desktop deliveries with the setting unset, diagnostics report
+it as receiver-observed-native-default, not as missing evidence. A failed read or
+unrecognized value stays unverified; never infer a delivery guarantee from an ACK. These content-free
 details affect diagnostics only, never receiver defaults, native admission,
 claims, dispatch guards or replay. Older unknown observations retain their
 explicit missing-evidence diagnosis until a fresh observer reports the reason.
