@@ -2,5 +2,6 @@
 pub mod codex_layout;
 pub mod json;
 pub mod rpc;
+pub mod shared_codex;
 pub mod storage;
 pub mod version;

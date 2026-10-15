@@ -145,6 +145,15 @@ struct Inner {
     child: Mutex<Option<Child>>,
     timeout: Duration,
 }
+impl Drop for Inner {
+    fn drop(&mut self) {
+        // Shared-socket tasks carry weak references, so abandoning a bounded
+        // read/initialize cannot keep the connection alive through a task cycle.
+        for task in self.tasks.get_mut().drain(..) {
+            task.abort();
+        }
+    }
+}
 #[derive(Clone)]
 pub struct CodexClient {
     inner: Arc<Inner>,
@@ -172,10 +181,16 @@ impl CodexClient {
         )
     }
     pub async fn connect(path: &Path) -> Result<Self> {
-        let ws = connect_codex_socket(path, MAX_FRAME_BYTES).await?;
+        Self::connect_with_limit(path, MAX_FRAME_BYTES).await
+    }
+    pub async fn connect_with_limit(path: &Path, max_payload: usize) -> Result<Self> {
+        if !(MAX_FRAME_BYTES..=1024 * 1024 * 1024).contains(&max_payload) {
+            bail!("Invalid shared Codex frame limit.");
+        }
+        let ws = connect_codex_socket(path, max_payload).await?;
         let (client, mut outgoing) = Self::new();
         let (mut sink, mut stream) = ws.split();
-        let send = client.clone();
+        let send = Arc::downgrade(&client.inner);
         let writer = tokio::spawn(async move {
             while let Some(value) = outgoing.recv().await {
                 let text = match crate::json::stringify(&value) {
@@ -187,14 +202,22 @@ impl CodexClient {
                 }
             }
             let _ = sink.close().await;
-            send.fail("Shared Codex transport failed").await;
+            if let Some(inner) = send.upgrade() {
+                CodexClient { inner }
+                    .fail("Shared Codex transport failed")
+                    .await;
+            }
         });
-        let receive = client.clone();
+        let receive = Arc::downgrade(&client.inner);
         let reader = tokio::spawn(async move {
             while let Some(frame) = stream.next().await {
+                let Some(inner) = receive.upgrade() else {
+                    break;
+                };
+                let client = CodexClient { inner };
                 match frame {
                     Ok(Message::Text(text)) => {
-                        if receive.receive(text.as_bytes()).await.is_err() {
+                        if client.receive(text.as_bytes()).await.is_err() {
                             break;
                         }
                     }
@@ -202,7 +225,11 @@ impl CodexClient {
                     _ => break,
                 }
             }
-            receive.fail("Shared Codex transport closed").await;
+            if let Some(inner) = receive.upgrade() {
+                CodexClient { inner }
+                    .fail("Shared Codex transport closed")
+                    .await;
+            }
         });
         client.inner.tasks.lock().await.extend([writer, reader]);
         Ok(client)
@@ -359,6 +386,9 @@ impl CodexClient {
     }
     pub fn subscribe(&self) -> broadcast::Receiver<Value> {
         self.inner.notifications.subscribe()
+    }
+    pub fn is_closed(&self) -> bool {
+        self.inner.closed.load(Ordering::SeqCst)
     }
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         if self.inner.closed.load(Ordering::SeqCst) {

@@ -69,10 +69,16 @@ pub struct StableFile {
 
 /// The named file and opened descriptor must agree before and after the read.
 pub fn read_stable(path: impl AsRef<Path>) -> Result<StableFile> {
+    read_stable_with_limit(path, usize::MAX)
+}
+pub fn read_stable_with_limit(path: impl AsRef<Path>, limit: usize) -> Result<StableFile> {
     let path = path.as_ref();
     let named = fs::symlink_metadata(path)?;
     if !named.is_file() || named.file_type().is_symlink() {
         bail!("Transcript must be a regular file, never a symlink.");
+    }
+    if named.len() > limit as u64 {
+        bail!("File exceeds its read size limit.");
     }
     let mut file = OpenOptions::new()
         .read(true)
@@ -84,7 +90,12 @@ pub fn read_stable(path: impl AsRef<Path>) -> Result<StableFile> {
         bail!("Transcript changed while being read.");
     }
     let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    std::io::Read::by_ref(&mut file)
+        .take((limit as u64).saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > limit {
+        bail!("File exceeds its read size limit.");
+    }
     let after = file.metadata()?;
     let current = match fs::symlink_metadata(path) {
         Ok(m) => m,
