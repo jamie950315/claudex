@@ -4,8 +4,13 @@
   "private": true,
   "type": "module",
   "description": "Bounded conversation synchronization and opt-in cross-model work between Codex and Claude Code.",
-  "bin": { "claudex": "bin/claudex.mjs" },
-  "scripts": { "test": "node --test --test-concurrency=4 test/*.test.mjs" },
+  "bin": { "claudex": "bin/claudex" },
+  "scripts": {
+    "build": "cargo build --locked --release -p claudex-cli",
+    "test": "cargo test --locked --workspace && npm run test:entrypoints",
+    "test:entrypoints": "node --test test/rust-entrypoints.test.mjs",
+    "test:reference": "node dev/test-reference.mjs"
+  },
   "engines": { "node": "^22.15.0 || >=23.8.0" },
   "dependencies": { "txcript": "0.14.4", "@anthropic-ai/claude-agent-sdk": "0.3.281", "ws": "8.21.3", "acorn": "8.18.0" }
 }

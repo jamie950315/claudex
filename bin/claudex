@@ -1,0 +1,29 @@
+#!/bin/sh
+# Source-checkout entry point. Installed bundles contain the native binary here.
+set -eu
+
+launcher=$0
+case "$launcher" in
+  */*) ;;
+  *) launcher=$(command -v "$launcher") ;;
+esac
+while [ -L "$launcher" ]; do
+  directory=$(CDPATH= cd -P -- "$(dirname -- "$launcher")" && pwd)
+  target=$(readlink "$launcher")
+  case "$target" in
+    /*) launcher=$target ;;
+    *) launcher=$directory/$target ;;
+  esac
+done
+source_root=$(CDPATH= cd -P -- "$(dirname -- "$launcher")/.." && pwd)
+engine=${CLAUDEX_RUST_ENGINE-"$source_root/target/release/claudex"}
+case "$engine" in
+  /*) ;;
+  *) printf '%s\n' 'Claudex: CLAUDEX_RUST_ENGINE must be an absolute executable path.' >&2; exit 127 ;;
+esac
+if [ ! -f "$engine" ] || [ ! -x "$engine" ]; then
+  printf 'Claudex: Rust engine is not built or executable: %s\n' "$engine" >&2
+  printf '%s\n' 'Build it with: cargo build --locked --release -p claudex-cli' >&2
+  exit 127
+fi
+exec "$engine" "$@"

@@ -62,3 +62,28 @@ than being inserted between the backend and its signed parent. Policy,
 ownership journals, socket validation and framing belong in Rust. This
 integration requirement does not justify retaining the JavaScript engine or
 substituting an unsigned Node runtime.
+
+## Developer entry points
+
+Build the native executable with
+`cargo build --locked --release -p claudex-cli` (or `npm run build`), then run
+`bin/claudex`. The npm `claudex` executable points to that same no-Node launcher.
+It resolves checkout symlinks and executes `target/release/claudex`, or the
+absolute executable selected by `CLAUDEX_RUST_ENGINE`. A missing engine fails
+with the build command; startup never compiles, downloads, or dispatches the
+JavaScript engine.
+
+Explicit `node bin/*.mjs` commands remain thin compatibility hosts that route to
+the corresponding Rust subcommand and forward standard streams, exit status,
+and signals. `bin/claudex-codex.mjs` is the exception to direct spawning: it loads
+the signed-Node sibling transport host described above, keeping the native
+backend's required ancestry. The app builder forwards to `claudex app build`;
+use `--executable` for a built native engine instead of the former
+`--node-distribution` option.
+
+`npm test` runs `cargo test --locked --workspace` and the thin entry-point tests.
+The former JavaScript entry points live only in `test/reference/bin/`.
+`npm run test:reference` overlays them into its own temporary source fixture and
+runs the existing behavioral tests there; individual test paths may be supplied
+after `--`. Node dependencies remain development/reference tooling, not Rust
+runtime dependencies. Reference success and Rust parity are separate evidence.
