@@ -613,11 +613,15 @@ pub fn convert(
             }
             messages.push(message);
         } else if let Some(status) = entry.status {
-            messages.push(Message {
+            let mut message = Message {
                 role: "assistant".into(),
                 content: vec![inert("Codex closed turn status", &status)?],
                 extra: Map::new(),
-            });
+            };
+            if let Some(stamp) = &stamp {
+                message.extra.insert("timestamp".into(), json!(stamp));
+            }
+            messages.push(message);
         }
     }
     if notice {
@@ -806,6 +810,37 @@ mod tests {
                 &json!({"type":"userMessage","content":[{"type":"newAttachment","path":"/secret"}]})
             )
             .is_err()
+        );
+    }
+    #[test]
+    fn closed_status_keeps_the_native_turn_timestamp() {
+        let snapshot = Snapshot {
+            turns: vec![
+                json!({"id":"interrupted","status":"interrupted","startedAt":100,"items":[{"id":"u","type":"userMessage","content":[{"type":"text","text":"Ask"}]}]}),
+                json!({"id":"completed","status":"completed","startedAt":200,"items":[{"id":"a","type":"agentMessage","text":"Done"}]}),
+            ],
+            digest: "d".into(),
+            item_count: 2,
+            bytes: 0,
+            pages: 1,
+            completed_prefix: true,
+            incomplete_tail: false,
+            incomplete_tail_count: 0,
+            closed_tail: false,
+            empty_turn_evidence: vec![],
+            initial_goal: None,
+            late_item_evidence: None,
+            native_item_order: None,
+            late_item_native: 0,
+        };
+        let common = convert(&snapshot, "id", "/tmp", None, true).unwrap();
+        assert_eq!(
+            common.messages[1].extra["timestamp"],
+            "1970-01-01T00:01:40.000Z"
+        );
+        assert_eq!(
+            common.messages[0].extra["timestamp"],
+            common.messages[1].extra["timestamp"]
         );
     }
 }
