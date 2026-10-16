@@ -6,6 +6,36 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Installed Rust synchronization and Local archival repair (2026-10-17)
+
+The development-signed Mac installation at `bb8aa1c` (App 1.4.8 / Mod 0.8.45)
+used the normal service drain, signed-bundle replacement, app-owned Mod update
+and idle Claude restart. Both user-selected existing conversations passed full
+normal Runtime adapter reads on Codex and Claude: complete portable canonical
+histories matched, including image blocks, with no incomplete tail. Later
+metadata checks confirmed unchanged checkpoints. These were read-only
+acceptance checks; no new model input was submitted.
+
+The native sidebar first exposed two independent consumer defects: state grouping
+unmounted a project-only subscription, and presentation filters or loaded pages
+hid otherwise valid replacements. The installed consumer retains one Code-only
+subscription and uses the existing native exact-ID no-store metadata reader,
+normalizer and bridge classifier with the native account/cloud-access getters.
+Three previously unarchived, unstarred Local predecessors then completed the
+normal native archive API and were independently observed archived. The starred
+predecessor remained unarchived. Complete saved byte prefixes of all fifteen
+protected original histories (155,783,256 bytes) still matched after archival.
+Native registry files, transcripts and ledgers were not manually repaired.
+
+The actual consuming graph was `index-BOnos2uv.js`; source preparation preserved
+its native AST and wiring, and live renderer diagnostics showed metadata reads,
+dispatch and verified native archive outcomes. The fresh loaded Mod reported
+0.8.45. Services stayed in one healthy generation with no worker restart.
+The remaining watcher hold at observation time named the still-executing repair
+thread, not either accepted target. Private histories, exact identities, native
+flags, preservation proofs and rollback artifacts remain outside Git. This
+installation is not a notarized or published release.
+
 ## Rust runtime follow-up (2026-10-16)
 
 Authorized native synchronization acceptance used a dedicated two-message
