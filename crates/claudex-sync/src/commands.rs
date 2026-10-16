@@ -366,6 +366,7 @@ fn watch_status(
     held: bool,
     lifecycle: Option<&Arc<dyn WatchLifecycle>>,
     remaining: Option<usize>,
+    initial_sweep_completed_at: Option<i64>,
 ) -> Value {
     let at = storage::now_ms();
     let sources = discovery["unsupportedSources"]
@@ -383,7 +384,8 @@ fn watch_status(
         "blockedSourceCount":sources.len(),"blockedSources":sources,"absentSourceCount":absent.len(),"absentSources":absent,
         "waiting":if held{Some("Application synchronization is held while setup or resume completes.")}else{None},
         "discovery":discovery,"rendererAdapters":lifecycle.map(|l|l.status()).unwrap_or(Value::Null),"claudeDesktopRestart":lifecycle.map(|l|l.restart()).unwrap_or(Value::Null),
-        "initialSweepRemaining":remaining,"foregroundCompletedAt":remaining.filter(|n|*n==0).map(|_|at)})
+        "initialSweepRemaining":remaining,"initialSweepCompletedAt":initial_sweep_completed_at,
+        "foregroundCompletedAt":remaining.filter(|n|*n==0).map(|_|at)})
 }
 fn signal() -> Result<tokio::sync::watch::Receiver<bool>> {
     let (send, receive) = tokio::sync::watch::channel(false);
@@ -499,17 +501,18 @@ async fn watch_desktop_control(
         let mut handoff_maintenance = tokio::time::Instant::now();
         let delays = [250, 1000, 3000];
         let mut held=false;
+        let mut initial_sweep_completed_at = None;
         loop {
             source.check()?;
             if *shutdown.borrow() { break; }
             if hooks::app_stopped(&bridge.root)? {
                 held=true;
                 if handoff_enabled {runtime.revoke_handoff_actions()?;}
-                let mut status=watch_status(&blocked,None,&unsupported,true,lifecycle.as_ref(),None);status["folderProjection"]=json!({"state":"waiting","deferred":"application-hold"});status["localHandoff"]=json!({"state":"waiting","actions":0,"deferred":"application-hold"});diagnostics(&bridge.root,&status)?;
+                let mut status=watch_status(&blocked,None,&unsupported,true,lifecycle.as_ref(),None,initial_sweep_completed_at);status["folderProjection"]=json!({"state":"waiting","deferred":"application-hold"});status["localHandoff"]=json!({"state":"waiting","actions":0,"deferred":"application-hold"});diagnostics(&bridge.root,&status)?;
                 tokio::select! {result=listener.wait_hint(Duration::from_secs(30),&mut shutdown)=>result?,_=source.failed()=>source.check()?}
                 continue;
             }
-            if held {startup=true;hooks_refresh=true;handoff_maintenance=tokio::time::Instant::now();held=false;}
+            if held {startup=true;initial_sweep_completed_at=None;hooks_refresh=true;handoff_maintenance=tokio::time::Instant::now();held=false;}
             let mut pending_error = None;
             if bridge.status()?.pending.is_some() {
                 if handoff_enabled { runtime.revoke_handoff_actions()?; }
@@ -538,7 +541,7 @@ async fn watch_desktop_control(
                 if hooks_refresh {hook_status=match runtime.synchronization_hooks().await {Ok(status)=>status,Err(error)=>json!({"ready":false,"reason":format!("{error:#}")})};hooks_refresh=false;}
                 let state = bridge.status()?;
                 source.observe(&work, &state, &inbox)?;
-                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {startup=true;hooks_refresh=true;}
+                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {startup=true;initial_sweep_completed_at=None;hooks_refresh=true;}
                 let mut consumed = vec![];
                 for receipt in &work {
                     if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
@@ -667,7 +670,10 @@ async fn watch_desktop_control(
                 if handoff_full { handoff_maintenance = tokio::time::Instant::now() + Duration::from_secs(30); }
                 value
             } else { json!({"state":"disabled","enabled":false}) };
-            let mut status=watch_status(&blocked,pending_error.as_deref(),&unsupported,false,lifecycle.as_ref(),if startup{None}else{Some(candidates.len()+background.len())});status["hookStatus"]=hook_status.clone();if pending_error.is_none() && hook_status["ready"] == false {status["synchronization"]=json!("blocked");status["blocked"]=json!({"scope":"hooks","reason":hook_status["reason"]});}status["coldVerificationCache"]=scheduler.cache.diagnostics();status["folderProjection"]=folder_projection;status["localHandoff"]=local_handoff;status["rendererAdapters"]=renderer;diagnostics(&bridge.root,&status)?;
+            if !startup && pending_error.is_none() && candidates.is_empty() && background.is_empty() {
+                initial_sweep_completed_at.get_or_insert_with(storage::now_ms);
+            }
+            let mut status=watch_status(&blocked,pending_error.as_deref(),&unsupported,false,lifecycle.as_ref(),if startup{None}else{Some(candidates.len()+background.len())},initial_sweep_completed_at);status["hookStatus"]=hook_status.clone();if pending_error.is_none() && hook_status["ready"] == false {status["synchronization"]=json!("blocked");status["blocked"]=json!({"scope":"hooks","reason":hook_status["reason"]});}status["coldVerificationCache"]=scheduler.cache.diagnostics();status["folderProjection"]=folder_projection;status["localHandoff"]=local_handoff;status["rendererAdapters"]=renderer;diagnostics(&bridge.root,&status)?;
             let mut timeout = followups.values().map(|(_, when)| when.saturating_duration_since(tokio::time::Instant::now()))
                 .chain(unknown.values().map(|(_, _, when)| when.saturating_duration_since(tokio::time::Instant::now())))
                 .min().unwrap_or(Duration::from_secs(30)).min(Duration::from_secs(30));
@@ -690,14 +696,15 @@ async fn watch_desktop_control(
         None => Ok(()),
     };
     let close_result = close_runtime(&runtime).await;
+    let outcome = result.and(source_result).and(listener_result).and(lifecycle_result).and(close_result);
     let mut status = storage::read_json_or(bridge.root.join("watcher-status.json"), json!({}))?;
     status["coldVerificationCache"] = scheduler.cache.diagnostics();
+    status["pid"] = json!(std::process::id());
+    status["running"] = json!(false);
+    status["updatedAt"] = json!(storage::now_ms());
+    status["error"] = outcome.as_ref().err().map(|error|json!(format!("{error:#}").chars().take(2000).collect::<String>())).unwrap_or(Value::Null);
     diagnostics(&bridge.root, &status)?;
-    result
-        .and(source_result)
-        .and(listener_result)
-        .and(lifecycle_result)
-        .and(close_result)
+    outcome
 }
 fn event_conversations(state: &crate::desktop::State, receipt: &Receipt) -> BTreeSet<String> {
     state
@@ -873,6 +880,9 @@ mod lifecycle_tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("Injected partial lifecycle"));
+        let status = storage::read_json(root.join("watcher-status.json"))?;
+        assert_eq!(status["running"], false);
+        assert!(status["error"].as_str().is_some_and(|s| s.contains("Injected partial lifecycle")));
         assert!(lifecycle.stopped.load(Ordering::SeqCst));
         assert!(!root.join("watch.lock").exists());
         let inbox = Inbox::new(&root)?;
@@ -1035,7 +1045,10 @@ mod lifecycle_tests {
         assert_eq!(folder_view(&error, &skipped), error);
         let deferred = json!({"state":"waiting","deferred":"pending","updatedAt":99});
         assert_eq!(folder_view(&deferred, &skipped), deferred);
-        let value = watch_status(&BTreeMap::new(), None, &json!({}), false, None, Some(0));
+        let value = watch_status(&BTreeMap::new(), None, &json!({}), false, None, Some(0), Some(123));
+        assert_eq!(value["initialSweepCompletedAt"], 123);
+        let pending = watch_status(&BTreeMap::new(), None, &json!({}), false, None, Some(5), None);
+        assert!(pending.get("initialSweepCompletedAt").is_some_and(Value::is_null));
         assert!(value["blocked"].is_null());
         assert_eq!(value["blockedConversationCount"], 0);
         assert!(value["updatedAt"].is_number());

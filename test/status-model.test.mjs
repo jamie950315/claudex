@@ -44,6 +44,11 @@ var legacy = ready; legacy["mode"] = "desktop"
 check(health(legacy).state == "waiting")
 legacy["foregroundCompletedAt"] = now
 check(health(legacy).state == "ready")
+var nativeSweep = legacy; nativeSweep["initialSweepCompletedAt"] = NSNull()
+nativeSweep["initialSweepRemaining"] = 4
+check(health(nativeSweep).state == "waiting")
+nativeSweep["initialSweepRemaining"] = 0; nativeSweep["initialSweepCompletedAt"] = now
+check(health(nativeSweep).state == "ready")
 invalidProgress = initial; invalidProgress["blocked"] = ["reason": "Exact history mismatch"]
 check(health(invalidProgress).state == "paused" && health(invalidProgress).detail == "Exact history mismatch")
 invalidProgress = initial; invalidProgress["waiting"] = "Shared Codex Desktop backend is not ready."
@@ -74,6 +79,21 @@ check(health(changed).state == "paused")
 changed = ready; changed["blockedSourceCount"] = 1
 changed["blockedSources"] = [["reason": "A new native history requires verification"]]
 check(health(changed).attention && health(changed).title == "New conversations need attention")
+let firstTurnWaits = ["No completed persisted native history; wait for complete turn.",
+  "Wait for a complete assistant turn or authenticated synchronized checkpoint.", "Wait for a complete assistant turn."]
+for reason in firstTurnWaits {
+  changed = ready; changed["blockedSourceCount"] = 1
+  changed["blockedSources"] = [["nativeId": "waiting-source", "reason": reason]]
+  check(health(changed).state == "ready" && !health(changed).attention && health(changed).issues.isEmpty)
+  check(health(changed).featureDiagnostics.first?.identity == "waiting-source")
+  check(health(changed).featureDiagnostics.first?.nextStep == "Wait for the reply to finish. No action is required.")
+  changed["blockedSourceCount"] = 2
+  check(health(changed).attention)
+}
+changed = ready; changed["blockedSourceCount"] = 2
+changed["blockedSources"] = [["reason": firstTurnWaits[0]], ["reason": "Exact identity conflict"]]
+check(health(changed).attention && health(changed).detail.contains("Exact identity conflict"))
+check(health(changed).issues.count == 1 && health(changed).issues[0].reason == "Exact identity conflict")
 changed = ready; changed["waiting"] = "Shared Codex Desktop backend is not ready."
 check(health(changed).title == "Waiting for Codex")
 changed = ready; changed["localHandoff"] = ["state": "error", "error": "Native history changed"]

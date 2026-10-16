@@ -40,6 +40,20 @@ fn row(
         action: action.map(str::to_string),
     }
 }
+fn enrollment_needs_attention(watcher: &Value) -> bool {
+    if let Some(count) = watcher.get("blockedSourceCount")
+        && !count.is_null() && count.as_u64().is_none() {
+        return truthy(count);
+    }
+    let sources = watcher["blockedSources"].as_array();
+    let waiting = sources.into_iter().flatten().filter(|source| matches!(source["reason"].as_str(),
+        Some("No completed persisted native history; wait for complete turn."
+            | "Wait for a complete assistant turn or authenticated synchronized checkpoint."
+            | "Wait for a complete assistant turn."))).count();
+    let listed = sources.map_or(0, Vec::len);
+    let declared = watcher["blockedSourceCount"].as_u64().map_or(listed, |n| n as usize);
+    declared > waiting || listed > waiting
+}
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Report {
@@ -358,8 +372,9 @@ impl AppSetup<'_> {
                 || watcher["synchronization"] == "degraded"
                 || truthy(&watcher["blocked"])
                 || truthy(&watcher["blockedConversationCount"])
-                || truthy(&watcher["blockedSourceCount"]));
-        let initial = if watcher.get("checkingConversationCount").is_some() {
+                || enrollment_needs_attention(&watcher));
+        let initial = if watcher.get("checkingConversationCount").is_some()
+            || watcher.get("initialSweepCompletedAt").is_some() {
             &watcher["initialSweepCompletedAt"]
         } else {
             &watcher["foregroundCompletedAt"]
@@ -826,6 +841,24 @@ pub async fn dispatch(args: &[String], runtime: &dyn AppRuntime) -> Result<Value
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn unenrolled_first_turn_waits_do_not_hide_real_source_conflicts() {
+        let waiting = json!({"blockedSourceCount":3,"blockedSources":[
+            {"reason":"No completed persisted native history; wait for complete turn."},
+            {"reason":"Wait for a complete assistant turn or authenticated synchronized checkpoint."},
+            {"reason":"Wait for a complete assistant turn."}
+        ]});
+        assert!(!super::enrollment_needs_attention(&waiting));
+        let mut mixed = waiting.clone();
+        mixed["blockedSources"][1]["reason"] = json!("Exact native identity conflict.");
+        assert!(super::enrollment_needs_attention(&mixed));
+        mixed = waiting.clone();
+        mixed["blockedSourceCount"] = json!(4);
+        assert!(super::enrollment_needs_attention(&mixed));
+        mixed = waiting;
+        mixed["blockedSources"][0] = json!({});
+        assert!(super::enrollment_needs_attention(&mixed));
+    }
     use super::*;
     use std::{os::unix::fs::PermissionsExt, sync::Mutex};
     struct Runtime {

@@ -23,6 +23,11 @@ a superseded owned handler from it and never adopts an altered handler or a
 differently shaped group. CLI hooks install
 and hooks status configure/inspect them; graphical setup installs them too.
 Perform one startup/reconnection reconciliation, then sleep until an event.
+The Rust watcher publishes initialSweepCompletedAt as null until both initial
+source enrollment and tracked-history queues drain, then retains that timestamp
+until another startup/reconnection reconciliation. Foreground completion is not
+initial-sweep completion. Final shutdown status marks running=false and records
+the bounded terminal error so the supervisor can explain a failed worker exit.
 Map exact native IDs, including preserved originals, to affected logical work.
 Discovery may return only side/path. In event-filtered discovery, obtain a Claude
 ID from its validated UUID filename and a Codex ID from its native header, then

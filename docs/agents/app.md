@@ -55,6 +55,11 @@ inspect histories concurrently, advance checkpoints, or imply synchronization
 completion. Stop and drain the heartbeat before leaving the operation.
 Keep initialSweepCompletedAt separate from foregroundCompletedAt: completing the
 foreground queue must not hide initial verification of the cold backlog.
+An explicit initialSweepCompletedAt, including null before completion, governs
+the Rust watcher's initial-check state even without conversation-count fields.
+Unenrolled sources waiting for their first complete turn stay in diagnostic
+details, not the action-needed list. Only the three exact first-turn wait
+reasons qualify; unknown, unreported and tracked-history failures stay visible.
 
 Distinguish setup `waiting` from `needs-action`: only missing components or sign-in
 requirements request user action, while normal runtime waits need no setup retry.

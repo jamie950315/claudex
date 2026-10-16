@@ -41,8 +41,24 @@ func statusTimestamp(_ value: Any?) -> Double? {
 
 func initialChecking(_ watcher: [String: Any]) -> Bool {
     guard watcher["mode"] as? String == "desktop" else { return false }
-    let completion = watcher["checkingConversationCount"] == nil ? "foregroundCompletedAt" : "initialSweepCompletedAt"
+    let explicitSweep = watcher["checkingConversationCount"] != nil || watcher.keys.contains("initialSweepCompletedAt")
+    let completion = explicitSweep ? "initialSweepCompletedAt" : "foregroundCompletedAt"
     return watcher[completion] as? NSNumber == nil
+}
+
+func sourceAwaitingFirstTurn(_ entry: [String: Any]) -> Bool {
+    guard let reason = entry["reason"] as? String else { return false }
+    return ["No completed persisted native history; wait for complete turn.",
+            "Wait for a complete assistant turn or authenticated synchronized checkpoint.",
+            "Wait for a complete assistant turn."].contains(reason)
+}
+
+func enrollmentAttention(_ watcher: [String: Any]) -> (sources: [[String: Any]], count: Int) {
+    let sources = watcher["blockedSources"] as? [[String: Any]] ?? []
+    let waiting = sources.filter(sourceAwaitingFirstTurn).count
+    let blocked = sources.filter { !sourceAwaitingFirstTurn($0) }
+    let declared = watcher["blockedSourceCount"] as? Int ?? sources.count
+    return (blocked, max(blocked.count, declared - waiting))
 }
 
 func checkingProgress(_ watcher: [String: Any], now: Double) -> String? {
@@ -173,9 +189,10 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
         return report("paused", "Some conversations paused", "\(count) conversation(s) need attention. " + (entries.first?["reason"] as? String ?? "Open diagnostics for details."), true,
                       watcher["scheduler"] as? String == "completion-events" ? nil : statusTimestamp(entries.first?["retryAt"]))
     }
-    if (watcher["blockedSourceCount"] as? Int ?? 0) > 0 {
-        let sources = watcher["blockedSources"] as? [[String: Any]] ?? []
-        let count = watcher["blockedSourceCount"] as? Int ?? sources.count
+    let enrollment = enrollmentAttention(watcher)
+    if enrollment.count > 0 {
+        let sources = enrollment.sources
+        let count = enrollment.count
         return report("paused", "New conversations need attention", "\(count) new conversation(s) could not be enrolled. Existing conversations can continue. "
                       + (sources.first?["reason"] as? String ?? "Open diagnostics for details."), true)
     }
@@ -303,7 +320,13 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
             append(entry, target: "Synchronization", waiting: false, fallback: result.detail)
         }
         for entry in watcher["blockedSources"] as? [[String: Any]] ?? [] {
-            append(entry, target: "Synchronization", waiting: false, fallback: result.detail)
+            if sourceAwaitingFirstTurn(entry) {
+                feature("Synchronization", bounded(entry["reason"], result.detail, 1000),
+                        "Wait for the reply to finish. No action is required.",
+                        identity: (entry["nativeId"] as? String).map { String($0.prefix(100)) })
+            } else {
+                append(entry, target: "Synchronization", waiting: false, fallback: result.detail)
+            }
         }
         for (key, label) in [("folderProjection", "Native project folders"), ("localHandoff", "Desktop handoff")] {
             if let entry = watcher[key] as? [String: Any], entry["state"] as? String == "error" {
