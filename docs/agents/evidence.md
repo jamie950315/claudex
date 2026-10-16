@@ -24,6 +24,15 @@ remained unavailable. Bundled, installed and fresh observer versions were
 The services resumed healthy while normal initial reconciliation continued;
 this is not a new full-history or cache-retention acceptance claim.
 
+## Installed Claude local warming controls (2026-10-17)
+
+With Mod 0.8.46 installed and freshly observed loaded, an existing Claude
+Desktop Code session completed native `status`, `off`, then `status` commands.
+Computer Use inspected the rendered local replies: disabled, TTL 1h, zero warm
+requests and stopped next warming. No ENOENT appeared and no warming was enabled.
+The Claude companion already resolved the collaboration child correctly; this
+check required no runtime repair. Native apps were not restarted.
+
 ## Installed Rust synchronization and Local archival repair (2026-10-17)
 
 The development-signed Mac installation at `bb8aa1c` (App 1.4.8 / Mod 0.8.45)
