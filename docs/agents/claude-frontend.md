@@ -127,6 +127,17 @@ with no rival context or slot writes. Never treat an alias as an absent mode.
 Chat/Cowork keep an inert subscription. Keep the existing project consumer for
 folder projection, but its filtered subset must not replace the common
 component's full handoff inventory while any common-mode listener is active.
+The common context's `allRows` is still presentation data: native status,
+environment and age filters can remove a valid replacement before grouping.
+Where the native sidebar supplies its existing `rawCodeSessions` React context,
+read that nearest provider instead. Prove the unchanged native data parameter,
+exact raw binding/provider/import, unique public `createContext([])` factory
+and public `useContext` getter/export chain. Import the read hook and context
+under reserved aliases and call the hook unconditionally; only Code supplies
+the resulting normalized rows to the existing store. Keep native presentation
+rows and filters untouched. This inventory covers native loaded pages, not an
+assertion that every server session is loaded. A missing exact replacement
+still defers; never add pagination, model work or a guessed metadata endpoint.
 Both use one store and poller; each actual subscription owns an idempotent
 cleanup token, even when callbacks are identical. The last common listener
 restores an existing project listener's rows; the last total listener stops

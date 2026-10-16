@@ -56,6 +56,10 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
   };
   const replacement = action => rows.some(row => row?.type === 'bridge'
     && remoteId(row.id) === action.remoteId && row.title === action.title && row.isArchived !== true);
+  const replacementRefusal = action => {
+    const matches = rows.filter(row => row?.type === 'bridge' && remoteId(row.id) === action.remoteId);
+    return !matches.length ? 'missing-id' : !matches.some(row => row.title === action.title) ? 'title-changed' : 'archived';
+  };
   function parse(result) {
     if (!result || typeof result.contents !== 'string' || result.contents.length > 2 * 1024 * 1024 || result.isTail)
       throw new Error('Native handoff manifest is unavailable or truncated');
@@ -152,7 +156,7 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
       for (const action of manifest.actions) {
         if (!running || ticket !== generation || now() >= manifest.expiresAt) break;
         if (attempted.has(action.operationId)) { status('action deferred already-attempted'); continue; }
-        if (!replacement(action)) { status('action deferred replacement-unavailable'); continue; }
+        if (!replacement(action)) { status('action deferred replacement-unavailable'); status(`replacement guard ${replacementRefusal(action)}`); continue; }
         phase = 'original'; status('original session read');
         const original = await native.getSession(action.localSessionId);
         status('original session read completed');

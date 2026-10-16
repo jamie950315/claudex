@@ -1,10 +1,13 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.43
+## Current companion: 0.8.44
 
 Claudex.app 1.4.8 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.44 verifies Local handoff replacements against the native raw Code
+inventory, independently of sidebar status, environment and age filters. Native
+presentation and archive identity checks are unchanged.
 Version 0.8.43 keeps the native Local handoff consumer connected across Code
 sidebar grouping modes. The shared store retains complete Code rows while
 preserving the original project consumer; Chat and Cowork do not activate it.
@@ -451,7 +454,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.43-review"
+STAGE="$PARENT/claudex-0.8.44-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -472,7 +475,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.43-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.44-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

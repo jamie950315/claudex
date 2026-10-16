@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createClaudeDesktopHandoffRuntime } from '../src/claude-desktop-handoff-runtime.mjs';
 import { normalizeClaudeLocalFolderAnchor } from '../src/claude-folder-anchor.mjs';
 import { claudeFolderProjectKey } from '../src/claude-folder-projection.mjs';
+import { createClaudeFolderRuntime } from '../src/claude-folder-runtime.mjs';
 
 function fixture(options = {}) {
   let clock = 10000, tasks = [], errors = [], archives = [], statuses = [];
@@ -37,6 +38,26 @@ test('only an exact verified replacement archives its idle Local predecessor thr
   assert.deepEqual(f.archives, [{ id: f.action.localSessionId, options: { cleanupWorktree: false, forceWorktreeCleanup: false } }]);
   assert.equal(f.errors.length, 0);
   await f.runtime.poll(); assert.equal(f.archives.length, 1);
+});
+
+test('a fresh Code context supplies its unfiltered replacement even when presentation hides the entire group', async () => {
+  const f = fixture(), raw = [{ type: 'bridge', id: 'session_test', title: f.action.title, isArchived: false }];
+  const folder = createClaudeFolderRuntime({ createHandoff: () => f.runtime });
+  folder.setModeRows(raw, claudeFolderProjectKey); // Read from the existing native rawCodeSessions context.
+  folder.setRows([], claudeFolderProjectKey); // Status/age/environment and Project presentation hide it.
+  const stop = folder.subscribeModes(() => {});
+  await new Promise(resolve => setImmediate(resolve)); stop();
+  assert.equal(f.archives.length, 1); assert.ok(f.statuses.includes('archive verified'));
+  assert.equal(raw[0].isArchived, false);
+});
+
+test('replacement guard diagnostics distinguish absent IDs, changed titles and archived rows without native reads', async () => {
+  for (const [rows, reason] of [[[], 'missing-id'], [[{ type: 'bridge', id: 'session_test', title: 'Different' }], 'title-changed'],
+    [[{ type: 'bridge', id: 'session_test', title: 'Same title', isArchived: true }], 'archived']]) {
+    const f = fixture(); f.runtime.setRows(rows); await f.run();
+    assert.ok(f.statuses.includes(`replacement guard ${reason}`));
+    assert.equal(f.nativeReads, 0); assert.equal(f.archives.length, 0);
+  }
 });
 
 for (const field of ['isRunning', 'turnRunning', 'hasBackgroundWork', 'hasBackgroundActivity', 'starting', 'cliBootPending', 'isStarred'])

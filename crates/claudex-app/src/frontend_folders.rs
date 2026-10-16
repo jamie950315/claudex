@@ -422,6 +422,127 @@ pub struct Consumer {
     pub imported_path: String,
     pub subscription: Imported,
     pub modes: Option<ModeConsumer>,
+    pub inventory: Option<InventoryContext>,
+}
+#[derive(Clone, Debug)]
+pub struct InventoryContext {
+    pub exported: String,
+    pub hook: Imported,
+}
+fn inventory_provider<'a>(
+    ast: &'a Value,
+    imported_path: &str,
+) -> Result<Option<(&'a Value, &'a Value)>> {
+    let scopes = Scopes::analyze(ast);
+    let declarations = nodes(ast, |n| {
+        kind(n) == "VariableDeclarator"
+            && kind(&n["id"]) == "ObjectPattern"
+            && array(&n["id"]["properties"])
+                .iter()
+                .any(|p| property(p, "rawCodeSessions"))
+            && array(&n["id"]["properties"])
+                .iter()
+                .any(|p| property(p, "sessionsByKind"))
+    });
+    if declarations.is_empty() {
+        return Ok(None);
+    }
+    let declaration = unique(declarations, "native Code inventory context source")?;
+    let raw = field(&declaration["id"], "rawCodeSessions")
+        .ok_or_else(|| anyhow::anyhow!("Native Code inventory source is ambiguous."))?;
+    let owner = unique(
+        functions(ast)
+            .into_iter()
+            .filter(|f| start(f) < start(declaration) && end(f) > end(declaration))
+            .collect(),
+        "native Code inventory provider",
+    )?;
+    ensure!(
+        id(raw).is_some()
+            && array(&owner["params"]).len() == 2
+            && scopes.same(&declaration["init"], &owner["params"][1])
+            && field(&declaration["id"], "codeCanLoadMore").is_some()
+            && field(&declaration["id"], "isCodePlaceholderData").is_some()
+            && nodes(ast, |n| (kind(n) == "AssignmentExpression"
+                && scopes.same(&n["left"], raw))
+                || (kind(n) == "UpdateExpression"
+                    && scopes.same(&n["argument"], raw)))
+            .is_empty(),
+        "Claude frontend anchors: raw Code inventory provenance missing or ambiguous."
+    );
+    let provider = unique(
+        nodes(owner, |n| {
+            kind(n) == "CallExpression"
+                && array(&n["arguments"]).len() >= 2
+                && member(&n["arguments"][0], "Provider")
+                && kind(&n["arguments"][1]) == "ObjectExpression"
+                && field(&n["arguments"][1], "value").is_some_and(|v| scopes.same(v, raw))
+        }),
+        "native raw Code context provider",
+    )?;
+    let context = &provider["arguments"][0]["object"];
+    let spec = unique(
+        array(&ast["body"])
+            .iter()
+            .filter(|n| kind(n) == "ImportDeclaration" && n["source"]["value"] == imported_path)
+            .flat_map(|n| array(&n["specifiers"]).iter())
+            .filter(|n| scopes.same(&n["local"], context))
+            .collect(),
+        "native raw Code context import",
+    )?;
+    ensure!(
+        nodes(ast, |n| member(n, "Provider")
+            && scopes.same(&n["object"], context))
+        .len()
+            == 1,
+        "Claude frontend anchors: competing raw Code context providers."
+    );
+    Ok(Some((context, &spec["imported"])))
+}
+fn inventory_context(
+    resolver: &Resolver<'_>,
+    imported_path: &str,
+) -> Result<Option<InventoryContext>> {
+    let Some((_, exported)) = inventory_provider(&resolver.ast, imported_path)? else {
+        return Ok(None);
+    };
+    let helper_url = crate::frontend_bindings::resolve_url(resolver.url, imported_path)
+        .ok_or_else(|| anyhow::anyhow!("Code context module is unavailable."))?;
+    let helper_source = resolver
+        .modules
+        .source(&helper_url)
+        .ok_or_else(|| anyhow::anyhow!("Code context source is unavailable."))?;
+    let helper = Resolver::new(helper_source, &helper_url, resolver.modules)?;
+    let resolved = helper
+        .exported(&helper_url, id(exported).unwrap())?
+        .ok_or_else(|| anyhow::anyhow!("Code context export is unavailable."))?;
+    ensure!(
+        resolved.module == helper_url,
+        "Code context must be constructed in the proved folder helper."
+    );
+    let creator = helper.imported_api("createContext", false)?;
+    let call = &resolved.node["init"];
+    ensure!(
+        kind(call) == "CallExpression"
+            && id(&call["callee"]) == Some(creator.local.as_str())
+            && array(&call["arguments"]).len() == 1
+            && kind(&call["arguments"][0]) == "ArrayExpression"
+            && array(&call["arguments"][0]["elements"]).is_empty(),
+        "Claude frontend anchors: native Code context factory missing or ambiguous."
+    );
+    let scopes = Scopes::analyze(&helper.ast);
+    ensure!(
+        nodes(&helper.ast, |n| (kind(n) == "AssignmentExpression"
+            && scopes.same(&n["left"], &resolved.node["id"]))
+            || (kind(n) == "UpdateExpression"
+                && scopes.same(&n["argument"], &resolved.node["id"])))
+        .is_empty(),
+        "Claude frontend anchors: native Code context has rival writes."
+    );
+    Ok(Some(InventoryContext {
+        exported: id(exported).unwrap().into(),
+        hook: resolver.imported_api("useContext", false)?,
+    }))
 }
 #[derive(Clone, Debug)]
 pub struct ModeConsumer {
@@ -997,6 +1118,12 @@ pub fn consumer(
         kind(last) == "ReturnStatement" && guards.iter().all(|guard| end(guard) <= start(last)),
         "Claude frontend anchors: folder consumer return boundary missing or ambiguous."
     );
+    let modes = mode_consumer(ast, component)?;
+    let inventory = if modes.is_some() {
+        inventory_context(&resolver, imported_path)?
+    } else {
+        None
+    };
     Ok(Consumer {
         component: component.clone(),
         memo: memo.clone(),
@@ -1009,15 +1136,19 @@ pub fn consumer(
         size,
         imported_path: imported_path.into(),
         subscription: resolver.imported_api("useSyncExternalStore", false)?,
-        modes: mode_consumer(ast, component)?,
+        modes,
+        inventory,
     })
 }
 pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
+    let inventory_import=anchor.inventory.as_ref().map(|i|format!(
+        "import{{{} as __cldxCodeInventory}}from{};import{{{} as __cldxFolderContext}}from{};",
+        i.exported,serde_json::to_string(&anchor.imported_path).unwrap(),i.hook.exported,serde_json::to_string(&i.hook.path).unwrap())).unwrap_or_default();
     let mut edits = vec![
         Edit::insert(
             0,
             format!(
-                "import{{__cldxFolderStore,__cldxNativeProjectKey}}from{};import{{{} as __cldxFolderSubscribe}}from{};",
+                "import{{__cldxFolderStore,__cldxNativeProjectKey}}from{};import{{{} as __cldxFolderSubscribe}}from{};{inventory_import}",
                 serde_json::to_string(&anchor.imported_path)?,
                 anchor.subscription.exported,
                 serde_json::to_string(&anchor.subscription.path)?
@@ -1048,9 +1179,20 @@ pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
             0,
             "const __cldxFolderNoSubscription=()=>()=>{};",
         ));
+        let (read, rows) = if anchor.inventory.is_some() {
+            (
+                "const __cldxCodeRows=__cldxFolderContext(__cldxCodeInventory);".to_string(),
+                "__cldxCodeRows".to_string(),
+            )
+        } else {
+            (
+                String::new(),
+                format!("{}({}.allRows)", modes.projector, modes.context),
+            )
+        };
         edits.push(Edit::insert(start(&modes.function["body"]) + 1, format!(
-            "const __cldxCodeMode={0}.kind===\"code\";__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{{__cldxFolderStore.setModeRows({1}({0}.allRows),__cldxNativeProjectKey)}}catch{{}}",
-            modes.context, modes.projector
+            "const __cldxCodeMode={0}.kind===\"code\";{read}__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{{__cldxFolderStore.setModeRows({rows},__cldxNativeProjectKey)}}catch{{}}",
+            modes.context
         )));
     }
     for guard in &anchor.guards {
@@ -1136,5 +1278,81 @@ function Parent(all, kind) { const context={allRows:all,projectSectionRows:all,k
                 "Accepted changed native mode contract: {source}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod inventory_tests {
+    use super::*;
+    use crate::frontend_bindings::{ASSET_ROOT, Module, Modules};
+    const SOURCE: &str = r#"import{Raw}from'./helper.js';import{U}from'./react.js';
+function provider(options,data){const{rawCodeSessions:raw,sessionsByKind,codeCanLoadMore,isCodePlaceholderData}=data;return jsx(Raw.Provider,{value:raw,children:[]});}"#;
+    fn inspect(source: &str, helper: &str, react: &str) -> Result<Option<InventoryContext>> {
+        let mut modules = Modules::new();
+        for (name, source) in [("helper.js", helper), ("react.js", react)] {
+            let url = format!("{ASSET_ROOT}{name}");
+            modules.insert(url.clone(), Module::parse(url, source)?);
+        }
+        inventory_context(
+            &Resolver::new(source, &format!("{ASSET_ROOT}consumer.js"), &modules)?,
+            "./helper.js",
+        )
+    }
+    const HELPER: &str = "import{C}from'./react.js';const Context=C([]);export{Context as Raw};";
+    const REACT: &str = "const U=React.useContext,C=React.createContext;const api={useContext:()=>U,createContext:()=>C};export{U,C};";
+    #[test]
+    fn native_raw_context_keeps_its_public_react_factory_and_read_hook_provenance() -> Result<()> {
+        let context = inspect(SOURCE, HELPER, REACT)?.unwrap();
+        assert_eq!(context.exported, "Raw");
+        assert_eq!(context.hook.exported, "U");
+        assert!(inspect("function old(rows){return rows}", HELPER, REACT)?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn filtered_values_other_contexts_and_non_native_hooks_are_refused() -> Result<()> {
+        for source in [
+            SOURCE.replace("value:raw", "value:filtered"),
+            SOURCE.replace("}=data", "}=other"),
+            SOURCE.replace(
+                "rawCodeSessions:raw,",
+                "rawCodeSessions:raw,rawCodeSessions:rival,",
+            ),
+            SOURCE.replace("return jsx", "raw=[];return jsx"),
+            SOURCE.replace(
+                "function provider(options,data)",
+                "function provider(Raw,data)",
+            ),
+            SOURCE.replace("return jsx", "jsx(Raw.Provider,{value:raw});return jsx"),
+        ] {
+            assert!(
+                inspect(&source, HELPER, REACT).is_err(),
+                "Accepted changed raw context: {source}"
+            );
+        }
+        assert!(
+            inspect(
+                SOURCE,
+                &HELPER.replace("Context=C([])", "Context=other([])"),
+                REACT
+            )
+            .is_err()
+        );
+        assert!(
+            inspect(
+                SOURCE,
+                HELPER,
+                &REACT.replace("useContext:()=>U", "useContext:()=>other")
+            )
+            .is_err()
+        );
+        assert!(
+            inspect(
+                SOURCE,
+                HELPER,
+                &REACT.replace("createContext:()=>C", "createContext:()=>other")
+            )
+            .is_err()
+        );
+        Ok(())
     }
 }

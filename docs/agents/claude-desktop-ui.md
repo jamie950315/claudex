@@ -117,5 +117,10 @@ On native builds with a proved common Code sidebar dispatcher, subscription and
 the full native Code-row inventory belong to that dispatcher, not an individual
 project/status grouping. Project presentation may still use a subset, but cannot
 hide another group's verified replacement from the shared handoff consumer.
+Use the native unfiltered `rawCodeSessions` context where its provider/factory
+and read hook are proved; the similarly named common `allRows` is already
+filtered presentation data. This does not fetch extra pages or change native
+rows. Content-free replacement guards distinguish a missing ID, changed title
+and archived replacement; all three still refuse the action.
 Only real mounted Code listeners keep the existing poller alive; Chat/Cowork and
 an unmounted sidebar never provide archival authority or background ownership.

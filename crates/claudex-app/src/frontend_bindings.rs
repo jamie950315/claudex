@@ -119,6 +119,8 @@ impl Index {
                     "LocalSessions",
                     "useEffect",
                     "useRef",
+                    "useContext",
+                    "createContext",
                     "useSyncExternalStore",
                     "useMemo",
                     "memo",
