@@ -103,3 +103,13 @@ rows in code. The All view may still show recoverable archived sources. Actual
 native titles have lost their owned legacy prefix; authenticated transport labels
 inside conversation content intentionally retain their existing Claudex markers.
 Do not claim same-Local-ID bidirectional writing or generic Chat/Cowork support.
+
+The handoff renderer reports content-free lifecycle and fixed phase/guard codes
+under `[Claudex native handoff status]`: subscription start/stop, row availability,
+manifest consumption, anchor-read boundaries, replacement waits, native guards,
+dispatch and verified outcome. Keep callback failures contained and repeat codes
+at most once per five seconds, with a total cap of 64 per thirty seconds. Never
+log native IDs, titles, paths, content or native error text through this diagnostic.
+Use the actual consuming renderer's logs to distinguish a loaded module from a
+running subscription or an awaited native call. Native archived-state and original
+preservation checks still determine acceptance.

@@ -9,18 +9,33 @@ const boundedText = value => typeof value === 'string' && value.length > 0 && va
  */
 export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = () => Date.now(),
   setTimer = setTimeout, clearTimer = clearTimeout, intervalMs = 2000,
-  onError = () => {}, onChange = () => {}, hasDraft = () => false, normalizeAnchor, registryRoot } = {}) {
+  onError = () => {}, onChange = () => {}, onStatus = () => {}, hasDraft = () => false, normalizeAnchor, registryRoot } = {}) {
   let running = false, timer, inFlight = false, generation = 0, rows = [], keys;
   let lastError = null;
   const attempted = new Set(), observedAnchors = new Map();
+  const reported = new Map();
+  let statusWindow = 0, statusCount = 0;
+  const status = code => {
+    try {
+      const time = now();
+      if (time < statusWindow || time - statusWindow >= 30_000) { statusWindow = time; statusCount = 0; }
+      const prior = reported.get(code);
+      if (statusCount >= 64 || prior !== undefined && time >= prior && time - prior < 5000) return;
+      reported.set(code, time); statusCount++; onStatus(code);
+    } catch {}
+  };
   const report = message => { if (lastError !== message) { lastError = message; onError(message); } };
   const safe = (session, action) => {
     if (!session || session.sessionId !== action.localSessionId || session.cwd !== action.cwd
-      || session.title !== action.title || session.lastActivityAt !== action.expectedLastActivityAt)
+      || session.title !== action.title || session.lastActivityAt !== action.expectedLastActivityAt) {
+      status('original guard identity-changed');
       return 'Local session identity, title, directory, or activity changed';
+    }
     if (session.isArchived === true) return null;
-    if ([session.bridgeSessionId, ...(session.bridgeSessionIds ?? [])].some(id => remoteId(id) === action.remoteId))
+    if ([session.bridgeSessionId, ...(session.bridgeSessionIds ?? [])].some(id => remoteId(id) === action.remoteId)) {
+      status('original guard shared-remote');
       return 'Local predecessor shares the replacement Remote Control identity';
+    }
     if (session.isRunning !== false || session.turnRunning !== false || session.cliBootPending
       || session.starting || session.heldInput || session.hasBackgroundActivity || session.hasBackgroundWork
       || session.remoteTarget || session.isStarred || session.spawnedFrom || session.forkedFromSessionId
@@ -30,7 +45,13 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
       || session.pendingLanyardConsent || session.pendingViolinBowPrompt
       || session.pendingToolPermissions !== undefined && (!Array.isArray(session.pendingToolPermissions) || session.pendingToolPermissions.length)
       || session.loops !== undefined && (!Array.isArray(session.loops) || session.loops.length)
-      || session.spawningTaskIds?.length) return 'Local session has active, queued, dependent, or unverified work';
+      || session.spawningTaskIds?.length) {
+      status(session.isStarred ? 'original guard starred'
+        : session.isRunning === true || session.turnRunning === true ? 'original guard running'
+          : session.isRunning !== false || session.turnRunning !== false ? 'original guard idle-unverified'
+            : 'original guard queued-or-dependent');
+      return 'Local session has active, queued, dependent, or unverified work';
+    }
     return null;
   };
   const replacement = action => rows.some(row => row?.type === 'bridge'
@@ -90,13 +111,16 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
       const identity = JSON.stringify(anchor), previous = observedAnchors.get(anchor.localSessionId);
       if (previous?.identity === identity && now() - previous.verifiedAt < 60_000) continue;
       if (reads++ >= 4) break;
+      status('anchor session read');
       const session = await native.getSession(anchor.localSessionId);
       if (!session || session.sessionId !== anchor.localSessionId) {
         if (observedAnchors.delete(anchor.localSessionId)) onChange();
         continue;
       }
       const path = session.harnessCwd || session.cwd, origin = session.originCwd || session.cwd;
+      status('anchor git read');
       const gitInfo = await native.getGitInfo(path);
+      if (origin !== path) status('anchor origin git read');
       const originGitInfo = origin === path ? gitInfo : await native.getGitInfo(origin);
       const row = normalizeAnchor({ session, anchor, gitInfo, originGitInfo });
       if (!row || !boundedText(keys(row)) || !boundedText(row.repoInfo?.name)) {
@@ -111,33 +135,46 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
   async function poll() {
     if (!running || inFlight || typeof readManifest !== 'function') return;
     inFlight = true; const ticket = generation;
+    let phase = 'manifest';
+    status('poll started');
     try {
       const manifest = parse(await readManifest());
+      status(manifest.actions.length ? 'manifest actions available' : 'manifest no actions');
       if (!running || ticket !== generation) return;
       rememberAnchors(manifest);
+      phase = 'api';
       if (['getSession', 'getSessionList', 'getBusyShellPtyKeys', 'readFileAtCwd', 'archive'].some(name => typeof native?.[name] !== 'function'))
         throw new Error('Native Local session archive API is unavailable');
+      status('native archive APIs verified');
+      phase = 'anchors'; status('anchors hydrate started');
       await hydrateAnchors(manifest);
+      status('anchors hydrate completed');
       for (const action of manifest.actions) {
         if (!running || ticket !== generation || now() >= manifest.expiresAt) break;
-        if (attempted.has(action.operationId) || !replacement(action)) continue;
+        if (attempted.has(action.operationId)) { status('action deferred already-attempted'); continue; }
+        if (!replacement(action)) { status('action deferred replacement-unavailable'); continue; }
+        phase = 'original'; status('original session read');
         const original = await native.getSession(action.localSessionId);
+        status('original session read completed');
         const refusal = safe(original, action);
-        if (refusal) { report(refusal); continue; }
+        if (refusal) { status('action deferred original-guard'); report(refusal); continue; }
         if (original.isArchived) { attempted.add(action.operationId); continue; }
+        phase = 'dependencies'; status('dependency inventory read');
         const listing = await native.getSessionList();
         if (!Array.isArray(listing?.sessions) || listing.sessions.length > 16_384)
           throw new Error('Native session dependency inventory is unavailable');
         if (listing.sessions.some(row => row?.isArchived !== true
           && (row.spawnedFrom?.sessionId === action.localSessionId || row.forkedFromSessionId === action.localSessionId))) {
-          report('Local session has a live dependent session'); continue;
+          status('action deferred dependent-session'); report('Local session has a live dependent session'); continue;
         }
-        if (hasDraft(action.localSessionId)) { report('Local session has an unsent draft'); continue; }
+        if (hasDraft(action.localSessionId)) { status('action deferred unsent-draft'); report('Local session has an unsent draft'); continue; }
+        phase = 'terminals'; status('terminal probe read');
         const terminals = await native.getBusyShellPtyKeys(action.localSessionId, false);
         if (terminals?.probed !== true || !Array.isArray(terminals.busy) || terminals.busy.length
           || !Array.isArray(terminals.unknown) || terminals.unknown.length) {
-          report('Local session has busy or unverified terminal work'); continue;
+          status('action deferred terminal-work'); report('Local session has busy or unverified terminal work'); continue;
         }
+        phase = 'mapping'; status('registry mapping read');
         const registryPath = action.registryProof.path, separator = registryPath.lastIndexOf('/');
         const persisted = await native.readFileAtCwd(registryPath.slice(0, separator), registryPath.slice(separator + 1));
         if (!persisted || typeof persisted.contents !== 'string' || persisted.isTail || persisted.contents.length > 8 * 1024 * 1024)
@@ -146,33 +183,45 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
         if (mapped.sessionId !== action.localSessionId || mapped.cliSessionId !== action.nativeId
           || mapped.cwd !== action.cwd || mapped.title !== action.title
           || mapped.lastActivityAt !== action.expectedLastActivityAt || mapped.isArchived !== false) {
-          report('Native Local mapping changed its CLI session identity or activity'); continue;
+          status('action deferred mapping-changed'); report('Native Local mapping changed its CLI session identity or activity'); continue;
         }
+        phase = 'recheck'; status('original session recheck');
         const current = await native.getSession(action.localSessionId);
         const changed = safe(current, action);
-        if (changed) { report(changed); continue; }
+        if (changed) { status('action deferred original-guard'); report(changed); continue; }
+        phase = 'authority'; status('archive authority recheck');
         const latest = parse(await readManifest());
         const stillAuthorized = latest.actions.some(candidate => JSON.stringify(candidate) === JSON.stringify(action));
-        if (!stillAuthorized || !replacement(action) || !running || ticket !== generation || hasDraft(action.localSessionId)) continue;
+        if (!stillAuthorized || !replacement(action) || !running || ticket !== generation || hasDraft(action.localSessionId)) {
+          status('action deferred authority-revoked'); continue;
+        }
         attempted.add(action.operationId);
         // Keep worktrees and original files. This is the native reversible
         // archive action, never a delete or a foreign transcript append.
+        phase = 'archive'; status('archive dispatched');
         await native.archive(action.localSessionId, { cleanupWorktree: false, forceWorktreeCleanup: false });
         const archived = await native.getSession(action.localSessionId);
         if (archived?.sessionId !== action.localSessionId || archived.isArchived !== true)
           throw new Error('Native Local archive outcome is not verified');
         lastError = null;
+        status('archive verified');
         break; // A bounded, serial action per poll; never monopolize the renderer.
       }
       const activeOperations = new Set(manifest.actions.map(action => action.operationId));
       for (const operationId of attempted) if (!activeOperations.has(operationId)) attempted.delete(operationId);
-    } catch (error) { report(String(error?.message ?? error).slice(0, 300)); }
-    finally { inFlight = false; if (running) timer = setTimer(poll, intervalMs); }
+    } catch (error) { status(`poll failed ${phase}`); report(String(error?.message ?? error).slice(0, 300)); }
+    finally { status('poll completed'); inFlight = false; if (running) timer = setTimer(poll, intervalMs); }
   }
   return {
-    start() { if (!running) { running = true; generation++; void poll(); } },
-    stop() { running = false; generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; },
-    setRows(value, projectKey) { if (Array.isArray(value)) rows = value; keys = projectKey; },
+    start() { if (!running) { running = true; generation++; status('started'); void poll(); } },
+    stop() { running = false; generation++; status('stopped'); if (timer !== undefined) clearTimer(timer); timer = undefined; },
+    setRows(value, projectKey) {
+      if (Array.isArray(value)) {
+        rows = value;
+        status(rows.some(row => row?.type === 'bridge') ? 'rows received bridge-present' : 'rows received no-bridge');
+      }
+      keys = projectKey;
+    },
     projectionRows() { return [...observedAnchors.values()].map(value => value.row); },
     poll,
   };

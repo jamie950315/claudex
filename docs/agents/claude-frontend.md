@@ -326,6 +326,13 @@ lines to once per second and runtime diagnostics to 64 per thirty seconds, witho
 diagnostic timers/retries. Synthetic, syntax and copied-cache checks are not live
 renderer acceptance. Earlier native reception evidence remains historical; each
 new graph requires separate live reception acceptance before claiming delivery.
+Local archival adds `[Claudex native handoff status]` with fixed content-free
+subscription, rows, manifest, anchor-read, replacement/guard, dispatch and outcome
+phases. This diagnostic repeats each code at most once per five seconds, with
+the same 64-per-thirty-second cap. Callback failures are contained; phase reports
+add no native calls, archive authority, timers or retry. An evaluated folder
+module is distinct from a started subscription, a finished native read and a
+verified archive outcome.
 
 dev/verify-claude-frontend-builds.mjs is a developer-only static acceptance script.
 It inventories real cached entries and all current/legacy renderer journals,

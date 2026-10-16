@@ -5,7 +5,7 @@ import { normalizeClaudeLocalFolderAnchor } from '../src/claude-folder-anchor.mj
 import { claudeFolderProjectKey } from '../src/claude-folder-projection.mjs';
 
 function fixture(options = {}) {
-  let clock = 10000, tasks = [], errors = [], archives = [];
+  let clock = 10000, tasks = [], errors = [], archives = [], statuses = [];
   const action = { operationId: '11111111-1111-4111-8111-111111111111', conversationId: '22222222-2222-4222-8222-222222222222',
     localSessionId: 'local_33333333-3333-4333-8333-333333333333', nativeId: '44444444-4444-4444-8444-444444444444',
     remoteId: 'cse_test', cwd: '/project', title: 'Same title', expectedLastActivityAt: 4000,
@@ -14,17 +14,18 @@ function fixture(options = {}) {
   let manifest = { version: 1, kind: 'claude-local-archive', generatedAt: clock, expiresAt: clock + 15000, actions: [action], anchors: [] };
   let session = { sessionId: action.localSessionId, cwd: action.cwd, title: action.title, lastActivityAt: 4000,
     isArchived: false, isRunning: false, turnRunning: false, pendingToolPermissions: [], loops: [] };
-  const f = { action, errors, archives, reads: 0, nativeReads: 0, draft: false, children: [],
+  const f = { action, errors, archives, statuses, reads: 0, nativeReads: 0, draft: false, children: [],
     mutateManifest(fn) { manifest = fn(manifest); }, mutateSession(fn) { session = fn(session); },
     tick(ms) { clock += ms; }, beforeManifest: null, beforeNative: null };
   const runtime = createClaudeDesktopHandoffRuntime({ now: () => clock, registryRoot: '/native/claude-code-sessions',
     readManifest: async () => { f.beforeManifest?.(++f.reads); return { contents: JSON.stringify(manifest) }; },
-    native: { async getSession() { f.beforeNative?.(++f.nativeReads); return structuredClone(session); },
+    native: { async getSession() { await f.beforeNative?.(++f.nativeReads); return structuredClone(session); },
       async getSessionList() { return { sessions: [session, ...f.children] }; }, async getGitInfo() { return null; },
       async getBusyShellPtyKeys() { return f.terminals ?? { probed: true, busy: [], unknown: [] }; },
       async readFileAtCwd() { return { contents: JSON.stringify({ ...session, cliSessionId: f.transcriptId ?? action.nativeId }) }; },
       async archive(id, options) { archives.push({ id, options }); session.isArchived = true; } },
-    hasDraft: () => f.draft, setTimer(fn) { tasks.push(fn); return fn; }, clearTimer() {}, onError(error) { errors.push(error); }, ...options });
+    hasDraft: () => f.draft, setTimer(fn) { tasks.push(fn); return fn; }, clearTimer() {}, onError(error) { errors.push(error); },
+    onStatus(code) { statuses.push(code); }, ...options });
   runtime.setRows([{ type: 'bridge', id: 'session_test', title: action.title }]);
   f.runtime = runtime;
   f.run = async () => { runtime.start(); for (let i = 0; i < 12 && !tasks.length; i++) await new Promise(resolve => setImmediate(resolve)); runtime.stop(); };
@@ -42,6 +43,7 @@ for (const field of ['isRunning', 'turnRunning', 'hasBackgroundWork', 'hasBackgr
   test(`native ${field} defers archival without stopping user work`, async () => {
     const f = fixture(); f.mutateSession(session => ({ ...session, [field]: true })); await f.run();
     assert.equal(f.archives.length, 0); assert.match(f.errors[0], /active|unverified/);
+    if (field === 'isStarred') assert.ok(f.statuses.includes('original guard starred'));
   });
 
 test('queued input, pending permissions, loops, live descendants and unsent drafts block archival', async () => {
@@ -109,4 +111,55 @@ test('native terminal activity and incomplete terminal probes defer archival', a
     const f = fixture(); f.terminals = terminals; await f.run();
     assert.equal(f.archives.length, 0); assert.match(f.errors[0], /terminal work/);
   }
+});
+
+test('handoff diagnostics identify silent replacement waits and successful native consumption without identities', async () => {
+  const waiting = fixture();
+  waiting.runtime.setRows([{ type: 'bridge', id: 'session_other', title: 'Another replacement' }]);
+  await waiting.run();
+  assert.ok(waiting.statuses.includes('started'));
+  assert.ok(waiting.statuses.includes('poll started'));
+  assert.ok(waiting.statuses.includes('rows received bridge-present'));
+  assert.ok(waiting.statuses.includes('manifest actions available'));
+  assert.ok(waiting.statuses.includes('anchors hydrate completed'));
+  assert.ok(waiting.statuses.includes('action deferred replacement-unavailable'));
+  assert.equal(waiting.nativeReads, 0);
+  assert.equal(waiting.archives.length, 0);
+  const accepted = fixture(); await accepted.run();
+  assert.ok(accepted.statuses.includes('archive dispatched'));
+  assert.ok(accepted.statuses.includes('archive verified'));
+  for (const f of [waiting, accepted]) {
+    assert.doesNotMatch(f.statuses.join('\n'), /Same title|Another|cse_|session_|local_|\/project|11111111/);
+  }
+});
+
+test('diagnostics show a pending anchor read and contain observer failures without changing native work', async () => {
+  let release;
+  const pending = new Promise(resolve => { release = resolve; });
+  const states = [];
+  const slow = fixture({ normalizeAnchor: normalizeClaudeLocalFolderAnchor,
+    onStatus(code) { states.push(code); } });
+  slow.mutateManifest(m => ({ ...m, anchors: [{
+    localSessionId: slow.action.localSessionId, nativeId: slow.action.nativeId,
+    replacementNativeId: '55555555-5555-4555-8555-555555555555', remoteId: slow.action.remoteId, cwd: '/project' }] }));
+  slow.runtime.setRows([{ type: 'bridge', id: 'session_test', title: slow.action.title }], claudeFolderProjectKey);
+  slow.beforeNative = read => read === 1 ? pending : undefined;
+  slow.runtime.start();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(states.at(-1), 'anchor session read');
+  assert.equal(slow.archives.length, 0);
+  release();
+  await slow.run();
+  assert.ok(states.indexOf('anchor session read') > states.indexOf('anchors hydrate started'));
+  assert.ok(states.indexOf('anchors hydrate completed') > states.indexOf('anchor git read'));
+  const throwing = fixture({ onStatus() { throw new Error('Observer failure'); } });
+  await throwing.run(); assert.equal(throwing.archives.length, 1);
+});
+
+test('repeated row observations are rate-bounded and contain no row metadata', () => {
+  const f = fixture();
+  for (let i = 0; i < 1000; i++) f.runtime.setRows([{ type: 'bridge', id: `private-${i}` }]);
+  assert.deepEqual(f.statuses, ['rows received bridge-present']);
+  f.tick(1000); f.runtime.setRows([]);
+  assert.deepEqual(f.statuses, ['rows received bridge-present', 'rows received no-bridge']);
 });
