@@ -1,6 +1,6 @@
 //! Lossless native-preview bindings. Native transcripts remain untouched.
 use crate::{history::digest_bytes, owner::normalize_content, packet};
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use claudex_core::{
     storage::{self, FileIdentity, FileLock},
@@ -15,7 +15,8 @@ use std::{
 };
 const LIMIT: usize = 64 * 1024 * 1024;
 fn private_file(path: &Path) -> Result<Vec<u8>> {
-    let data = storage::read_stable_with_limit(path, LIMIT)?;
+    let data = storage::read_stable_with_limit(path, LIMIT)
+        .with_context(|| format!("Cannot read image asset {}.", path.display()))?;
     ensure!(
         data.identity.uid == storage::uid().to_string()
             && data.identity.nlink == "1"
@@ -25,7 +26,12 @@ fn private_file(path: &Path) -> Result<Vec<u8>> {
     Ok(data.bytes)
 }
 fn directory(path: &Path, private: bool) -> Result<()> {
-    let metadata = fs::symlink_metadata(path)?;
+    let metadata = fs::symlink_metadata(path).with_context(|| {
+        format!(
+            "Cannot inspect native image cache directory {}.",
+            path.display()
+        )
+    })?;
     ensure!(
         metadata.is_dir()
             && !metadata.file_type().is_symlink()
@@ -37,12 +43,14 @@ fn directory(path: &Path, private: bool) -> Result<()> {
 }
 fn asset_directory(root: &Path, create: bool) -> Result<PathBuf> {
     ensure!(root.is_absolute(), "Image asset root must be absolute.");
-    storage::require_private_directory(root)?;
+    storage::require_private_directory(root)
+        .with_context(|| format!("Cannot inspect image asset root {}.", root.display()))?;
     let path = root.join("image-assets");
     if create {
         storage::private_directory(&path)?;
     }
-    storage::require_private_directory(&path)?;
+    storage::require_private_directory(&path)
+        .with_context(|| format!("Cannot inspect image asset directory {}.", path.display()))?;
     Ok(path)
 }
 fn store(root: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
@@ -59,7 +67,11 @@ fn store(root: &Path, hash: &str, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 fn harden_project(path: &Path) -> Result<()> {
-    let before = fs::symlink_metadata(path)?;
+    let metadata = || {
+        fs::symlink_metadata(path)
+            .with_context(|| format!("Cannot inspect native image project {}.", path.display()))
+    };
+    let before = metadata()?;
     let identity = FileIdentity::from_metadata(&before);
     ensure!(
         before.is_dir()
@@ -74,10 +86,11 @@ fn harden_project(path: &Path) -> Result<()> {
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_DIRECTORY)
-        .open(path)?;
+        .open(path)
+        .with_context(|| format!("Cannot open native image project {}.", path.display()))?;
     ensure!(
         FileIdentity::from_metadata(&file.metadata()?) == identity
-            && FileIdentity::from_metadata(&fs::symlink_metadata(path)?) == identity,
+            && FileIdentity::from_metadata(&metadata()?) == identity,
         "Native image project changed before hardening."
     );
     file.set_permissions(fs::Permissions::from_mode(0o700))?;
@@ -85,7 +98,7 @@ fn harden_project(path: &Path) -> Result<()> {
     ensure!(
         after.same_inode(&identity)
             && after.mode.parse::<u32>()? & 0o7777 == 0o700
-            && after == FileIdentity::from_metadata(&fs::symlink_metadata(path)?),
+            && after == FileIdentity::from_metadata(&metadata()?),
         "Native image project changed during hardening."
     );
     Ok(())
@@ -124,12 +137,19 @@ fn original(temp: &Path, cwd: &str, id: &str, paste: u64, media: &str) -> Result
                 found = Some(path);
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e.into()),
+            Err(e) => {
+                return Err(e).with_context(|| {
+                    format!("Cannot inspect native original image {}.", path.display())
+                });
+            }
         }
     }
-    private_file(
-        &found.ok_or_else(|| anyhow::anyhow!("Original native image cache asset is missing."))?,
-    )
+    private_file(&found.ok_or_else(|| {
+        anyhow::anyhow!(
+            "Original native image cache asset is missing in {} (paste {paste}).",
+            images.display()
+        )
+    })?)
 }
 fn image_bytes(image: &Value) -> Result<Vec<u8>> {
     packet::validate_image(image)?;
@@ -523,7 +543,9 @@ pub(crate) mod tests {
         fs::write(&asset, b"wrong authoritative bytes")?;
         assert!(restore(&f.root, &[f.row.clone()], &bindings).is_err());
         fs::remove_file(&asset)?;
-        assert!(restore(&f.root, &[f.row.clone()], &bindings).is_err());
+        let error = restore(&f.root, &[f.row.clone()], &bindings).unwrap_err();
+        assert!(storage::is_not_found(&error));
+        assert!(format!("{error:#}").contains(&asset.display().to_string()));
         std::os::unix::fs::symlink(&f.path, &asset)?;
         assert!(restore(&f.root, &[f.row.clone()], &bindings).is_err());
         Ok(())

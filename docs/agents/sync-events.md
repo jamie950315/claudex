@@ -8,11 +8,12 @@ Desktop synchronization is completion-event driven, not a recurring two-second
 history sweep. Native Stop/lifecycle hooks publish bounded identity-only hints to
 the private durable sync-events inbox and wake the owner through a private Unix
 socket. Native SDK/app-server events join the same queue. Configuration events
-recheck hook readiness and liveness. After a successful empty-scope publication
-revokes archival commands, configuration-only passes with an unchanged ledger
-reuse presentation without renewing manifest timestamps or proof lifetimes.
-Pending recovery, changed state, native events and deferred/failed publications
-still use normal publication. Known managed session registration and started events
+recheck hook readiness and liveness. A pass with pending recovery or newly observed
+native work revokes archival commands before inspection; an empty publication
+scope keeps validated presentation anchors without restoring that authority.
+An idle pass with no discovery, cold operation, native event or due handoff
+maintenance leaves the previous publication untouched, including its original
+expiry. It neither revokes nor renews intents. Known managed session registration and started events
 never start a sync. Resuming an original reconciles that conversation for offline
 completions. Hook definitions are merged with existing settings and require the
 native Codex trust review; never bypass or forge trust receipts. Another tool or a manual edit may
@@ -58,10 +59,12 @@ watcher errors and OS rescan flags. Forward the same coalesced hints to renderer
 maintenance, and continue servicing native started/completion events during the
 settle window. Hint pressure never drops a durable completion or starts broad
 history discovery, and unchanged metadata never publishes a history event.
-A 30-second idle status heartbeat does no native history reads, discovery or
-archival proof renewal. Scope Desktop
-handoff history checks to event targets; empty scope revokes commands while keeping
-validated presentation anchors. Test-only dependency injection retains the former
+A status-only heartbeat does no native history reads, discovery or archival
+proof renewal. Separately, the enabled native Local handoff publisher performs
+one bounded full candidate verification per pass, with a normal 30-second
+maintenance interval. Scope event-triggered handoff history checks to event targets; after
+real work revoked authority, empty scope keeps only validated presentation
+anchors. Test-only dependency injection retains the former
 bounded polling harness, not a production fallback.
 
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.

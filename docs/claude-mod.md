@@ -1,10 +1,15 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.39
+## Current companion: 0.8.40
 
 Claudex.app 1.4.8 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.40 keeps verified Local archive intents available to the native
+consumer across idle scheduling passes, without renewing their expiry, and fairly
+rotates full predecessor verification. New activity still revokes authority
+before inspection; exact history, ownership and native archival checks remain.
+Native file-read failures now identify the failing operation and path.
 Version 0.8.39 packages input-only interrupted-image recovery through exact
 completed-successor evidence and portable Local predecessor checkpoint checks.
 Original histories, interrupted status and all native write/archive authority
@@ -436,7 +441,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.39-review"
+STAGE="$PARENT/claudex-0.8.40-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -457,7 +462,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.39-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.40-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

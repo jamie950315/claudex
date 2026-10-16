@@ -5,7 +5,7 @@ use crate::{
     codecs,
     history::{Common, assert_complete, digest_bytes},
 };
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use claudex_core::{
     rpc::CodexClient,
@@ -56,22 +56,38 @@ pub fn physical_rollout(logical: &Path) -> Result<PathBuf> {
         Ok(_) => Ok(logical.into()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let compressed = PathBuf::from(format!("{}.zst", logical.display()));
-            fs::symlink_metadata(&compressed)?;
+            fs::symlink_metadata(&compressed).with_context(|| {
+                format!(
+                    "Cannot inspect Codex rollout representation {} (logical path {}).",
+                    compressed.display(),
+                    logical.display()
+                )
+            })?;
             Ok(compressed)
         }
-        Err(e) => Err(e.into()),
+        Err(e) => {
+            Err(e).with_context(|| format!("Cannot inspect Codex rollout {}.", logical.display()))
+        }
     }
 }
 pub fn safe_native_path(path: &Path, root: &Path) -> Result<()> {
-    let parent = fs::canonicalize(
-        path.parent()
-            .ok_or_else(|| anyhow::anyhow!("Native transcript has no parent."))?,
-    )?;
-    let root = fs::canonicalize(root)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("Native transcript has no parent."))?;
+    let parent = fs::canonicalize(parent).with_context(|| {
+        format!(
+            "Cannot resolve native transcript parent {}.",
+            parent.display()
+        )
+    })?;
+    let root = fs::canonicalize(root)
+        .with_context(|| format!("Cannot resolve native store {}.", root.display()))?;
+    let metadata = || {
+        fs::symlink_metadata(path)
+            .with_context(|| format!("Cannot inspect native transcript {}.", path.display()))
+    };
     ensure!(
-        parent.starts_with(&root)
-            && fs::symlink_metadata(path)?.is_file()
-            && !fs::symlink_metadata(path)?.file_type().is_symlink(),
+        parent.starts_with(&root) && metadata()?.is_file() && !metadata()?.file_type().is_symlink(),
         "Native path is outside its configured store or is unsafe."
     );
     Ok(())
@@ -626,4 +642,30 @@ pub fn desktop_owns(root: &Path, native_id: &str) -> Result<bool> {
         Ok(false)
     }
     visit(root, native_id, 0, &mut 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_native_paths_keep_the_exact_path_and_io_classification() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let logical = root.join("missing.jsonl");
+        let error = physical_rollout(&logical).unwrap_err();
+        assert!(storage::is_not_found(&error));
+        assert!(format!("{error:#}").contains(&logical.display().to_string()));
+        assert!(format!("{error:#}").contains("missing.jsonl.zst"));
+
+        let error = safe_native_path(&logical, &root).unwrap_err();
+        assert!(storage::is_not_found(&error));
+        assert!(format!("{error:#}").contains(&logical.display().to_string()));
+
+        let missing_parent = root.join("removed-project");
+        let error = safe_native_path(&missing_parent.join("native.jsonl"), &root).unwrap_err();
+        assert!(storage::is_not_found(&error));
+        assert!(format!("{error:#}").contains(&missing_parent.display().to_string()));
+        Ok(())
+    }
 }

@@ -76,6 +76,12 @@ verification. The renderer rereads
 native identities, title, cwd, activity, idle state, drafts and dependencies before
 the normal archive API, with worktree cleanup disabled. An outcome is not accepted
 until native archive state and original history preservation are verified.
+The full-verification cursor follows the last conversation identity, not an
+index into the expiring dirty inventory; every eligible candidate must receive
+service even when earlier proofs expire between maintenance passes. An idle
+watcher pass with no native event, pending recovery, discovery or cold operation
+neither revokes nor republishes existing archive intents. Their original
+15-second expiry remains unchanged; real work still revokes before inspection.
 The native getSession/getTranscript DTO may expose only the Desktop UI ID, not
 the CLI ID. Before archival, reread the exact original registry JSON through the
 guarded native readFileAtCwd API; require its path beneath the pinned native

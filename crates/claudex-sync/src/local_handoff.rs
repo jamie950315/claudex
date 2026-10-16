@@ -482,7 +482,7 @@ struct Entry {
 #[derive(Default)]
 pub struct Publisher {
     verified: BTreeMap<String, Entry>,
-    cursor: usize,
+    last_verified: Option<String>,
 }
 impl Publisher {
     pub async fn publish(
@@ -627,8 +627,13 @@ impl Publisher {
         if !dirty.is_empty() {
             let anchors = retain_anchors(root, registry, state, previous_anchors);
             write_manifest(root, &[], &anchors, now)?;
-            let index = self.cursor % dirty.len();
-            self.cursor = self.cursor.wrapping_add(1);
+            // The dirty inventory changes as proofs expire. An index into that
+            // shrinking list can repeatedly skip the same conversation.
+            let index = self
+                .last_verified
+                .as_ref()
+                .and_then(|last| dirty.iter().position(|(c, ..)| c.conversation.id > *last))
+                .unwrap_or(0);
             let (
                 candidate,
                 mapping,
@@ -639,6 +644,7 @@ impl Publisher {
                 current_identity,
                 hint,
             ) = dirty.swap_remove(index);
+            self.last_verified = Some(candidate.conversation.id.clone());
             for (record, checkpoint) in [
                 (&candidate.original, &candidate.original.checkpoint),
                 (&candidate.current, &candidate.conversation.canonical),
@@ -932,6 +938,56 @@ mod tests {
                 extra: Map::new(),
             })
         }
+    }
+    struct Inventory(BTreeMap<String, Fake>);
+    #[async_trait]
+    impl Inspector for Inventory {
+        async fn inspect_handoff(&self, record: &Record) -> Result<Reading> {
+            self.0[&record.conversation_id].inspect_handoff(record).await
+        }
+    }
+    #[tokio::test]
+    async fn expiring_cached_candidates_cannot_starve_the_round_robin() -> Result<()> {
+        let mut f = Fixture::new()?;
+        let others = (0..12).map(|_| Fixture::new()).collect::<Result<Vec<_>>>()?;
+        let mut inspect = Inventory(BTreeMap::from([(
+            f.original.conversation_id.clone(),
+            f.inspector(),
+        )]));
+        for other in &others {
+            let id = &other.original.conversation_id;
+            inspect.0.insert(id.clone(), other.inspector());
+            f.state
+                .conversations
+                .extend(other.state.conversations.clone());
+            f.state.records.extend(other.state.records.clone());
+            let name = format!("{}.json", digest_bytes(id.as_bytes()));
+            let mut owner = storage::read_json(other.root.join("owners").join(&name))?;
+            owner["remoteId"] = json!(format!("cse_{id}"));
+            storage::write_json(f.root.join("owners").join(&name), &owner)?;
+            let name = format!("{}.json", other.local);
+            storage::write_json(
+                f.registry.join(&name),
+                &storage::read_json(other.registry.join(&name))?,
+            )?;
+        }
+        let mut publisher = Publisher::default();
+        for pass in 0..13 {
+            publisher
+                .publish(
+                    &f.root,
+                    &f.registry,
+                    &f.state,
+                    None,
+                    &inspect,
+                    100_000 + pass * 30_000,
+                )
+                .await?;
+        }
+        for (id, inspector) in &inspect.0 {
+            assert_eq!(inspector.reads.load(Ordering::SeqCst), 2, "{id}");
+        }
+        Ok(())
     }
     #[tokio::test]
     async fn scoped_expiration_never_revives_authority_and_anchors_do_not_read_history()
