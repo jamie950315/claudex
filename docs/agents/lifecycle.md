@@ -36,6 +36,10 @@ old snapshot cwd and normal retirement guards. Keep at most 16 verified project
 roots. Imported bootstrap originals and ambiguous duplicate paths remain blocked.
 Stable relocated reads revalidate the registry and saved prefix without creating
 a Claude writer or editing any native transcript or registry.
+Compare relocation checkpoints after portable-message normalization, as in
+ordinary coordinator reads. Empty native thinking-only rows do not occupy a
+canonical message index; retaining them until the prefix slice would change
+which authored messages its saved count names.
 
 By user decision Codex project moves are followed too. Only a current unmanaged
 Codex original qualifies: the saved cwd must be absent or an alias resolving to

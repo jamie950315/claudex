@@ -181,6 +181,9 @@ pub fn claude(home: &Path, registry: &Path, record: &Record) -> Result<Option<Re
     );
     let mut decoded =
         owned_history::completed_claude(&raw.text, home, "", &record.native_id, None)?;
+    // Checkpoint counts index portable messages, not native thinking-only
+    // placeholders that normalize to no authored content.
+    decoded.common.make_portable();
     ensure!(
         record.checkpoint.contains(&decoded.common)?,
         "Relocated history lost its exact synchronized prefix."
@@ -308,6 +311,25 @@ mod tests {
         assert_eq!(storage::snapshot(&f.target)?.text, before.text);
         let repeat = claude(&f.home, &f.registry, &moved.record)?.unwrap();
         assert_eq!(repeat.proof, moved.proof);
+        Ok(())
+    }
+    #[test]
+    fn relocation_indexes_the_portable_checkpoint_after_empty_thinking_normalization() -> Result<()>
+    {
+        let mut f = fixture()?;
+        let mut thinking = f.rows[1].clone();
+        thinking["message"]["content"] =
+            json!([{"type":"thinking","thinking":"","signature":"opaque"}]);
+        thinking["message"]["stop_reason"] = json!("tool_use");
+        thinking["uuid"] = json!(Uuid::new_v4().to_string());
+        f.rows[1]["parentUuid"] = thinking["uuid"].clone();
+        f.rows.insert(1, thinking);
+        storage::atomic_write(&f.target, codecs::serialize_rows(&f.rows)?)?;
+        let before = storage::read_stable(&f.target)?;
+        let moved = claude(&f.home, &f.registry, &f.record)?.unwrap();
+        assert_eq!(moved.reading.common.messages.len(), 4);
+        assert!(f.record.checkpoint.contains(&moved.reading.common)?);
+        assert_eq!(storage::read_stable(&f.target)?.bytes, before.bytes);
         Ok(())
     }
     #[test]

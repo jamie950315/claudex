@@ -194,6 +194,7 @@ pub struct Runtime {
 struct RuntimeProofs {
     rollout: crate::native_proofs::RolloutProofs,
     provenance: crate::codex_provenance::Provenance,
+    late_items_enabled: bool,
 }
 #[async_trait]
 impl native_history::Proofs for RuntimeProofs {
@@ -209,6 +210,9 @@ impl native_history::Proofs for RuntimeProofs {
         turns: &[Value],
         empty: &std::collections::BTreeSet<String>,
     ) -> Result<Option<Value>> {
+        if !self.late_items_enabled {
+            return Ok(None);
+        }
         ensure!(
             id == self.provenance.thread_id,
             "Native late-item thread identity changed."
@@ -641,21 +645,23 @@ impl Runtime {
                 codex_home: self.options.codex_home.clone(),
                 max_bytes: 480 * 1024 * 1024,
             };
+            let mut proofs = RuntimeProofs {
+                rollout: crate::native_proofs::RolloutProofs {
+                    path: path.clone(),
+                    thread_id: id.clone(),
+                    cwd: cwd.clone(),
+                    max_bytes: 480 * 1024 * 1024,
+                },
+                provenance: provenance.clone(),
+                late_items_enabled: false,
+            };
             let mut snapshot = native_history::read_stable(
                 &client,
                 &id,
                 &self.options.limits,
                 true,
                 r.extra.get("displayScreenshots") == Some(&json!("omitted")),
-                &RuntimeProofs {
-                    rollout: crate::native_proofs::RolloutProofs {
-                        path: path.clone(),
-                        thread_id: id.clone(),
-                        cwd: cwd.clone(),
-                        max_bytes: 480 * 1024 * 1024,
-                    },
-                    provenance: provenance.clone(),
-                },
+                &proofs,
             )
             .await?;
             if r.managed {
@@ -708,6 +714,39 @@ impl Runtime {
                 }
             };
             let mut common = convert(&snapshot)?;
+            let prove_late =
+                native_history::needs_late_item_proof(r.verified, &r.checkpoint, &common)?;
+            if prove_late {
+                // Ordinary full native history is authoritative when its whole
+                // saved prefix matches. Only an actual mismatch admits the
+                // extra raw late-item proof and a fresh complete two-pass read.
+                proofs.late_items_enabled = true;
+                snapshot = native_history::read_stable(
+                    &client,
+                    &id,
+                    &self.options.limits,
+                    true,
+                    r.extra.get("displayScreenshots") == Some(&json!("omitted")),
+                    &proofs,
+                )
+                .await?;
+                if r.managed {
+                    owned_history::validate_codex_native_bootstrap(
+                        &self.options.root,
+                        &snapshot,
+                        &r.conversation_id,
+                        &id,
+                        &self.key,
+                    )?;
+                }
+                images = provenance.hydrate(
+                    &mut snapshot.turns,
+                    &retained,
+                    r.verified.then_some(r.path.as_path()),
+                    self.options.limits.max_bytes,
+                )?;
+                common = convert(&snapshot)?;
+            }
             if r.verified && r.checkpoint.count > 0 && snapshot.late_item_evidence.is_some() {
                 let mut matched = None;
                 for candidate in crate::native_order::representations(&snapshot)? {
@@ -724,6 +763,12 @@ impl Runtime {
                 })?;
                 snapshot = selected.0;
                 common = selected.1;
+            }
+            if prove_late {
+                ensure!(
+                    r.checkpoint.contains(&common)?,
+                    "Native late item ordering does not preserve the complete saved checkpoint."
+                );
             }
             ensure!(
                 crate::history::canonical(&serde_json::to_value(&common)?)?.len()
@@ -800,6 +845,7 @@ impl Runtime {
             storage::snapshot(&r.path)?
         };
         let mut retired = false;
+        let mut reset_bootstrap = None;
         if r.managed {
             let (owner, is_retired) = if let Some((generation, _)) = reset_source {
                 (generation, false)
@@ -809,6 +855,7 @@ impl Runtime {
                 saved
             };
             retired = is_retired;
+            reset_bootstrap = owner.get("lastReset").filter(|v| !v.is_null()).cloned();
             ensure!(
                 r.path == codecs::claude_path(&self.options.claude_home, &r.cwd, &r.native_id)?,
                 "Saved Claude owner transcript path changed."
@@ -825,7 +872,7 @@ impl Runtime {
         } else {
             None
         };
-        let mut decoded = owned_history::completed_claude_with_policy(
+        let mut decoded = owned_history::completed_claude_with_reset(
             &data.text,
             &self.options.root,
             &r.conversation_id,
@@ -836,6 +883,7 @@ impl Runtime {
             },
             owned.then_some(self.key.as_slice()),
             self.options.version_policy,
+            reset_bootstrap.as_ref(),
         )?;
         if let Some(parent) = fork_parent {
             let path = r.path.parent().unwrap().join(format!("{parent}.jsonl"));
@@ -2017,6 +2065,44 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn late_proof_gate_skips_normal_reads_and_preserves_admitted_proof_failures() -> Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = fs::canonicalize(temp.path())?;
+        let id = Uuid::new_v4().to_string();
+        let path = root.join("missing-rollout.jsonl");
+        let mut proofs = RuntimeProofs {
+            rollout: crate::native_proofs::RolloutProofs {
+                path: path.clone(),
+                thread_id: id.clone(),
+                cwd: root.clone(),
+                max_bytes: 1024 * 1024,
+            },
+            provenance: crate::codex_provenance::Provenance {
+                path,
+                thread_id: id.clone(),
+                cwd: root.clone(),
+                codex_home: root,
+                max_bytes: 1024 * 1024,
+            },
+            late_items_enabled: false,
+        };
+        let turns = vec![json!({"items":[{"type":"commandExecution"}]})];
+        let empty = std::collections::BTreeSet::new();
+        assert!(
+            native_history::Proofs::late_items(&proofs, &id, &turns, &empty)
+                .await?
+                .is_none()
+        );
+        proofs.late_items_enabled = true;
+        assert!(
+            native_history::Proofs::late_items(&proofs, &id, &turns, &empty)
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
     #[test]
     fn only_fresh_unenrolled_subagents_are_excluded_by_native_metadata() -> Result<()> {
         let source = Record::source(
@@ -2185,6 +2271,43 @@ mod tests {
         assert!(projected_images(&common));
         common.messages[0].content[0]["unknown"] = json!(true);
         assert!(!projected_images(&common));
+    }
+    #[tokio::test]
+    async fn managed_claude_reads_use_the_saved_reset_bootstrap_proof() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let runtime = Runtime::new(Options::from_config(
+            &root,
+            &json!({"codexHome":codex,"claudeHome":claude}),
+        )?)?;
+        let id = Uuid::new_v4().to_string();
+        let cwd = root.to_string_lossy();
+        let (rows, proof, common) =
+            owned_history::tests::reset_fixture(&root, &cwd, &id, &runtime.key)?;
+        let path = codecs::claude_path(&claude, &cwd, &id)?;
+        storage::private_directory(path.parent().unwrap())?;
+        storage::publish_exclusive(&path, codecs::serialize_rows(&rows)?)?;
+        let owners = storage::private_directory(root.join("owners"))?;
+        let state = owners.join(format!("{}.json", digest_bytes(b"c")));
+        storage::write_json(
+            &state,
+            &json!({"version":1,"conversationId":"c","sessionId":id,"cwd":cwd,"claudeHome":claude,"lastReset":proof}),
+        )?;
+        let mut record = Record::source(Side::Claude, &path, &id);
+        record.cwd = cwd.into();
+        record.conversation_id = "c".into();
+        record.managed = true;
+        assert_eq!(
+            runtime.inspect(&record).await?.common.fingerprint()?,
+            common.fingerprint()?
+        );
+        let mut owner = storage::read_json(&state)?;
+        owner.as_object_mut().unwrap().remove("lastReset");
+        storage::write_json(&state, &owner)?;
+        assert!(runtime.inspect(&record).await.is_err());
+        Ok(())
     }
     #[tokio::test]
     async fn managed_claude_image_reads_restore_before_authentication_and_keep_raw_byte_count()

@@ -141,6 +141,11 @@ After authenticated archive restoration, promote the new native ID before a
 normal-profile worker reattaches the same RC ID. One sealed prior generation is
 retained; repeated resets are refused until safe retirement exists. Unknown clear
 outcomes are never resent. Unexpected session identity makes shutdown unsafe.
+Current, stopped and retired owned readers pass the saved `lastReset` proof to
+the completed-history decoder. Exclude only its exact `/clear` caveat, command
+and empty native output after verifying the zero-query receipt, native graph,
+session/cwd/version and authenticated restoring archive packet. Without that
+proof they remain history; no reader starts or repeats a reset.
 CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS must be enabled explicitly. Pinned native
 no-query appends and /clear also emit running/idle; correlate their own receipts
 and wait for reset idle without classifying the owned lifecycle as user work.
