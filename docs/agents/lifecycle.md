@@ -204,6 +204,9 @@ rechecks only the explicit busy-owner refusal until native closure is safe.
 service-status.json and watcher-status.json are disposable diagnostics written
 by writeDiagnosticJSON (atomic rename, no device flush). Never use it for
 journals, checkpoints, ownership, inbox or any state that authorizes work.
+The supervisor reads terminal watcher diagnostics with the app reader's 1 MiB
+bound, preserving the exact worker PID and private stable-file checks; renderer
+status may exceed 64 KiB. Ownership and lock files retain their 64 KiB bound.
 
 Explicit `archive-original CONVERSATION_ID --id NATIVE_ID` reconciliation may
 also preserve-archive an unchanged legacy original plus its completed/unloaded

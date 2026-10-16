@@ -581,7 +581,10 @@ impl ProcessInspector for NativeProcesses {
     }
 }
 fn private_json(path: &Path) -> Result<Option<Value>> {
-    let file = match read_stable(path) {
+    private_json_with_limit(path, 65536)
+}
+fn private_json_with_limit(path: &Path, limit: usize) -> Result<Option<Value>> {
+    let file = match read_stable_with_limit(path, limit) {
         Ok(v) => v,
         Err(e) if is_not_found(&e) => return Ok(None),
         Err(e) => return Err(e),
@@ -591,11 +594,23 @@ fn private_json(path: &Path) -> Result<Option<Value>> {
     if identity.uid != uid().to_string()
         || mode & 0o077 != 0
         || identity.nlink != "1"
-        || file.bytes.len() > 65536
+        || file.bytes.len() > limit
     {
         bail!("Unverified service state file.");
     }
     Ok(Some(serde_json::from_slice(&file.bytes)?))
+}
+// Watcher presentation includes bounded renderer diagnostics and can exceed
+// the ownership ledger's 64 KiB limit. This read never authorizes a restart.
+fn watcher_exit_error(root: &Path, pid: Option<u32>) -> Value {
+    if let Ok(Some(watcher)) = private_json_with_limit(&root.join("watcher-status.json"), 1024 * 1024) {
+        if watcher["pid"].as_u64() == pid.map(u64::from) {
+            if let Some(text) = watcher["error"].as_str() {
+                return json!(text.chars().take(2000).collect::<String>());
+            }
+        }
+    }
+    Value::Null
 }
 fn valid_pid(value: &Value) -> Option<u32> {
     value
@@ -870,14 +885,7 @@ pub async fn supervise(
             }
         };
         use std::os::unix::process::ExitStatusExt;
-        let mut error = Value::Null;
-        if let Ok(Some(watcher)) = private_json(&root.join("watcher-status.json")) {
-            if watcher["pid"].as_u64() == pid.map(u64::from) {
-                if let Some(text) = watcher["error"].as_str() {
-                    error = json!(text.chars().take(2000).collect::<String>());
-                }
-            }
-        }
+        let error = watcher_exit_error(&root, pid);
         let runtime = now_ms() - launched;
         publish(
             &path,
@@ -908,4 +916,24 @@ pub async fn supervise(
     )?;
     lock.release()?;
     Ok(status)
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn watcher_exit_diagnostics_preserve_errors_beyond_the_lock_file_limit() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = private_directory(temp.path())?;
+        let path = root.join("watcher-status.json");
+        write_json(&path, &json!({"pid":100,"error":"Broken pipe","rendererAdapters":{"details":"x".repeat(100_000)}}))?;
+        assert!(private_json(&path).is_err());
+        assert_eq!(watcher_exit_error(&root, Some(100)), "Broken pipe");
+        assert!(watcher_exit_error(&root, Some(101)).is_null());
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+        assert!(watcher_exit_error(&root, Some(100)).is_null());
+        Ok(())
+    }
 }
