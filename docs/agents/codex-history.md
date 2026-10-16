@@ -114,8 +114,13 @@ exclusion never applies to verified, managed or pending records, and never
 relaxes the independent-source header/session identity proofs.
 Goal continuations may begin with assistant items and
 receive user steering later. Full native reads preserve this order when earlier
-verified user context exists, still requiring a final answer and withholding
-active tails. Never fabricate a user message to force role alternation.
+verified user context exists, still requiring a persisted final assistant item
+and withholding active tails. A completed, error-free full-API turn may intentionally retain an
+empty-string final text, as in quiet automation heartbeats. Preserve that item
+and all user/tool/reasoning activity; no text is fabricated or omitted. Missing
+final items, commentary-only endings, non-string text, active items and error
+turns retain their existing guards. Rendered text length is not completion proof.
+Never fabricate a user message to force role alternation.
 Desktop create_thread can deliver the first request as a codex_app function
 output instead of a userMessage. Only its exact initial delegation envelope
 establishes request context; preserve the event's assistant role and full inert

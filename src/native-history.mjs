@@ -108,7 +108,9 @@ function validateTurn(turn, previousStart, { completedPrefix = false, allowActiv
     }
   }
   if (continuation && compactionControl(turn)) return startedAt ?? previousStart;
-  if (turn.status === 'completed' && ((!continuation && lastUser < 0) || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string' || !turn.items[lastAgent].text.trim())) fail('a completed turn lacks its final assistant response.');
+  // A quiet native turn can complete with an intentionally empty final text.
+  // Keep its actual final item and every historical activity; never invent a reply.
+  if (turn.status === 'completed' && ((!continuation && lastUser < 0) || lastAgent <= lastUser || turn.items[lastAgent].phase === 'commentary' || typeof turn.items[lastAgent].text !== 'string')) fail('a completed turn lacks its final assistant response.');
   return startedAt ?? previousStart;
 }
 

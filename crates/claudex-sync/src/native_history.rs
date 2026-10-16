@@ -213,13 +213,13 @@ fn validate_turn(
     if status == "completed" {
         let agent = last_agent
             .ok_or_else(|| anyhow::anyhow!("Completed native turn lacks final response."))?;
+        // Quiet native turns may close with an intentionally empty final
+        // message. Completion is not a rendered-text requirement.
         ensure!(
             (prior_request || last_user.is_some())
                 && last_user.is_none_or(|u| agent > u)
                 && items[agent]["phase"] != "commentary"
-                && items[agent]["text"]
-                    .as_str()
-                    .is_some_and(|s| !s.trim().is_empty()),
+                && items[agent]["text"].is_string(),
             "Completed native turn lacks final assistant response."
         );
     }
@@ -702,6 +702,46 @@ pub fn needs_late_item_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct QuietTurnRpc(Value);
+    #[async_trait]
+    impl Rpc for QuietTurnRpc {
+        async fn request(&self, method: &str, _: Value) -> Result<Value> {
+            assert_eq!(method, "thread/turns/list");
+            Ok(json!({"data":[self.0.clone()],"nextCursor":null}))
+        }
+    }
+    #[tokio::test]
+    async fn completed_quiet_turn_retains_empty_final_and_all_activity() -> Result<()> {
+        let turn = json!({"id":"quiet","status":"completed","error":null,
+            "itemsView":"full","startedAt":100,"completedAt":101,"items":[
+                {"id":"request","type":"userMessage","content":[{"type":"text","text":"Report only when attention is needed."}]},
+                {"id":"inspection","type":"commandExecution","status":"completed","aggregatedOutput":"Progressing normally."},
+                {"id":"final","type":"agentMessage","phase":"final_answer","text":""}]});
+        let snapshot = read_stable(&QuietTurnRpc(turn.clone()), "thread", &Limits::default(), true, false, &NoProofs).await?;
+        assert_eq!(snapshot.turns, vec![turn.clone()]);
+        assert_eq!(snapshot.item_count, 3);
+        assert!(!snapshot.incomplete_tail);
+        let common = convert(&snapshot, "thread", "/tmp", None, false)?;
+        assert_eq!(common.messages.len(), 3);
+        assert_eq!(common.messages[2].content[0], json!({"type":"text","text":""}));
+        assert!(common.messages[1].content[0]["text"].as_str().unwrap().contains("Progressing normally."));
+        assert!(common.messages[2].content[1]["text"].as_str().unwrap().contains("final_answer"));
+        for (pointer, replacement) in [
+            ("/items/2/text", Value::Null),
+            ("/items/2/phase", json!("commentary")),
+            ("/items/1/status", json!("inProgress")),
+            ("/error", json!({"message":"Native failure"})),
+        ] {
+            let mut invalid = turn.clone();
+            *invalid.pointer_mut(pointer).unwrap() = replacement;
+            assert!(read_stable(&QuietTurnRpc(invalid), "thread", &Limits::default(), true, false, &NoProofs).await.is_err());
+        }
+        let mut active = turn;
+        active["status"] = json!("inProgress");
+        active["completedAt"] = Value::Null;
+        assert!(read_stable(&QuietTurnRpc(active), "thread", &Limits::default(), true, false, &NoProofs).await.is_err());
+        Ok(())
+    }
     #[test]
     fn arrival_proof_is_requested_only_after_the_whole_verified_prefix_mismatches() {
         let original = Common {

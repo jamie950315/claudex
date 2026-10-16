@@ -131,6 +131,21 @@ test('visible text, inline images, metadata and unknown events survive the Claud
   assert.equal(fingerprint(decodeClaude(encoded.text)), fingerprint(common));
 });
 
+test('a completed quiet heartbeat preserves its empty final response and historical activity', async () => {
+  const inspected = { type: 'commandExecution', id: 'inspection', status: 'completed', aggregatedOutput: 'Progressing normally.' };
+  const quiet = turn('quiet', [user('Report only when attention is needed.'), inspected, answer('')]);
+  const exported = await run(client([page([quiet])]), { completedPrefix: true });
+  assert.equal(exported.turnCount, 1);
+  assert.equal(exported.itemCount, 3);
+  assert.equal(exported.incompleteTail, false);
+  assert.equal(exported.common.messages.length, 3);
+  assert.deepEqual(exported.common.messages.at(-1).content[0], { type: 'text', text: '' });
+  assert.match(exported.common.messages[1].content[0].text, /Progressing normally/);
+  assert.match(exported.common.messages.at(-1).content[1].text, /final_answer/);
+  const encoded = encodeClaude(exported.common, '00000000-0000-4000-8000-000000000001');
+  assert.equal(fingerprint(decodeClaude(encoded.text)), fingerprint(exported.common));
+});
+
 test('source mutation between passes fails without retrying', async () => {
   const native = client([page([turn()]), page([turn('t1', [user(), answer('Changed')])])]);
   await assert.rejects(run(native), /source history changed/);
@@ -292,7 +307,7 @@ test('summary views, active/failed turns, reversed ordering and malformed comple
   await assert.rejects(run(client([page([{ ...turn(), itemsView: 'summary' }])])), /full turn items/);
   await assert.rejects(run(client([page([{ ...turn(), itemsView: undefined }])])), /full turn items/);
   await assert.rejects(run(client([page([turn('t1', undefined, 200), turn('t2', undefined, 100)])])), /ascending order/);
-  for (const items of [[user()], [answer()], [user(), { ...answer(), phase: 'commentary' }], [user(), answer('')], [user(), answer(), user('Unanswered')]]) {
+  for (const items of [[user()], [answer()], [user(), { ...answer(), phase: 'commentary' }], [user(), { ...answer(), text: null }], [user(), answer(), user('Unanswered')]]) {
     await assert.rejects(run(client([page([turn('t', items)])])), /final assistant|precedes/);
   }
   await assert.rejects(run(client([page([{ ...turn(), completedAt: 1 }])])), /completion precedes/);
