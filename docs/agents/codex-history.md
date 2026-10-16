@@ -107,7 +107,12 @@ Only absent raw client_id normalizes to API clientId:null; explicit values must
 match exactly, and raw clientId aliases are rejected rather than overwritten.
 
 Native metadata, not the rollout header, determines subagent exclusion; ordinary
-forks remain eligible. Goal continuations may begin with assistant items and
+forks remain eligible. Automatic discovery keeps raw candidates until exact
+`thread/read` metadata classifies them. A fresh unenrolled native subagent is
+excluded before history/proof reads and is not an unsupported source. This
+exclusion never applies to verified, managed or pending records, and never
+relaxes the independent-source header/session identity proofs.
+Goal continuations may begin with assistant items and
 receive user steering later. Full native reads preserve this order when earlier
 verified user context exists, still requiring a final answer and withholding
 active tails. Never fabricate a user message to force role alternation.

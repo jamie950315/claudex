@@ -289,6 +289,16 @@ fn discovery_options(config: &Value, only: Option<HashSet<String>>) -> Result<di
         only_keys: only,
     })
 }
+fn desktop_discovery_options(
+    config: &Value,
+    only: Option<HashSet<String>>,
+) -> Result<discovery::Options> {
+    let mut options = discovery_options(config, only)?;
+    // Desktop's native adapter classifies exact API metadata before history
+    // reads. Legacy discovery retains its original header-filter contract.
+    options.exclude_subagents = false;
+    Ok(options)
+}
 async fn discover_desktop(
     bridge: &DesktopBridge,
     config: &Value,
@@ -303,7 +313,7 @@ async fn discover_desktop(
     let mut unsupported = vec![];
     let mut absent = vec![];
     let mut enrolled = vec![];
-    for source in discovery::discover(&discovery_options(config, only)?, &known)? {
+    for source in discovery::discover(&desktop_discovery_options(config, only)?, &known)? {
         if matches!(fs::symlink_metadata(&source.cwd),Err(e)if e.kind()==std::io::ErrorKind::NotFound)
         {
             if absent.len() < 100 {
@@ -319,6 +329,7 @@ async fn discover_desktop(
             .await
         {
             Ok(result) => enrolled.push(result),
+            Err(error) if error.is::<discovery::CodexSubagentSource>() => (),
             Err(error) => {
                 if unsupported.len() < 100 {
                     unsupported.push(json!({"side":source.side,"nativeId":source.native_id,"reason":format!("{error:#}")}));
@@ -610,7 +621,7 @@ async fn watch_desktop_control(
                         if startup {
                             let state = bridge.status()?;
                             let known = state.records.iter().map(|r| format!("{}:{}", r.side.name(), r.native_id.to_lowercase())).collect();
-                            candidates = discovery::discover(&discovery_options(config, None)?, &known)?.into();
+                            candidates = discovery::discover(&desktop_discovery_options(config, None)?, &known)?.into();
                             background = state.conversations.into_iter().filter(|(_, c)| c.tracked()).map(|(id, _)| id).collect();
                             unsupported = json!({"unsupportedSources":[],"absentSources":[]});
                             startup = false;
@@ -714,6 +725,9 @@ async fn enroll_candidate(bridge: &DesktopBridge, source: discovery::Source) -> 
         .await
     {
         Ok(value) => Ok(json!({"enrolled":[value],"unsupportedSources":[],"absentSources":[]})),
+        Err(error) if error.is::<discovery::CodexSubagentSource>() => {
+            Ok(json!({"enrolled":[],"unsupportedSources":[],"absentSources":[]}))
+        }
         Err(error) => Ok(
             json!({"enrolled":[],"unsupportedSources":[{"side":source.side,"nativeId":source.native_id,"reason":format!("{error:#}")}],"absentSources":[]}),
         ),
@@ -792,6 +806,16 @@ mod lifecycle_tests {
         os::unix::fs::PermissionsExt,
         sync::atomic::{AtomicBool, Ordering},
     };
+    #[test]
+    fn only_desktop_discovery_defers_subagent_classification_to_native_metadata() -> Result<()> {
+        let config = json!({"codexHome":"/native/codex","claudeHome":"/native/claude"});
+        let keys = HashSet::from(["codex:exact-native-id".into()]);
+        assert!(discovery_options(&config, None)?.exclude_subagents);
+        let desktop = desktop_discovery_options(&config, Some(keys.clone()))?;
+        assert!(!desktop.exclude_subagents);
+        assert_eq!(desktop.only_keys, Some(keys));
+        Ok(())
+    }
     struct PartialStart {
         root: PathBuf,
         stopped: AtomicBool,

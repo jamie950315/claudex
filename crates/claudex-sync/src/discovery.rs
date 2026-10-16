@@ -167,6 +167,16 @@ pub struct Source {
     pub native_id: String,
     pub cwd: String,
 }
+/// A normal enrollment exclusion, proven by exact native API metadata rather
+/// than inferred from a rollout's historical source label or parent rows.
+#[derive(Debug)]
+pub struct CodexSubagentSource;
+impl std::fmt::Display for CodexSubagentSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Native Codex subagent is not an independent conversation source.")
+    }
+}
+impl std::error::Error for CodexSubagentSource {}
 #[derive(Clone, Debug)]
 pub struct Options {
     pub codex_home: PathBuf,

@@ -220,6 +220,16 @@ pub struct NativeAdapter {
     runtime: Arc<Runtime>,
     side: Side,
 }
+fn admit_codex_source(record: &Record, metadata: &Value) -> Result<()> {
+    if !record.verified
+        && !record.managed
+        && record.conversation_id.is_empty()
+        && crate::discovery::codex_subagent(&metadata["source"])
+    {
+        return Err(crate::discovery::CodexSubagentSource.into());
+    }
+    Ok(())
+}
 impl Runtime {
     pub fn new(options: Options) -> Result<Arc<Self>> {
         let shared_transport_root = options.root.clone();
@@ -605,6 +615,7 @@ impl Runtime {
                 thread["id"] == id,
                 "Native Codex returned a different identity."
             );
+            admit_codex_source(r, thread)?;
             let mut cwd = self.safe_cwd(
                 thread["cwd"]
                     .as_str()
@@ -2006,6 +2017,38 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_fresh_unenrolled_subagents_are_excluded_by_native_metadata() -> Result<()> {
+        let source = Record::source(
+            Side::Codex,
+            Path::new("/native/rollout.jsonl"),
+            &Uuid::new_v4().to_string(),
+        );
+        let subagent = json!({"source":{"subAgent":{"thread_spawn":{
+            "parent_thread_id":Uuid::new_v4(),"depth":1
+        }}}});
+        assert!(
+            admit_codex_source(&source, &subagent)
+                .unwrap_err()
+                .is::<crate::discovery::CodexSubagentSource>()
+        );
+        // Fork ancestry and unknown metadata are not subagent evidence.
+        admit_codex_source(
+            &source,
+            &json!({"source":"cli","forkedFrom":Uuid::new_v4()}),
+        )?;
+        admit_codex_source(&source, &json!({"source":{"future":"metadata"}}))?;
+        let mut record = source;
+        record.verified = true;
+        admit_codex_source(&record, &subagent)?;
+        record.verified = false;
+        record.managed = true;
+        admit_codex_source(&record, &subagent)?;
+        record.managed = false;
+        record.conversation_id = "existing-conversation".into();
+        admit_codex_source(&record, &subagent)?;
+        Ok(())
+    }
     #[test]
     fn shared_transport_root_default_preserves_relative_runtime_root() -> Result<()> {
         let cwd = std::env::current_dir()?;
