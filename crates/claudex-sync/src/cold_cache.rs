@@ -763,15 +763,27 @@ mod tests {
     #[tokio::test]
     async fn archive_capture_records_only_authenticated_stable_reads() -> Result<()> {
         let (_temp, cache) = fixture()?;
-        let messages = vec![
-            crate::history::Message::text("user", "request"),
-            crate::history::Message::text("assistant", "answer"),
-        ];
+        let messages = (0..130)
+            .map(|i| {
+                crate::history::Message::text(
+                    if i % 2 == 0 { "user" } else { "assistant" },
+                    format!("message {i}"),
+                )
+            })
+            .collect::<Vec<_>>();
         let reference = crate::archive::persist(&cache.root, &messages, 2)?;
         let (result, files) =
             capture(async { crate::archive::load(&cache.root, &reference) }).await;
         assert_eq!(result?, messages);
-        assert!(!files.unwrap().is_empty());
+        let files = files.unwrap();
+        // Every message, all three reference pages and the manifest must reach
+        // the caller's task-local proof even when message reads use OS workers.
+        assert_eq!(files.len(), 130 + 3 + 1);
+        for file in files {
+            let identity =
+                FileIdentity::from_metadata(&fs::symlink_metadata(file["path"].as_str().unwrap())?);
+            assert_eq!(file["identity"], serde_json::to_value(identity)?);
+        }
         Ok(())
     }
 }

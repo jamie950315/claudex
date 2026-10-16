@@ -25,6 +25,17 @@ Keep the upstream CPU dispatch and portable build target; do not require a
 machine-specific `target-cpu`. Digest, HMAC, archive and checkpoint bytes remain
 unchanged, including when hardware acceleration is unavailable.
 
+Archive message loads larger than one 64-message page use at most four scoped
+read-only workers. Keep every stable-file, private ownership/link, directory,
+canonical-byte, message-shape and semantic-digest check. Drain each four-input
+batch and join all workers before reporting its first input-ordered error;
+publication and coordinator writes remain serial. Forward each authenticated
+worker file identity to cold verification on the calling task, because its
+capture is task-local. Smaller loads stay serial. Already-portable histories
+may be borrowed after full packet validation; normalization still owns any
+transformed output and the public `normalize` function still returns an owned
+vector. No loaded content or proof is cached across snapshots.
+
 Keep Swift for native presentation. Host-required JavaScript may remain for
 Claude Mod, injected vendor frontend code, and the original signed Codex
 Desktop Node process-chain host. The host must not contain the migrated engine.

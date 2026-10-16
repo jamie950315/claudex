@@ -13,7 +13,12 @@ use std::{
     collections::HashSet,
     fs,
     path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
 };
+
+const PAGE_SIZE: usize = 64;
+const READ_CONCURRENCY: usize = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -67,6 +72,11 @@ fn verify_directory(dir: &Directory) -> Result<()> {
     Ok(())
 }
 fn read_asset(dir: &Directory, hash: &str, bytes: usize) -> Result<Vec<u8>> {
+    let data = read_verified_asset(dir, hash, bytes)?;
+    crate::cold_cache::asset(&dir.path.join(hash), &data.identity);
+    Ok(data.bytes)
+}
+fn read_verified_asset(dir: &Directory, hash: &str, bytes: usize) -> Result<storage::StableFile> {
     ensure!(
         packet::hex_digest(&json!(hash)) && bytes > 0,
         "Invalid history archive chunk reference."
@@ -86,8 +96,7 @@ fn read_asset(dir: &Directory, hash: &str, bytes: usize) -> Result<Vec<u8>> {
         "History archive content changed."
     );
     verify_directory(dir)?;
-    crate::cold_cache::asset(&path, &data.identity);
-    Ok(data.bytes)
+    Ok(data)
 }
 fn publish_asset(dir: &Directory, bytes: &[u8]) -> Result<Value> {
     verify_directory(dir)?;
@@ -111,11 +120,14 @@ pub fn persist(root: &Path, messages: &[Message], version: u8) -> Result<Referen
         matches!(version, 1 | 2),
         "Unsupported history archive version."
     );
-    let messages = packet::normalize(messages)?;
+    let messages = packet::normalized(messages)?;
+    persist_normalized(root, &messages, version)
+}
+fn persist_normalized(root: &Path, messages: &[Message], version: u8) -> Result<Reference> {
     let dir = directory(root, true)?;
     let _lock = FileLock::acquire(&root.join("history-assets.lock"), true)?;
     let mut references = vec![];
-    for message in &messages {
+    for message in messages {
         references.push(publish_asset(
             &dir,
             &canonical(&json!({"type":"claudex-history-message","version":1,"message":message}))?,
@@ -126,12 +138,12 @@ pub fn persist(root: &Path, messages: &[Message], version: u8) -> Result<Referen
         json!({"type":"claudex-history-archive","version":1,"digest":digest,"messages":references})
     } else {
         let mut previous = Value::Null;
-        for (page, batch) in references.chunks(64).enumerate() {
+        for (page, batch) in references.chunks(PAGE_SIZE).enumerate() {
             let bytes = canonical(
-                &json!({"type":"claudex-history-page","version":2,"start":page*64,"previous":previous,"messages":batch}),
+                &json!({"type":"claudex-history-page","version":2,"start":page*PAGE_SIZE,"previous":previous,"messages":batch}),
             )?;
             let mut reference = publish_asset(&dir, &bytes)?;
-            reference["start"] = json!(page * 64);
+            reference["start"] = json!(page * PAGE_SIZE);
             reference["count"] = json!(batch.len());
             previous = reference;
         }
@@ -258,26 +270,99 @@ pub fn load(root: &Path, archive: &Reference) -> Result<Vec<Message>> {
         chunks.len() == archive.message_count,
         "History archive message coverage mismatch."
     );
-    let mut messages = Vec::with_capacity(chunks.len());
-    for chunk in chunks {
-        let (hash, bytes) = chunk_reference(&chunk)?;
-        let value = parse(&read_asset(&dir, hash, bytes)?)?;
-        ensure!(
-            exact_keys(&value, &["type", "version", "message"])
-                && value["type"] == "claudex-history-message"
-                && value["version"] == 1
-                && exact_keys(&value["message"], &["role", "content"]),
-            "Invalid history archive message."
-        );
-        messages.push(serde_json::from_value(value["message"].clone())?);
-    }
+    let messages = read_messages(&dir, &chunks)?;
     ensure!(
-        packet::normalize(&messages)? == messages
+        packet::normalized(&messages)?.as_ref() == messages
             && fingerprint(&messages, messages.len())? == archive.digest,
         "History archive semantic binding mismatch."
     );
     verify_directory(&dir)?;
     Ok(messages)
+}
+
+type ReadMessage = (Message, String, FileIdentity);
+fn read_message(dir: &Directory, chunk: &Value) -> Result<ReadMessage> {
+    let (hash, bytes) = chunk_reference(chunk)?;
+    let data = read_verified_asset(dir, hash, bytes)?;
+    let mut value = parse(&data.bytes)?;
+    ensure!(
+        exact_keys(&value, &["type", "version", "message"])
+            && value["type"] == "claudex-history-message"
+            && value["version"] == 1
+            && exact_keys(&value["message"], &["role", "content"]),
+        "Invalid history archive message."
+    );
+    Ok((
+        serde_json::from_value(value["message"].take())?,
+        hash.into(),
+        data.identity,
+    ))
+}
+fn record_message(dir: &Directory, (message, hash, identity): ReadMessage) -> Message {
+    // Cold verification capture is task-local: publish every worker's exact
+    // authenticated file observation on the calling task, not the OS thread.
+    crate::cold_cache::asset(&dir.path.join(hash), &identity);
+    message
+}
+fn read_messages(dir: &Directory, chunks: &[Value]) -> Result<Vec<Message>> {
+    // A single page stays serial; larger histories amortize four scoped workers
+    // across batches without a global pool or one new thread per asset.
+    if chunks.len() <= PAGE_SIZE {
+        return chunks
+            .iter()
+            .map(|chunk| Ok(record_message(dir, read_message(dir, chunk)?)))
+            .collect();
+    }
+    thread::scope(|scope| {
+        let mut workers = Vec::with_capacity(READ_CONCURRENCY);
+        let mut handles = Vec::with_capacity(READ_CONCURRENCY);
+        for _ in 0..READ_CONCURRENCY {
+            let (request, requests) = mpsc::sync_channel::<&Value>(1);
+            let (results, response) = mpsc::sync_channel(1);
+            handles.push(thread::Builder::new().spawn_scoped(scope, move || {
+                while let Ok(chunk) = requests.recv() {
+                    if results.send(read_message(dir, chunk)).is_err() {
+                        break;
+                    }
+                }
+            })?);
+            workers.push((request, response));
+        }
+        let result = (|| {
+            let mut messages = Vec::with_capacity(chunks.len());
+            for batch in chunks.chunks(READ_CONCURRENCY) {
+                for (chunk, (request, _)) in batch.iter().zip(&workers) {
+                    request
+                        .send(chunk)
+                        .map_err(|_| anyhow::anyhow!("Archive reader stopped before dispatch."))?;
+                }
+                // Receive all started reads before returning the first error in
+                // input order. No next batch starts after a failed read.
+                let results: Vec<_> = workers[..batch.len()]
+                    .iter()
+                    .map(|(_, response)| {
+                        response
+                            .recv()
+                            .map_err(|_| {
+                                anyhow::anyhow!("Archive reader stopped before completion.")
+                            })
+                            .and_then(|result| result)
+                    })
+                    .collect();
+                for result in results {
+                    messages.push(record_message(dir, result?));
+                }
+            }
+            Ok(messages)
+        })();
+        drop(workers);
+        let joined: Vec<_> = handles.into_iter().map(|handle| handle.join()).collect();
+        ensure!(
+            joined.iter().all(Result::is_ok),
+            "Archive reader worker panicked."
+        );
+        result
+    })
 }
 
 pub fn images(messages: &[Message]) -> Result<Vec<Value>> {
@@ -432,8 +517,12 @@ pub fn encode(
         (1024..=packet::MAX_PACKET_BYTES).contains(&options.max_native_bytes),
         "Invalid native packet byte limit."
     );
-    let messages = packet::normalize(messages)?;
-    let archive = persist(root, &messages, options.archive_version)?;
+    let messages = packet::normalized(messages)?;
+    ensure!(
+        matches!(options.archive_version, 1 | 2),
+        "Unsupported history archive version."
+    );
+    let archive = persist_normalized(root, &messages, options.archive_version)?;
     let projected = if options.image_projection_version == 1 {
         images(&messages)?
     } else {
