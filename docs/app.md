@@ -2,9 +2,9 @@
 
 [Back to README](../README.md)
 
-Current source: **Claudex.app 1.4.8**, with **Claude Mod 0.8.32** bundled.
+Current source: **Claudex.app 1.4.8**, with **Claude Mod 0.8.33** bundled.
 The `codex/rust-refactor` branch uses the native Rust runtime with the Swift UI.
-Its development-signed candidate is not a published or installed release.
+This development-signed source build is not a published release.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
