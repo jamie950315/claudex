@@ -1397,6 +1397,28 @@ impl CacheWarmManager {
                     }
                 }
             }
+            // Persist a completed Codex schedule's limit before its runtime
+            // detaches the observer; that owned shutdown is not a binding change.
+            if self.provider == "codex"
+                && p.enabled
+                && o.phase == NativePhase::Idle
+                && self.compaction(&p, Some(&b), now, settings).is_none()
+            {
+                if let Some(reason) = self
+                    .reason(Some(&p), Some(&b), now, false)
+                    .filter(|reason| {
+                        matches!(
+                            *reason,
+                            "duration-limit" | "refresh-limit" | "output-budget"
+                        )
+                    })
+                    .map(str::to_owned)
+                {
+                    p.enabled = false;
+                    p.reason = Some(reason);
+                    changed = true;
+                }
+            }
             self.state.policies[i] = p;
         }
         if o.phase == NativePhase::Ended {
@@ -1855,11 +1877,14 @@ where
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    fn manager() -> (tempfile::TempDir, CacheWarmManager) {
+    fn manager_for(provider: &str) -> (tempfile::TempDir, CacheWarmManager) {
         let t = tempfile::tempdir().unwrap();
         std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let m = CacheWarmManager::open(std::fs::canonicalize(t.path()).unwrap(), "claude").unwrap();
+        let m = CacheWarmManager::open(std::fs::canonicalize(t.path()).unwrap(), provider).unwrap();
         (t, m)
+    }
+    fn manager() -> (tempfile::TempDir, CacheWarmManager) {
+        manager_for("claude")
     }
     fn binding(epoch: u64, sequence: u64) -> Value {
         json!({"sessionId":"session-a","cwd":"/tmp/project","instanceId":"warm-100-uuid","epoch":epoch,"sequence":sequence,"phase":"idle"})
@@ -1936,6 +1961,75 @@ mod tests {
         assert!(parse_limit("for=1h rounds=3", 4, now).is_err());
         assert_eq!(parse_limit("for=1h30m", 25, now).unwrap().max_minutes, 90);
         assert_eq!(parse_limit("rounds=3", 55, now).unwrap().max_minutes, 10080);
+    }
+
+    #[test]
+    fn completed_codex_limits_survive_detach_without_ending_due_compaction() {
+        for (minutes, refreshes, output, compact, completed, reason) in [
+            (60, 1, 256, false, 2000, "refresh-limit"),
+            (60, 2, 128, false, 2000, "output-budget"),
+            (1, 2, 256, false, 61001, "duration-limit"),
+            (60, 1, 256, true, 2000, "refresh-limit"),
+        ] {
+            let (t, mut m) = manager_for("codex");
+            let settings = WarmSettings::default();
+            m.dispatch("observe", binding(1, 1), 1000, false, &settings)
+                .unwrap();
+            let mut config = enable();
+            config["provider"] = json!("codex");
+            config["bestEffort"] = json!(true);
+            config["maxMinutes"] = json!(minutes);
+            config["maxRefreshes"] = json!(refreshes);
+            config["maxOutputTokens"] = json!(output);
+            config["compact"] = json!(compact);
+            m.dispatch("configure", config, 1000, false, &settings)
+                .unwrap();
+            let claim = m
+                .dispatch("claim", binding(1, 2), 1000, false, &settings)
+                .unwrap();
+            let mut input = binding(1, 2);
+            input["attemptId"] = claim["attempt"]["id"].clone();
+            m.dispatch("check", input.clone(), 1001, false, &settings)
+                .unwrap();
+            input["outcome"] = json!("submitted");
+            m.dispatch("receipt", input.clone(), 1002, false, &settings)
+                .unwrap();
+            let mut sample = binding(2, 2);
+            sample["phase"] = json!("busy");
+            sample["attemptId"] = input["attemptId"].clone();
+            sample["sample"] = json!({"id":"prime-response","startedAt":1001,"completedAt":completed,"model":"synthetic-model","effort":"medium","ttlMs":1800000,"ttlSource":"configured-window","inputTokens":1000,"cacheReadTokens":0,"cacheWriteTokens":0,"outputTokens":5,"stopReason":"end_turn","attemptId":input["attemptId"]});
+            m.dispatch("observe", sample, completed, false, &settings)
+                .unwrap();
+            let mut idle = binding(2, 3);
+            idle["attemptId"] = input["attemptId"].clone();
+            let done = m
+                .dispatch("observe", idle, completed, false, &settings)
+                .unwrap();
+            assert_eq!(done["policy"]["reason"], reason);
+            assert_eq!(done["policy"]["enabled"], compact);
+            if compact {
+                assert!(done["compactAt"].is_u64());
+                continue;
+            }
+            let mut ended = binding(2, 4);
+            ended["phase"] = json!("ended");
+            let detached = m
+                .dispatch("observe", ended, completed, false, &settings)
+                .unwrap();
+            assert_eq!(detached["policy"]["reason"], reason);
+            assert_eq!(detached["policy"]["bound"], false);
+            assert_eq!(m.state.attempts[0].state, AttemptState::Verified);
+            assert_eq!(m.state.attempts[0].cache_verified, Some(false));
+            drop(m);
+            let mut restored =
+                CacheWarmManager::open(std::fs::canonicalize(t.path()).unwrap(), "codex").unwrap();
+            let saved = restored
+                .dispatch("list", json!({}), completed + 1, false, &settings)
+                .unwrap();
+            assert_eq!(saved["policies"][0]["enabled"], false);
+            assert_eq!(saved["policies"][0]["reason"], reason);
+            assert_eq!(saved["attempts"][0]["state"], "verified");
+        }
     }
 
     #[test]

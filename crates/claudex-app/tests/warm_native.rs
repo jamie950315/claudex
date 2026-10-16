@@ -292,6 +292,10 @@ async fn native_prime_runs_once_through_existing_owner_and_accounts_actual_usage
     .await??;
     assert_eq!(done["attempts"][0]["kind"], "prime");
     assert_eq!(done["attempts"][0]["actual"]["inputTokens"], 100);
+    assert_eq!(done["policies"][0]["enabled"], false);
+    assert_eq!(done["policies"][0]["reason"], "refresh-limit");
+    assert_eq!(done["policies"][0]["nativeReason"], "refresh-limit");
+    assert_eq!(done["providerStatus"]["bindings"], 0);
     assert_eq!(f.sends.load(Ordering::SeqCst), 1);
     assert!(!CacheRuntime::supports("codex_cache_warm_claim"));
     assert!(!f.root.join("collaboration").exists());
