@@ -1,6 +1,7 @@
 //! Preserve JSON.stringify bytes used by existing authenticated checkpoints.
 use anyhow::{Context, Result};
 use serde_json::Value;
+use std::io::Write;
 
 pub fn stringify(value: &Value) -> Result<String> {
     serialize(value, false)
@@ -9,66 +10,76 @@ pub fn stringify(value: &Value) -> Result<String> {
 pub fn canonical_stringify(value: &Value) -> Result<String> {
     serialize(value, true)
 }
+/// Write the same checkpoint bytes without allocating a complete JSON string.
+pub fn canonical_to_writer(value: &Value, writer: &mut impl Write) -> Result<()> {
+    write(value, writer, true)
+}
 fn serialize(value: &Value, canonical: bool) -> Result<String> {
-    fn index(key: &str) -> Option<u32> {
-        let n = key.parse::<u32>().ok()?;
-        (n != u32::MAX && n.to_string() == key).then_some(n)
+    let mut output = Vec::new();
+    write(value, &mut output, canonical)?;
+    Ok(String::from_utf8(output)?)
+}
+fn index(key: &str) -> Option<u32> {
+    if key.len() > 10
+        || (key.len() > 1 && key.starts_with('0'))
+        || !key.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
     }
-    fn write(value: &Value, out: &mut String, canonical: bool) -> Result<()> {
-        match value {
-            Value::Null => out.push_str("null"),
-            Value::Bool(v) => out.push_str(if *v { "true" } else { "false" }),
-            Value::Number(v) => {
-                let number = v
-                    .as_f64()
-                    .context("JSON number is not representable by the native JavaScript codec.")?;
-                if number == 0.0 {
-                    out.push('0');
-                } else {
-                    out.push_str(ryu_js::Buffer::new().format_finite(number));
-                }
-            }
-            Value::String(v) => out.push_str(&serde_json::to_string(v)?),
-            Value::Array(values) => {
-                out.push('[');
-                for (i, v) in values.iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    write(v, out, canonical)?;
-                }
-                out.push(']');
-            }
-            Value::Object(values) => {
-                let mut keys: Vec<&String> = values.keys().collect();
-                if canonical {
-                    keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
-                }
-                // JavaScript enumerates integer-index properties before other keys,
-                // including objects reconstructed in lexicographic order.
-                keys.sort_by(|a, b| match (index(a), index(b)) {
-                    (Some(a), Some(b)) => a.cmp(&b),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    _ => std::cmp::Ordering::Equal,
-                });
-                out.push('{');
-                for (i, key) in keys.into_iter().enumerate() {
-                    if i > 0 {
-                        out.push(',');
-                    }
-                    out.push_str(&serde_json::to_string(key)?);
-                    out.push(':');
-                    write(&values[key], out, canonical)?;
-                }
-                out.push('}');
+    key.parse::<u32>().ok().filter(|n| *n != u32::MAX)
+}
+fn write(value: &Value, out: &mut impl Write, canonical: bool) -> Result<()> {
+    match value {
+        Value::Null => out.write_all(b"null")?,
+        Value::Bool(v) => out.write_all(if *v { b"true" } else { b"false" })?,
+        Value::Number(v) => {
+            let number = v
+                .as_f64()
+                .context("JSON number is not representable by the native JavaScript codec.")?;
+            if number == 0.0 {
+                out.write_all(b"0")?;
+            } else {
+                out.write_all(ryu_js::Buffer::new().format_finite(number).as_bytes())?;
             }
         }
-        Ok(())
+        Value::String(v) => serde_json::to_writer(out, v)?,
+        Value::Array(values) => {
+            out.write_all(b"[")?;
+            for (i, v) in values.iter().enumerate() {
+                if i > 0 {
+                    out.write_all(b",")?;
+                }
+                write(v, out, canonical)?;
+            }
+            out.write_all(b"]")?;
+        }
+        Value::Object(values) => {
+            let mut entries: Vec<_> = values
+                .iter()
+                .map(|(key, value)| (key, value, index(key)))
+                .collect();
+            // JavaScript enumerates integer-index properties before other keys,
+            // including objects reconstructed in lexicographic order.
+            entries.sort_by(|(a, _, ai), (b, _, bi)| match (ai, bi) {
+                (Some(a), Some(b)) => a.cmp(&b),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                _ if canonical => a.encode_utf16().cmp(b.encode_utf16()),
+                _ => std::cmp::Ordering::Equal,
+            });
+            out.write_all(b"{")?;
+            for (i, (key, value, _)) in entries.into_iter().enumerate() {
+                if i > 0 {
+                    out.write_all(b",")?;
+                }
+                serde_json::to_writer(&mut *out, key)?;
+                out.write_all(b":")?;
+                write(value, out, canonical)?;
+            }
+            out.write_all(b"}")?;
+        }
     }
-    let mut output = String::new();
-    write(value, &mut output, canonical)?;
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -88,5 +99,47 @@ mod tests {
             r#"{"2":100000000000000000000,"10":1e-7,"a":0,"big":9007199254740992,"z":1}"#
         );
         Ok(())
+    }
+
+    #[test]
+    fn streamed_json_keeps_utf16_order_escapes_and_integer_keys() -> Result<()> {
+        let value: Value = serde_json::from_str(
+            r#"{"\ue000":"last","\ud800\udc00":"first","01":true,"4294967295":null,"4294967294":-0.0,"0":"\"\\\n\u0000中文😀","":1}"#,
+        )?;
+        let expected = "{\"0\":\"\\\"\\\\\\n\\u0000中文😀\",\"4294967294\":0,\"\":1,\"01\":true,\"4294967295\":null,\"𐀀\":\"first\",\"\u{e000}\":\"last\"}";
+        let mut bytes = Vec::new();
+        canonical_to_writer(&value, &mut bytes)?;
+        assert_eq!(bytes, expected.as_bytes());
+        assert_eq!(canonical_stringify(&value)?, expected);
+        for (key, expected) in [
+            ("0", Some(0)),
+            ("4294967294", Some(u32::MAX - 1)),
+            ("", None),
+            ("00", None),
+            ("01", None),
+            ("+1", None),
+            ("-0", None),
+            ("1e0", None),
+            ("4294967295", None),
+            ("4294967296", None),
+            ("12345678901", None),
+        ] {
+            assert_eq!(index(key), expected, "{key}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn streamed_json_propagates_writer_failure() {
+        struct Refuse;
+        impl Write for Refuse {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("fixture write refused"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        assert!(canonical_to_writer(&serde_json::json!({"x":1}), &mut Refuse).is_err());
     }
 }

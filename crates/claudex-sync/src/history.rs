@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
+use std::{borrow::Cow, io::Write};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Message {
@@ -45,9 +46,28 @@ impl Common {
     }
 
     pub fn portable(&self) -> Self {
-        let mut out = self.clone();
-        out.messages = portable_messages(&self.messages);
-        out
+        Self {
+            meta: self.meta.clone(),
+            messages: portable_messages(&self.messages),
+            extra: self.extra.clone(),
+        }
+    }
+
+    /// Normalize an owned reading without copying unchanged native payloads.
+    pub fn make_portable(&mut self) {
+        self.messages.retain_mut(|message| {
+            message
+                .content
+                .retain_mut(|block| match portable_block(block) {
+                    Some(Cow::Owned(value)) => {
+                        *block = value;
+                        true
+                    }
+                    Some(Cow::Borrowed(_)) => true,
+                    None => false,
+                });
+            !message.content.is_empty()
+        });
     }
 }
 
@@ -66,26 +86,38 @@ pub fn ordered(value: &Value) -> Value {
 }
 
 pub fn canonical(value: &Value) -> Result<Vec<u8>> {
-    Ok(claudex_core::json::canonical_stringify(value)?.into_bytes())
+    let mut bytes = Vec::new();
+    claudex_core::json::canonical_to_writer(value, &mut bytes)?;
+    Ok(bytes)
 }
 pub fn digest_bytes(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 pub fn digest_json(value: &Value) -> Result<String> {
-    Ok(digest_bytes(&canonical(value)?))
+    let mut hash = DigestWriter(Sha256::new());
+    claudex_core::json::canonical_to_writer(value, &mut hash)?;
+    Ok(hex::encode(hash.0.finalize()))
+}
+
+fn portable_block(block: &Value) -> Option<Cow<'_, Value>> {
+    if block.get("type").and_then(Value::as_str) == Some("thinking") {
+        block
+            .get("text")
+            .and_then(Value::as_str)
+            .filter(|text| !text.is_empty())
+            .map(|text| {
+                Cow::Owned(json!({"type":"text","text":format!("[Imported reasoning]\n{text}")}))
+            })
+    } else {
+        Some(Cow::Borrowed(block))
+    }
 }
 
 pub fn portable_content(content: &[Value]) -> Vec<Value> {
     content
         .iter()
-        .filter_map(|block| {
-            if block.get("type").and_then(Value::as_str) == Some("thinking") {
-                block.get("text").and_then(Value::as_str).filter(|text| !text.is_empty())
-                .map(|text| json!({"type":"text","text":format!("[Imported reasoning]\n{text}")}))
-            } else {
-                Some(block.clone())
-            }
-        })
+        .filter_map(portable_block)
+        .map(Cow::into_owned)
         .collect()
 }
 
@@ -93,9 +125,12 @@ pub fn portable_messages(messages: &[Message]) -> Vec<Message> {
     messages
         .iter()
         .filter_map(|message| {
-            let mut message = message.clone();
-            message.content = portable_content(&message.content);
-            (!message.content.is_empty()).then_some(message)
+            let content = portable_content(&message.content);
+            (!content.is_empty()).then(|| Message {
+                role: message.role.clone(),
+                content,
+                extra: message.extra.clone(),
+            })
         })
         .collect()
 }
@@ -103,22 +138,43 @@ pub fn portable_messages(messages: &[Message]) -> Vec<Message> {
 /// Persisted checkpoint bytes match history.mjs: sorted role/content only,
 /// reasoning made visible, and empty portable messages omitted.
 pub fn fingerprint(messages: &[Message], length: usize) -> Result<String> {
-    let mut hash = Sha256::new();
-    hash.update(b"[");
+    let mut hash = DigestWriter(Sha256::new());
+    hash.write_all(b"[")?;
     let mut separator = false;
     for message in messages.iter().take(length) {
-        let content = portable_content(&message.content);
-        if content.is_empty() {
+        let mut content = message.content.iter().filter_map(portable_block).peekable();
+        if content.peek().is_none() {
             continue;
         }
         if separator {
-            hash.update(b",");
+            hash.write_all(b",")?;
         }
         separator = true;
-        hash.update(canonical(&json!({"role":message.role,"content":content}))?);
+        // Canonical field order is content, role; metadata never enters the proof.
+        hash.write_all(b"{\"content\":[")?;
+        for (i, block) in content.enumerate() {
+            if i > 0 {
+                hash.write_all(b",")?;
+            }
+            claudex_core::json::canonical_to_writer(&block, &mut hash)?;
+        }
+        hash.write_all(b"],\"role\":")?;
+        serde_json::to_writer(&mut hash, &message.role)?;
+        hash.write_all(b"}")?;
     }
-    hash.update(b"]");
-    Ok(hex::encode(hash.finalize()))
+    hash.write_all(b"]")?;
+    Ok(hex::encode(hash.0.finalize()))
+}
+
+struct DigestWriter(Sha256);
+impl Write for DigestWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn assert_complete(common: &Common) -> Result<()> {
@@ -199,5 +255,85 @@ mod tests {
             portable_content(&[json!({"type":"thinking","text":"why","signature":"secret"})]),
             vec![json!({"type":"text","text":"[Imported reasoning]\nwhy"})]
         );
+    }
+
+    #[test]
+    fn borrowed_and_owned_portable_paths_keep_complete_checkpoint_contract() -> Result<()> {
+        let mut common = Common {
+            meta: serde_json::from_value(json!({"cwd":"/fixture","future":[1,2]}))?,
+            extra: serde_json::from_value(json!({"unknown":{"value":true}}))?,
+            messages: vec![
+                Message {
+                    role: "user".into(),
+                    content: vec![
+                        json!({"type":"text","text":"keep\n中文😀"}),
+                        json!({"type":"thinking","text":"","signature":"ignored"}),
+                        json!({"type":"future","10":1e-7,"2":1e20,"𐀀":1,"\u{e000}":2}),
+                    ],
+                    extra: serde_json::from_value(json!({"timestamp":"retained"}))?,
+                },
+                Message {
+                    role: "assistant".into(),
+                    content: vec![
+                        json!({"type":"thinking","text":"why","signature":"not transported"}),
+                        json!({"type":"thinking","text":null}),
+                        json!({"type":"image","source":{"type":"base64","data":"AQID"}}),
+                    ],
+                    extra: Map::new(),
+                },
+                Message {
+                    role: "assistant".into(),
+                    content: vec![json!({"type":"thinking","text":""})],
+                    extra: Map::new(),
+                },
+                Message::text("assistant", "done"),
+            ],
+        };
+        let original = common.clone();
+        let expected = Common {
+            messages: original.messages.iter().filter_map(|message| {
+                let mut message = message.clone();
+                message.content = message.content.into_iter().filter_map(|block| {
+                    if block["type"] == "thinking" {
+                        block["text"].as_str().filter(|s| !s.is_empty())
+                            .map(|s| json!({"type":"text","text":format!("[Imported reasoning]\n{s}")}))
+                    } else { Some(block) }
+                }).collect();
+                (!message.content.is_empty()).then_some(message)
+            }).collect(),
+            ..original.clone()
+        };
+        assert_eq!(common.portable(), expected);
+        assert_eq!(common, original);
+        for length in 0..=original.messages.len() + 1 {
+            let portable =
+                portable_messages(&original.messages[..length.min(original.messages.len())]);
+            let value = Value::Array(
+                portable
+                    .iter()
+                    .map(|m| json!({"role":m.role,"content":m.content}))
+                    .collect(),
+            );
+            assert_eq!(
+                fingerprint(&original.messages, length)?,
+                digest_bytes(&canonical(&value)?)
+            );
+        }
+        let text = common.messages[0].content[0]["text"]
+            .as_str()
+            .unwrap()
+            .as_ptr();
+        common.make_portable();
+        assert_eq!(common, expected);
+        assert_eq!(
+            common.messages[0].content[0]["text"]
+                .as_str()
+                .unwrap()
+                .as_ptr(),
+            text
+        );
+        common.make_portable();
+        assert_eq!(common, expected);
+        Ok(())
     }
 }

@@ -478,7 +478,7 @@ impl DesktopBridge {
             record.native_id.is_empty() || data.native_id == record.native_id,
             "Native source identity changed; synchronization paused."
         );
-        data.common = data.common.portable();
+        data.common.make_portable();
         for m in &mut data.common.messages {
             m.extra.clear();
         }
@@ -642,7 +642,7 @@ impl DesktopBridge {
                 } else {
                     self.inspect(record).await?
                 };
-                data.common = data.common.portable();
+                data.common.make_portable();
                 for m in &mut data.common.messages {
                     m.extra.clear();
                 }
