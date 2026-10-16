@@ -1,7 +1,7 @@
 //! Durable identity-only wake hints. Revisions, not wall time, determine which
 //! hints a completed operation is allowed to consume.
 use crate::bridge::Side;
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use claudex_core::storage::{self, FileIdentity, FileLock};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -10,7 +10,7 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 use tokio::{
@@ -113,6 +113,7 @@ pub struct Inbox {
     pub directory: PathBuf,
     pub path: PathBuf,
     pub socket: PathBuf,
+    local_wake: Arc<Mutex<Option<Weak<Notify>>>>,
 }
 impl Inbox {
     pub fn new(root: &Path) -> Result<Self> {
@@ -122,6 +123,7 @@ impl Inbox {
             directory: root.join("sync-events"),
             path: root.join("sync-events/inbox.json"),
             socket: root.join("sync-events/wake.sock"),
+            local_wake: Arc::new(Mutex::new(None)),
         })
     }
     pub fn initialize(&self) -> Result<()> {
@@ -281,6 +283,18 @@ impl Inbox {
         Ok(count)
     }
     pub async fn wake(&self) -> Result<()> {
+        if let Some(notify) = self
+            .local_wake
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(Weak::upgrade)
+        {
+            // Clones used by this listener's event source are already in the
+            // consumer process. A socket deadline is only for other processes.
+            notify.notify_one();
+            return Ok(());
+        }
         let metadata = match fs::symlink_metadata(&self.socket) {
             Ok(m) => m,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -310,7 +324,7 @@ impl Inbox {
             {
                 Ok(())
             }
-            Ok(Err(e)) => Err(e.into()),
+            Ok(Err(e)) => Err(e).context("Synchronization socket wake delivery failed."),
             Err(_) => bail!("Wake delivery timed out; durable event was preserved."),
         }
     }
@@ -444,11 +458,15 @@ impl Inbox {
                         // A busy coordinator cannot acknowledge its socket.
                         // This independent acceptor acknowledges only delivery
                         // of a hint; the durable inbox remains authoritative.
-                        wake.notify_one();
-                        let _ = tokio::time::timeout(
-                            Duration::from_millis(200),
-                            stream.write_all(b"ok"),
-                        )
+                        let _ = tokio::time::timeout(Duration::from_millis(200), async {
+                            // Dropping an accepted stream before reading
+                            // the publisher's byte closes its read half:
+                            // a descheduled publisher then gets EPIPE.
+                            let mut byte = [0; 1];
+                            stream.read_exact(&mut byte).await?;
+                            wake.notify_one();
+                            stream.write_all(b"ok").await
+                        })
                         .await;
                     }
                     Err(error) => {
@@ -459,6 +477,7 @@ impl Inbox {
                 }
             }
         });
+        *self.local_wake.lock().unwrap() = Some(Arc::downgrade(&notify));
         Ok(Listener {
             inbox: self.clone(),
             notify,
@@ -478,6 +497,15 @@ pub struct Listener {
     identity: FileIdentity,
 }
 impl Listener {
+    fn release_local_wake(&self) {
+        let mut local = self.inbox.local_wake.lock().unwrap();
+        if local
+            .as_ref()
+            .is_some_and(|w| w.ptr_eq(&Arc::downgrade(&self.notify)))
+        {
+            local.take();
+        }
+    }
     /// Wait for a new hint without inspecting or consuming queued work. App
     /// holds use this path so a preserved inbox cannot cause a busy loop.
     pub async fn wait_hint(
@@ -558,6 +586,7 @@ impl Listener {
 }
 impl Drop for Listener {
     fn drop(&mut self) {
+        self.release_local_wake();
         if let Some(task) = self.task.take() {
             task.abort();
         }
@@ -617,11 +646,66 @@ mod tests {
         assert_eq!(inbox.acknowledge(&[second]).await.unwrap(), 1);
     }
     #[tokio::test]
+    async fn listener_keeps_the_read_half_open_for_a_delayed_publisher() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let inbox = Inbox::new(&root)?;
+        let listener = inbox.listen().await?;
+        let mut publisher = UnixStream::connect(&inbox.socket).await?;
+        // A publisher may be descheduled between connect and its one-byte
+        // write. The acceptor must not ACK and fully close its read half first.
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        publisher.write_all(b"w").await?;
+        let mut ack = [0; 2];
+        publisher.read_exact(&mut ack).await?;
+        assert_eq!(&ack, b"ok");
+        listener.close().await?;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn cloned_consumer_publish_wakes_locally_without_a_socket_roundtrip() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().canonicalize()?;
+        let inbox = Inbox::new(&root)?;
+        let publisher = inbox.clone();
+        let mut listener = inbox.listen().await?;
+        // Isolate local delivery from the independent socket acceptor. A local
+        // publisher still commits its revision and wakes this exact listener.
+        let acceptor = listener.task.take().unwrap();
+        acceptor.abort();
+        let _ = acceptor.await;
+        let receipt = publisher
+            .publish(Event {
+                side: Side::Codex,
+                native_id: Uuid::new_v4().to_string(),
+                kind: Kind::Completed,
+                turn_id: None,
+                remote_id: None,
+            })
+            .await?;
+        tokio::time::timeout(Duration::from_millis(50), listener.notify.notified()).await?;
+        assert_eq!(inbox.list()?[0].revision, receipt.revision);
+        assert!(
+            publisher
+                .local_wake
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .upgrade()
+                .is_some()
+        );
+        listener.close().await?;
+        assert!(publisher.local_wake.lock().unwrap().is_none());
+        Ok(())
+    }
+    #[tokio::test]
     async fn publisher_is_acknowledged_while_consumer_is_busy() {
         let t = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(t.path()).unwrap();
         let inbox = Inbox::new(&root).unwrap();
         let listener = inbox.listen().await.unwrap();
+        let publisher = Inbox::new(&root).unwrap();
         let event = Event {
             side: Side::Codex,
             native_id: Uuid::new_v4().to_string(),
@@ -630,7 +714,7 @@ mod tests {
             remote_id: None,
         };
         // No listener.wait is running during publication.
-        inbox.publish(event).await.unwrap();
+        publisher.publish(event).await.unwrap();
         let (_, mut shutdown) = watch::channel(false);
         assert_eq!(
             listener

@@ -6,7 +6,7 @@ use crate::{
     events::{Event, Inbox, Kind, Receipt},
     runtime::Runtime,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use claudex_core::storage::{self, FileIdentity};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use serde_json::Value;
@@ -633,7 +633,10 @@ async fn consume_events(
         };
         let result = async {
             for event in output? {
-                inbox.publish(event).await?;
+                inbox
+                    .publish(event)
+                    .await
+                    .context("Synchronization hint publication failed.")?;
             }
             Ok::<_, anyhow::Error>(())
         }

@@ -40,6 +40,12 @@ Never infer completion from a hook alone or resend uncertain native input.
 Socket notifications are primary: macOS fs.watch registration can lose events.
 The consumer wakes itself directly for events it publishes; the socket's
 delivery deadline is for other processes, and a busy consumer cannot meet it.
+Inbox clones share only their admitted listener's weak local wake handle and
+release it when that listener closes. External publishers retain the private
+socket handshake: the acceptor reads the one-byte hint before acknowledging and
+closing, so a publisher descheduled after connect never writes into a prematurely
+closed read half. The acceptor stays independent of coordinator work and bounded;
+publication errors preserve the durable revision without replaying native work.
 Use one OS watcher per parent directory with subscriber fanout; filesystem signals
 are hints, never checkpoint or mutation evidence. Release retired subscribers and
 recheck lifecycle after awaited path inspections. Anonymous directory signals use
