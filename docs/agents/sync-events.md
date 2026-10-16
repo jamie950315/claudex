@@ -11,6 +11,10 @@ socket. Native SDK/app-server events join the same queue. Configuration events
 recheck hook readiness and liveness. A pass with pending recovery or newly observed
 native work revokes archival commands before inspection; an empty publication
 scope keeps validated presentation anchors without restoring that authority.
+Configuration hints retain the current initial source/history queues and their
+initialSweepCompletedAt; only startup, a released application hold or a real
+reconnection starts that reconciliation again. An unrelated native MCP setting
+must not turn an already completed sweep into another full history scan.
 An idle pass with no discovery, cold operation, native event or due handoff
 maintenance leaves the previous publication untouched, including its original
 expiry. It neither revokes nor renews intents. Known managed session registration and started events

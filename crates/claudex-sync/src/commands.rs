@@ -546,7 +546,8 @@ async fn watch_desktop_control(
                 if hooks_refresh {hook_status=match runtime.synchronization_hooks().await {Ok(status)=>status,Err(error)=>json!({"ready":false,"reason":format!("{error:#}")})};hooks_refresh=false;}
                 let state = bridge.status()?;
                 source.observe(&work, &state, &inbox)?;
-                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {startup=true;initial_sweep_completed_at=None;hooks_refresh=true;}
+                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {hooks_refresh=true;}
+                if work.iter().any(|r|r.event.kind==Kind::Reconnect) {startup=true;initial_sweep_completed_at=None;}
                 let mut consumed = vec![];
                 for receipt in &work {
                     if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
@@ -950,6 +951,61 @@ mod lifecycle_tests {
             }
         })
         .await?
+    }
+    #[tokio::test]
+    async fn configuration_keeps_the_completed_sweep_but_reconnection_reconciles_again() -> Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude});
+        let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let running = tokio::spawn(async move {
+            let bridge = runtime.bridge();
+            watch_desktop_control(runtime, bridge, &config, None, Some(receiver)).await
+        });
+        let first = until_status(&root, |v| v["initialSweepCompletedAt"].is_number()).await?;
+        let inbox = Inbox::new(&root)?;
+        for _ in 0..2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            let before = storage::read_json(root.join("watcher-status.json"))?;
+            inbox
+                .publish(crate::events::Event {
+                    side: Side::Codex,
+                    native_id: crate::event_source::CONFIG_ID.into(),
+                    kind: Kind::Configuration,
+                    turn_id: None,
+                    remote_id: None,
+                })
+                .await?;
+            let next = until_status(&root, |v| {
+                v["updatedAt"].as_i64() > before["updatedAt"].as_i64()
+            })
+            .await?;
+            assert_eq!(next["initialSweepRemaining"], 0);
+            assert_eq!(
+                next["initialSweepCompletedAt"],
+                first["initialSweepCompletedAt"]
+            );
+        }
+        inbox
+            .publish(crate::events::Event {
+                side: Side::Codex,
+                native_id: crate::event_source::RECONNECT_ID.into(),
+                kind: Kind::Reconnect,
+                turn_id: None,
+                remote_id: None,
+            })
+            .await?;
+        until_status(&root, |v| {
+            v["initialSweepCompletedAt"].as_i64() > first["initialSweepCompletedAt"].as_i64()
+        })
+        .await?;
+        shutdown.send(true)?;
+        tokio::time::timeout(Duration::from_secs(5), running).await???;
+        Ok(())
     }
     #[tokio::test]
     async fn stopped_and_resuming_hold_keep_listener_alive_without_history_reads_then_release()
