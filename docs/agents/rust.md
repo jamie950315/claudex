@@ -19,6 +19,12 @@ durable state formats and JavaScript checkpoint serialization bytes. Use
 `claudex_core::json` for existing authenticated JSON serialization and
 `claudex_core::storage` for exact file identities and safe publication.
 
+The shared `sha2` dependency enables its upstream `asm` backend so ARM64 builds
+use runtime-detected SHA instructions instead of unconditional software hashing.
+Keep the upstream CPU dispatch and portable build target; do not require a
+machine-specific `target-cpu`. Digest, HMAC, archive and checkpoint bytes remain
+unchanged, including when hardware acceleration is unavailable.
+
 Keep Swift for native presentation. Host-required JavaScript may remain for
 Claude Mod, injected vendor frontend code, and the original signed Codex
 Desktop Node process-chain host. The host must not contain the migrated engine.

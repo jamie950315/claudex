@@ -373,9 +373,7 @@ pub fn decode_inline(
 mod tests {
     use super::*;
     #[test]
-    fn hmac_vector() {
-        // Compare the independently standardized SHA256 HMAC construction via
-        // packet roundtrip and a known digest supplied by the JS reference.
+    fn inline_roundtrip_rejects_altered_native_text() {
         let key = [b'x'; 32];
         let metadata = json!({"conversationId":"c","targetSessionId":"s","operationId":"o","sourceSide":"codex","previousDigest":null});
         let content = encode_inline(
@@ -392,5 +390,28 @@ mod tests {
         let mut altered = content;
         altered[1]["text"] = json!("[Imported User]\nchanged");
         assert!(decode_inline(&altered, "c", "s", &key).is_err());
+    }
+
+    #[test]
+    fn accelerated_hmac_matches_independent_short_and_long_key_vectors() -> Result<()> {
+        let metadata = json!({"conversationId":"c","targetSessionId":"s","operationId":"o","sourceSide":"codex","previousDigest":null});
+        let content = vec![
+            json!({"type":"text","text":"hello\n中文😀"}),
+            json!({"type":"text","text":"quote \" \\"}),
+        ];
+        // Python's standard-library HMAC over independently canonicalized bytes.
+        for (length, expected) in [
+            (
+                32,
+                "16d66083a81dc6a74c03e3e36062d20a973a4c23885899cdf9521b1349b52a6b",
+            ),
+            (
+                100,
+                "2bf6aba7226a332eabc145cdbe166d870f4e1fbe2bd579b9e9d8919c88435de8",
+            ),
+        ] {
+            assert_eq!(sign(&metadata, &content, &vec![b'x'; length])?, expected);
+        }
+        Ok(())
     }
 }

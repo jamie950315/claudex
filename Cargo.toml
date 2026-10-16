@@ -27,7 +27,7 @@ ryu-js = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_stacker = "0.1"
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["asm"] }
 tempfile = "3"
 tar = "0.4"
 tokio = { version = "1", features = ["full"] }
