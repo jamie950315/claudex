@@ -454,7 +454,11 @@ pub fn completed_claude_with_policy(
                     .is_some_and(|u| {
                         u.get("input_tokens") == Some(&json!(0))
                             && u.get("output_tokens") == Some(&json!(0))
-                            && u.values().all(|v| v == &json!(0))
+                            && ["cache_read_input_tokens", "cache_creation_input_tokens"]
+                                .iter()
+                                .all(|field| {
+                                    u.get(*field).is_none_or(|v| v.is_null() || v == &json!(0))
+                                })
                     });
             following = false;
             if !receipt {
@@ -714,6 +718,89 @@ mod tests {
             completed_claude(&codecs::serialize_rows(&rows)?, &root, "c", &id, Some(&key))?
                 .incomplete_tail
         );
+        Ok(())
+    }
+    #[test]
+    fn resumed_no_query_receipt_ignores_extended_usage_metadata_but_not_token_activity()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = std::fs::canonicalize(temp.path())?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let key = [7u8; 32];
+        let first = vec![
+            Message::text("user", "first question"),
+            Message::text("assistant", "first answer"),
+        ];
+        let delta = vec![
+            Message::text("user", "next question"),
+            Message::text("assistant", "next answer"),
+        ];
+        let packet_message = |messages: &[Message], operation: &str, previous: Value| {
+            Ok::<_, anyhow::Error>(Message {
+                role: "user".into(),
+                content: packet::encode_inline(
+                    messages,
+                    json!({"conversationId":"c","targetSessionId":id,"operationId":operation,"sourceSide":"codex","previousDigest":previous}),
+                    &key,
+                )?,
+                extra: Map::new(),
+            })
+        };
+        let native = Common {
+            meta: json!({"cwd":"/tmp","timestamp":"2026-10-16T00:00:00.000Z"})
+                .as_object()
+                .unwrap()
+                .clone(),
+            messages: vec![
+                packet_message(&first, "first", Value::Null)?,
+                Message::text("assistant", "No response requested."),
+                packet_message(&delta, "next", json!(fingerprint(&first, first.len())?))?,
+            ],
+            extra: Map::new(),
+        };
+        let mut rows = codecs::parse_rows(&codecs::encode_claude(&native, &id, None, None, None)?)?;
+        rows[1]["message"]["model"] = json!("<synthetic>");
+        rows[1]["message"]["stop_reason"] = json!("stop_sequence");
+        // Observed CLI 2.1.283 shape. The legacy txcript usage projection kept
+        // only the four token counters; metadata and nested zero counters did
+        // not turn this authenticated no-query receipt into an authored answer.
+        let usage = json!({
+            "input_tokens":0,"output_tokens":0,
+            "cache_read_input_tokens":0,"cache_creation_input_tokens":0,
+            "output_tokens_details":null,
+            "server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},
+            "service_tier":null,
+            "cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},
+            "inference_geo":null,"iterations":null,"speed":null
+        });
+        rows[1]["message"]["usage"] = usage.clone();
+        let read = |rows: &[Value]| {
+            completed_claude(&codecs::serialize_rows(rows)?, &root, "c", &id, Some(&key))
+        };
+        let expected = first.into_iter().chain(delta).collect::<Vec<_>>();
+        assert_eq!(
+            read(&rows)?.common.fingerprint()?,
+            fingerprint(&expected, expected.len())?
+        );
+        for counter in [
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ] {
+            rows[1]["message"]["usage"] = usage.clone();
+            rows[1]["message"]["usage"][counter] = json!(1);
+            assert!(
+                read(&rows).is_err(),
+                "Nonzero {counter} is not a no-query receipt"
+            );
+        }
+        rows[1]["message"]["usage"] = usage;
+        rows[1]["message"]["model"] = json!("real-model");
+        assert!(read(&rows).is_err());
+        rows[1]["message"]["model"] = json!("<synthetic>");
+        rows[1]["message"]["content"][0]["text"] = json!("An authored answer");
+        assert!(read(&rows).is_err());
         Ok(())
     }
     #[test]

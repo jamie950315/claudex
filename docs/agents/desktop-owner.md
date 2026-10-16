@@ -54,7 +54,11 @@ active tails. Verified dead locks are reclaimed; live/malformed locks block.
 CLI 2.1.281 inserts a zero-usage synthetic assistant
 `No response requested.` after a resumed no-query tail. The owned decoder
 excludes only that exact placeholder immediately after an authenticated packet;
-real replies remain history. SDK-owned packets from another state root are
+require zero input/output tokens and absent, null or zero cache-read/cache-creation
+token counters, matching the legacy codec's four-counter usage projection.
+Extended usage metadata (including nested counters and null fields) does not
+become authored content; native bytes stay untouched. Real replies remain
+history. SDK-owned packets from another state root are
 excluded during discovery to prevent import loops (classification is not HMAC
 authentication). No current user transcript is modified by these checks.
 
