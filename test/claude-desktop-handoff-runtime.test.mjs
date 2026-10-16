@@ -184,3 +184,83 @@ test('repeated row observations are rate-bounded and contain no row metadata', (
   f.tick(1000); f.runtime.setRows([]);
   assert.deepEqual(f.statuses, ['rows received bridge-present', 'rows received no-bridge']);
 });
+
+function exactReader(f, mutate = () => {}) {
+  let reads = 0;
+  const fetch = () => { throw new Error('Only the native reader may use authenticated fetch'); };
+  const source = { fetch, orgUuid: 'organization-test', allowed: true,
+    async read(actualFetch, org, id) {
+      assert.equal(actualFetch, fetch); assert.equal(org, source.orgUuid); assert.equal(id, f.action.remoteId);
+      const value = { type: 'session', id: 'session_test', title: f.action.title, session_status: 'idle', environment_kind: 'bridge' };
+      return await mutate(value, ++reads) ?? value;
+    }, normalize: value => value, isBridge: value => value.environment_kind === 'bridge' };
+  f.runtime.setReplacementSource(source);
+  return { source, reads: () => reads };
+}
+
+test('a fresh profile verifies only the intent exact ID twice without requiring a loaded sidebar page', async () => {
+  const f = fixture(); f.runtime.setRows([]);
+  const reader = exactReader(f);
+  await f.run();
+  assert.equal(reader.reads(), 2); assert.equal(f.archives.length, 1);
+  assert.ok(f.statuses.includes('replacement metadata read completed'));
+});
+
+test('configured native metadata never falls back to a matching visible row', async () => {
+  for (const [change, reason] of [
+    [value => { value.id = 'session_other'; }, 'identity-changed'],
+    [value => { value.title = 'Other title'; }, 'title-changed'],
+    [value => { value.environment_kind = 'remote'; }, 'type-unverified'],
+    [value => { value.session_status = 'archived'; }, 'archived'],
+    [() => { throw new Error('private response details'); }, 'native-read-failed'],
+  ]) {
+    const f = fixture(); exactReader(f, change); await f.run();
+    assert.equal(f.archives.length, 0); assert.equal(f.nativeReads, 0);
+    assert.ok(f.statuses.includes(`replacement guard ${reason}`));
+    assert.doesNotMatch(f.statuses.join('\n'), /private response|Other title|session_/);
+  }
+  const f = fixture(), reader = exactReader(f);
+  f.runtime.setReplacementSource({ ...reader.source, allowed: false });
+  await f.run(); assert.equal(reader.reads(), 0); assert.equal(f.archives.length, 0);
+  assert.ok(f.statuses.includes('replacement guard native-reader-unavailable'));
+});
+
+test('metadata completion cannot outlive its source, intent, or fresh unarchived proof', async () => {
+  for (const change of [
+    (f, value, count) => { if (count === 2) value.session_status = 'archived'; },
+    (f, value, count) => { if (count === 2) f.tick(16000); },
+    (f, value, count) => { if (count === 2) f.mutateManifest(m => ({ ...m, actions: [] })); },
+    (f, value, count) => { if (count === 1) f.runtime.setReplacementSource({}); },
+  ]) {
+    const f = fixture(); exactReader(f, (value, count) => change(f, value, count));
+    await f.run(); assert.equal(f.archives.length, 0);
+  }
+});
+
+test('same source render supplies do not invalidate an in-flight native metadata read', async () => {
+  const f = fixture(); let reader;
+  reader = exactReader(f, () => { f.runtime.setReplacementSource({ ...reader.source }); });
+  await f.run(); assert.equal(reader.reads(), 2); assert.equal(f.archives.length, 1);
+});
+
+test('an absent exact native session never substitutes a visible same-title row', async () => {
+  const f = fixture(), reader = exactReader(f);
+  f.runtime.setReplacementSource({ ...reader.source, read: async () => null });
+  await f.run(); assert.equal(f.archives.length, 0); assert.equal(f.nativeReads, 0);
+  assert.ok(f.statuses.includes('replacement guard native-session-absent'));
+});
+
+test('an uncertain native archive is not replayed after exact-ID metadata reads', async () => {
+  let calls = 0, task;
+  const f = fixture({ setTimer(fn) { task = fn; return fn; },
+    native: { async getSession() { return { sessionId: f.action.localSessionId, cwd: f.action.cwd,
+      title: f.action.title, lastActivityAt: 4000, isArchived: false, isRunning: false, turnRunning: false }; },
+      async getSessionList() { return { sessions: [] }; },
+      async getBusyShellPtyKeys() { return { probed: true, busy: [], unknown: [] }; },
+      async readFileAtCwd() { return { contents: JSON.stringify({ sessionId: f.action.localSessionId,
+        cliSessionId: f.action.nativeId, cwd: f.action.cwd, title: f.action.title, lastActivityAt: 4000, isArchived: false }) }; },
+      async archive() { calls++; throw new Error('uncertain archive response'); } } });
+  exactReader(f); f.runtime.start();
+  for (let i = 0; i < 12 && !task; i++) await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls, 1); await task(); assert.equal(calls, 1); f.runtime.stop();
+});

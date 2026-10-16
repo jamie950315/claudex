@@ -8,6 +8,7 @@ pub mod frontend_anchors;
 pub mod frontend_ast;
 pub mod frontend_bindings;
 pub mod frontend_folders;
+pub mod frontend_metadata;
 pub mod frontend_graph;
 pub mod frontend_install;
 pub mod frontend_maintenance;

@@ -119,8 +119,16 @@ project/status grouping. Project presentation may still use a subset, but cannot
 hide another group's verified replacement from the shared handoff consumer.
 Use the native unfiltered `rawCodeSessions` context where its provider/factory
 and read hook are proved; the similarly named common `allRows` is already
-filtered presentation data. This does not fetch extra pages or change native
-rows. Content-free replacement guards distinguish a missing ID, changed title
-and archived replacement; all three still refuse the action.
+filtered presentation data. Neither is a complete server inventory. On proved
+native metadata profiles, the existing exact-ID no-store GET reader is the
+primary replacement proof, using the same native account/fetch and Code/cloud
+access policy as its normal caller. Read only an authorized intent ID, normalize
+with the native DTO function, require the native bridge classification and exact
+ID/title/unarchived state, and repeat the read before final Local/authority
+checks. Source changes invalidate pending reads; refusal never falls back to
+loaded rows. Legacy profiles without the capability retain their row proof.
+This does not paginate, change rows, invoke owners or extend the 15-second intent.
+Content-free guards distinguish missing loaded IDs, native-reader absence or
+failure, unverified type, changed identity/title and archived replacement.
 Only real mounted Code listeners keep the existing poller alive; Chat/Cowork and
 an unmounted sidebar never provide archival authority or background ownership.

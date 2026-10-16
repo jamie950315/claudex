@@ -11,6 +11,7 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
   setTimer = setTimeout, clearTimer = clearTimeout, intervalMs = 2000,
   onError = () => {}, onChange = () => {}, onStatus = () => {}, hasDraft = () => false, normalizeAnchor, registryRoot } = {}) {
   let running = false, timer, inFlight = false, generation = 0, rows = [], keys;
+  let replacementSource;
   let lastError = null;
   const attempted = new Set(), observedAnchors = new Map();
   const reported = new Map();
@@ -57,9 +58,35 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
   const replacement = action => rows.some(row => row?.type === 'bridge'
     && remoteId(row.id) === action.remoteId && row.title === action.title && row.isArchived !== true);
   const replacementRefusal = action => {
-    const matches = rows.filter(row => row?.type === 'bridge' && remoteId(row.id) === action.remoteId);
-    return !matches.length ? 'missing-id' : !matches.some(row => row.title === action.title) ? 'title-changed' : 'archived';
+    const matches = rows.filter(row => remoteId(row?.id) === action.remoteId);
+    return !matches.length ? 'missing-id' : !matches.some(row => row.type === 'bridge') ? 'type-unverified'
+      : !matches.some(row => row.type === 'bridge' && row.title === action.title) ? 'title-changed' : 'archived';
   };
+  async function verifyReplacement(action, ticket) {
+    const source = replacementSource;
+    if (!source) {
+      if (replacement(action)) return true;
+      status('action deferred replacement-unavailable'); status(`replacement guard ${replacementRefusal(action)}`); return false;
+    }
+    if (source.allowed !== true || !boundedText(source.orgUuid)
+      || ['fetch', 'read', 'normalize', 'isBridge'].some(name => typeof source[name] !== 'function')) {
+      status('replacement guard native-reader-unavailable'); return false;
+    }
+    let session;
+    status('replacement metadata read');
+    try {
+      const raw = await source.read(source.fetch, source.orgUuid, action.remoteId);
+      if (!running || ticket !== generation || source !== replacementSource) return false;
+      if (!raw) { status('replacement guard native-session-absent'); return false; }
+      session = source.normalize(raw);
+      if (session?.type !== 'session' || source.isBridge(session) !== true) { status('replacement guard type-unverified'); return false; }
+    } catch { status('replacement guard native-read-failed'); return false; }
+    status('replacement metadata read completed');
+    if (remoteId(session.id) !== action.remoteId) { status('replacement guard identity-changed'); return false; }
+    if (session.title !== action.title) { status('replacement guard title-changed'); return false; }
+    if (session.session_status === 'archived') { status('replacement guard archived'); return false; }
+    return true;
+  }
   function parse(result) {
     if (!result || typeof result.contents !== 'string' || result.contents.length > 2 * 1024 * 1024 || result.isTail)
       throw new Error('Native handoff manifest is unavailable or truncated');
@@ -156,7 +183,9 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
       for (const action of manifest.actions) {
         if (!running || ticket !== generation || now() >= manifest.expiresAt) break;
         if (attempted.has(action.operationId)) { status('action deferred already-attempted'); continue; }
-        if (!replacement(action)) { status('action deferred replacement-unavailable'); status(`replacement guard ${replacementRefusal(action)}`); continue; }
+        phase = 'replacement';
+        if (!await verifyReplacement(action, ticket)) continue;
+        if (!running || ticket !== generation || now() >= manifest.expiresAt) break;
         phase = 'original'; status('original session read');
         const original = await native.getSession(action.localSessionId);
         status('original session read completed');
@@ -189,6 +218,9 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
           || mapped.lastActivityAt !== action.expectedLastActivityAt || mapped.isArchived !== false) {
           status('action deferred mapping-changed'); report('Native Local mapping changed its CLI session identity or activity'); continue;
         }
+        phase = 'replacement-recheck';
+        if (replacementSource && !await verifyReplacement(action, ticket)) continue;
+        if (!running || ticket !== generation || now() >= manifest.expiresAt) break;
         phase = 'recheck'; status('original session recheck');
         const current = await native.getSession(action.localSessionId);
         const changed = safe(current, action);
@@ -196,7 +228,7 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
         phase = 'authority'; status('archive authority recheck');
         const latest = parse(await readManifest());
         const stillAuthorized = latest.actions.some(candidate => JSON.stringify(candidate) === JSON.stringify(action));
-        if (!stillAuthorized || !replacement(action) || !running || ticket !== generation || hasDraft(action.localSessionId)) {
+        if (!stillAuthorized || !replacementSource && !replacement(action) || !running || ticket !== generation || hasDraft(action.localSessionId)) {
           status('action deferred authority-revoked'); continue;
         }
         attempted.add(action.operationId);
@@ -219,6 +251,12 @@ export function createClaudeDesktopHandoffRuntime({ readManifest, native, now = 
   return {
     start() { if (!running) { running = true; generation++; status('started'); void poll(); } },
     stop() { running = false; generation++; status('stopped'); if (timer !== undefined) clearTimer(timer); timer = undefined; },
+    setReplacementSource(value) {
+      const fields = ['fetch', 'read', 'normalize', 'isBridge', 'orgUuid', 'allowed'];
+      if (replacementSource && fields.every(name => replacementSource[name] === value?.[name])) return;
+      replacementSource = Object.fromEntries(fields.map(name => [name, value?.[name]]));
+      generation++;
+    },
     setRows(value, projectKey) {
       if (Array.isArray(value)) {
         rows = value;

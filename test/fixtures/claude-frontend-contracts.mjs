@@ -123,7 +123,7 @@ export function folderPatchContract(source, original, b) {
 
 export function folderConsumerPatchContract(source, original, b) {
   const ast = syntax(source), originalAST = syntax(original);
-  let hasInventory = false;
+  let hasInventory = false, hasMetadata = false;
   if (ast.body[0]?.declarations?.[0]?.id.name === '__cldxFolderNoSubscription') {
     assert.deepEqual(astValue(ast.body.shift()), astValue(syntax('const __cldxFolderNoSubscription=()=>()=>{};').body[0]));
     const mode = only(nodes(ast, n => n.type === 'FunctionDeclaration'
@@ -142,8 +142,11 @@ export function folderConsumerPatchContract(source, original, b) {
       assert.deepEqual(astValue(nativeProjector.body), astValue(syntax(`function f(){return ${rows}.flatMap(${row}=>${row}.source.kind==="code"?[${row}.source.data]:[]);}`).body[0].body));
       supplied = `${projector}(${context}.allRows)`;
     }
-    const injected = syntax(`const __cldxCodeMode=${context}.kind==="code";${read}__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{__cldxFolderStore.setModeRows(${supplied},__cldxNativeProjectKey)}catch{}`).body;
-    assert.deepEqual(astValue(mode.body.body.splice(0, hasInventory ? 4 : 3)), astValue(injected));
+    hasMetadata = hasInventory && mode.body.body[2]?.declarations?.[0]?.id.name === '__cldxFetch';
+    const metadataHooks = hasMetadata ? 'const __cldxFetch=__cldxFetchHook(),__cldxAccount=__cldxAccountHook(),__cldxCloud=__cldxCloudHook(),__cldxCodeAccess=__cldxCodeAccessHook();' : '';
+    const metadataSupply = hasMetadata ? '__cldxFolderStore.setReplacementSource({fetch:__cldxFetch,orgUuid:__cldxAccount?.activeOrganization?.uuid,allowed:!!__cldxCodeAccess&&__cldxCloud?.cloud==="allowed",read:__cldxReadSession,normalize:__cldxNormalizeSession,isBridge:__cldxIsBridge});' : '';
+    const injected = syntax(`const __cldxCodeMode=${context}.kind==="code";${read}${metadataHooks}__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{${metadataSupply}__cldxFolderStore.setModeRows(${supplied},__cldxNativeProjectKey)}catch{}`).body;
+    assert.deepEqual(astValue(mode.body.body.splice(0, hasInventory ? hasMetadata ? 5 : 4 : 3)), astValue(injected));
   }
   const imp = ast.body.shift();
   assert.equal(imp.type, 'ImportDeclaration'); assert.equal(imp.source.value, b.importedPath);
@@ -161,6 +164,18 @@ export function folderConsumerPatchContract(source, original, b) {
     assert.equal(hook.specifiers[0].local.name, '__cldxFolderContext');
     for (const added of [raw, hook]) assert.ok(originalAST.body.some(n => n.type === 'ImportDeclaration'
       && n.source.value === added.source.value && n.specifiers.some(s => s.imported?.name === added.specifiers[0].imported.name)));
+  }
+  if (hasMetadata) {
+    const metadata = ast.body.shift();
+    assert.equal(metadata.type, 'ImportDeclaration');
+    assert.deepEqual(metadata.specifiers.map(s => s.local.name), ['__cldxReadSession', '__cldxNormalizeSession', '__cldxIsBridge']);
+    assert.ok(originalAST.body.some(n => n.type === 'ImportDeclaration' && n.source.value === metadata.source.value), 'reuse an already imported native metadata module');
+    for (const name of ['__cldxFetchHook', '__cldxAccountHook', '__cldxCloudHook', '__cldxCodeAccessHook']) {
+      const hook = ast.body.shift();
+      assert.equal(hook.type, 'ImportDeclaration'); assert.equal(hook.specifiers.length, 1);
+      assert.equal(hook.specifiers[0].local.name, name); assert.equal(hook.specifiers[0].type, 'ImportSpecifier');
+      assert.match(hook.source.value, /^\.\/shared[-\w]+\.js$/);
+    }
   }
   const f = only(functionsFor(ast, b.component.id.name), 'consumer component');
   assert.deepEqual(astValue(f.body.body.shift()), astValue(syntax('const __cldxVersion=__cldxFolderSubscribe(__cldxFolderStore.subscribe,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);').body[0]));

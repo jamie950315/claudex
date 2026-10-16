@@ -60,6 +60,7 @@ export function createClaudeFolderRuntime({ readMap, intervalMs = 2000, setTimer
     getSnapshot: () => revision,
     subscribe: listener => subscribe(listener, false),
     subscribeModes: listener => subscribe(listener, true),
+    setReplacementSource: source => handoff?.setReplacementSource(source),
     setModeRows(localRows, projectKey) {
       modeRows = localRows; modeKeyFunction = projectKey;
       if (modeListeners.size) handoff?.setRows(localRows, projectKey);

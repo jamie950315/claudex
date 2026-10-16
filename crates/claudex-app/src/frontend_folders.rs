@@ -423,6 +423,7 @@ pub struct Consumer {
     pub subscription: Imported,
     pub modes: Option<ModeConsumer>,
     pub inventory: Option<InventoryContext>,
+    pub metadata: Option<crate::frontend_metadata::MetadataReader>,
 }
 #[derive(Clone, Debug)]
 pub struct InventoryContext {
@@ -1124,6 +1125,11 @@ pub fn consumer(
     } else {
         None
     };
+    let metadata = if inventory.is_some() {
+        crate::frontend_metadata::resolve(source, url, graph)?
+    } else {
+        None
+    };
     Ok(Consumer {
         component: component.clone(),
         memo: memo.clone(),
@@ -1138,17 +1144,34 @@ pub fn consumer(
         subscription: resolver.imported_api("useSyncExternalStore", false)?,
         modes,
         inventory,
+        metadata,
     })
 }
 pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
     let inventory_import=anchor.inventory.as_ref().map(|i|format!(
         "import{{{} as __cldxCodeInventory}}from{};import{{{} as __cldxFolderContext}}from{};",
         i.exported,serde_json::to_string(&anchor.imported_path).unwrap(),i.hook.exported,serde_json::to_string(&i.hook.path).unwrap())).unwrap_or_default();
+    let mut metadata_import = String::new();
+    if let Some(m) = &anchor.metadata {
+        metadata_import.push_str(&format!("import{{{} as __cldxReadSession,{} as __cldxNormalizeSession,{} as __cldxIsBridge}}from{};",m.read,m.normalize,m.is_bridge,serde_json::to_string(&m.path)?));
+        for (hook, alias) in [
+            (&m.fetch_hook, "__cldxFetchHook"),
+            (&m.account_hook, "__cldxAccountHook"),
+            (&m.cloud_hook, "__cldxCloudHook"),
+            (&m.enabled_hook, "__cldxCodeAccessHook"),
+        ] {
+            metadata_import.push_str(&format!(
+                "import{{{} as {alias}}}from{};",
+                hook.exported,
+                serde_json::to_string(&hook.path)?
+            ));
+        }
+    }
     let mut edits = vec![
         Edit::insert(
             0,
             format!(
-                "import{{__cldxFolderStore,__cldxNativeProjectKey}}from{};import{{{} as __cldxFolderSubscribe}}from{};{inventory_import}",
+                "import{{__cldxFolderStore,__cldxNativeProjectKey}}from{};import{{{} as __cldxFolderSubscribe}}from{};{inventory_import}{metadata_import}",
                 serde_json::to_string(&anchor.imported_path)?,
                 anchor.subscription.exported,
                 serde_json::to_string(&anchor.subscription.path)?
@@ -1190,8 +1213,16 @@ pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
                 format!("{}({}.allRows)", modes.projector, modes.context),
             )
         };
+        let (metadata_read, metadata_supply) = if anchor.metadata.is_some() {
+            (
+                "const __cldxFetch=__cldxFetchHook(),__cldxAccount=__cldxAccountHook(),__cldxCloud=__cldxCloudHook(),__cldxCodeAccess=__cldxCodeAccessHook();",
+                "__cldxFolderStore.setReplacementSource({fetch:__cldxFetch,orgUuid:__cldxAccount?.activeOrganization?.uuid,allowed:!!__cldxCodeAccess&&__cldxCloud?.cloud===\"allowed\",read:__cldxReadSession,normalize:__cldxNormalizeSession,isBridge:__cldxIsBridge});",
+            )
+        } else {
+            ("", "")
+        };
         edits.push(Edit::insert(start(&modes.function["body"]) + 1, format!(
-            "const __cldxCodeMode={0}.kind===\"code\";{read}__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{{__cldxFolderStore.setModeRows({rows},__cldxNativeProjectKey)}}catch{{}}",
+            "const __cldxCodeMode={0}.kind===\"code\";{read}{metadata_read}__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{{{metadata_supply}__cldxFolderStore.setModeRows({rows},__cldxNativeProjectKey)}}catch{{}}",
             modes.context
         )));
     }

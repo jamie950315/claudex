@@ -136,8 +136,19 @@ and public `useContext` getter/export chain. Import the read hook and context
 under reserved aliases and call the hook unconditionally; only Code supplies
 the resulting normalized rows to the existing store. Keep native presentation
 rows and filters untouched. This inventory covers native loaded pages, not an
-assertion that every server session is loaded. A missing exact replacement
-still defers; never add pagination, model work or a guessed metadata endpoint.
+assertion that every server session is loaded. Where the already imported native
+Code metadata module exposes its exact-ID no-store GET reader, native DTO
+normalizer and bridge classifier, prove those bodies and reuse that reader as
+the replacement authority. Capture raw fetch, active organization, Code-enabled
+and cloud-access hooks from the native prefetch/exact-ID lookup caller; import
+them under reserved aliases and invoke hooks unconditionally. Supply the reader
+only in Code mode. Read only the valid intent's ID, require native Code/cloud
+access, normalize before checking exact ID/title/unarchived bridge identity,
+and read again before the final Local/manifest rechecks. A source/account change
+fences in-flight reads; equal source tuples do not cancel ordinary renders.
+Native absence, failure, access refusal or mismatch never falls back to visible
+rows. Older graphs without this capability retain their existing row proof.
+Do not guess endpoints, paginate inventories, invoke owners or start model work.
 Both use one store and poller; each actual subscription owns an idempotent
 cleanup token, even when callbacks are identical. The last common listener
 restores an existing project listener's rows; the last total listener stops
