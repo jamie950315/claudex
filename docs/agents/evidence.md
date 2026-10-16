@@ -6,6 +6,24 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Installed Rust Codex warm-command repair (2026-10-17)
+
+The development-signed App 1.4.8 / Mod 0.8.46 installation packages the
+`1b9ff3e` broker-root repair and `f009929` payload version. The previously
+failing installed hook was reproduced against exact active native metadata.
+After normal service drain, bundle replacement and app-owned Mod maintenance,
+the same existing Codex conversation completed one local off control; its exact
+durable turn was completed and its broker policy was disabled. A separately
+subscribed, trusted native status hook returned the localized disabled/stopped
+summary with blocked interception and a completed turn on
+`0.162.0-alpha.17.2`. Neither control produced model/tool items or a warm attempt.
+The first off observer lacked a resume subscription; exact durable readback
+resolved the missing notifications without replaying off. Codex pixel capture
+remained unavailable. Bundled, installed and fresh observer versions were
+0.8.46; native apps were not restarted. Twelve focused Rust tests passed.
+The services resumed healthy while normal initial reconciliation continued;
+this is not a new full-history or cache-retention acceptance claim.
+
 ## Installed Rust synchronization and Local archival repair (2026-10-17)
 
 The development-signed Mac installation at `bb8aa1c` (App 1.4.8 / Mod 0.8.45)
