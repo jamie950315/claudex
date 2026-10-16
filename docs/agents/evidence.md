@@ -121,6 +121,45 @@ measurements. Private inputs and raw records remain outside the repository.
 
 ## From cache-warming.md
 
+Authorized installed Rust acceptance (2026-10-17, App 1.4.8 / Mod 0.8.46)
+used dedicated native test conversations and the existing signed native hosts:
+
+- Claude Desktop Code returned the exact ordinary acceptance marker, followed
+  by an autonomous prime and a periodic request 240.199 seconds later. All
+  three actual responses reported `claude-opus-5-5`; medium was configured.
+  Prime read 82,218 cached tokens and wrote 480; the periodic request read
+  82,698 (the complete required preceding prefix), wrote 107 and used four
+  uncached input tokens, with four output tokens on each warm request.
+  Native usage and the rendered Desktop replies agreed. Warming was stopped
+  after two requests and the session-only TTL restored from 5m to its original
+  1h without enabling another request or changing global preferences.
+- Codex Desktop 0.162.0-alpha.17.2 completed an autonomous prime and a periodic
+  request 60 seconds later, then an ordinary exact-marker reply after off.
+  Configured model/effort remained `gpt-6.1-sol` / `xhigh`; the native protocol
+  did not independently report response-model identity. Prime input/read/output
+  was 45,995/33,408/19; periodic was 46,869/45,824/5. The periodic read share was
+  97.77%, but it was 171 tokens short of the preceding complete input, so the
+  ledger correctly retained `cacheVerified=false` / `native-cache-refreshed`.
+  Exact starts, completions, usage and native history readback were observed;
+  none of these model turns used tools. Both test schedules ended without a
+  remaining timer or Codex binding. Codex GUI pixels remained unavailable.
+
+This run found a terminal diagnostic defect: normal Codex limit completion was
+overwritten with `native-binding-changed` during observer detach. Repair
+`b630ed6` preserves the count/duration/output limit before normal detach while
+retaining due compaction. Five unit and three native-transport tests passed,
+including the previously failing native-prime regression and no uncertain
+dispatch replay. Normal guarded installation of `e37f8a9` (Mod 0.8.47) then
+completed one additional real Codex prime, with input/read/output
+48,607/47,488/5 and an `OK` reply. It automatically ended disabled with both
+reasons `refresh-limit`, zero bindings, no next request and an idle native
+thread. The official Claude plugin reload and a local status command verified
+loaded Mod 0.8.47, warming off and TTL 1h without another model request. Native
+apps were not restarted. This proves the measured replies, scheduling, cache
+reads and repaired limit stop, not cache retention beyond TTL or a speedup.
+Private native identities, histories, receipts and rollback artifacts stay
+outside the repository.
+
 Authorized autonomous-start acceptance (2026-10-15, App 1.4.8 / Mod 0.8.31)
 used independent test conversations, with no ordinary seed or follow-up message:
 
