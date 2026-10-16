@@ -113,3 +113,9 @@ log native IDs, titles, paths, content or native error text through this diagnos
 Use the actual consuming renderer's logs to distinguish a loaded module from a
 running subscription or an awaited native call. Native archived-state and original
 preservation checks still determine acceptance.
+On native builds with a proved common Code sidebar dispatcher, subscription and
+the full native Code-row inventory belong to that dispatcher, not an individual
+project/status grouping. Project presentation may still use a subset, but cannot
+hide another group's verified replacement from the shared handoff consumer.
+Only real mounted Code listeners keep the existing poller alive; Chat/Cowork and
+an unmounted sidebar never provide archival authority or background ownership.

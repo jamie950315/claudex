@@ -421,6 +421,325 @@ pub struct Consumer {
     pub size: usize,
     pub imported_path: String,
     pub subscription: Imported,
+    pub modes: Option<ModeConsumer>,
+}
+#[derive(Clone, Debug)]
+pub struct ModeConsumer {
+    pub function: Value,
+    pub context: String,
+    pub projector: String,
+}
+fn field<'a>(object: &'a Value, name: &str) -> Option<&'a Value> {
+    let fields = array(&object["properties"])
+        .iter()
+        .filter(|node| property(node, name))
+        .collect::<Vec<_>>();
+    (fields.len() == 1).then(|| &fields[0]["value"])
+}
+fn native_rows_context(ast: &Value, supplied: &Value, scopes: &Scopes) -> Result<()> {
+    let mut current = supplied;
+    let mut seen = BTreeSet::new();
+    for _ in 0..8 {
+        let declaration = unique(
+            nodes(ast, |n| {
+                kind(n) == "VariableDeclarator" && scopes.same(&n["id"], current)
+            }),
+            "group-mode context declaration",
+        )?;
+        ensure!(
+            seen.insert(start(declaration)),
+            "Group-mode context alias cycle."
+        );
+        ensure!(
+            nodes(ast, |n| kind(n) == "UpdateExpression"
+                && scopes.same(&n["argument"], current))
+            .is_empty(),
+            "Claude frontend anchors: group-mode context has rival writes."
+        );
+        let writes = nodes(ast, |n| {
+            kind(n) == "AssignmentExpression" && scopes.same(&n["left"], current)
+        });
+        let initializer = &declaration["init"];
+        if id(initializer).is_some() {
+            ensure!(
+                writes.is_empty(),
+                "Group-mode context alias has rival writes."
+            );
+            current = initializer;
+            continue;
+        }
+        let value = if initializer.is_null() {
+            let condition = unique(
+                nodes(ast, |n| {
+                    kind(n) == "ConditionalExpression"
+                        && kind(&n["consequent"]) == "SequenceExpression"
+                        && scopes.same(&n["alternate"]["left"], current)
+                }),
+                "group-mode context memo",
+            )?;
+            let steps = array(&condition["consequent"]["expressions"]);
+            let first = steps
+                .first()
+                .ok_or_else(|| anyhow::anyhow!("Context memo is empty."))?;
+            let last = steps.last().unwrap();
+            let alternate = &condition["alternate"];
+            let slot = &alternate["right"];
+            let same_slot = |node: &Value| {
+                kind(node) == "MemberExpression"
+                    && node["computed"] == true
+                    && scopes.same(&node["object"], &slot["object"])
+                    && node["property"]["value"] == slot["property"]["value"]
+            };
+            ensure!(
+                writes.len() == 2
+                    && steps.len() >= 2
+                    && kind(first) == "AssignmentExpression"
+                    && first["operator"] == "="
+                    && scopes.same(&first["left"], current)
+                    && kind(&first["right"]) == "ObjectExpression"
+                    && kind(alternate) == "AssignmentExpression"
+                    && alternate["operator"] == "="
+                    && kind(slot) == "MemberExpression"
+                    && slot["computed"] == true
+                    && id(&slot["object"]).is_some()
+                    && slot["property"]["value"].as_u64().is_some()
+                    && kind(last) == "AssignmentExpression"
+                    && last["operator"] == "="
+                    && same_slot(&last["left"])
+                    && scopes.same(&last["right"], current)
+                    && nodes(ast, |n| kind(n) == "AssignmentExpression"
+                        && same_slot(&n["left"]))
+                    .len()
+                        == 1
+                    && nodes(ast, |n| kind(n) == "UpdateExpression"
+                        && same_slot(&n["argument"]))
+                    .is_empty(),
+                "Claude frontend anchors: group-mode context cache roundtrip missing or ambiguous."
+            );
+            &first["right"]
+        } else {
+            ensure!(writes.is_empty(), "Group-mode context has rival writes.");
+            initializer
+        };
+        unique(
+            nodes(value, |n| {
+                kind(n) == "ObjectExpression"
+                    && field(n, "allRows").is_some_and(|v| id(v).is_some())
+                    && field(n, "projectSectionRows").is_some_and(|v| id(v).is_some())
+                    && field(n, "kind").is_some_and(|v| id(v).is_some())
+            }),
+            "group-mode native rows context",
+        )?;
+        return Ok(());
+    }
+    anyhow::bail!("Group-mode context alias bound exceeded.")
+}
+fn mode_consumer(ast: &Value, project_component: &Value) -> Result<Option<ModeConsumer>> {
+    let candidates = functions(ast)
+        .into_iter()
+        .filter(|function| {
+            let params = array(&function["params"]);
+            params.len() == 1
+                && kind(&params[0]) == "ObjectPattern"
+                && array(&params[0]["properties"])
+                    .iter()
+                    .any(|n| property(n, "groupBy"))
+                && array(&params[0]["properties"])
+                    .iter()
+                    .any(|n| property(n, "ctx"))
+        })
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    let function = unique(candidates, "group-mode consumer")?;
+    let pattern = &function["params"][0];
+    let group = field(pattern, "groupBy")
+        .ok_or_else(|| anyhow::anyhow!("Group-mode parameter is ambiguous."))?;
+    let context = field(pattern, "ctx")
+        .ok_or_else(|| anyhow::anyhow!("Group-mode context parameter is ambiguous."))?;
+    let body = array(&function["body"]["body"]);
+    ensure!(
+        id(group).is_some()
+            && id(context).is_some()
+            && body.len() == 1
+            && kind(&body[0]) == "ReturnStatement",
+        "Claude frontend anchors: group-mode routing missing or ambiguous."
+    );
+    let call = &body[0]["argument"];
+    ensure!(
+        kind(call) == "CallExpression"
+            && id(&call["callee"]).is_some()
+            && array(&call["arguments"]).len() == 2
+            && id(&call["arguments"][0]) == id(group)
+            && id(&call["arguments"][1]) == id(context),
+        "Claude frontend anchors: group-mode context missing or ambiguous."
+    );
+    let scopes = Scopes::analyze(ast);
+    let rendering = unique(
+        nodes(ast, |n| {
+            kind(n) == "CallExpression"
+                && array(&n["arguments"]).len() >= 2
+                && scopes.same(&n["arguments"][0], &function["id"])
+                && kind(&n["arguments"][1]) == "ObjectExpression"
+        }),
+        "group-mode render",
+    )?;
+    let supplied = field(&rendering["arguments"][1], "ctx")
+        .ok_or_else(|| anyhow::anyhow!("Group-mode context is absent."))?;
+    native_rows_context(ast, supplied, &scopes)?;
+    let dispatcher = unique(
+        functions(ast)
+            .into_iter()
+            .filter(|f| scopes.same(&f["id"], &call["callee"]))
+            .collect(),
+        "group-mode dispatcher",
+    )?;
+    let params = array(&dispatcher["params"]);
+    ensure!(
+        params.len() == 2 && params.iter().all(|p| id(p).is_some()),
+        "Claude frontend anchors: group-mode dispatcher arguments missing or ambiguous."
+    );
+    let lookup = unique(
+        nodes(dispatcher, |n| {
+            kind(n) == "MemberExpression"
+                && n["computed"] == true
+                && scopes.same(&n["property"], &params[0])
+        }),
+        "group-mode table lookup",
+    )?;
+    let table = unique(
+        nodes(ast, |n| {
+            kind(n) == "VariableDeclarator"
+                && scopes.same(&n["id"], &lookup["object"])
+                && kind(&n["init"]) == "ObjectExpression"
+        }),
+        "group-mode table",
+    )?;
+    let project = field(&table["init"], "project").and_then(|n| field(n, "code"));
+    ensure!(
+        project.is_some_and(|n| id(n).is_some())
+            && field(&table["init"], "state")
+                .and_then(|n| field(n, "code"))
+                .is_some()
+            && !nodes(dispatcher, |n| member(n, "kind")
+                && scopes.same(&n["object"], &params[1]))
+            .is_empty(),
+        "Claude frontend anchors: Code group-mode table missing or ambiguous."
+    );
+    let project = project.unwrap();
+    let wrapper = unique(
+        functions(ast)
+            .into_iter()
+            .filter(|f| scopes.same(&f["id"], project))
+            .collect(),
+        "project mode wrapper",
+    )?;
+    // Follow only native JSX component references, not arbitrary calls or names.
+    let mut frontier = vec![wrapper];
+    let mut reached = false;
+    let mut seen = BTreeSet::new();
+    for _ in 0..8 {
+        let mut next = vec![];
+        for parent in frontier {
+            if !seen.insert(start(parent)) {
+                continue;
+            }
+            for call in nodes(parent, |n| {
+                kind(n) == "CallExpression"
+                    && array(&n["arguments"]).len() >= 2
+                    && id(&n["arguments"][0]).is_some()
+                    && scopes.same(&n["callee"], &rendering["callee"])
+                    && kind(&n["arguments"][1]) == "ObjectExpression"
+            }) {
+                let target = &call["arguments"][0];
+                if scopes.same(target, &project_component["id"]) {
+                    reached = true;
+                }
+                next.extend(
+                    functions(ast)
+                        .into_iter()
+                        .filter(|f| scopes.same(&f["id"], target)),
+                );
+            }
+        }
+        frontier = next;
+    }
+    ensure!(
+        reached,
+        "Claude frontend anchors: project mode is disconnected from its proved folder consumer."
+    );
+    let projectors = functions(ast)
+        .into_iter()
+        .filter(|f| {
+            let params = array(&f["params"]);
+            if params.len() != 1
+                || id(&params[0]).is_none()
+                || f["async"] == true
+                || f["generator"] == true
+            {
+                return false;
+            }
+            let body = array(&f["body"]["body"]);
+            if body.len() != 1 || kind(&body[0]) != "ReturnStatement" {
+                return false;
+            }
+            let call = &body[0]["argument"];
+            if kind(call) != "CallExpression"
+                || !member(&call["callee"], "flatMap")
+                || !scopes.same(&call["callee"]["object"], &params[0])
+                || array(&call["arguments"]).len() != 1
+            {
+                return false;
+            }
+            let callback = &call["arguments"][0];
+            let row = &callback["params"][0];
+            let value = &callback["body"];
+            let test = &value["test"];
+            kind(callback) == "ArrowFunctionExpression"
+                && callback["async"] != true
+                && array(&callback["params"]).len() == 1
+                && kind(value) == "ConditionalExpression"
+                && kind(test) == "BinaryExpression"
+                && test["operator"] == "==="
+                && member(&test["left"], "kind")
+                && member(&test["left"]["object"], "source")
+                && scopes.same(&test["left"]["object"]["object"], row)
+                && test["right"]["value"] == "code"
+                && kind(&value["consequent"]) == "ArrayExpression"
+                && array(&value["consequent"]["elements"]).len() == 1
+                && member(&value["consequent"]["elements"][0], "data")
+                && member(&value["consequent"]["elements"][0]["object"], "source")
+                && scopes.same(&value["consequent"]["elements"][0]["object"]["object"], row)
+                && kind(&value["alternate"]) == "ArrayExpression"
+                && array(&value["alternate"]["elements"]).is_empty()
+        })
+        .collect::<Vec<_>>();
+    let projector = unique(projectors, "native Code row projector")?;
+    ensure!(
+        id(&projector["id"]) != id(group)
+            && id(&projector["id"]) != id(context)
+            && nodes(ast, |n| id(n)
+                .is_some_and(|name| name.starts_with("__cldx")))
+            .is_empty()
+            && nodes(ast, |n| (kind(n) == "AssignmentExpression"
+                && scopes.same(&n["left"], &projector["id"]))
+                || (kind(n) == "UpdateExpression"
+                    && scopes.same(&n["argument"], &projector["id"])))
+            .is_empty(),
+        "Claude frontend anchors: group-mode injected bindings are shadowed or rewritten."
+    );
+    ensure!(
+        !nodes(project_component, |n| kind(n) == "CallExpression"
+            && scopes.same(&n["callee"], &projector["id"]))
+        .is_empty(),
+        "Claude frontend anchors: native Code row projector is disconnected."
+    );
+    Ok(Some(ModeConsumer {
+        function: function.clone(),
+        context: id(context).unwrap().into(),
+        projector: id(&projector["id"]).unwrap().into(),
+    }))
 }
 fn memo_call(node: &Value, cache: &str) -> bool {
     kind(node) == "CallExpression"
@@ -690,6 +1009,7 @@ pub fn consumer(
         size,
         imported_path: imported_path.into(),
         subscription: resolver.imported_api("useSyncExternalStore", false)?,
+        modes: mode_consumer(ast, component)?,
     })
 }
 pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
@@ -723,6 +1043,16 @@ pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
             format!("{}[{}]=__cldxVersion;", anchor.cache, anchor.size),
         ),
     ];
+    if let Some(modes) = &anchor.modes {
+        edits.push(Edit::insert(
+            0,
+            "const __cldxFolderNoSubscription=()=>()=>{};",
+        ));
+        edits.push(Edit::insert(start(&modes.function["body"]) + 1, format!(
+            "const __cldxCodeMode={0}.kind===\"code\";__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{{__cldxFolderStore.setModeRows({1}({0}.allRows),__cldxNativeProjectKey)}}catch{{}}",
+            modes.context, modes.projector
+        )));
+    }
     for guard in &anchor.guards {
         edits.push(Edit::replace(
             &guard["test"],
@@ -735,4 +1065,76 @@ pub fn transform_consumer(source: &str, anchor: &Consumer) -> Result<String> {
         ));
     }
     apply_edits(source, edits)
+}
+
+#[cfg(test)]
+mod mode_tests {
+    use super::*;
+    const SOURCE: &str = r#"
+function jsx(component, props) { return { component, props }; }
+function codeRows(rows) { return rows.flatMap(row => row.source.kind === "code" ? [row.source.data] : []); }
+function Folder(sessions) { const rows = codeRows(sessions); return rows; }
+function Wrapper(props) { return jsx(Folder, {...props}); }
+function Project({projectSectionRows}) { return jsx(Wrapper, {sessions:projectSectionRows}); }
+function State(props) { return props; }
+const modes = { project:{code:Project}, state:{code:State} };
+function dispatch(group, context) { const choices=modes[group], chosen=typeof choices==="function"?choices:choices[context.kind]; return jsx(State,{children:chosen(context)}); }
+function List({groupBy:group,ctx:context}) { return dispatch(group,context); }
+function Parent(all, kind) { const context={allRows:all,projectSectionRows:all,kind}; return jsx(List,{groupBy:"state",ctx:context}); }
+"#;
+    fn inspect(source: &str) -> Result<Option<ModeConsumer>> {
+        let ast = syntax(source)?;
+        let project = functions(&ast)
+            .into_iter()
+            .find(|f| id(&f["id"]) == Some("Folder"))
+            .unwrap();
+        mode_consumer(&ast, project)
+    }
+    fn memo_context() -> String {
+        SOURCE.replace("const context={allRows:all,projectSectionRows:all,kind};", "const memo=[];let cached;memo[0]!==all?(cached={allRows:all,projectSectionRows:all,kind},memo[0]=all,memo[1]=cached):cached=memo[1];const context=cached;")
+    }
+    #[test]
+    fn every_code_group_mode_shares_a_proved_native_context_and_row_projector() -> Result<()> {
+        let mode = inspect(SOURCE)?.unwrap();
+        assert_eq!(id(&mode.function["id"]), Some("List"));
+        assert_eq!(mode.context, "context");
+        assert_eq!(mode.projector, "codeRows");
+        assert!(inspect(&memo_context())?.is_some());
+        assert!(inspect("function Folder(rows){return rows;}")?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn disconnected_shadowed_or_changed_mode_contracts_cannot_install_a_lifecycle_patch() {
+        for source in [
+            SOURCE.replace("allRows:all", "otherRows:all"),
+            SOURCE.replace("allRows:all", "allRows:all,allRows:other"),
+            SOURCE.replace("code:Project", "code:State"),
+            SOURCE.replace(
+                "row.source.kind === \"code\"",
+                "row.source.kind === \"chat\"",
+            ),
+            SOURCE.replace(
+                "const rows = codeRows(sessions)",
+                "const codeRows=other; const rows = codeRows(sessions)",
+            ),
+            SOURCE.replace("jsx(Folder,", "other(Folder,"),
+            SOURCE.replace(
+                "ctx:context}) { return dispatch(group,context)",
+                "ctx:codeRows}) { return dispatch(group,codeRows)",
+            ),
+            SOURCE.to_owned() + "codeRows = other;",
+            SOURCE.to_owned() + "const __cldxFolderStore=other;",
+            memo_context().replace("memo[1]=cached", "memo[2]=cached"),
+            memo_context().replace(
+                "const context=cached;",
+                "memo[1]=other;const context=cached;",
+            ),
+            SOURCE.to_owned() + "function Rival({groupBy:g,ctx:c}) { return dispatch(g,c); }",
+        ] {
+            assert!(
+                inspect(&source).is_err(),
+                "Accepted changed native mode contract: {source}"
+            );
+        }
+    }
 }

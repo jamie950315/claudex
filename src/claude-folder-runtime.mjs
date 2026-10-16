@@ -6,10 +6,11 @@ import { buildClaudeFolderProjection, lookupClaudeFolderProjection } from './cla
 export function createClaudeFolderRuntime({ readMap, intervalMs = 2000, setTimer = setTimeout, clearTimer = clearTimeout,
   onError = () => {}, createHandoff, createWake } = {}) {
   let entries = [], revision = 0, text = '', timer, reading = false, generation = 0, lastError = null;
-  let rows, keyFunction, projectionRevision = -1;
+  let rows, keyFunction, modeRows, modeKeyFunction, projectionRevision = -1;
   let projection = { version: 1, overrides: {} };
   const listeners = new Set();
-  const notify = () => { revision++; for (const listener of listeners) listener(); };
+  const modeListeners = new Set();
+  const notify = () => { revision++; for (const { listener } of listeners) listener(); };
   const handoff = typeof createHandoff === 'function' ? createHandoff({ onChange: notify }) : null;
   const wake = typeof createWake === 'function' ? createWake() : null;
   function accept(result) {
@@ -40,18 +41,31 @@ export function createClaudeFolderRuntime({ readMap, intervalMs = 2000, setTimer
       if (listeners.size) timer = setTimer(poll, intervalMs);
     }
   }
+  function subscribe(listener, modes) {
+    const subscription = { listener };
+    listeners.add(subscription);
+    if (modes) {
+      modeListeners.add(subscription);
+      if (modeRows !== undefined) handoff?.setRows(modeRows, modeKeyFunction);
+    }
+    if (listeners.size === 1) { generation++; void poll(); handoff?.start(); wake?.start(); }
+    return () => {
+      if (!listeners.delete(subscription)) return;
+      if (modeListeners.delete(subscription) && !modeListeners.size && listeners.size && rows !== undefined)
+        handoff?.setRows(rows, keyFunction);
+      if (!listeners.size) { generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; handoff?.stop(); wake?.stop(); }
+    };
+  }
   return {
     getSnapshot: () => revision,
-    subscribe(listener) {
-      listeners.add(listener);
-      if (listeners.size === 1) { generation++; void poll(); handoff?.start(); wake?.start(); }
-      return () => {
-        listeners.delete(listener);
-        if (!listeners.size) { generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; handoff?.stop(); wake?.stop(); }
-      };
+    subscribe: listener => subscribe(listener, false),
+    subscribeModes: listener => subscribe(listener, true),
+    setModeRows(localRows, projectKey) {
+      modeRows = localRows; modeKeyFunction = projectKey;
+      if (modeListeners.size) handoff?.setRows(localRows, projectKey);
     },
     setRows(localRows, projectKey) {
-      handoff?.setRows(localRows, projectKey);
+      if (!modeListeners.size) handoff?.setRows(localRows, projectKey);
       if (rows === localRows && keyFunction === projectKey && projectionRevision === revision) return;
       const anchors = handoff?.projectionRows() ?? [];
       const existing = new Set(localRows.map(row => row.id));

@@ -116,6 +116,23 @@ renderer before claiming UI acceptance. Preflight both complete candidates, publ
 helper before its consumer, and restore dependent consumers before the helper.
 Each resource retains its own immutable original and recoverable journal; a
 partial pair is never ready. This is still restart-required, not live-load proof.
+When the native sidebar exposes a common group-mode dispatcher, prove its
+`groupBy`/`ctx` route, the context's `allRows`/`projectSectionRows`/`kind` fields,
+the Code project route back to the existing folder consumer and its pure native
+Code-row projector. Subscribe at that common component for Code only: project,
+state and other group modes must not determine whether archival is consumed.
+Context aliases are bounded to eight declarations; an older compiler memo
+requires its unique object write and exact cache-slot store/read roundtrip,
+with no rival context or slot writes. Never treat an alias as an absent mode.
+Chat/Cowork keep an inert subscription. Keep the existing project consumer for
+folder projection, but its filtered subset must not replace the common
+component's full handoff inventory while any common-mode listener is active.
+Both use one store and poller; each actual subscription owns an idempotent
+cleanup token, even when callbacks are identical. The last common listener
+restores an existing project listener's rows; the last total listener stops
+work. Do not retain a background consumer after native unmount. Older graphs
+without the common dispatcher retain their proved project-consumer path;
+ambiguous or disconnected new routing fails explicitly.
 Graphs are bounded to 2,048 cached modules and
 2,048 missing imports (observed older entries reach 1,171 cached modules).
 By user decision, each cache file and decoded/patched JavaScript source is

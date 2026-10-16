@@ -123,6 +123,21 @@ export function folderPatchContract(source, original, b) {
 
 export function folderConsumerPatchContract(source, original, b) {
   const ast = syntax(source), originalAST = syntax(original);
+  if (ast.body[0]?.declarations?.[0]?.id.name === '__cldxFolderNoSubscription') {
+    assert.deepEqual(astValue(ast.body.shift()), astValue(syntax('const __cldxFolderNoSubscription=()=>()=>{};').body[0]));
+    const mode = only(nodes(ast, n => n.type === 'FunctionDeclaration'
+      && n.body.body[0]?.declarations?.[0]?.id.name === '__cldxCodeMode'), 'common Code group consumer');
+    const context = mode.params[0].properties.find(p => p.key.name === 'ctx')?.value.name;
+    assert.ok(context && mode.params[0].properties.some(p => p.key.name === 'groupBy'));
+    const supply = mode.body.body[2]?.consequent?.block?.body[0]?.expression;
+    const projector = supply?.arguments[0]?.callee.name;
+    assert.ok(projector);
+    const nativeProjector = only(functionsFor(originalAST, projector), 'native Code row projector');
+    const rows = nativeProjector.params[0].name, row = nativeProjector.body.body[0].argument.arguments[0].params[0].name;
+    assert.deepEqual(astValue(nativeProjector.body), astValue(syntax(`function f(){return ${rows}.flatMap(${row}=>${row}.source.kind==="code"?[${row}.source.data]:[]);}`).body[0].body));
+    const injected = syntax(`const __cldxCodeMode=${context}.kind==="code";__cldxFolderSubscribe(__cldxCodeMode?__cldxFolderStore.subscribeModes:__cldxFolderNoSubscription,__cldxFolderStore.getSnapshot,__cldxFolderStore.getSnapshot);if(__cldxCodeMode)try{__cldxFolderStore.setModeRows(${projector}(${context}.allRows),__cldxNativeProjectKey)}catch{}`).body;
+    assert.deepEqual(astValue(mode.body.body.splice(0, 3)), astValue(injected));
+  }
   const imp = ast.body.shift();
   assert.equal(imp.type, 'ImportDeclaration'); assert.equal(imp.source.value, b.importedPath);
   assert.deepEqual(imp.specifiers.map(n => n.imported.name), ['__cldxFolderStore', '__cldxNativeProjectKey']);
