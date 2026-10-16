@@ -684,9 +684,56 @@ pub fn convert_checkpoint(
     Ok(original)
 }
 
+/// Raw arrival proof is only needed to recover an existing checkpoint whose
+/// complete prefix the ordinary full API export no longer preserves. First
+/// enrollment and exact normal matches retain their normal export contract.
+pub fn needs_late_item_proof(
+    verified: bool,
+    checkpoint: &crate::desktop::Checkpoint,
+    common: &Common,
+) -> Result<bool> {
+    Ok(verified && checkpoint.count > 0 && !checkpoint.contains(common)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn arrival_proof_is_requested_only_after_the_whole_verified_prefix_mismatches() {
+        let original = Common {
+            meta: Map::new(),
+            messages: vec![
+                crate::history::Message::text("user", "Ask"),
+                crate::history::Message::text("assistant", "Done"),
+            ],
+            extra: Map::new(),
+        };
+        let checkpoint = crate::desktop::Checkpoint::of(&original).unwrap();
+        assert!(!needs_late_item_proof(true, &checkpoint, &original).unwrap());
+        let mut appended = original.clone();
+        appended
+            .messages
+            .push(crate::history::Message::text("user", "Continue"));
+        assert!(!needs_late_item_proof(true, &checkpoint, &appended).unwrap());
+        let mut changed = original.clone();
+        changed.messages[0] = crate::history::Message::text("user", "Changed");
+        assert!(needs_late_item_proof(true, &checkpoint, &changed).unwrap());
+        assert!(!needs_late_item_proof(false, &checkpoint, &changed).unwrap());
+        assert!(
+            needs_late_item_proof(
+                true,
+                &checkpoint,
+                &Common {
+                    messages: vec![],
+                    ..original.clone()
+                }
+            )
+            .unwrap()
+        );
+        assert!(
+            !needs_late_item_proof(true, &crate::desktop::Checkpoint::empty(), &changed).unwrap()
+        );
+    }
     #[test]
     fn initial_goal_serialization_is_selected_only_by_the_whole_saved_checkpoint() {
         let mut snapshot = Snapshot {
