@@ -457,6 +457,19 @@ snapshot and prevents any new native dispatch. Storage, context, concurrency, de
 and generation limits fail explicitly without
 pruning history or idempotency receipts. Cancellation is not rollback.
 
+Rust startup must inspect optional notification deliveries with `get_mut`, never
+an inserting `IndexMut` lookup. A task with notifications off keeps that field
+absent across restarts. Recover only the prior startup bug's exact
+`notification: {"deliveries": null}` placeholder, with no other notification
+fields and no creation receipt for that task carrying `originChallenge`,
+`originChallengeExpiresAt` or `notificationMode`. Validate the complete corrected
+ledger before recovery. Preserve the original ledger bytes in the private,
+exclusive `work-notification-placeholders-v1.json` backup before the normal atomic
+work-ledger publication; an existing backup must match those bytes exactly to
+resume an interrupted recovery. All other malformed notification evidence still
+refuses startup. Recovery never changes request receipts, task revisions or
+generations, and never creates or retries a notification or native invocation.
+
 Work-ledger capacity covers active tasks (1,000), active request receipts
 (10,000) and compact serialized state (32 MiB). List and status expose used,
 limit and remaining for each; status also exposes the used/remaining transition

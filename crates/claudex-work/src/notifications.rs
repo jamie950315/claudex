@@ -89,6 +89,46 @@ fn same_origin(a: &Value, b: &Value) -> bool {
         .iter()
         .all(|k| a[*k] == b[*k])
 }
+/// Undo only the empty object inserted by the old startup IndexMut lookup.
+/// A notification-bearing creation receipt contradicts that provenance and must
+/// keep failing validation. The caller validates the complete corrected ledger
+/// and preserves its original bytes before publishing any recovery.
+pub(crate) fn recover_empty_placeholders(s: &mut Value) -> bool {
+    let notified = s["requests"]
+        .as_object()
+        .into_iter()
+        .flat_map(|requests| requests.values())
+        .filter_map(|r| {
+            let result = &r["result"];
+            [
+                "originChallenge",
+                "originChallengeExpiresAt",
+                "notificationMode",
+            ]
+            .iter()
+            .any(|k| result.get(*k).is_some())
+            .then(|| result["taskId"].as_str().map(str::to_owned))
+            .flatten()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut recovered = false;
+    if let Some(tasks) = s.get_mut("tasks").and_then(Value::as_object_mut) {
+        for (id, task) in tasks {
+            if !notified.contains(id)
+                && task
+                    .get("notification")
+                    .and_then(Value::as_object)
+                    .is_some_and(|n| {
+                        n.len() == 1 && n.get("deliveries").is_some_and(Value::is_null)
+                    })
+            {
+                task.as_object_mut().unwrap().remove("notification");
+                recovered = true;
+            }
+        }
+    }
+    recovered
+}
 pub(crate) fn validate_task(t: &Value, requests: &Value) -> Result<()> {
     let Some(n) = t.get("notification") else {
         return Ok(());

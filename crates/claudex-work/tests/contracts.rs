@@ -719,6 +719,123 @@ async fn child_results_are_acknowledged_only_when_returned_not_by_observability(
     Ok(())
 }
 
+fn settled_legacy_ledger(cwd: &Path) -> Value {
+    let id = "11111111-1111-4111-8111-111111111111";
+    json!({"version":1,"defaultModels":{"codex":null,"claude":null},"defaultEfforts":{"codex":null,"claude":null},"tasks":{id:{"id":id,"parentId":null,"returnTo":"codex","owner":"claude","permission":"read-only","model":null,"effort":null,"cwd":cwd,"depth":0,"generation":1,"status":"completed","revision":3,"createdAt":1,"updatedAt":2,"active":null,"pendingHandoff":null,"messages":[{"from":"codex","kind":"request","text":"Synthetic settled legacy request.","at":1}],"result":{"text":"Synthetic retained result.","provider":"claude","generation":1}}},"requests":{"a".repeat(64):{"fingerprint":"b".repeat(64),"result":{"taskId":id,"revision":1}}}})
+}
+
+#[tokio::test]
+async fn restart_keeps_notifications_off_without_inserting_optional_fields() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = claudex_core::storage::private_directory(dir.path().join("work"))?;
+    let original = settled_legacy_ledger(dir.path());
+    claudex_core::storage::write_json(root.join("work.json"), &original)?;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    for _ in 0..2 {
+        let b = Broker::open(
+            root.clone(),
+            Config::default(),
+            Arc::new(ControlledRunner(tx.clone())),
+        )
+        .await?;
+        assert_eq!(b.snapshot().await, original);
+        b.schedule();
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        b.close().await?;
+        assert_eq!(
+            claudex_core::storage::read_json(root.join("work.json"))?,
+            original
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn restart_recovers_only_empty_notification_placeholders_with_exact_backup() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = claudex_core::storage::private_directory(dir.path().join("work"))?;
+    let id = "11111111-1111-4111-8111-111111111111";
+    let notified_id = "22222222-2222-4222-8222-222222222222";
+    let mut expected = settled_legacy_ledger(dir.path());
+    let mut notified = expected["tasks"][id].clone();
+    notified["id"] = json!(notified_id);
+    notified["notification"] = json!({"policy":{"mode":"wake","expiresInMs":1000},"requestKey":"c".repeat(64),"challenge":"d".repeat(64),"challengeExpiresAt":10,"origin":{"provider":"codex","sessionId":"33333333-3333-4333-8333-333333333333","cwd":dir.path(),"toolUseId":"synthetic-call","source":"synthetic-proof","verifiedAt":1},"deliveries":[{"revision":3,"state":"uncertain","createdAt":2,"expiresAt":1002,"requestId":"synthetic-notification","reason":"notification-outcome-unknown"}],"suppressedRevision":null});
+    expected["tasks"][notified_id] = notified;
+    expected["requests"]["c".repeat(64)] = json!({"fingerprint":"e".repeat(64),"result":{"taskId":notified_id,"originChallenge":"d".repeat(64),"originChallengeExpiresAt":10,"notificationMode":"wake"}});
+    let mut corrupt = expected.clone();
+    corrupt["tasks"][id]["notification"] = json!({"deliveries":null});
+    let original = format!("{}\n", serde_json::to_string_pretty(&corrupt)?);
+    claudex_core::storage::atomic_write(root.join("work.json"), &original)?;
+    let backup = root.join("work-notification-placeholders-v1.json");
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    for attempt in 0..3 {
+        if attempt == 1 {
+            // An interrupted publication retries only against the exact same backup.
+            claudex_core::storage::atomic_write(root.join("work.json"), &original)?;
+        }
+        let b = Broker::open(
+            root.clone(),
+            Config::default(),
+            Arc::new(ControlledRunner(tx.clone())),
+        )
+        .await?;
+        assert_eq!(b.snapshot().await, expected);
+        assert_eq!(std::fs::read_to_string(&backup)?, original);
+        b.schedule();
+        tokio::task::yield_now().await;
+        assert!(rx.try_recv().is_err());
+        b.close().await?;
+        assert_eq!(
+            claudex_core::storage::read_json(root.join("work.json"))?,
+            expected
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn notification_placeholder_recovery_refuses_ambiguous_evidence_without_writes() -> Result<()>
+{
+    let id = "11111111-1111-4111-8111-111111111111";
+    for (notification, linked_receipt, conflicting_backup) in [
+        (json!({"deliveries":[]}), false, false),
+        (json!({"deliveries":null,"origin":null}), false, false),
+        (json!({"deliveries":null}), true, false),
+        (json!({"deliveries":null}), false, true),
+    ] {
+        let dir = tempfile::tempdir()?;
+        let root = claudex_core::storage::private_directory(dir.path().join("work"))?;
+        let mut ledger = settled_legacy_ledger(dir.path());
+        ledger["tasks"][id]["notification"] = notification;
+        if linked_receipt {
+            ledger["requests"]["a".repeat(64)]["result"]["originChallenge"] = json!("f".repeat(64));
+        }
+        let original = format!("{}\n", serde_json::to_string_pretty(&ledger)?);
+        claudex_core::storage::atomic_write(root.join("work.json"), &original)?;
+        let backup = root.join("work-notification-placeholders-v1.json");
+        if conflicting_backup {
+            claudex_core::storage::publish_exclusive(&backup, "{}\n")?;
+        }
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let result = Broker::open(
+            root.clone(),
+            Config::default(),
+            Arc::new(ControlledRunner(tx)),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(rx.try_recv().is_err());
+        assert_eq!(std::fs::read_to_string(root.join("work.json"))?, original);
+        if conflicting_backup {
+            assert_eq!(std::fs::read_to_string(&backup)?, "{}\n");
+        } else {
+            assert!(!backup.exists());
+        }
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn restart_marks_inflight_uncertain_and_never_replays_it() -> Result<()> {
     let dir = tempfile::tempdir()?;

@@ -157,9 +157,32 @@ impl Broker {
         if !token_valid(&controller) {
             bail!("Malformed collaboration controller key.");
         }
-        let mut state = archive::optional(&root.join("work.json"), config.max_state_bytes + 1)?
-            .unwrap_or(json!({"version":1,"tasks":{},"requests":{}}));
+        let original =
+            match archive::private_read_text(&root.join("work.json"), config.max_state_bytes + 1) {
+                Ok(text) => Some(text),
+                Err(e) if claudex_core::storage::is_not_found(&e) => None,
+                Err(e) => return Err(e),
+            };
+        let mut state = match original.as_deref() {
+            Some(text) => serde_json::from_str(text)?,
+            None => json!({"version":1,"tasks":{},"requests":{}}),
+        };
+        let recovered_placeholders = crate::notifications::recover_empty_placeholders(&mut state);
         validate_state(&state)?;
+        if recovered_placeholders {
+            let path = root.join("work-notification-placeholders-v1.json");
+            let original = original.as_ref().unwrap();
+            match archive::private_read_text(&path, config.max_state_bytes + 1) {
+                Ok(saved) if saved == *original => {}
+                Ok(_) => bail!(
+                    "Notification recovery backup conflicts; original evidence was preserved."
+                ),
+                Err(e) if claudex_core::storage::is_not_found(&e) => {
+                    claudex_core::storage::publish_exclusive(&path, original)?;
+                }
+                Err(e) => return Err(e),
+            }
+        }
         if state.get("defaultModels").is_none() {
             state["defaultModels"] = json!({"codex":null,"claude":null});
         }
@@ -181,7 +204,11 @@ impl Broker {
                 );
                 bump(task);
             }
-            if let Some(deliveries) = task["notification"]["deliveries"].as_array_mut() {
+            if let Some(deliveries) = task
+                .get_mut("notification")
+                .and_then(|n| n.get_mut("deliveries"))
+                .and_then(Value::as_array_mut)
+            {
                 for d in deliveries {
                     if d["state"] == "dispatching" {
                         d["state"] = json!("uncertain");
