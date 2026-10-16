@@ -18,9 +18,65 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{Notify, broadcast, watch};
 pub const RECONNECT_ID: &str = "00000000-0000-4000-8000-000000000001";
 pub const CONFIG_ID: &str = "00000000-0000-4000-8000-000000000002";
+const MAX_FILESYSTEM_PATHS: usize = 1024;
+const FILESYSTEM_SETTLE: Duration = Duration::from_millis(200);
+
+#[derive(Default)]
+struct FilesystemBatch {
+    pending: bool,
+    paths: BTreeSet<PathBuf>,
+    anonymous: bool,
+    error: Option<notify::Error>,
+}
+#[derive(Default)]
+struct FilesystemNotifications {
+    batch: Mutex<FilesystemBatch>,
+    wake: Notify,
+}
+impl FilesystemNotifications {
+    fn push(&self, result: notify::Result<notify::Event>) {
+        let mut batch = self.batch.lock().unwrap();
+        match result {
+            Err(error) => {
+                batch.error.get_or_insert(error);
+            }
+            Ok(notification) if !batch.anonymous => {
+                if notification.paths.is_empty() || notification.need_rescan() {
+                    batch.anonymous = true;
+                } else {
+                    for path in notification.paths {
+                        batch.paths.insert(path);
+                        if batch.paths.len() > MAX_FILESYSTEM_PATHS {
+                            batch.anonymous = true;
+                            break;
+                        }
+                    }
+                }
+                if batch.anonymous {
+                    // These are metadata hints, not durable events. One anonymous
+                    // hint preserves every subscribed target without an unbounded
+                    // per-notification queue or any additional history discovery.
+                    batch.paths.clear();
+                }
+            }
+            Ok(_) => (),
+        }
+        if !batch.pending {
+            batch.pending = true;
+            self.wake.notify_one();
+        }
+    }
+    fn take(&self) -> Result<Vec<PathBuf>> {
+        let batch = std::mem::take(&mut *self.batch.lock().unwrap());
+        match batch.error {
+            Some(error) => Err(error.into()),
+            None => Ok(batch.paths.into_iter().collect()),
+        }
+    }
+}
 fn hint(path: &Path) -> Result<Option<FileIdentity>> {
     match fs::symlink_metadata(path) {
         Ok(m) => Ok(Some(FileIdentity::from_metadata(&m))),
@@ -354,20 +410,12 @@ impl DirectoryWatch {
 }
 impl Source {
     pub fn start(runtime: Arc<Runtime>, config: &Value, inbox: Inbox) -> Result<Self> {
-        let (send, mut receive) = mpsc::channel(1024);
+        let notifications = Arc::new(FilesystemNotifications::default());
+        let callback = notifications.clone();
         let (failure_send, failure) = watch::channel(None::<String>);
-        let callback_failure = failure_send.clone();
         let (filesystem_hints, _) = broadcast::channel(1024);
-        let hints = filesystem_hints.clone();
         let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-            if let Ok(notification) = &result {
-                let _ = hints.send(notification.paths.clone());
-            }
-            if send.try_send(result).is_err() {
-                let _ = callback_failure.send(Some(
-                    "Filesystem synchronization notification queue overflowed.".into(),
-                ));
-            }
+            callback.push(result);
         })?;
         let root = runtime.options.root.clone();
         storage::require_private_directory(&root)?;
@@ -420,27 +468,14 @@ impl Source {
         }
         let _ = config;
         let state = Arc::new(Mutex::new(state));
-        let process = state.clone();
-        let mut native = runtime.subscribe();
-        let task = tokio::spawn(async move {
-            loop {
-                let output = tokio::select! {
-                    Some(notification)=receive.recv()=>match notification{Ok(notification)=>{tokio::time::sleep(Duration::from_millis(200)).await;process.lock().unwrap().filesystem(&notification.paths)},Err(e)=>Err(e.into())},
-                    notification=native.recv()=>match notification{Ok(value)=>process.lock().unwrap().native(&value).map(|event|event.into_iter().collect()),Err(tokio::sync::broadcast::error::RecvError::Lagged(_))=>Err(anyhow::anyhow!("Native synchronization notification queue overflowed.")),Err(_)=>break}
-                };
-                let result = async {
-                    for event in output? {
-                        inbox.publish(event).await?;
-                    }
-                    Ok::<_, anyhow::Error>(())
-                }
-                .await;
-                if let Err(e) = result {
-                    let _ = failure_send.send(Some(format!("{e:#}")));
-                    break;
-                }
-            }
-        });
+        let task = tokio::spawn(consume_events(
+            state.clone(),
+            notifications,
+            runtime.subscribe(),
+            inbox,
+            filesystem_hints.clone(),
+            failure_send,
+        ));
         Ok(Self {
             state,
             failure,
@@ -563,6 +598,52 @@ impl Source {
         result
     }
 }
+async fn consume_events(
+    state: Arc<Mutex<SourceState>>,
+    notifications: Arc<FilesystemNotifications>,
+    mut native: broadcast::Receiver<Value>,
+    inbox: Inbox,
+    hints: broadcast::Sender<Vec<PathBuf>>,
+    failure: watch::Sender<Option<String>>,
+) {
+    let settle = tokio::time::sleep(FILESYSTEM_SETTLE);
+    tokio::pin!(settle);
+    let mut filesystem_pending = false;
+    loop {
+        let output = tokio::select! {
+            _ = notifications.wake.notified() => {
+                if !filesystem_pending {
+                    settle.as_mut().reset(tokio::time::Instant::now() + FILESYSTEM_SETTLE);
+                    filesystem_pending = true;
+                }
+                continue;
+            },
+            _ = &mut settle, if filesystem_pending => {
+                filesystem_pending = false;
+                notifications.take().and_then(|paths| {
+                    let _ = hints.send(paths.clone());
+                    state.lock().unwrap().filesystem(&paths)
+                })
+            },
+            notification = native.recv() => match notification {
+                Ok(value) => state.lock().unwrap().native(&value).map(|event| event.into_iter().collect()),
+                Err(broadcast::error::RecvError::Lagged(_)) => Err(anyhow::anyhow!("Native synchronization notification queue overflowed.")),
+                Err(_) => break,
+            }
+        };
+        let result = async {
+            for event in output? {
+                inbox.publish(event).await?;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+        if let Err(error) = result {
+            let _ = failure.send(Some(format!("{error:#}")));
+            break;
+        }
+    }
+}
 impl Drop for Source {
     fn drop(&mut self) {
         self.state.lock().unwrap().watcher.take();
@@ -576,6 +657,188 @@ impl Drop for Source {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn notification(path: &Path) -> notify::Result<notify::Event> {
+        Ok(notify::Event::new(notify::EventKind::Any).add_path(path.into()))
+    }
+
+    #[test]
+    fn filesystem_batches_are_bounded_and_preserve_anonymous_hints_and_errors() -> Result<()> {
+        let notifications = FilesystemNotifications::default();
+        for _ in 0..4096 {
+            notifications.push(notification(Path::new("/duplicate")));
+        }
+        assert_eq!(notifications.batch.lock().unwrap().paths.len(), 1);
+        assert_eq!(notifications.take()?, vec![PathBuf::from("/duplicate")]);
+        for index in 0..=MAX_FILESYSTEM_PATHS {
+            notifications.push(notification(&PathBuf::from(format!("/distinct-{index}"))));
+        }
+        assert!(notifications.batch.lock().unwrap().anonymous);
+        assert!(notifications.batch.lock().unwrap().paths.is_empty());
+        assert!(notifications.take()?.is_empty());
+
+        notifications.push(notification(Path::new("/known")));
+        notifications.push(Ok(
+            notify::Event::new(notify::EventKind::Any).set_flag(notify::event::Flag::Rescan)
+        ));
+        assert!(notifications.take()?.is_empty());
+        notifications.push(Ok(notify::Event::new(notify::EventKind::Any)));
+        assert!(notifications.take()?.is_empty());
+        notifications.push(Err(notify::Error::generic("actual watcher failure")));
+        for index in 0..=MAX_FILESYSTEM_PATHS {
+            notifications.push(notification(&PathBuf::from(format!("/more-{index}"))));
+        }
+        assert!(
+            notifications
+                .take()
+                .unwrap_err()
+                .to_string()
+                .contains("actual watcher failure")
+        );
+        notifications.push(notification(Path::new("/next")));
+        assert_eq!(notifications.take()?, vec![PathBuf::from("/next")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn notification_storm_coalesces_without_delaying_native_started_or_losing_changes()
+    -> Result<()> {
+        let fixture = tempfile::tempdir_in("/tmp")?;
+        let root = storage::private_directory(fixture.path().canonicalize()?)?;
+        let changed = root.join("completed.jsonl");
+        let streaming = root.join("streaming.jsonl");
+        let unchanged = root.join("unchanged.jsonl");
+        for path in [&changed, &streaming, &unchanged] {
+            fs::write(path, b"before")?;
+        }
+        let mut state = SourceState {
+            watcher: None,
+            targets: BTreeMap::new(),
+            directories: BTreeSet::new(),
+            external_directories: BTreeMap::new(),
+            active: BTreeSet::new(),
+            root: root.clone(),
+        };
+        let ids = [
+            "00000000-0000-4000-8000-000000000010",
+            "00000000-0000-4000-8000-000000000011",
+            "00000000-0000-4000-8000-000000000012",
+        ];
+        for (id, path) in ids.iter().zip([&changed, &streaming, &unchanged]) {
+            state.targets.insert(
+                format!("codex:{id}"),
+                Target {
+                    paths: vec![path.clone()],
+                    signature: vec![hint(path)?],
+                    event: Event {
+                        native_id: (*id).into(),
+                        kind: Kind::Changed,
+                        ..event(Kind::Changed)
+                    },
+                },
+            );
+        }
+        fs::write(&changed, b"completed flush")?;
+        fs::write(&streaming, b"new turn still streaming")?;
+        let notifications = Arc::new(FilesystemNotifications::default());
+        // More than the former FIFO capacity arrives while a cold read occupies
+        // the owner. Unique unrelated paths force a bounded anonymous recheck.
+        for index in 0..4096 {
+            notifications.push(notification(&root.join(format!("diagnostic-{index}"))));
+        }
+        let (native, receive) = broadcast::channel(8);
+        let (hints, mut observed) = broadcast::channel(8);
+        let (failure, status) = watch::channel(None::<String>);
+        let inbox = Inbox::new(&root)?;
+        let task = tokio::spawn(consume_events(
+            Arc::new(Mutex::new(state)),
+            notifications.clone(),
+            receive,
+            inbox.clone(),
+            hints,
+            failure,
+        ));
+        native.send(json!({"type":"codex_notification","event":{
+            "method":"turn/started","params":{"threadId":ids[1],"turn":{"id":"new-turn"}}
+        }}))?;
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if inbox.list()?.iter().any(|r| r.event.native_id == ids[1]) {
+                    assert!(matches!(
+                        observed.try_recv(),
+                        Err(broadcast::error::TryRecvError::Empty)
+                    ));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), observed.recv())
+                .await??
+                .is_empty()
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if inbox.list()?.len() == 2 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        let receipts = inbox.list()?;
+        assert!(
+            receipts
+                .iter()
+                .any(|r| r.event.native_id == ids[0] && r.event.kind == Kind::Changed)
+        );
+        assert!(
+            receipts
+                .iter()
+                .any(|r| r.event.native_id == ids[1] && r.event.kind == Kind::Started)
+        );
+        assert!(!receipts.iter().any(|r| r.event.native_id == ids[2]));
+        assert!(status.borrow().is_none());
+
+        // A fresh burst remains serviceable after the first batch was drained;
+        // callback/drain races must not strand the next wake permit.
+        fs::write(&changed, b"later completed flush")?;
+        let revision = receipts
+            .iter()
+            .find(|r| r.event.native_id == ids[0])
+            .unwrap()
+            .revision
+            .clone();
+        for _ in 0..4096 {
+            notifications.push(notification(&changed));
+        }
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(3), observed.recv()).await??,
+            vec![changed]
+        );
+        tokio::time::timeout(Duration::from_secs(3), async {
+            loop {
+                if inbox
+                    .list()?
+                    .iter()
+                    .any(|r| r.event.native_id == ids[0] && r.revision != revision)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        assert!(status.borrow().is_none());
+        drop(native);
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn directory_watch_rearms_replaced_inodes_and_cloned_handles_remain_closed() -> Result<()>

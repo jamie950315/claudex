@@ -40,6 +40,13 @@ are hints, never checkpoint or mutation evidence. Release retired subscribers an
 recheck lifecycle after awaited path inspections. Anonymous directory signals use
 exact-file metadata to suppress unchanged transcript hints; root/config/backend
 signals must still check their exact target rather than discard unknown filenames.
+Rust filesystem hints coalesce into one bounded dirty-path batch per 200 ms
+settle window, not one delayed FIFO entry per OS notification. Above 1024 distinct
+paths, an anonymous hint rechecks only subscribed exact-file metadata; retain
+watcher errors and OS rescan flags. Forward the same coalesced hints to renderer
+maintenance, and continue servicing native started/completion events during the
+settle window. Hint pressure never drops a durable completion or starts broad
+history discovery, and unchanged metadata never publishes a history event.
 A 30-second idle status heartbeat does no native history reads, discovery or
 archival proof renewal. Scope Desktop
 handoff history checks to event targets; empty scope revokes commands while keeping
