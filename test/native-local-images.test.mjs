@@ -597,6 +597,43 @@ test('native archival rebinds only images proven at the authoritative relocated 
   await assert.rejects(f.runtime.inspect(f.record), /retained rollout image evidence is missing/);
 });
 
+test('an input-only interrupted image turn can bind its exact completed successor without inventing a closure', async t => {
+  const f = await fixture(t), after = randomUUID();
+  f.turns[0].status = 'interrupted'; f.turns[0].completedAt = null; f.turns[0].items.length = 1;
+  f.turns.push({ id: after, status: 'completed', itemsView: 'full', startedAt: 102, completedAt: 103,
+    items: [{ type: 'agentMessage', id: randomUUID(), phase: 'final_answer', text: 'Resumed answer' }] });
+  f.rows.pop();
+  f.rows.push({ type: 'event_msg', payload: { type: 'task_started', turn_id: after } },
+    { type: 'turn_context', payload: { turn_id: after, cwd: f.cwd } },
+    { type: 'event_msg', payload: { type: 'task_complete', turn_id: after } });
+  await f.write(); const before = await readFile(f.path);
+  const data = await f.run({ completedPrefix: true });
+  assert.deepEqual(data.common.messages[0].content.filter(block => block.type === 'image')
+    .map(block => `data:${block.source.media_type};base64,${block.source.data}`), f.urls);
+  assert.ok(data.common.messages.some(message => message.content.some(block => block.text?.includes('interrupted'))));
+  assert.deepEqual(await readFile(f.path), before);
+  for (const mutate of [
+    () => { f.turns[0].status = 'inProgress'; },
+    () => { f.turns[0].status = 'completed'; },
+    () => { f.turns[1].status = 'inProgress'; },
+    () => { f.rows[6].payload.turn_id = randomUUID(); },
+    () => { f.rows.length = 6; },
+    () => { f.rows.splice(6, 0, { type: 'response_item', payload: { type: 'message', role: 'assistant', content: [] } }); },
+    () => { f.rows.splice(6, 0, { type: 'event_msg', payload: { type: 'exec_command_begin', call_id: 'uncertain-work' } }); },
+    () => { f.turns[0].items.push({ type: 'commandExecution', id: 'work', status: 'inProgress' }); },
+    () => { f.rows.push({ type: 'event_msg', payload: { type: 'item_completed', turn_id: f.turnId,
+      item: { type: 'CommandExecution', id: 'late-work' } } }); },
+    () => { f.rows.splice(6, 0, { type: 'response_item', payload: { type: 'local_shell_call', call_id: 'uncertain-shell' } }); },
+    () => { f.rows.splice(6, 0, { type: 'event_msg', payload: { type: 'collab_agent_spawn_end', turn_id: f.turnId } }); },
+    () => { f.rows.push({ type: 'event_msg', payload: { type: 'image_generation_begin', turn_id: f.turnId } }); },
+  ]) {
+    const turns = structuredClone(f.turns), rows = structuredClone(f.rows);
+    mutate(); await f.write();
+    await assert.rejects(f.run({ completedPrefix: true }));
+    f.turns.splice(0, f.turns.length, ...turns); f.rows.splice(0, f.rows.length, ...rows);
+  }
+});
+
 test('an interrupted image turn closes with its exact turn_aborted event', async t => {
   const f = await fixture(t);
   const nextTurn = randomUUID();

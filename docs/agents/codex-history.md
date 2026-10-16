@@ -73,6 +73,17 @@ exact file proves the same bytes within its ordinal and byte prefix; otherwise
 retained evidence still cannot supply a message outside its checkpoint.
 An image turn may close with its exact turn_aborted (reason interrupted) event
 instead of task_complete; the API reports it as an interrupted closed turn.
+After a native process interruption, an input-only image turn can lack either
+raw closing event. Accept that read boundary only when both complete API passes
+agree on an error-free interrupted turn containing exactly its one user item,
+immediately followed by the same completed, error-free full-API successor whose
+task_started is next in the raw rollout. Its exact persisted user completion
+and unique embedded image response must already match; any raw assistant,
+reasoning or tool activity absent from that input-only API turn blocks it.
+Keep the interrupted status and missing completedAt as historical data; never
+manufacture a closing event, infer successful work, replay input or use this
+read boundary as an archival/retirement/writer proof. A missing successor,
+active/failed turn, mismatched identity or incomplete image input still blocks.
 Require exact translated completed-item
 equality with the full API item, matching thread/turn/context/passthrough IDs,
 one earlier embedded user response, exact text, and image wrapper path/number/order

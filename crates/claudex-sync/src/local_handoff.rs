@@ -643,7 +643,14 @@ impl Publisher {
                 (&candidate.original, &candidate.original.checkpoint),
                 (&candidate.current, &candidate.conversation.canonical),
             ] {
-                let read = inspector.inspect_handoff(record).await?;
+                let mut read = inspector.inspect_handoff(record).await?;
+                // Checkpoints name the coordinator's portable messages, not
+                // raw codec rows (which may include empty thinking-only rows).
+                read.common.make_portable();
+                for message in &mut read.common.messages {
+                    message.extra.clear();
+                }
+                crate::history::assert_complete(&read.common)?;
                 ensure!(
                     read.native_id == record.native_id
                         && read.path == record.path
@@ -881,6 +888,7 @@ mod tests {
                 original: self.original.clone(),
                 reads: AtomicUsize::new(0),
                 deferred: false,
+                empty_thinking: false,
             }
         }
         fn manifest(&self) -> Value {
@@ -892,6 +900,7 @@ mod tests {
         original: Record,
         reads: AtomicUsize,
         deferred: bool,
+        empty_thinking: bool,
     }
     #[async_trait]
     impl Inspector for Fake {
@@ -903,6 +912,16 @@ mod tests {
             let mut common = self.common.clone();
             if record.id == self.original.id {
                 common.messages.truncate(2);
+            }
+            if self.empty_thinking {
+                common.messages.insert(
+                    1,
+                    Message {
+                        role: "assistant".into(),
+                        content: vec![json!({"type":"thinking","text":""})],
+                        extra: Map::new(),
+                    },
+                );
             }
             Ok(Reading {
                 common,
@@ -957,6 +976,33 @@ mod tests {
             .await?;
         assert_eq!(next["changed"], false);
         assert_eq!(f.manifest(), before);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn checkpoint_counts_use_the_same_portable_messages_as_synchronization() -> Result<()> {
+        let f = Fixture::new()?;
+        let mut inspect = f.inspector();
+        inspect.empty_thinking = true;
+        let original = fs::read(&f.original.path)?;
+        let replacement = fs::read(&f.current.path)?;
+        let mut publisher = Publisher::default();
+        for now in [100_000, 160_000, 220_000] {
+            let result = publisher
+                .publish(&f.root, &f.registry, &f.state, None, &inspect, now)
+                .await?;
+            assert_eq!(result["actions"], 1);
+            assert_eq!(
+                f.manifest()["actions"][0]["originalProof"]["checkpoint"],
+                json!(f.original.checkpoint)
+            );
+            assert_eq!(
+                f.manifest()["actions"][0]["replacement"]["checkpoint"],
+                json!(f.current.checkpoint)
+            );
+        }
+        assert_eq!(inspect.reads.load(Ordering::SeqCst), 6);
+        assert_eq!(fs::read(&f.original.path)?, original);
+        assert_eq!(fs::read(&f.current.path)?, replacement);
         Ok(())
     }
     #[tokio::test]

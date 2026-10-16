@@ -67,8 +67,12 @@ archival. Configuration changes require a safely stopped watcher and the folder
 adapter enabled. A cache upgrade requires an idle Claude app restart. Existing
 verified pairs are eligible; this is not an unchecked bulk archival operation.
 The coordinator publishes bounded, 15-second archive intents only after exact
-original/checkpoint and replacement/canonical verification. Pending work or new
-activity revokes commands before expensive verification. The renderer rereads
+original/checkpoint and replacement/canonical verification. Compare both counts
+and digests after the same portable-message normalization used by ordinary
+synchronization; empty thinking-only codec rows do not occupy canonical message
+indices. This does not change the exact native-file identities or original byte
+prefix proof. Pending work or new activity revokes commands before expensive
+verification. The renderer rereads
 native identities, title, cwd, activity, idle state, drafts and dependencies before
 the normal archive API, with worktree cleanup disabled. An outcome is not accepted
 until native archive state and original history preservation are verified.

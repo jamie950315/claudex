@@ -92,6 +92,20 @@ function candidateImages(payload, request, activeTurn, contextTurn) {
   return images;
 }
 
+const imageWorkKind = kind => typeof kind === 'string' && [
+  'exec_command_', 'mcp_', 'patch_apply_', 'web_search_', 'function_call', 'custom_tool_call',
+  'local_shell_', 'collab_', 'image_generation_', 'computer_', 'tool_search_', 'agent_message', 'agent_reasoning',
+].some(prefix => kind.startsWith(prefix));
+function imageTurnWork(row) {
+  const p = row.payload;
+  if (['compacted', 'realtime_item'].includes(row.type)) return true;
+  if (row.type === 'response_item') return ['assistant', 'tool'].includes(p?.role)
+    || p?.type === 'reasoning' || imageWorkKind(p?.type);
+  return row.type === 'event_msg' && typeof p?.type === 'string' && (
+    imageWorkKind(p.type)
+    || ['item_started', 'item_completed'].includes(p.type) && p.item?.type !== 'UserMessage');
+}
+
 /** Resolve only the observed native image triplet format from one authoritative
  * current rollout. The complete API item must match its persisted completion;
  * a unique earlier response in the same closed turn binds text, path and order.
@@ -121,7 +135,7 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
             ? typeof input.path !== 'string' || !input.path || /["\r\n]/.test(input.path)
             : input?.type !== 'image' || !inlineImage(input.url)))
         fail('unsupported or ambiguous native local-image request shape.');
-      const state = { request, candidate: null, completion: false, started: false, closed: false, lastUserCompletion: -1 };
+      const state = { request, candidate: null, completion: false, started: false, closed: false, lastUserCompletion: -1, unreportedWork: false, successorBoundary: false };
       byId.set(item.id, state);
       const group = byTurn.get(turnId) ?? []; group.push(state); byTurn.set(turnId, group);
     }
@@ -166,8 +180,19 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
       }
       if (row.type === 'session_meta') fail('rollout contains multiple session metadata records.');
       const payload = row.payload;
+      const affected = new Set([activeTurn, payload?.turn_id, payload?.internal_chat_message_metadata_passthrough?.turn_id]);
+      for (const turnId of affected) for (const state of byTurn.get(turnId) ?? []) if (imageTurnWork(row)
+        || row.type === 'event_msg' && ['item_started', 'item_completed'].includes(payload?.type)
+          && payload.item?.type === 'UserMessage' && payload.item.id !== state.request.item.id) state.unreportedWork = true;
       if (row.type === 'event_msg' && payload?.type === 'task_started') {
-        if (byTurn.has(activeTurn) && byTurn.get(activeTurn).some(state => !state.closed)) fail('image turn did not close before the next native turn.');
+        for (const state of byTurn.get(activeTurn) ?? []) if (!state.closed) {
+          if (!state.completion || !state.candidate || state.unreportedWork
+            || typeof state.request.interruptedSuccessor !== 'string' || !state.request.interruptedSuccessor
+            || state.request.interruptedSuccessor === activeTurn || payload.turn_id !== state.request.interruptedSuccessor)
+            fail('image turn did not close before the next native turn.');
+          state.closed = true;
+          state.successorBoundary = true;
+        }
         activeTurn = payload.turn_id; contextTurn = null;
         for (const state of byTurn.get(activeTurn) ?? []) {
           if (state.started) fail('native image turn was started more than once.');
@@ -246,7 +271,8 @@ function createSingleRolloutImageResolver({ path, threadId, sourceThreadId = thr
       if (!regular(current) || !unchanged(initial, after) || !unchanged(initial, current) || !prefix && total !== length)
         fail('transcript changed while being read during image recovery; no recovery was returned.');
       if (!ordinal || !allowAbsent && found.size !== requests.length || [...byId.values()].some(state =>
-        (!allowAbsent || state.started || state.closed || state.completion || state.candidate) && (!state.started || !state.closed || !state.completion)))
+        (!allowAbsent || state.started || state.closed || state.completion || state.candidate) && (!state.started || !state.closed || !state.completion
+          || state.successorBoundary && state.unreportedWork)))
         fail('current rollout lacks complete unambiguous image provenance; referenced histories were not searched.');
       onScanned({ bytes: prefix ? scannedEnd : total, identity: `${initial.dev}:${initial.ino}`, stat: initial, unchanged });
       return found;
@@ -519,9 +545,15 @@ export function createCodexLocalImageResolver({ path, threadId, retainedRollouts
  */
 export async function hydrateNativeLocalImages(snapshot, resolveLocalImages, maxBytes) {
   const entries = nativeHistoryEntries(snapshot), nativeMessageCount = entries.length;
+  const interruptions = new Map(snapshot.turns.flatMap((turn, index) => {
+    const next = snapshot.turns[index + 1];
+    return turn.status === 'interrupted' && turn.error == null && turn.itemsView === 'full' && turn.items.length === 1
+      && next?.status === 'completed' && next.error == null && next.itemsView === 'full' && typeof next.id === 'string' && next.id && next.id !== turn.id
+      ? [[turn.id, next.id]] : [];
+  }));
   const requests = entries.flatMap(({ kind, turnId, item, messageIndex }) => kind === 'item'
     && item.type === 'userMessage' && item.content?.some(input => input.type === 'localImage')
-    ? [{ turnId, item, messageIndex }] : []);
+    ? [{ turnId, item, messageIndex, ...(interruptions.has(turnId) ? { interruptedSuccessor: interruptions.get(turnId) } : {}) }] : []);
   if (!requests.length || resolveLocalImages === undefined) return snapshot;
   if (typeof resolveLocalImages !== 'function') fail('local-image resolver must be a function.');
   const resolved = await resolveLocalImages(requests, { maxBytes, threadId: snapshot.threadId, nativeMessageCount });

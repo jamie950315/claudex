@@ -1280,6 +1280,7 @@ fn late_gap_activity(row: &Value) -> bool {
 struct Request {
     turn: String,
     item: Value,
+    interrupted_successor: Option<String>,
 }
 impl Request {
     fn key(&self) -> String {
@@ -1599,6 +1600,46 @@ struct ImageState {
     completion: bool,
     candidate: Option<(usize, Vec<Value>)>,
     last: Option<usize>,
+    unreported_work: bool,
+    successor_boundary: bool,
+}
+fn image_turn_work(row: &Value) -> bool {
+    let p = &row["payload"];
+    if matches!(row["type"].as_str(), Some("compacted" | "realtime_item")) {
+        return true;
+    }
+    if row["type"] == "response_item" {
+        return matches!(p["role"].as_str(), Some("assistant" | "tool"))
+            || p["type"] == "reasoning"
+            || image_work_kind(&p["type"]);
+    }
+    row["type"] == "event_msg"
+        && p["type"].as_str().is_some_and(|kind| {
+            image_work_kind(&p["type"])
+                || matches!(kind, "item_started" | "item_completed")
+                    && p["item"]["type"] != "UserMessage"
+        })
+}
+fn image_work_kind(kind: &Value) -> bool {
+    kind.as_str().is_some_and(|kind| {
+        [
+            "exec_command_",
+            "mcp_",
+            "patch_apply_",
+            "web_search_",
+            "function_call",
+            "custom_tool_call",
+            "local_shell_",
+            "collab_",
+            "image_generation_",
+            "computer_",
+            "tool_search_",
+            "agent_message",
+            "agent_reasoning",
+        ]
+        .iter()
+        .any(|prefix| kind.starts_with(prefix))
+    })
 }
 impl Provenance {
     fn scan_images(
@@ -1632,14 +1673,41 @@ impl Provenance {
                 "Native image rollout contains multiple metadata rows."
             );
             let p = &row["payload"];
+            for (r, s) in requests.iter().zip(&mut states) {
+                if (Some(&r.turn) == active.as_ref()
+                    || p["turn_id"] == r.turn
+                    || p["internal_chat_message_metadata_passthrough"]["turn_id"] == r.turn)
+                    && (image_turn_work(row)
+                        || row["type"] == "event_msg"
+                            && matches!(
+                                p["type"].as_str(),
+                                Some("item_started" | "item_completed")
+                            )
+                            && p["item"]["type"] == "UserMessage"
+                            && p["item"]["id"] != r.item["id"])
+                {
+                    s.unreported_work = true;
+                }
+            }
             if row["type"] == "event_msg" && p["type"] == "task_started" {
-                ensure!(
-                    !requests
-                        .iter()
-                        .zip(&states)
-                        .any(|(r, s)| Some(&r.turn) == active.as_ref() && !s.closed),
-                    "Native image turn did not close before the next native turn."
-                );
+                for (r, s) in requests.iter().zip(&mut states) {
+                    if Some(&r.turn) == active.as_ref() && !s.closed {
+                        // A killed native backend can persist the full input but
+                        // no abort event. Its stable API interruption and exact
+                        // completed successor establish a read-only boundary.
+                        ensure!(
+                            s.completion
+                                && s.candidate.is_some()
+                                && !s.unreported_work
+                                && r.interrupted_successor
+                                    .as_deref()
+                                    .is_some_and(|id| p["turn_id"] == id && id != r.turn),
+                            "Native image turn did not close before the next native turn."
+                        );
+                        s.closed = true;
+                        s.successor_boundary = true;
+                    }
+                }
                 active = p["turn_id"].as_str().map(str::to_owned);
                 context = None;
                 for (r, s) in requests.iter().zip(&mut states) {
@@ -1741,7 +1809,10 @@ impl Provenance {
                     && !s.closed
                     && !s.completion
                     && s.candidate.is_none())
-                    || (s.started && s.closed && s.completion)),
+                    || (s.started
+                        && s.closed
+                        && s.completion
+                        && (!s.successor_boundary || !s.unreported_work))),
             "Native rollout lacks complete unambiguous image provenance."
         );
         Ok((found, document))
@@ -1767,7 +1838,7 @@ impl Provenance {
         let mut requests = vec![];
         let mut count = 0;
         let mut item_ids = BTreeSet::new();
-        for turn in turns.iter() {
+        for (index, turn) in turns.iter().enumerate() {
             for item in turn["items"]
                 .as_array()
                 .context("Native API items are incomplete.")?
@@ -1796,6 +1867,27 @@ impl Provenance {
                     requests.push(Request {
                         turn: text(&turn["id"])?.into(),
                         item: item.clone(),
+                        interrupted_successor: if turn["status"] == "interrupted"
+                            && turn["error"].is_null()
+                            && turn["itemsView"] == "full"
+                            && turn["items"]
+                                .as_array()
+                                .is_some_and(|items| items.len() == 1)
+                        {
+                            turns
+                                .get(index + 1)
+                                .filter(|next| {
+                                    next["status"] == "completed"
+                                        && next["error"].is_null()
+                                        && next["itemsView"] == "full"
+                                        && nonempty(&next["id"])
+                                        && next["id"] != turn["id"]
+                                })
+                                .and_then(|next| next["id"].as_str())
+                                .map(str::to_owned)
+                        } else {
+                            None
+                        },
                     });
                 }
                 count += 1;
@@ -2232,6 +2324,60 @@ process.stdout.write(JSON.stringify(result));
         assert_eq!(evidence.native_message_count, 3);
         fs::write(&f.source.path, bytes).unwrap();
         assert!(evidence.verify().is_err());
+    }
+    #[test]
+    fn input_only_interruption_requires_its_exact_completed_successor_and_no_raw_work() {
+        let mut f = fixture();
+        f.turns[0]["status"] = json!("interrupted");
+        f.turns[0]["completedAt"] = Value::Null;
+        f.turns[0]["items"].as_array_mut().unwrap().truncate(1);
+        f.turns.push(json!({"id":AFTER,"status":"completed","itemsView":"full","startedAt":102,"completedAt":103,
+            "items":[{"id":"resumed-answer","type":"agentMessage","text":"Resumed","phase":"final_answer"}]}));
+        f.rows.pop();
+        f.rows
+            .push(json!({"type":"event_msg","payload":{"type":"task_started","turn_id":AFTER}}));
+        f.rows
+            .push(json!({"type":"turn_context","payload":{"turn_id":AFTER,"cwd":f.source.cwd}}));
+        f.rows
+            .push(json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":AFTER}}));
+        write(&f.source.path, &f.rows);
+        let before = fs::read(&f.source.path).unwrap();
+        let mut turns = f.turns.clone();
+        f.source
+            .hydrate(&mut turns, &[], None, 1_048_576)
+            .unwrap()
+            .verify()
+            .unwrap();
+        assert_eq!(turns[0]["status"], "interrupted");
+        assert!(turns[0]["completedAt"].is_null());
+        assert_eq!(
+            json!(turns),
+            js_reference(&f.source, &f.turns, "images", &[], None)
+        );
+        assert_eq!(fs::read(&f.source.path).unwrap(), before);
+        for mutation in 0..12 {
+            let mut rows = f.rows.clone();
+            let mut turns = f.turns.clone();
+            match mutation {
+                0 => turns[0]["status"] = json!("inProgress"),
+                1 => turns[0]["status"] = json!("completed"),
+                2 => turns[1]["status"] = json!("inProgress"),
+                3 => rows[6]["payload"]["turn_id"] = json!(SEGMENT),
+                4 => rows.truncate(6),
+                5 => rows.insert(6,json!({"type":"response_item","payload":{"type":"message","role":"assistant","content":[]}})),
+                6 => rows.insert(6,json!({"type":"event_msg","payload":{"type":"exec_command_begin","call_id":"uncertain-work"}})),
+                7 => turns[0]["items"].as_array_mut().unwrap().push(json!({"id":"work","type":"commandExecution","status":"inProgress"})),
+                8 => rows.push(json!({"type":"event_msg","payload":{"type":"item_completed","turn_id":TURN,"item":{"type":"CommandExecution","id":"late-work"}}})),
+                9 => rows.insert(6,json!({"type":"response_item","payload":{"type":"local_shell_call","call_id":"uncertain-shell"}})),
+                10 => rows.insert(6,json!({"type":"event_msg","payload":{"type":"collab_agent_spawn_end","turn_id":TURN}})),
+                _ => rows.push(json!({"type":"event_msg","payload":{"type":"image_generation_begin","turn_id":TURN}})),
+            }
+            write(&f.source.path, &rows);
+            assert!(
+                f.source.hydrate(&mut turns, &[], None, 1_048_576).is_err(),
+                "mutation {mutation}"
+            );
+        }
     }
     fn rollover(f: &mut Fixture, remove_image: bool) -> PathBuf {
         let old = f.source.path.clone();
