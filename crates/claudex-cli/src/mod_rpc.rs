@@ -1,5 +1,5 @@
 //! The host Mod's narrow companion uses the ordinary authenticated Rust broker.
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use claudex_app::mod_protocol::ModError;
 use claudex_work::{Provider, model::ProtocolError};
@@ -48,7 +48,12 @@ async fn call(
     params: Value,
     duration: Duration,
 ) -> Result<Value> {
-    let token = claudex_work::cli::controller_token(root)?;
+    let token = claudex_work::cli::controller_token(root).with_context(|| {
+        format!(
+            "Cannot read broker controller key {}",
+            root.join("controller-key").display()
+        )
+    })?;
     let operation = claudex_work::transport::call(root, peer, &token, method, params);
     match tokio::time::timeout(duration,operation).await {
             Ok(result)=>result.map_err(mod_error),
@@ -58,6 +63,30 @@ async fn call(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn missing_controller_key_names_the_exact_file_and_preserves_io_cause() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = std::fs::canonicalize(temporary.path())?;
+        let error = call(
+            &root,
+            Provider::Codex,
+            "codex_cache_warm_list",
+            serde_json::json!({}),
+            Duration::from_secs(1),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains(root.join("controller-key").to_str().unwrap())
+        );
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::NotFound
+        );
+        Ok(())
+    }
     #[test]
     fn typed_domain_refusals_survive_the_companion_boundary() {
         for code in [

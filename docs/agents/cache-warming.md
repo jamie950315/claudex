@@ -286,6 +286,9 @@ compatible; advanced CLI controls keep their own confirmation workflow.
 Verify primary metadata, hook/native transcript-path equality and exact active
 turn without reading arbitrary transcript paths; subagent hooks can report the
 parent session ID. Never relax these guards to pass an untested hook lifecycle.
+The hook's `--root` is the synchronization root for stop and native-owner checks;
+send every broker RPC to its `collaboration` child exactly once. Keep failure
+diagnostics action-specific and retain the failing operation and error chain.
 Recognized commands return blocking output on success or failure, with a
 25-second handler deadline before the 30-second native timeout. Native startup
 failure or untrusted/disabled hooks can still skip interception; document that

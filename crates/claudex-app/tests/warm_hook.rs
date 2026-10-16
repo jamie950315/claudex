@@ -6,7 +6,7 @@ use claudex_app::{
 };
 use serde_json::{Value, json};
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{
         Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -40,20 +40,31 @@ impl CommandVerifier for Verify {
 struct Broker {
     calls: Mutex<Vec<(String, Value)>>,
     uncertain: bool,
+    root: Option<PathBuf>,
+    unavailable: bool,
 }
 #[async_trait]
 impl Rpc for Broker {
     async fn call(
         &self,
-        _root: &Path,
+        root: &Path,
         method: &str,
         params: Value,
         _timeout: Duration,
     ) -> Result<Value> {
+        if let Some(expected) = &self.root {
+            assert_eq!(
+                root, expected,
+                "RPC must use the collaboration root, not the synchronization root"
+            );
+        }
         self.calls
             .lock()
             .unwrap()
             .push((method.into(), params.clone()));
+        if self.unavailable {
+            return Err(std::io::Error::from(std::io::ErrorKind::NotFound).into());
+        }
         Ok(match method {
             "cache_warm_settings" => json!({"defaultLimit":"for=3h"}),
             "codex_cache_warm_prepare" => {
@@ -66,6 +77,9 @@ impl Rpc for Broker {
                 json!({"policy":{"provider":"codex","sessionId":SESSION,"cwd":"/private/project","enabled":true,"refreshMinutes":25}})
             }
             "codex_cache_warm_list" => json!({"policies":[]}),
+            "codex_cache_warm_off" => {
+                json!({"policy":{"provider":"codex","sessionId":SESSION,"cwd":"/private/project","enabled":false,"reason":"disabled"}})
+            }
             other => panic!("Unexpected broker method {other}"),
         })
     }
@@ -74,7 +88,10 @@ impl Rpc for Broker {
 async fn on_uses_saved_limit_and_a_fresh_primary_context_before_one_confirmation() -> Result<()> {
     let temporary = tempfile::tempdir()?;
     let root = std::fs::canonicalize(temporary.path())?;
-    let broker = Broker::default();
+    let broker = Broker {
+        root: Some(root.join("collaboration")),
+        ..Default::default()
+    };
     let verify = Verify {
         calls: AtomicUsize::new(0),
         fail_at: usize::MAX,
@@ -122,6 +139,7 @@ async fn changed_context_and_lost_confirmation_always_block_without_replay() -> 
     for (fail_at, uncertain, confirms) in [(2, false, 0), (usize::MAX, true, 1)] {
         let broker = Broker {
             uncertain,
+            root: Some(root.join("collaboration")),
             ..Default::default()
         };
         let verify = Verify {
@@ -155,6 +173,123 @@ async fn changed_context_and_lost_confirmation_always_block_without_replay() -> 
                 .count(),
             confirms
         );
+    }
+    Ok(())
+}
+#[tokio::test]
+async fn status_and_off_use_the_nested_broker_without_enabling_or_replaying() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let root = std::fs::canonicalize(temporary.path())?;
+    let broker = Broker {
+        root: Some(root.join("collaboration")),
+        ..Default::default()
+    };
+    let verify = Verify {
+        calls: AtomicUsize::new(0),
+        fail_at: usize::MAX,
+    };
+    for action in ["status", "off"] {
+        let result = warm_hook::handle(
+            &input(&format!("/claudex:warm {action}")),
+            &root,
+            false,
+            &broker,
+            &verify,
+            "en",
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["decision"], "block");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("Cache warming: Disabled")
+        );
+    }
+    assert_eq!(verify.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        broker
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(m, _)| m.as_str())
+            .collect::<Vec<_>>(),
+        vec!["codex_cache_warm_list", "codex_cache_warm_off"]
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_stop_and_status_do_not_advise_an_enable_request() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let root = std::fs::canonicalize(temporary.path())?;
+    let broker = Broker::default();
+    for (action, instruction) in [
+        (
+            "off",
+            "Use /claudex:warm status to check whether warming is stopped.",
+        ),
+        ("status", "No change was requested."),
+    ] {
+        let verify = Verify {
+            calls: AtomicUsize::new(0),
+            fail_at: 1,
+        };
+        let result = warm_hook::handle(
+            &input(&format!("/claudex:warm {action}")),
+            &root,
+            false,
+            &broker,
+            &verify,
+            "en",
+        )
+        .await
+        .unwrap();
+        let reason = result["reason"].as_str().unwrap();
+        assert!(reason.contains("Primary native turn changed."));
+        assert!(reason.contains(instruction));
+        assert!(!reason.contains("enable request"));
+        assert_eq!(result["decision"], "block");
+    }
+    assert!(broker.calls.lock().unwrap().is_empty());
+    Ok(())
+}
+#[tokio::test]
+async fn broker_failures_keep_method_root_and_io_cause_without_retrying() -> Result<()> {
+    let temporary = tempfile::tempdir()?;
+    let root = std::fs::canonicalize(temporary.path())?;
+    for (action, method) in [
+        ("off", "codex_cache_warm_off"),
+        ("status", "codex_cache_warm_list"),
+    ] {
+        let broker = Broker {
+            root: Some(root.join("collaboration")),
+            unavailable: true,
+            ..Default::default()
+        };
+        let verify = Verify {
+            calls: AtomicUsize::new(0),
+            fail_at: usize::MAX,
+        };
+        let result = warm_hook::handle(
+            &input(&format!("/claudex:warm {action}")),
+            &root,
+            false,
+            &broker,
+            &verify,
+            "en",
+        )
+        .await
+        .unwrap();
+        let reason = result["reason"].as_str().unwrap();
+        assert!(reason.contains(method));
+        assert!(reason.contains(root.join("collaboration").to_str().unwrap()));
+        assert!(reason.contains("entity not found"));
+        assert!(!reason.contains("enable request"));
+        assert_eq!(broker.calls.lock().unwrap().len(), 1);
+        assert_eq!(verify.calls.load(Ordering::SeqCst), 1);
     }
     Ok(())
 }

@@ -96,6 +96,22 @@ impl CommandVerifier for Native {
 fn block(text: String) -> Value {
     json!({"decision":"block","reason":text,"systemMessage":text})
 }
+fn failure(action: &str, detail: &str) -> String {
+    match action {
+        "off" => format!(
+            "Stop not confirmed: {detail}\nUse /claudex:warm status to check whether warming is stopped."
+        ),
+        "status" => format!("Status unavailable: {detail}\nNo change was requested."),
+        _ => format!(
+            "Operation not confirmed: {detail}\nDo not repeat an uncertain enable request. Use /claudex:warm status or /claudex:warm off."
+        ),
+    }
+}
+async fn broker_call(rpc: &dyn Rpc, root: &Path, method: &str, params: Value) -> Result<Value> {
+    rpc.call(root, method, params, Duration::from_secs(20))
+        .await
+        .with_context(|| format!("Broker {method} failed in {}", root.display()))
+}
 pub async fn handle(
     input: &Value,
     root: &Path,
@@ -112,16 +128,17 @@ pub async fn handle(
         Ok(None) => return None,
         Err(e) => return Some(block(e.to_string())),
     };
+    let broker_root = root.join("collaboration");
     let result=async{
         ensure!(!worker&&!["agent_id","agentId","agent_type"].iter().any(|k|input.get(*k).is_some_and(|v|!v.is_null()&&v!=false&&v!="")),"Managed workers and subagents cannot use this controller command.");
         let mut params=json!({"sessionId":input["session_id"],"cwd":input["cwd"]});crate::codex_cache_native::target(&params)?;
         ensure!(crate::codex_cache_native::identifier(&input["turn_id"]),"Exact native command turn is unavailable.");
         ensure!(!platform::stopped(root)?,"Claudex is stopped or resuming; no change was requested.");
-        let mut context=params.clone();context["turnId"]=input["turn_id"].clone();context["transcriptPath"]=input["transcript_path"].clone();verify.verify(&context).await?;
+        let mut context=params.clone();context["turnId"]=input["turn_id"].clone();context["transcriptPath"]=input["transcript_path"].clone();verify.verify(&context).await.context("Cannot verify the current native command")?;
         if matches!(parsed.action.as_str(),"on"|"confirm"){params["bestEffort"]=json!(true);}
         if parsed.action=="on"{
             let limits=if parsed.defaulted{
-                let settings=rpc.call(root,"cache_warm_settings",json!({}),Duration::from_secs(20)).await?;
+                let settings=broker_call(rpc,&broker_root,"cache_warm_settings",json!({})).await?;
                 let word=settings.get("defaultLimit").filter(|v|!v.is_null()).map(|v|v.as_str().context("Invalid shared warm limit.")).transpose()?.unwrap_or("for=4h");
                 let saved=warm::WarmSettings{default_warm_limit:word.into(),..Default::default()};saved.validate()?;
                 warm::parse_limit(word,25,Local::now())?
@@ -131,20 +148,18 @@ pub async fn handle(
         }
         if let Some(id)=parsed.confirmation{params["confirmationId"]=json!(id);}
         let action=match parsed.action.as_str(){"on"=>"prepare","status"=>"list",other=>other};
-        let mut result=rpc.call(root,&format!("codex_cache_warm_{action}"),params.clone(),Duration::from_secs(20)).await?;
+        let mut result=broker_call(rpc,&broker_root,&format!("codex_cache_warm_{action}"),params.clone()).await?;
         if parsed.action=="on"{
             ensure!(result["confirmationId"].as_str().is_some_and(|s|s.len()==36&&uuid::Uuid::parse_str(s).is_ok())&&result["sessionId"]==params["sessionId"]&&result["cwd"]==params["cwd"],"Prepared settings did not match this chat; warming was not enabled.");
-            verify.verify(&context).await?;
-            result=rpc.call(root,"codex_cache_warm_confirm",json!({"sessionId":params["sessionId"],"cwd":params["cwd"],"bestEffort":true,"confirmationId":result["confirmationId"]}),Duration::from_secs(20)).await?;
+            verify.verify(&context).await.context("Cannot reverify the current native command before enabling")?;
+            result=broker_call(rpc,&broker_root,"codex_cache_warm_confirm",json!({"sessionId":params["sessionId"],"cwd":params["cwd"],"bestEffort":true,"confirmationId":result["confirmationId"]})).await?;
             ensure!(result["policy"]["enabled"]==true,"Warming activation was not verified; inspect status.");result["state"]=json!("enabled");
         }
         Ok::<_,anyhow::Error>(summary(&result,&params,language))
     }.await;
     Some(block(match result {
         Ok(text) => text,
-        Err(e) => format!(
-            "Operation not confirmed: {e}\nDo not repeat an uncertain enable request. Use /claudex:warm status or /claudex:warm off."
-        ),
+        Err(e) => failure(&parsed.action, &format!("{e:#}")),
     }))
 }
 fn language(preferred: &[String]) -> &'static str {
@@ -492,7 +507,16 @@ pub async fn stdio(args: &[String], rpc: &dyn Rpc) -> Result<()> {
     let worker = std::env::var("CLAUDEX_COLLABORATION_WORKER").as_deref() == Ok("1")
         || std::env::var_os("CLAUDEX_WORK_TOKEN").is_some();
     let lang = system_language(&platform::SystemRunner).await;
-    let output=tokio::time::timeout(Duration::from_secs(25),handle(&input,&root,worker,rpc,&native,&lang)).await.unwrap_or_else(|_|Some(block("Claudex cache command timed out. The operation is not confirmed. Do not repeat on; inspect /claudex:warm status or use /claudex:warm off.".into())));
+    let action = input["prompt"]
+        .as_str()
+        .and_then(|s| s.split_whitespace().nth(1))
+        .unwrap_or("status");
+    let output = tokio::time::timeout(
+        Duration::from_secs(25),
+        handle(&input, &root, worker, rpc, &native, &lang),
+    )
+    .await
+    .unwrap_or_else(|_| Some(block(failure(action, "Claudex cache command timed out."))));
     if let Some(output) = output {
         let mut bytes = claudex_core::json::stringify(&output)?.into_bytes();
         bytes.push(b'\n');
