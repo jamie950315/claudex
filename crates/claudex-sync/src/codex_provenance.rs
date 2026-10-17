@@ -249,14 +249,18 @@ impl Provenance {
         } else {
             Box::new(BufReader::new(file.try_clone()?))
         };
+        let prefix_guard = prefix.is_some() && !compressed;
+        let retain_bytes = protected || prefix_guard;
         let mut rows = vec![];
         let mut lines = vec![];
         let mut bytes = vec![];
+        let mut scanned = 0usize;
         let mut previous = 0;
         let mut stopped = false;
+        let mut row = Vec::new();
         loop {
-            let start = bytes.len();
-            let mut row = vec![];
+            let start = scanned;
+            row.clear();
             let count = reader
                 .by_ref()
                 .take((ROW_BYTES + 1) as u64)
@@ -273,15 +277,17 @@ impl Provenance {
                 "Native provenance aggregate scan byte limit exceeded."
             );
             let line = std::str::from_utf8(&row[..count - 1])
-                .context("Native provenance row has invalid UTF-8.")?
-                .to_owned();
+                .context("Native provenance row has invalid UTF-8.")?;
             let parsed: Value =
-                serde_json::from_str(&line).context("Malformed native provenance rollout row.")?;
+                serde_json::from_str(line).context("Malformed native provenance rollout row.")?;
             ensure!(
                 parsed.is_object() && nonempty(&parsed["type"]),
                 "Malformed native provenance rollout row."
             );
-            bytes.extend_from_slice(&row);
+            scanned += count;
+            if retain_bytes {
+                bytes.extend_from_slice(&row);
+            }
             if let Some(prefix) = prefix {
                 ensure!(
                     parsed["ordinal"] == json!(prefix.start_ordinal + rows.len()),
@@ -298,20 +304,21 @@ impl Provenance {
                 previous = start;
             }
             rows.push(parsed);
-            lines.push(line);
+            if protected {
+                lines.push(line.to_owned());
+            }
         }
         if let Some(prefix) = prefix {
             ensure!(
                 stopped
                     || (prefix.start_ordinal + rows.len() == prefix.end_ordinal
                         && prefix.end_byte >= previous
-                        && prefix.end_byte <= bytes.len()),
+                        && prefix.end_byte <= scanned),
                 "Native history_base does not cover its exact referenced prefix."
             );
         }
         let after = FileIdentity::from_metadata(&file.metadata()?);
         let current = FileIdentity::from_metadata(&fs::symlink_metadata(&physical)?);
-        let prefix_guard = prefix.is_some() && !compressed;
         ensure!(
             if prefix_guard {
                 [&after, &current].iter().all(|now| {
@@ -319,7 +326,7 @@ impl Provenance {
                         && now.uid == identity.uid
                         && now.mode == identity.mode
                         && now.nlink == identity.nlink
-                        && now.size.parse::<usize>().is_ok_and(|n| n >= bytes.len())
+                        && now.size.parse::<usize>().is_ok_and(|n| n >= scanned)
                 })
             } else {
                 after == identity && current == identity
@@ -330,14 +337,19 @@ impl Provenance {
             logical: path.into(),
             physical,
             identity,
-            prefix: prefix_guard.then(|| (bytes.len(), history::digest_bytes(&bytes))),
+            prefix: prefix_guard.then(|| (scanned, history::digest_bytes(&bytes))),
         };
         guard.verify()?;
+        let digest = if protected {
+            history::digest_json_str(std::str::from_utf8(&bytes)?)?
+        } else {
+            String::new()
+        };
         Ok(Document {
             rows,
             lines,
-            scanned: bytes.len(),
-            digest: history::digest_json(&json!(std::str::from_utf8(&bytes)?))?,
+            scanned,
+            digest,
             guard,
         })
     }
@@ -385,15 +397,15 @@ impl Provenance {
             "Native history_base header changed while reading."
         );
         let size = if compressed {
-            let mut rest = vec![];
-            reader
-                .take((MAX_BYTES + 1 - row.len()) as u64)
-                .read_to_end(&mut rest)?;
+            let rest = std::io::copy(
+                &mut reader.take((MAX_BYTES + 1 - row.len()) as u64),
+                &mut std::io::sink(),
+            )? as usize;
             ensure!(
-                row.len() + rest.len() <= MAX_BYTES,
+                row.len() + rest <= MAX_BYTES,
                 "Native history_base decompressed byte limit exceeded."
             );
-            row.len() + rest.len()
+            row.len() + rest
         } else {
             usize::try_from(m.len())?
         };

@@ -411,17 +411,65 @@ impl ArchiveDispatch for ArchiveJournal<'_> {
         )
     }
 }
+pub(crate) type StateCache = std::sync::Mutex<Option<(storage::FileIdentity, Vec<u8>, State)>>;
+pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
+    let path = root.join("desktop-state.json");
+    let stored = match storage::read_stable(&path) {
+        Ok(stored) => Some(stored),
+        Err(error) if storage::is_not_found(&error) => None,
+        Err(error) => return Err(error),
+    };
+    if let Some(stored) = &stored {
+        if let Some((identity, bytes, state)) = cache.lock().unwrap().as_ref() {
+            if identity == &stored.identity && bytes == &stored.bytes {
+                return Ok(state.clone());
+            }
+        }
+    }
+    let state: State = match &stored {
+        Some(stored) => serde_json::from_slice(&stored.bytes).map_err(|_| {
+            anyhow::anyhow!("Malformed JSON state; inspect the local file before continuing.")
+        })?,
+        None => State::default(),
+    };
+    ensure!(state.version == 2, "Unsupported Desktop state version.");
+    for (id, c) in &state.conversations {
+        ensure!(id == &c.id, "Logical conversation identity mismatch.");
+        c.canonical.validate()?;
+        ensure!(
+            c.extra
+                .get("tracking")
+                .is_none_or(|v| v["status"] == "stopped" && v["stoppedAt"].is_u64()),
+            "Invalid tracking enrollment metadata."
+        );
+    }
+    if let Some(stored) = stored {
+        *cache.lock().unwrap() = Some((stored.identity, stored.bytes, state.clone()));
+    } else {
+        *cache.lock().unwrap() = None;
+    }
+    Ok(state)
+}
 pub struct DesktopBridge {
     pub root: PathBuf,
     pub adapters: BTreeMap<Side, Arc<dyn Adapter>>,
     pub policy: Policy,
+    pub(crate) state_cache: Arc<StateCache>,
 }
 impl DesktopBridge {
     pub fn new(root: impl Into<PathBuf>, adapters: BTreeMap<Side, Arc<dyn Adapter>>) -> Self {
+        Self::with_cache(root, adapters, Arc::default())
+    }
+    pub(crate) fn with_cache(
+        root: impl Into<PathBuf>,
+        adapters: BTreeMap<Side, Arc<dyn Adapter>>,
+        state_cache: Arc<StateCache>,
+    ) -> Self {
         Self {
             root: root.into(),
             adapters,
             policy: Policy::default(),
+            state_cache,
         }
     }
     fn adapter(&self, side: Side) -> Result<&Arc<dyn Adapter>> {
@@ -434,22 +482,7 @@ impl DesktopBridge {
         FileLock::acquire(&self.root.join("desktop-operation.lock"), true)
     }
     pub fn status(&self) -> Result<State> {
-        let state: State = serde_json::from_value(storage::read_json_or(
-            self.root.join("desktop-state.json"),
-            serde_json::to_value(State::default())?,
-        )?)?;
-        ensure!(state.version == 2, "Unsupported Desktop state version.");
-        for (id, c) in &state.conversations {
-            ensure!(id == &c.id, "Logical conversation identity mismatch.");
-            c.canonical.validate()?;
-            ensure!(
-                c.extra
-                    .get("tracking")
-                    .is_none_or(|v| v["status"] == "stopped" && v["stoppedAt"].is_u64()),
-                "Invalid tracking enrollment metadata."
-            );
-        }
-        Ok(state)
+        read_state(&self.root, &self.state_cache)
     }
     fn save(&self, state: &mut State, event: Option<Value>) -> Result<()> {
         if let Some(mut event) = event {
@@ -461,6 +494,7 @@ impl DesktopBridge {
                 .audit
                 .drain(..state.audit.len() - self.policy.max_audit_entries);
         }
+        *self.state_cache.lock().unwrap() = None;
         storage::write_json(
             self.root.join("desktop-state.json"),
             &serde_json::to_value(state)?,
@@ -626,39 +660,95 @@ impl DesktopBridge {
         }
         Ok(())
     }
+    async fn current_reading(
+        &self,
+        state: &State,
+        id: &str,
+        c: &Conversation,
+        side: Side,
+    ) -> Result<Option<(Record, Reading)>> {
+        let Some(record) = self.current(state, id, side) else {
+            return Ok(None);
+        };
+        let mut data = if record.cwd != c.cwd {
+            self.adapter(side)?
+                .inspect_relocation_counterpart(record)
+                .await?
+        } else {
+            self.inspect(record).await?
+        };
+        data.common.make_portable();
+        for m in &mut data.common.messages {
+            m.extra.clear();
+        }
+        assert_complete(&data.common)?;
+        ensure!(
+            data.native_id == record.native_id && data.common.cwd()? == record.cwd,
+            "Native relocation counterpart identity changed."
+        );
+        ensure!(
+            c.canonical.contains(&data.common)?,
+            "History diverged before the common checkpoint; no branch was selected."
+        );
+        Ok(Some((record.clone(), data)))
+    }
     async fn current_readings(
         &self,
         state: &State,
         id: &str,
         c: &Conversation,
     ) -> Result<Vec<(Record, Reading)>> {
+        let (codex, claude) = tokio::join!(
+            self.current_reading(state, id, c, Side::Codex),
+            self.current_reading(state, id, c, Side::Claude),
+        );
         let mut readings = vec![];
-        for side in [Side::Codex, Side::Claude] {
-            if let Some(record) = self.current(state, id, side) {
-                let mut data = if record.cwd != c.cwd {
-                    self.adapter(side)?
-                        .inspect_relocation_counterpart(record)
-                        .await?
-                } else {
-                    self.inspect(record).await?
-                };
-                data.common.make_portable();
-                for m in &mut data.common.messages {
-                    m.extra.clear();
-                }
-                assert_complete(&data.common)?;
-                ensure!(
-                    data.native_id == record.native_id && data.common.cwd()? == record.cwd,
-                    "Native relocation counterpart identity changed."
-                );
-                ensure!(
-                    c.canonical.contains(&data.common)?,
-                    "History diverged before the common checkpoint; no branch was selected."
-                );
-                readings.push((record.clone(), data));
-            }
+        if let Some(reading) = codex? {
+            readings.push(reading);
+        }
+        if let Some(reading) = claude? {
+            readings.push(reading);
         }
         Ok(readings)
+    }
+    async fn inspect_superseded_original(&self, r: &Record) -> Result<()> {
+        let data = self.inspect(r).await?;
+        ensure!(
+            !data.incomplete_tail && r.checkpoint.exact(&data.common)?,
+            "Superseded original changed; no branch was selected."
+        );
+        Ok(())
+    }
+    async fn inspect_superseded_batch(&self, batch: &[&Record]) -> Result<()> {
+        match batch {
+            [] => Ok(()),
+            [a] => self.inspect_superseded_original(a).await,
+            [a, b] => {
+                let (ra, rb) = tokio::join!(
+                    self.inspect_superseded_original(a),
+                    self.inspect_superseded_original(b),
+                );
+                ra.and(rb)
+            }
+            [a, b, c] => {
+                let (ra, rb, rc) = tokio::join!(
+                    self.inspect_superseded_original(a),
+                    self.inspect_superseded_original(b),
+                    self.inspect_superseded_original(c),
+                );
+                ra.and(rb).and(rc)
+            }
+            [a, b, c, d] => {
+                let (ra, rb, rc, rd) = tokio::join!(
+                    self.inspect_superseded_original(a),
+                    self.inspect_superseded_original(b),
+                    self.inspect_superseded_original(c),
+                    self.inspect_superseded_original(d),
+                );
+                ra.and(rb).and(rc).and(rd)
+            }
+            _ => unreachable!(),
+        }
     }
     async fn originals(
         &self,
@@ -668,12 +758,17 @@ impl DesktopBridge {
         except: Option<&str>,
     ) -> Result<Vec<(String, Value)>> {
         let mut extensions = vec![];
+        let mut batch = Vec::with_capacity(4);
         for r in state.records.iter().filter(|r| {
             id.is_none_or(|id| r.conversation_id == id)
                 && !frozen.contains(&r.conversation_id)
                 && except != Some(r.id.as_str())
         }) {
             if r.status == "dependency-anchor" {
+                if !batch.is_empty() {
+                    self.inspect_superseded_batch(&batch).await?;
+                    batch.clear();
+                }
                 ensure!(
                     r.managed && r.verified && r.kind == "snapshot" && r.side == Side::Codex,
                     "Invalid dependency anchor record."
@@ -683,12 +778,15 @@ impl DesktopBridge {
                 }
             }
             if r.status == "original" && !r.managed {
-                let data = self.inspect(r).await?;
-                ensure!(
-                    !data.incomplete_tail && r.checkpoint.exact(&data.common)?,
-                    "Superseded original changed; no branch was selected."
-                );
+                batch.push(r);
+                if batch.len() == 4 {
+                    self.inspect_superseded_batch(&batch).await?;
+                    batch.clear();
+                }
             }
+        }
+        if !batch.is_empty() {
+            self.inspect_superseded_batch(&batch).await?;
         }
         Ok(extensions)
     }

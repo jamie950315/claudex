@@ -98,6 +98,11 @@ pub fn digest_json(value: &Value) -> Result<String> {
     claudex_core::json::canonical_to_writer(value, &mut hash)?;
     Ok(hex::encode(hash.0.finalize()))
 }
+pub fn digest_json_str(text: &str) -> Result<String> {
+    let mut hash = DigestWriter(Sha256::new());
+    serde_json::to_writer(&mut hash, text)?;
+    Ok(hex::encode(hash.0.finalize()))
+}
 
 fn portable_block(block: &Value) -> Option<Cow<'_, Value>> {
     if block.get("type").and_then(Value::as_str) == Some("thinking") {

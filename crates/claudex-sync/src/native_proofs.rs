@@ -18,6 +18,7 @@ pub struct RolloutProofs {
     pub thread_id: String,
     pub cwd: PathBuf,
     pub max_bytes: usize,
+    cache: std::sync::Mutex<Option<(PathBuf, FileIdentity, std::sync::Arc<Snapshot>)>>,
 }
 fn uuid(v: &Value) -> bool {
     v.as_str()
@@ -37,7 +38,17 @@ fn same_directory(candidate: &str, cwd: &Path) -> bool {
     Path::new(candidate).is_absolute() && fs::canonicalize(candidate).ok().as_deref() == Some(cwd)
 }
 impl RolloutProofs {
-    fn read(&self, id: &str, foreign_writes: bool) -> Result<Snapshot> {
+    pub fn new(path: PathBuf, thread_id: String, cwd: PathBuf, max_bytes: usize) -> Self {
+        Self {
+            path,
+            thread_id,
+            cwd,
+            max_bytes,
+            cache: std::sync::Mutex::new(None),
+        }
+    }
+    fn read(&self, id: &str, foreign_writes: bool) -> Result<std::sync::Arc<Snapshot>> {
+        use std::os::unix::fs::OpenOptionsExt;
         ensure!(
             self.thread_id == id
                 && Uuid::parse_str(id).is_ok()
@@ -65,7 +76,22 @@ impl RolloutProofs {
                 && (!foreign_writes || identity.mode.parse::<u32>()? & 0o22 == 0),
             "Native proof source must be an owned bounded regular file without foreign writes."
         );
-        let data = storage::snapshot_with_limit(path, self.max_bytes)?;
+        if let Some((cached_path, cached_identity, cached)) =
+            self.cache.lock().unwrap().as_ref().cloned()
+        {
+            if cached_path == path && cached_identity == identity {
+                let fd = fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(&path)?;
+                let fd_identity = FileIdentity::from_metadata(&fd.metadata()?);
+                let after = FileIdentity::from_metadata(&fs::symlink_metadata(&path)?);
+                if fd_identity == identity && after == identity {
+                    return Ok(cached);
+                }
+            }
+        }
+        let data = std::sync::Arc::new(storage::snapshot_with_limit(&path, self.max_bytes)?);
         ensure!(
             identity == data.file_identity,
             "Native proof source changed before its stable read."
@@ -86,17 +112,16 @@ impl RolloutProofs {
                     .any(|r| r["type"] == "session_meta"),
             "Native proof source header differs from exact identity."
         );
+        *self.cache.lock().unwrap() = Some((path, identity, data.clone()));
         Ok(data)
     }
-    fn exact(data: &Snapshot, index: usize) -> Result<()> {
-        let line = data
-            .text
-            .split('\n')
-            .filter(|s| !s.is_empty())
-            .nth(index)
+    fn exact(rows: &[Value], lines: &[&str], index: usize) -> Result<()> {
+        let line = lines
+            .get(index)
+            .copied()
             .ok_or_else(|| anyhow::anyhow!("Missing exact native proof record."))?;
         ensure!(
-            claudex_core::json::stringify(&data.rows[index])? == line,
+            claudex_core::json::stringify(&rows[index])? == line,
             "Native proof source record serialization is ambiguous."
         );
         Ok(())
@@ -130,13 +155,13 @@ impl RolloutProofs {
             );
         }
         let data = self.read(id, true)?;
-        Self::exact(&data, 0)?;
         let rows = &data.rows;
         let lines = data
             .text
             .split('\n')
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>();
+        Self::exact(rows, &lines, 0)?;
         let mut allowed = BTreeSet::new();
         let mut segments = vec![];
         for turn in turns {
@@ -219,7 +244,7 @@ impl RolloutProofs {
                 "Native empty turn completion contradicts the API."
             );
             for (index, row) in rows.iter().enumerate().take(completion + 1).skip(start) {
-                Self::exact(&data, index)?;
+                Self::exact(rows, &lines, index)?;
                 let payload = &row["payload"];
                 for field in ["thread_id", "threadId"] {
                     ensure!(
@@ -246,7 +271,7 @@ impl RolloutProofs {
                 continue;
             }
             if ids.iter().any(|id| lines[index].contains(id)) {
-                Self::exact(&data, index)?;
+                Self::exact(rows, &lines, index)?;
             }
             ensure!(
                 !references(row, &ids),
@@ -559,12 +584,12 @@ mod tests {
     fn fixture() -> (tempfile::TempDir, RolloutProofs, Vec<Value>) {
         let tmp = tempfile::tempdir().unwrap();
         let root = fs::canonicalize(tmp.path()).unwrap();
-        let proof = RolloutProofs {
-            path: root.join("rollout.jsonl"),
-            thread_id: THREAD.into(),
-            cwd: root.clone(),
-            max_bytes: 1024 * 1024,
-        };
+        let proof = RolloutProofs::new(
+            root.join("rollout.jsonl"),
+            THREAD.into(),
+            root.clone(),
+            1024 * 1024,
+        );
         let rows = vec![
             json!({"type":"session_meta","payload":{"id":THREAD,"cwd":root}}),
             json!({"type":"event_msg","payload":{"type":"task_started","turn_id":TURN,"started_at":100}}),

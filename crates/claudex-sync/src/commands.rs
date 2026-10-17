@@ -540,27 +540,63 @@ async fn watch_desktop_control(
         let delays = [250, 1000, 3000];
         let mut held=false;
         let mut initial_sweep_completed_at = None;
+        let mut sweep_full_handoff = true;
+        let mut handoff_revoked = false;
+        let mut actions_revoked_since_publish = false;
+        let mut handoff_scope = BTreeSet::new();
+        let mut folder_map_cache: Option<Value> = None;
+        let mut folder_dirty = true;
+        let mut checking_conversation_count = 0usize;
+        let mut checked_conversations = BTreeSet::<String>::new();
+        let mut last_progress_at: Option<i64> = None;
+        let mut last_progress_health: Option<Value> = None;
+        let mut published_first_operation = false;
+        let mut observe_needed = true;
         loop {
             source.check()?;
-            let mut handoff_revoked = false;
             if *shutdown.borrow() { break; }
             if hooks::app_stopped(&bridge.root)? {
                 held=true;
-                if handoff_enabled {runtime.revoke_handoff_actions()?;}
+                if handoff_enabled && !actions_revoked_since_publish {
+                    runtime.revoke_handoff_actions()?;
+                    actions_revoked_since_publish = true;
+                    handoff_revoked = true;
+                }
                 let mut status=watch_status(&blocked,None,&unsupported,true,lifecycle.as_ref(),None,initial_sweep_completed_at);status["folderProjection"]=json!({"state":"waiting","deferred":"application-hold"});status["localHandoff"]=json!({"state":"waiting","actions":0,"deferred":"application-hold"});diagnostics(&bridge.root,&status)?;
+                last_progress_at = None;
+                last_progress_health = None;
                 tokio::select! {result=listener.wait_hint(Duration::from_secs(30),&mut shutdown)=>result?,_=source.failed()=>source.check()?}
                 continue;
             }
-            if held {startup=true;initial_sweep_completed_at=None;hooks_refresh=true;handoff_maintenance=tokio::time::Instant::now();held=false;}
+            if held {
+                startup=true;
+                initial_sweep_completed_at=None;
+                sweep_full_handoff=true;
+                folder_dirty=true;
+                observe_needed=true;
+                checked_conversations.clear();
+                checking_conversation_count=0;
+                published_first_operation=false;
+                hooks_refresh=true;
+                handoff_maintenance=tokio::time::Instant::now();
+                held=false;
+            }
             let mut pending_error = None;
             if bridge.status()?.pending.is_some() {
-                if handoff_enabled { runtime.revoke_handoff_actions()?; handoff_revoked = true; }
+                if handoff_enabled && !actions_revoked_since_publish {
+                    runtime.revoke_handoff_actions()?;
+                    actions_revoked_since_publish = true;
+                    handoff_revoked = true;
+                }
+                folder_dirty = true;
+                observe_needed = true;
                 if let Err(error) = bridge.recover().await { pending_error = Some(format!("{error:#}")); }
             }
             let mut receipts = inbox.list()?;
             let mut work = receipts.clone();
-            let mut handoff_scope = BTreeSet::new();
-            let handoff_full = startup || tokio::time::Instant::now() >= handoff_maintenance;
+            if startup {
+                sweep_full_handoff = true;
+            }
             // Revoke old native authority before a newly observed activity or
             // expensive coordinator operation can inspect changing histories.
             // Follow-ups retain their original revision. A fresh native event
@@ -575,83 +611,122 @@ async fn watch_desktop_control(
                     unknown.get_mut(&key).unwrap().2 = now + Duration::from_millis(delays[step + 1]);
                 } else { unknown.remove(&key); }
             }
-            if handoff_enabled && !work.is_empty() { runtime.revoke_handoff_actions()?; handoff_revoked = true; }
+            if handoff_enabled && !work.is_empty() && !actions_revoked_since_publish {
+                runtime.revoke_handoff_actions()?;
+                actions_revoked_since_publish = true;
+                handoff_revoked = true;
+            }
             if pending_error.is_none() {
                 if hooks_refresh {hook_status=match runtime.synchronization_hooks().await {Ok(status)=>status,Err(error)=>json!({"ready":false,"reason":format!("{error:#}")})};hooks_refresh=false;}
-                let state = bridge.status()?;
-                source.observe(&work, &state, &inbox)?;
-                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {hooks_refresh=true;}
-                if work.iter().any(|r|r.event.kind==Kind::Reconnect) {startup=true;initial_sweep_completed_at=None;}
-                let mut consumed = vec![];
-                for receipt in &work {
-                    if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
+                if !work.is_empty() || observe_needed {
                     let state = bridge.status()?;
-                    let ids = event_conversations(&state, receipt);
-                    handoff_scope.extend(ids.iter().cloned());
-                    if receipt.event.kind == Kind::Started {
-                        for id in &ids { followups.remove(id); background.retain(|queued| queued != id); }
-                        unknown.remove(&receipt.event.key());
-                        consumed.push(receipt.clone());
-                        continue;
-                    }
-                    if receipt.event.kind == Kind::OwnerWake {
-                        // A stale activation hint never takes down synchronization.
-                        let _ = runtime.wake_owner(&receipt.event.native_id, receipt.event.remote_id.as_deref().unwrap_or("")).await;
-                        consumed.push(receipt.clone());
-                        continue;
-                    }
-                    if matches!(receipt.event.kind, Kind::Configuration | Kind::Reconnect) {
-                        consumed.push(receipt.clone());
-                        continue;
-                    }
-                    let managed = state.records.iter().any(|r| r.managed && r.side == receipt.event.side && r.native_id.eq_ignore_ascii_case(&receipt.event.native_id));
-                    if receipt.event.kind == Kind::Session && managed {
-                        consumed.push(receipt.clone()); continue;
-                    }
-                    if ids.is_empty() {
-                        let only = HashSet::from([receipt.event.key()]);
-                        let update = discover_desktop(&bridge, config, Some(only.clone())).await?;
-                        merge_discovery(&mut unsupported, update, Some(&only));
-                    }
-                    let state = bridge.status()?;
-                    let ids = event_conversations(&state, receipt);
-                    handoff_scope.extend(ids.iter().cloned());
-                    if ids.is_empty() && receipt.event.kind != Kind::Session && receipts.iter().any(|r| r.revision == receipt.revision) {
-                        let key = receipt.event.key();
-                        if unknown.get(&key).is_none_or(|(r, _, _)| r.revision != receipt.revision) {
-                            unknown.insert(key, (receipt.clone(), 0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
-                        }
-                    } else if !ids.is_empty() { unknown.remove(&receipt.event.key()); }
-                    for id in ids {
-                        if !state.conversations[&id].tracked() { continue; }
-                        background.retain(|queued| queued != &id);
-                        let outcome = match bridge.untrack(&id, true).await {
-                            Ok(value) if value["tracking"] == "stopped" => {blocked.remove(&id); followups.remove(&id); continue;},
-                            Ok(_) => scheduler.sync(&runtime,&bridge,&id).await,
-                            Err(error) => Err(error),
-                        };
-                        let retry = match outcome {
-                            Ok(value) => { blocked.remove(&id); value["changed"] == false || value["incompleteTail"] == true },
-                            Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
-                            Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
-                        };
-                        if retry && matches!(receipt.event.kind, Kind::Completed | Kind::Interrupted | Kind::Idle | Kind::Changed) {
-                            followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
-                        } else { followups.remove(&id); }
-                    }
-                    consumed.push(receipt.clone());
+                    source.observe(&work, &state, &inbox)?;
+                    observe_needed = false;
                 }
-                source.observe(&work, &bridge.status()?, &inbox)?;
-                inbox.acknowledge(&consumed).await?;
+                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {hooks_refresh=true;}
+                if work.iter().any(|r|r.event.kind==Kind::Reconnect) {
+                    startup=true;
+                    initial_sweep_completed_at=None;
+                    sweep_full_handoff=true;
+                    folder_dirty=true;
+                    observe_needed=true;
+                    checked_conversations.clear();
+                    checking_conversation_count=0;
+                    published_first_operation=false;
+                }
+                if !work.is_empty() {
+                    folder_dirty = true;
+                    let mut consumed = vec![];
+                    for receipt in &work {
+                        if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
+                        let state = bridge.status()?;
+                        let ids = event_conversations(&state, receipt);
+                        handoff_scope.extend(ids.iter().cloned());
+                        if receipt.event.kind == Kind::Started {
+                            for id in &ids { followups.remove(id); background.retain(|queued| queued != id); }
+                            unknown.remove(&receipt.event.key());
+                            consumed.push(receipt.clone());
+                            continue;
+                        }
+                        if receipt.event.kind == Kind::OwnerWake {
+                            // A stale activation hint never takes down synchronization.
+                            let _ = runtime.wake_owner(&receipt.event.native_id, receipt.event.remote_id.as_deref().unwrap_or("")).await;
+                            consumed.push(receipt.clone());
+                            continue;
+                        }
+                        if matches!(receipt.event.kind, Kind::Configuration | Kind::Reconnect) {
+                            consumed.push(receipt.clone());
+                            continue;
+                        }
+                        let managed = state.records.iter().any(|r| r.managed && r.side == receipt.event.side && r.native_id.eq_ignore_ascii_case(&receipt.event.native_id));
+                        if receipt.event.kind == Kind::Session && managed {
+                            consumed.push(receipt.clone()); continue;
+                        }
+                        if ids.is_empty() {
+                            let only = HashSet::from([receipt.event.key()]);
+                            let update = discover_desktop(&bridge, config, Some(only.clone())).await?;
+                            merge_discovery(&mut unsupported, update, Some(&only));
+                        }
+                        let state = bridge.status()?;
+                        let ids = event_conversations(&state, receipt);
+                        handoff_scope.extend(ids.iter().cloned());
+                        if ids.is_empty() && receipt.event.kind != Kind::Session && receipts.iter().any(|r| r.revision == receipt.revision) {
+                            let key = receipt.event.key();
+                            if unknown.get(&key).is_none_or(|(r, _, _)| r.revision != receipt.revision) {
+                                unknown.insert(key, (receipt.clone(), 0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                            }
+                        } else if !ids.is_empty() { unknown.remove(&receipt.event.key()); }
+                        for id in ids {
+                            if !state.conversations[&id].tracked() { continue; }
+                            background.retain(|queued| queued != &id);
+                            let outcome = scheduler.sync(&runtime, &bridge, &id).await;
+                            let retry = match outcome {
+                                Ok(value) if value["tracking"] == "stopped" => {
+                                    blocked.remove(&id);
+                                    followups.remove(&id);
+                                    observe_needed = true;
+                                    continue;
+                                }
+                                Ok(value) => {
+                                    blocked.remove(&id);
+                                    if value["changed"] == true { observe_needed = true; }
+                                    value["changed"] == false || value["incompleteTail"] == true
+                                }
+                                Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
+                                Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
+                            };
+                            if retry && matches!(receipt.event.kind, Kind::Completed | Kind::Interrupted | Kind::Idle | Kind::Changed) {
+                                followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                            } else { followups.remove(&id); }
+                        }
+                        consumed.push(receipt.clone());
+                    }
+                    source.observe(&work, &bridge.status()?, &inbox)?;
+                    inbox.acknowledge(&consumed).await?;
+                }
                 if bridge.status()?.pending.is_none() && !hooks::app_stopped(&bridge.root)? {
                     let due = followups.iter().filter(|(_, (_, when))| *when <= tokio::time::Instant::now())
                         .map(|(id, (step, _))| (id.clone(), *step)).collect::<Vec<_>>();
                     for (id, step) in due {
                         handoff_scope.insert(id.clone());
+                        folder_dirty = true;
                         if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
-                        if handoff_enabled {runtime.revoke_handoff_actions()?;handoff_revoked=true;}
+                        if handoff_enabled && !actions_revoked_since_publish {
+                            runtime.revoke_handoff_actions()?;
+                            actions_revoked_since_publish = true;
+                            handoff_revoked = true;
+                        }
                         let retry = match scheduler.sync(&runtime,&bridge,&id).await {
-                            Ok(value) => { blocked.remove(&id); value["changed"] == false || value["incompleteTail"] == true },
+                            Ok(value) if value["tracking"] == "stopped" => {
+                                blocked.remove(&id);
+                                observe_needed = true;
+                                false
+                            }
+                            Ok(value) => {
+                                blocked.remove(&id);
+                                if value["changed"] == true { observe_needed = true; }
+                                value["changed"] == false || value["incompleteTail"] == true
+                            }
                             Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
                             Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
                         };
@@ -663,37 +738,84 @@ async fn watch_desktop_control(
                     // first service before the next potentially expensive read.
                     if !*shutdown.borrow() && !hooks::app_stopped(&bridge.root)? && inbox.list()?.is_empty() && bridge.status()?.pending.is_none() {
                         if startup {
-                            if handoff_enabled && !handoff_revoked {runtime.revoke_handoff_actions()?;handoff_revoked=true;}
+                            if handoff_enabled && !actions_revoked_since_publish {
+                                runtime.revoke_handoff_actions()?;
+                                actions_revoked_since_publish = true;
+                                handoff_revoked = true;
+                            }
                             let state = bridge.status()?;
                             let known = state.records.iter().map(|r| format!("{}:{}", r.side.name(), r.native_id.to_lowercase())).collect();
                             candidates = discovery::discover(&desktop_discovery_options(config, None)?, &known)?.into();
                             background = state.conversations.into_iter().filter(|(_, c)| c.tracked()).map(|(id, _)| id).collect();
+                            checked_conversations.clear();
+                            checking_conversation_count = background.len();
                             unsupported = json!({"unsupportedSources":[],"absentSources":[]});
+                            folder_dirty = true;
                             startup = false;
                         }
-                        if background.is_empty() && candidates.is_empty() {if let Some(id)=scheduler.due(&bridge.status()?){background.push_back(id);}}
+                        if background.is_empty() && candidates.is_empty() {
+                            if let Some(id) = scheduler.due(&bridge.status()?) {
+                                background.push_back(id);
+                            }
+                        }
                         if let Some(candidate) = candidates.pop_front() {
-                            if handoff_enabled && !handoff_revoked {runtime.revoke_handoff_actions()?;handoff_revoked=true;}
+                            if handoff_enabled && !actions_revoked_since_publish {
+                                runtime.revoke_handoff_actions()?;
+                                actions_revoked_since_publish = true;
+                                handoff_revoked = true;
+                            }
                             let key = format!("{}:{}", candidate.side.name(), candidate.native_id.to_lowercase());
                             let update = enroll_candidate(&bridge, candidate).await?;
-                            for row in update["enrolled"].as_array().into_iter().flatten() {
-                                if let Some(id) = row["conversationId"].as_str() { if !background.iter().any(|queued| queued == id) { background.push_back(id.into()); } }
+                            let enrolled = update["enrolled"].as_array().into_iter().flatten().collect::<Vec<_>>();
+                            if !enrolled.is_empty() {
+                                folder_dirty = true;
+                                observe_needed = true;
                             }
+                            for row in enrolled {
+                                if let Some(id) = row["conversationId"].as_str() {
+                                    if !background.iter().any(|queued| queued == id) {
+                                        background.push_back(id.into());
+                                    }
+                                }
+                            }
+                            checking_conversation_count = checked_conversations.len() + background.len();
                             merge_discovery(&mut unsupported, update, Some(&HashSet::from([key])));
                         } else if let Some(id) = background.pop_front() {
-                            if handoff_enabled && !handoff_revoked {runtime.revoke_handoff_actions()?;handoff_revoked=true;}
+                            if handoff_enabled && !actions_revoked_since_publish {
+                                runtime.revoke_handoff_actions()?;
+                                actions_revoked_since_publish = true;
+                                handoff_revoked = true;
+                            }
                             handoff_scope.insert(id.clone());
-                            let outcome=match bridge.untrack(&id,true).await {
-                                Ok(value) if value["tracking"] == "stopped" => {blocked.remove(&id);continue;},
-                                Ok(_)=>scheduler.sync(&runtime,&bridge,&id).await,
-                                Err(error)=>Err(error),
-                            };
-                            {
-                                match outcome {
-                                    Ok(value) => { blocked.remove(&id); if value["incompleteTail"] == true { followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0]))); } },
-                                    Err(error) if is_waiting(&error) => { blocked.remove(&id); followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0]))); },
-                                    Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0]))); }
+                            let outcome = scheduler.sync(&runtime, &bridge, &id).await;
+                            match outcome {
+                                Ok(value) if value["tracking"] == "stopped" => {
+                                    blocked.remove(&id);
+                                    folder_dirty = true;
+                                    observe_needed = true;
                                 }
+                                Ok(value) => {
+                                    blocked.remove(&id);
+                                    if value["changed"] == true {
+                                        folder_dirty = true;
+                                        observe_needed = true;
+                                    }
+                                    if value["incompleteTail"] == true {
+                                        followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                                    }
+                                }
+                                Err(error) if is_waiting(&error) => {
+                                    blocked.remove(&id);
+                                    followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                                }
+                                Err(error) => {
+                                    blocked.insert(id.clone(), format!("{error:#}"));
+                                    followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                                }
+                            }
+                            if initial_sweep_completed_at.is_none() {
+                                checked_conversations.insert(id);
+                                checking_conversation_count = checked_conversations.len() + background.len();
                             }
                         }
                     }
@@ -701,24 +823,95 @@ async fn watch_desktop_control(
             }
             if hooks::app_stopped(&bridge.root)? {continue;}
             runtime.close_idle_owners(false).await?;
+            let sweep_in_progress = startup || !candidates.is_empty() || !background.is_empty();
+            if !sweep_in_progress && initial_sweep_completed_at.is_none() && pending_error.is_none() {
+                folder_dirty = true;
+            }
             let folder_map = if config["folderProjection"]["enabled"] != true {json!({"state":"disabled"})}
-                else if pending_error.is_some() {json!({"state":"waiting","deferred":"pending"})}
-                else {match runtime.publish_folders().await {
-                    Ok(mut map)=>{map["state"]=json!(if map["deferred"].is_null(){"ready"}else{"waiting"});map},
-                    Err(error)=>json!({"state":"error","error":format!("{error:#}")}),
-                }};
+                else if pending_error.is_some() {folder_dirty = true; json!({"state":"waiting","deferred":"pending"})}
+                else if folder_dirty || folder_map_cache.is_none() {
+                    let map = match runtime.publish_folders().await {
+                        Ok(mut map)=>{map["state"]=json!(if map["deferred"].is_null(){"ready"}else{"waiting"});map},
+                        Err(error)=>json!({"state":"error","error":format!("{error:#}")}),
+                    };
+                    folder_map_cache = Some(map.clone());
+                    folder_dirty = false;
+                    map
+                } else {
+                    folder_map_cache.clone().unwrap()
+                };
             let renderer=lifecycle.as_ref().map(|l|l.status()).unwrap_or(Value::Null);let folder_projection=folder_view(&folder_map,&renderer);
-            if handoff_enabled && handoff_publication_needed(handoff_full, &handoff_scope, handoff_revoked) {
+            let handoff_full = sweep_full_handoff || tokio::time::Instant::now() >= handoff_maintenance;
+            if handoff_enabled && !sweep_in_progress && handoff_publication_needed(handoff_full, &handoff_scope, handoff_revoked) {
                 let value = match runtime.publish_handoffs(&desktop_registry, if handoff_full {None} else {Some(&handoff_scope)}).await {
                     Ok(mut value) => {value["state"]=json!(if value["deferred"].is_null(){"ready"}else{"waiting"});value}, Err(error) => json!({"state":"error","actions":0,"error":format!("{error:#}")})
                 };
                 if handoff_full { handoff_maintenance = tokio::time::Instant::now() + Duration::from_secs(30); }
+                sweep_full_handoff = false;
+                handoff_revoked = false;
+                actions_revoked_since_publish = false;
+                handoff_scope.clear();
                 local_handoff = value;
             } else if !handoff_enabled { local_handoff = json!({"state":"disabled","enabled":false}); }
             if !startup && pending_error.is_none() && candidates.is_empty() && background.is_empty() {
                 initial_sweep_completed_at.get_or_insert_with(storage::now_ms);
             }
-            let mut status=watch_status(&blocked,pending_error.as_deref(),&unsupported,false,lifecycle.as_ref(),if startup{None}else{Some(candidates.len()+background.len())},initial_sweep_completed_at);status["hookStatus"]=hook_status.clone();if pending_error.is_none() && hook_status["ready"] == false {status["synchronization"]=json!("blocked");status["blocked"]=json!({"scope":"hooks","reason":hook_status["reason"]});}status["coldVerificationCache"]=scheduler.cache.diagnostics();status["folderProjection"]=folder_projection;status["localHandoff"]=local_handoff.clone();status["rendererAdapters"]=renderer;diagnostics(&bridge.root,&status)?;
+            let mut status=watch_status(&blocked,pending_error.as_deref(),&unsupported,false,lifecycle.as_ref(),if startup{None}else{Some(candidates.len()+background.len())},initial_sweep_completed_at);
+            status["checkingConversationCount"] = json!(checking_conversation_count);
+            status["checkedConversationCount"] = json!(checked_conversations.len());
+            status["currentOperation"] = if initial_sweep_completed_at.is_none() {
+                background.front().map(|id| json!({"kind":"sync","conversationId":id,"startedAt":status["updatedAt"]})).unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            status["hookStatus"]=hook_status.clone();if pending_error.is_none() && hook_status["ready"] == false {status["synchronization"]=json!("blocked");status["blocked"]=json!({"scope":"hooks","reason":hook_status["reason"]});}status["coldVerificationCache"]=scheduler.cache.diagnostics();status["folderProjection"]=folder_projection;status["localHandoff"]=local_handoff.clone();status["rendererAdapters"]=renderer;
+            let health = json!({
+                "applicationHold": status["applicationHold"],
+                "synchronization": status["synchronization"],
+                "blocked": status["blocked"],
+                "pendingError": status["pendingError"],
+                "blockedConversationCount": status["blockedConversationCount"],
+                "blockedConversations": status["blockedConversations"],
+                "blockedSourceCount": status["blockedSourceCount"],
+                "blockedSources": status["blockedSources"],
+                "absentSourceCount": status["absentSourceCount"],
+                "absentSources": status["absentSources"],
+                "waiting": status["waiting"],
+                "hookStatus": status["hookStatus"],
+                "folderProjection": {
+                    "state": status["folderProjection"]["state"],
+                    "error": status["folderProjection"]["error"],
+                    "deferred": status["folderProjection"]["deferred"],
+                },
+                "localHandoff": {
+                    "state": status["localHandoff"]["state"],
+                    "error": status["localHandoff"]["error"],
+                    "deferred": status["localHandoff"]["deferred"],
+                },
+                "rendererAdapters": status["rendererAdapters"],
+                "claudeDesktopRestart": status["claudeDesktopRestart"],
+                "coldVerificationCache": {
+                    "state": status["coldVerificationCache"]["state"],
+                    "reason": status["coldVerificationCache"]["reason"],
+                },
+                "initialSweepComplete": status["initialSweepCompletedAt"].is_number(),
+                "foregroundComplete": status["foregroundCompletedAt"].is_number(),
+            });
+            let now_ms = status["updatedAt"].as_i64().unwrap_or(0);
+            let first_operation = !status["currentOperation"].is_null() && !published_first_operation;
+            let coalesced = sweep_in_progress
+                && work.is_empty()
+                && !first_operation
+                && last_progress_health.as_ref() == Some(&health)
+                && last_progress_at.is_some_and(|last| now_ms >= last && now_ms - last < 2000);
+            if !coalesced {
+                diagnostics(&bridge.root,&status)?;
+                last_progress_at = Some(now_ms);
+                last_progress_health = Some(health);
+                if !status["currentOperation"].is_null() {
+                    published_first_operation = true;
+                }
+            }
             let mut timeout = followups.values().map(|(_, when)| when.saturating_duration_since(tokio::time::Instant::now()))
                 .chain(unknown.values().map(|(_, _, when)| when.saturating_duration_since(tokio::time::Instant::now())))
                 .min().unwrap_or(Duration::from_secs(30)).min(Duration::from_secs(30));
@@ -1024,6 +1217,9 @@ mod lifecycle_tests {
             })
             .await?;
             assert_eq!(next["initialSweepRemaining"], 0);
+            assert_eq!(next["checkingConversationCount"], 0);
+            assert_eq!(next["checkedConversationCount"], 0);
+            assert!(next["currentOperation"].is_null());
             assert_eq!(
                 next["initialSweepCompletedAt"],
                 first["initialSweepCompletedAt"]

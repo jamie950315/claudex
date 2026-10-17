@@ -399,6 +399,9 @@ fn retain_anchors(root: &Path, registry: &Path, state: &State, anchors: &[Value]
                 },
             ));
         }
+        if selected.is_empty() {
+            return Ok(vec![]);
+        }
         let ids = selected
             .iter()
             .map(|(_, c)| c.original.native_id.clone())

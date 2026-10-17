@@ -190,6 +190,7 @@ pub struct Runtime {
     owners: Mutex<HashMap<String, Arc<Mutex<OwnerEntry>>>>,
     native_events: tokio::sync::broadcast::Sender<Value>,
     handoffs: Mutex<crate::local_handoff::Publisher>,
+    state_cache: Arc<crate::desktop::StateCache>,
 }
 struct RuntimeProofs {
     rollout: crate::native_proofs::RolloutProofs,
@@ -263,10 +264,11 @@ impl Runtime {
             owners: Mutex::new(HashMap::new()),
             native_events,
             handoffs: Mutex::new(crate::local_handoff::Publisher::default()),
+            state_cache: Arc::default(),
         }))
     }
     pub fn bridge(self: &Arc<Self>) -> DesktopBridge {
-        DesktopBridge::new(
+        DesktopBridge::with_cache(
             &self.options.root,
             [Side::Codex, Side::Claude]
                 .into_iter()
@@ -280,6 +282,7 @@ impl Runtime {
                     )
                 })
                 .collect(),
+            self.state_cache.clone(),
         )
     }
     pub async fn synchronization_hooks(&self) -> Result<Value> {
@@ -646,12 +649,12 @@ impl Runtime {
                 max_bytes: 480 * 1024 * 1024,
             };
             let mut proofs = RuntimeProofs {
-                rollout: crate::native_proofs::RolloutProofs {
-                    path: path.clone(),
-                    thread_id: id.clone(),
-                    cwd: cwd.clone(),
-                    max_bytes: 480 * 1024 * 1024,
-                },
+                rollout: crate::native_proofs::RolloutProofs::new(
+                    path.clone(),
+                    id.clone(),
+                    cwd.clone(),
+                    480 * 1024 * 1024,
+                ),
                 provenance: provenance.clone(),
                 late_items_enabled: false,
             };
@@ -796,7 +799,7 @@ impl Runtime {
                 common.meta.insert("title".into(), title.clone());
             }
             let bytes = if physical.as_os_str().to_string_lossy().ends_with(".jsonl.zst") {
-                storage::snapshot_with_limit(physical, 480 * 1024 * 1024)?.bytes
+                storage::compressed_rollout_bytes(&physical, 480 * 1024 * 1024)?
             } else {
                 fs::symlink_metadata(&physical)?.len()
             };
@@ -1353,12 +1356,7 @@ impl Runtime {
             .await
     }
     fn bridge_state(&self) -> Result<crate::desktop::State> {
-        let state: crate::desktop::State = serde_json::from_value(storage::read_json_or(
-            self.options.root.join("desktop-state.json"),
-            serde_json::to_value(crate::desktop::State::default())?,
-        )?)?;
-        ensure!(state.version == 2, "Unsupported Desktop state.");
-        Ok(state)
+        crate::desktop::read_state(&self.options.root, &self.state_cache)
     }
 }
 #[async_trait]
@@ -2077,12 +2075,12 @@ mod tests {
         let id = Uuid::new_v4().to_string();
         let path = root.join("missing-rollout.jsonl");
         let mut proofs = RuntimeProofs {
-            rollout: crate::native_proofs::RolloutProofs {
-                path: path.clone(),
-                thread_id: id.clone(),
-                cwd: root.clone(),
-                max_bytes: 1024 * 1024,
-            },
+            rollout: crate::native_proofs::RolloutProofs::new(
+                path.clone(),
+                id.clone(),
+                root.clone(),
+                1024 * 1024,
+            ),
             provenance: crate::codex_provenance::Provenance {
                 path,
                 thread_id: id.clone(),

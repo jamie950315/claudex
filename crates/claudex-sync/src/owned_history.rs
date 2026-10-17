@@ -275,15 +275,37 @@ pub fn completed_claude_with_reset(
     policy: claudex_core::version::VersionPolicy,
     reset: Option<&Value>,
 ) -> Result<Decoded> {
-    let rows = codecs::parse_rows(text)?;
+    let packet_cache: std::cell::RefCell<
+        std::collections::HashMap<Vec<Value>, Option<(Vec<Message>, Value)>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+    let decode_cached = |content: &[Value], key: &[u8]| -> Result<Option<(Vec<Message>, Value)>> {
+        if let Some(cached) = packet_cache.borrow().get(content) {
+            return Ok(cached.clone());
+        }
+        let decoded = decode_packet(root, content, conversation, id, key)?;
+        packet_cache
+            .borrow_mut()
+            .insert(content.to_vec(), decoded.clone());
+        Ok(decoded)
+    };
+    let mut rows = Vec::new();
+    let mut row_offsets = Vec::new();
     let mut cutoff = 0;
+    let mut cutoff_rows = 0;
     let mut offset = 0;
-    for line in text.split_inclusive('\n') {
+    for (line_index, line) in text.split_inclusive('\n').enumerate() {
         offset += line.len();
-        if line.trim().is_empty() {
+        let trimmed = line.strip_suffix('\n').unwrap_or(line);
+        let trimmed = trimmed.strip_suffix('\r').unwrap_or(trimmed);
+        if trimmed.is_empty() {
             continue;
         }
-        let row: Value = serde_json::from_str(line)?;
+        let row: Value = serde_json::from_str(trimmed).map_err(|_| {
+            anyhow::anyhow!("Malformed native transcript record at line {}.", line_index + 1)
+        })?;
+        rows.push(row);
+        row_offsets.push(offset);
+        let row = rows.last().unwrap();
         if row["isSidechain"] == true {
             continue;
         }
@@ -294,12 +316,14 @@ pub fn completed_claude_with_reset(
             )
         {
             cutoff = offset;
+            cutoff_rows = rows.len();
         }
         if let Some(key) = key {
             if row["type"] == "user" {
                 if let Some(content) = row["message"]["content"].as_array() {
-                    if decode_packet(root, content, conversation, id, key)?.is_some() {
+                    if decode_cached(content, key)?.is_some() {
                         cutoff = offset;
+                        cutoff_rows = rows.len();
                     }
                 }
             }
@@ -309,7 +333,7 @@ pub fn completed_claude_with_reset(
         cutoff > 0,
         "Wait for a complete assistant turn or authenticated synchronized checkpoint."
     );
-    let tail = codecs::parse_rows(&text[cutoff..])?;
+    let tail = &rows[cutoff_rows..];
     let authored_tail = tail
         .iter()
         .filter(|r| {
@@ -318,8 +342,8 @@ pub fn completed_claude_with_reset(
         .collect::<Vec<_>>();
     let mut incomplete = !authored_tail.is_empty()
         && !(key.is_none()
-            && (task_tail(&tail, &authored_tail, cutoff, text)
-                || local_command_tail(&tail, &authored_tail)));
+            && (task_tail(tail, &authored_tail, cutoff, text)
+                || local_command_tail(tail, &authored_tail)));
     if let Some(key) = key {
         if authored_tail.len() == 1
             && authored_tail[0]["type"] == "user"
@@ -348,16 +372,18 @@ pub fn completed_claude_with_reset(
             };
             if annotations.contains(&crate::claude_annotations::message_key(&candidate)?) {
                 cutoff = text.len();
+                cutoff_rows = rows.len();
                 incomplete = false;
             }
         }
     }
+    let _ = row_offsets;
     let authenticate = |row: &Value| -> Result<bool> {
         let Some(key) = key else { return Ok(false) };
         let Some(content) = row["message"]["content"].as_array() else {
             return Ok(false);
         };
-        Ok(decode_packet(root, content, conversation, id, key)?.is_some())
+        Ok(decode_cached(content, key)?.is_some())
     };
     let native = codecs::decode_claude_authenticated(
         &text[..cutoff],
@@ -377,7 +403,7 @@ pub fn completed_claude_with_reset(
             incomplete_tail: incomplete,
         });
     };
-    let selected_rows = codecs::parse_rows(&text[..cutoff])?;
+    let selected_rows = &rows[..cutoff_rows];
     if let Some(boundary) = selected_rows.iter().position(|r| {
         r["isSidechain"] != true && r["type"] == "system" && r["subtype"] == "compact_boundary"
     }) {
@@ -385,7 +411,7 @@ pub fn completed_claude_with_reset(
         for row in &selected_rows[..boundary] {
             if row["isSidechain"] != true && row["type"] == "user" {
                 if let Some(content) = row["message"]["content"].as_array() {
-                    if decode_packet(root, content, conversation, id, key)?.is_some() {
+                    if decode_cached(content, key)?.is_some() {
                         authenticated = true;
                         break;
                     }
@@ -398,7 +424,7 @@ pub fn completed_claude_with_reset(
         );
     }
     let mut annotations = crate::claude_annotations::image_keys(
-        &selected_rows,
+        selected_rows,
         &native,
         root,
         conversation,
@@ -408,7 +434,7 @@ pub fn completed_claude_with_reset(
     )?;
     if let Some(reset) = reset.filter(|v| !v.is_null()) {
         annotations.extend(reset_transport_keys(
-            &selected_rows,
+            selected_rows,
             &native,
             root,
             conversation,
@@ -429,7 +455,7 @@ pub fn completed_claude_with_reset(
             continue;
         }
         let decoded = if m.role == "user" {
-            decode_packet(root, &m.content, conversation, id, key)?
+            decode_cached(&m.content, key)?
         } else {
             None
         };
