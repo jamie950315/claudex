@@ -2,9 +2,7 @@
 
 [Back to README](../README.md)
 
-Current source: **Claudex.app 1.4.8**, with **Claude Mod 0.8.48** bundled.
-Current source on `main` uses the native Rust runtime with the Swift UI.
-This development-signed source build is not a published release.
+Current release: **Claudex.app 2.0.0**, with **Claude Mod 0.8.49** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -12,8 +10,8 @@ Setup installs the command's independent native hook but never trusts it or
 enables warming. The Claude Mod's Cache
 settings pane controls only its own Claude TTL and preferences, not Codex.
 See [Codex confirmation and limitations](cache-warming.md#codex-desktop-experimental-best-effort).
-For the latest published release, **1.4.8**, see [release notes](releases/1.4.8.md) and the
-[published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v1.4.8).
+For the latest published release, **2.0.0**, see [release notes](releases/2.0.0.md) and the
+[published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v2.0.0).
 
 ## Who this is for
 
@@ -369,7 +367,7 @@ and notarization are still required before advertising a download that launches
 without additional Gatekeeper handling on other users' Macs. No OS verification
 is disabled as a workaround.
 
-On the Rust migration branch, maintainers build the complete native engine with
+Maintainers build the complete native engine with
 Cargo and use Xcode's Swift compiler plus an available signing identity:
 
 ```sh

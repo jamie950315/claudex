@@ -1,10 +1,12 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.48
+## Current companion: 0.8.49
 
-Claudex.app 1.4.8 installs, updates and checks its bundled Mod automatically;
+Claudex.app 2.0.0 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.49 packages the Claudex 2.0.0 native Rust companion runtime and
+explicit temporary-root fixture permission guards.
 Version 0.8.48 packages the completed-prefix normalization for superseded unclosed
 Codex turns during active tail turns.
 Version 0.8.47 preserves completed Codex warm-up limit reasons through normal
@@ -60,8 +62,8 @@ equal-version installation. Receiver preferences and existing sessions remain un
 Version 0.8.32 stages the native Rust companion executable rather than the
 JavaScript engine. The native Mod remains host-required JavaScript; controller
 requests use the same exact-context protocol, private Unix RPC and durable
-no-replay receipts. This migration branch is not an installed Desktop acceptance
-or a published release.
+no-replay receipts. Installed Desktop acceptance remains separate from static
+validation.
 Version 0.8.31 lets `/claudex:warm on` start its own first warm request when
 there is no usable current request sample, then refresh periodically. No extra
 user message is needed. A cache miss is recorded without stopping a successful
@@ -466,7 +468,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.48-review"
+STAGE="$PARENT/claudex-0.8.49-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -487,7 +489,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.48-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.49-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

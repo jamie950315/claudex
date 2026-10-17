@@ -6,9 +6,9 @@ This guide documents Desktop setup and the native lifecycle, history and storage
 contracts. Synchronization moves completed history without requesting model
 inference. For model execution and delegation, use [collaboration](collaboration.md).
 Use the installed `claudex` executable, or `bin/claudex` from a built developer
-checkout. This branch's Rust migration status is tracked in
-[Rust migration](rust-migration.md); historical native acceptance below does not
-establish installed acceptance of the Rust candidate.
+checkout. The Rust runtime architecture is documented in
+[Rust migration](rust-migration.md); historical native acceptance below remains
+scoped to the versions and runtimes tested.
 
 ## In this guide
 
