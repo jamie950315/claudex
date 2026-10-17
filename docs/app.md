@@ -3,7 +3,7 @@
 [Back to README](../README.md)
 
 Current source: **Claudex.app 1.4.8**, with **Claude Mod 0.8.48** bundled.
-The `codex/rust-refactor` branch uses the native Rust runtime with the Swift UI.
+Current source on `main` uses the native Rust runtime with the Swift UI.
 This development-signed source build is not a published release.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort

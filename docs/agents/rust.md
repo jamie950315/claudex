@@ -1,6 +1,6 @@
 # Rust runtime migration
 
-The `codex/rust-refactor` branch implements the complete runtime in Rust, not
+The Cargo workspace implements the complete runtime in Rust, not
 a wrapper around the JavaScript engine. `docs/rust-migration.md` defines the
 capability-preservation contract and crate ownership. Keep the original product
 capabilities working through the Rust entry points; synthetic parity, candidate

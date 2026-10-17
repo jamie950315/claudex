@@ -17,10 +17,10 @@ Collaboration runs models using your native accounts. Synchronization transports
 history without asking a model to generate a reply or summarize it.
 
 Current source: **Claudex.app 1.4.8**, bundling **Claude Mod 0.8.48**.
-The `codex/rust-refactor` branch uses the native Rust runtime with the Swift UI.
+Current source on `main` uses the native Rust runtime with the Swift UI.
 It is an unreleased source candidate; the published release below remains the
 supported download. Installed Desktop and model acceptance are separate from
-the branch's synthetic and read-only parity checks.
+synthetic and read-only parity checks.
 Latest published release: **1.4.8** — [download and checksums](https://github.com/jamie950315/claudex/releases/tag/v1.4.8)
 · [Release notes](docs/releases/1.4.8.md).
 App and Mod versions are separate. Guides on `main` describe current behavior;

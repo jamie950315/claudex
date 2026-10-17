@@ -1,8 +1,8 @@
 # Rust migration
 
-This branch migrates Claudex's runtime implementation to Rust. The existing
-JavaScript implementation remains the behavioral reference during migration;
-it must not become a fallback called by the completed Rust runtime.
+Claudex's runtime implementation is written in Rust. The preserved
+JavaScript implementation remains the behavioral reference;
+it must not become a fallback called by the Rust runtime.
 
 ## Completion contract
 
