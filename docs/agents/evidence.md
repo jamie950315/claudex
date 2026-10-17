@@ -6,6 +6,40 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Native-scheduler preservation assessment and Desktop acceptance (2026-10-17)
+
+An authorized Claude Desktop Code test on native 2.1.299 created one
+session-only, non-recurring Cron task through the normal composer and native
+tools. The task enqueued its prompt 29.590 seconds after creation and completed
+in the same session with the exact requested marker. The actual response model
+was `claude-haiku-5-5`; medium remained configured. Its native usage was four
+uncached input tokens, 102,114 cache reads, 434 cache writes and 32 output
+tokens, with `end_turn` and no tools on the scheduled response. Cache reads
+covered the preceding response's complete 102,114-token read/write prefix;
+the read share was 99.57%. Computer Use inspected both the rendered marker and
+the final `CronList` result, `No scheduled jobs.` The one-shot task had
+auto-deleted. No Claudex warmer was enabled or native app restarted; the
+existing model, session TTL, empty final draft and fullscreen were preserved.
+
+The first setup model chose a past clock time from stale context. That test
+job was cancelled through native `CronDelete`, not replayed or treated as a
+successful firing. The corrected setup specified the next cron minute without
+model clock arithmetic. The full Desktop check used twelve deduplicated model
+requests: nine setup requests, one scheduled request and two final readback
+requests. Setup also used native turn-bookkeeping tools; the scheduled response
+used none. Private histories and exact task identities remain outside Git.
+
+The conditional replacement assessment did not pass, so no runtime or installed
+App was changed. Shipping Codex Desktop analysis found that busy deferral can
+dispatch after recurrence `UNTIL`, and an optional pre-model hook cannot provide
+fail-closed budget or stop admission. Claude Code 2.1.302 artifact analysis found
+that Cron jobs lack Mod-lifetime ownership and a final dispatch deadline; minute
+granularity and computed-minute 00/30 early jitter also cannot preserve the
+existing four-minute refresh gates for every five-minute cache window. These
+negative cases are source/path analysis, not deliberately induced live excess
+requests. The actual Desktop firing above used 2.1.299, not 2.1.302. Existing
+broker admission and Claude's native Mod `$.clock.after` remain in use.
+
 ## Installed Rust Codex warm-command repair (2026-10-17)
 
 The development-signed App 1.4.8 / Mod 0.8.46 installation packages the

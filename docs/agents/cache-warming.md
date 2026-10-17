@@ -2,6 +2,17 @@
 
 Contributor rules moved out of AGENTS.md; they are binding. Scope: Claude and Codex cache warming: commands, limits, broker settings, TTL preferences, ledgers, evidence rules and the developer probes.
 
+Native-scheduler migration must preserve the existing count, duration, output
+budget, stop, lifecycle and one-use admission contracts. A native scheduled
+reply with cache reads proves scheduling, not equivalence. Recheck the deadline
+after a busy wait and immediately before inference; a queued job must not outlive
+off, app-stop, its enrollment or its owning Mod. A prompt asking the model to
+check limits, or an optional hook that can be skipped, is not pre-dispatch
+admission. Do not replace the current runtime until the native interface can
+preserve these conditions. Keep the existing native Mod `$.clock.after` and
+broker gates when Cron/heartbeat cannot express them; do not silently install
+a weaker scheduler or reduce the supported five-minute cache coverage.
+
 - `dev/cache-warm-probe` is a manual, authorization-gated Sonnet 5.5/medium
   cache-retention experiment, not an installed warming service. It uses private
   nonpersistent sessions and a no-refresh control. Explicit `--strategy main`
