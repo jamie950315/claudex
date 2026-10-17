@@ -26,6 +26,9 @@ use tokio::{
 use uuid::Uuid;
 
 pub const CLAUDE_CLI_VERSION: &str = "2.1.281";
+/// Owner metadata keeps the last appended packet content for exact duplicate
+/// recovery, so it may grow up to the packet bound. Every reader shares it.
+pub(crate) const OWNER_STATE_LIMIT: usize = packet::MAX_PACKET_BYTES;
 #[derive(Debug)]
 pub struct ControlRequestFailed;
 impl std::fmt::Display for ControlRequestFailed {
@@ -198,13 +201,13 @@ pub fn configured_permission_mode(claude_home: &Path, cwd: &Path) -> Result<Opti
 }
 
 pub(crate) fn owned_state(path: &Path) -> Result<Option<Value>> {
-    match storage::read_stable_with_limit(path, 64 * 1024 * 1024) {
+    match storage::read_stable_with_limit(path, OWNER_STATE_LIMIT) {
         Ok(data) => {
             ensure!(
                 data.identity.uid == storage::uid().to_string()
                     && data.identity.nlink == "1"
                     && data.identity.mode.parse::<u32>()? & 0o7777 == 0o600
-                    && data.bytes.len() <= 64 * 1024 * 1024,
+                    && data.bytes.len() <= OWNER_STATE_LIMIT,
                 "Claude owner metadata must be private owned single-link file."
             );
             Ok(Some(serde_json::from_slice(&data.bytes)?))

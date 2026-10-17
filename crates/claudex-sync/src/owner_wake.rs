@@ -85,8 +85,11 @@ fn directory(path: &Path) -> Result<FileIdentity> {
     );
     Ok(FileIdentity::from_metadata(&fs::symlink_metadata(path)?))
 }
+/// Reads owner metadata, the Desktop ledger and the folder map. The bound must
+/// accept everything their writers may store; the generated map keeps its own
+/// tighter byte bound at publication.
 fn metadata(path: &Path) -> Result<StableFile> {
-    let file = storage::read_stable_with_limit(path, 2 * 1024 * 1024)?;
+    let file = storage::read_stable_with_limit(path, crate::owner::OWNER_STATE_LIMIT)?;
     ensure!(
         file.identity.uid == storage::uid().to_string()
             && file.identity.nlink == "1"
@@ -644,5 +647,23 @@ mod tests {
         for bad in ["/a/", "/a/../b", "/a/./b", "//a", "/a//b", "relative"] {
             assert!(!canonical_cwd(bad), "{bad}");
         }
+    }
+    #[test]
+    fn owner_metadata_with_large_last_append_still_projects() {
+        let (_tmp, root, state, id) = fixture();
+        let path = root
+            .join("owners")
+            .join(format!("{}.json", digest_bytes(id.as_bytes())));
+        let mut owner = storage::read_json(&path).unwrap();
+        owner["lastAppend"] = json!({"operationId":"op","uuid":"u","contentHash":"h",
+            "content":[{"type":"text","text":"x".repeat(3 * 1024 * 1024)}],"recovered":false});
+        fs::remove_file(&path).unwrap();
+        storage::write_json(&path, &owner).unwrap();
+        assert!(fs::metadata(&path).unwrap().len() > 2 * 1024 * 1024);
+        assert_eq!(publish_folders(&root, &state).unwrap()["entries"], 1);
+        assert!(matches!(
+            inspect(&root, &state, "cse_native_owner", false).unwrap(),
+            Inspection::Ready(_)
+        ));
     }
 }

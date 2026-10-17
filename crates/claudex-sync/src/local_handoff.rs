@@ -95,8 +95,16 @@ fn identity(path: &Path, limit: usize, private: bool) -> Result<FileIdentity> {
     Ok(identity)
 }
 fn metadata(path: &Path) -> Result<StableFile> {
-    let before = identity(path, MAX_METADATA, true)?;
-    let data = storage::read_stable_with_limit(path, MAX_METADATA)?;
+    bounded_metadata(path, MAX_METADATA)
+}
+/// Owner metadata may reach the owner writer's bound (it keeps the last
+/// appended packet), unlike the handoff manifest written here.
+fn owner_metadata(path: &Path) -> Result<StableFile> {
+    bounded_metadata(path, crate::owner::OWNER_STATE_LIMIT)
+}
+fn bounded_metadata(path: &Path, limit: usize) -> Result<StableFile> {
+    let before = identity(path, limit, true)?;
+    let data = storage::read_stable_with_limit(path, limit)?;
     ensure!(
         data.identity == before,
         "Local handoff metadata changed before read."
@@ -127,7 +135,9 @@ fn unchanged(path: &Path, saved: &FileIdentity, private: bool) -> Result<()> {
         &identity(
             path,
             if private {
-                MAX_METADATA
+                // Exact identity equality is the proof; the manifest writer
+                // enforces its own tighter bound.
+                crate::owner::OWNER_STATE_LIMIT
             } else {
                 MAX_TRANSCRIPT
             },
@@ -310,7 +320,7 @@ fn owner(root: &Path, candidate: &Candidate) -> Result<(PathBuf, StableFile, Val
         "{}.json",
         digest_bytes(candidate.conversation.id.as_bytes())
     ));
-    let saved = metadata(&path)?;
+    let saved = owner_metadata(&path)?;
     let data: Value = serde_json::from_slice(&saved.bytes)?;
     ensure!(
         data.is_object()
@@ -423,7 +433,9 @@ fn retain_anchors(root: &Path, registry: &Path, state: &State, anchors: &[Value]
                 "{}.json",
                 digest_bytes(candidate.conversation.id.as_bytes())
             ));
-            let Ok(saved) = metadata(&path) else { continue };
+            let Ok(saved) = owner_metadata(&path) else {
+                continue;
+            };
             let data: Value = serde_json::from_slice(&saved.bytes)?;
             if data["version"] != 1
                 || data["conversationId"] != anchor["conversationId"]
