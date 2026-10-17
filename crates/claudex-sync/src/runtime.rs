@@ -795,7 +795,11 @@ impl Runtime {
             {
                 common.meta.insert("title".into(), title.clone());
             }
-            let bytes = storage::snapshot_with_limit(physical, 480 * 1024 * 1024)?.bytes;
+            let bytes = if physical.as_os_str().to_string_lossy().ends_with(".jsonl.zst") {
+                storage::snapshot_with_limit(physical, 480 * 1024 * 1024)?.bytes
+            } else {
+                fs::symlink_metadata(&physical)?.len()
+            };
             return Ok(Reading {
                 common,
                 native_id: id,

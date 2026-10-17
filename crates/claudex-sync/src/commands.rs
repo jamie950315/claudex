@@ -452,6 +452,40 @@ pub async fn watch_desktop(
 ) -> Result<()> {
     watch_desktop_with(runtime, bridge, config, None).await
 }
+fn is_waiting(error: &anyhow::Error) -> bool {
+    let text = format!("{error:#}").to_ascii_lowercase();
+    [
+        "still running",
+        "complete assistant",
+        "no completed persisted history",
+        "in-progress turn",
+        "in progress",
+        "unfinished",
+        "incomplete final",
+        "incomplete native turn",
+        "empty or invalid conversation",
+        "transcript changed while being read",
+        "source history changed between complete reads",
+        "native history changed between complete reads",
+        "native provenance source changed",
+        "native provenance rollout changed",
+        "native provenance row is oversized or incomplete",
+        "native proof source changed",
+        "active writer",
+        "destination is active",
+        "claude turn is still running",
+        "claude code is open",
+        "another bridge operation",
+        "shared codex desktop backend is not ready",
+        "shared codex transport",
+        "could not connect to the shared codex transport",
+        "transport unavailable",
+        "econnrefused",
+        "econnreset",
+    ]
+    .iter()
+    .any(|pattern| text.contains(pattern))
+}
 pub async fn watch_desktop_with(
     runtime: Arc<Runtime>,
     bridge: DesktopBridge,
@@ -598,6 +632,7 @@ async fn watch_desktop_control(
                         };
                         let retry = match outcome {
                             Ok(value) => { blocked.remove(&id); value["changed"] == false || value["incompleteTail"] == true },
+                            Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
                             Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
                         };
                         if retry && matches!(receipt.event.kind, Kind::Completed | Kind::Interrupted | Kind::Idle | Kind::Changed) {
@@ -617,6 +652,7 @@ async fn watch_desktop_control(
                         if handoff_enabled {runtime.revoke_handoff_actions()?;handoff_revoked=true;}
                         let retry = match scheduler.sync(&runtime,&bridge,&id).await {
                             Ok(value) => { blocked.remove(&id); value["changed"] == false || value["incompleteTail"] == true },
+                            Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
                             Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
                         };
                         if retry && step + 1 < delays.len() {
@@ -655,6 +691,7 @@ async fn watch_desktop_control(
                             {
                                 match outcome {
                                     Ok(value) => { blocked.remove(&id); if value["incompleteTail"] == true { followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0]))); } },
+                                    Err(error) if is_waiting(&error) => { blocked.remove(&id); followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0]))); },
                                     Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0]))); }
                                 }
                             }
@@ -1132,5 +1169,17 @@ mod lifecycle_tests {
         assert_eq!(value["blockedConversationCount"], 0);
         assert!(value["updatedAt"].is_number());
         assert_eq!(value["running"], true);
+        assert!(is_waiting(&anyhow::anyhow!(
+            "Native provenance source changed during verification."
+        )));
+        assert!(is_waiting(&anyhow::anyhow!(
+            "Wait for a complete assistant turn."
+        )));
+        assert!(is_waiting(&anyhow::anyhow!(
+            "Transcript changed while being read."
+        )));
+        assert!(!is_waiting(&anyhow::anyhow!(
+            "Both sides changed; no history was replaced."
+        )));
     }
 }

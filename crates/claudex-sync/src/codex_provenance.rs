@@ -1317,7 +1317,6 @@ impl ImageEvidence {
         checkpoint: Option<&Checkpoint>,
         retained: &[Value],
     ) -> Result<Value> {
-        self.verify()?;
         ensure!(
             common.messages.len() as isize - self.native_message_count as isize == offset,
             "Native image provenance has an invalid canonical message offset."
