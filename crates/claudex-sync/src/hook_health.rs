@@ -186,7 +186,9 @@ mod tests {
     use super::*;
     #[test]
     fn recovery_retains_content_free_error_evidence() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir()?;
+        std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = std::fs::canonicalize(t.path())?;
         record(&root, "codex", "mailbox", Some("private arbitrary message"))?;
         record(&root, "codex", "mailbox", None)?;

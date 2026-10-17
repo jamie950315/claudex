@@ -677,7 +677,9 @@ mod tests {
     use super::*;
     #[test]
     fn both_archive_versions_roundtrip_and_preserve_images() {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir().unwrap();
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
         storage::private_directory(temp.path()).unwrap();
         let root = fs::canonicalize(temp.path()).unwrap();
         let messages = vec![Message::text("user", "a"), Message::text("assistant", "b")];

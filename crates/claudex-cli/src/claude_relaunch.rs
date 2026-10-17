@@ -516,7 +516,9 @@ mod tests {
         }
     }
     fn profile() -> Result<(tempfile::TempDir, PathBuf, Arc<Fake>, Controller)> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir_in("/tmp")?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path().canonicalize()?)?;
         let environment = Arc::new(Fake::new(root.clone()));
         let controller = Controller::new(root.clone(), environment.clone())?;

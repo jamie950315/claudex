@@ -701,7 +701,9 @@ impl Scheduler {
 mod tests {
     use super::*;
     fn fixture() -> Result<(tempfile::TempDir, Cache)> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path())?;
         storage::private_directory(root.join("history-assets"))?;
         let cache = Cache::new(&root, &[41; 32], "cold-verification-v1")?;

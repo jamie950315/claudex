@@ -796,7 +796,9 @@ pub(crate) mod tests {
     }
     #[test]
     fn owned_reset_excludes_only_the_exact_receipted_authenticated_transport() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = claudex_core::storage::private_directory(temp.path())?;
         let id = uuid::Uuid::new_v4().to_string();
         let key = [7u8; 32];

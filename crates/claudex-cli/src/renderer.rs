@@ -319,7 +319,9 @@ mod tests {
     #[tokio::test]
     async fn restart_request_reaches_the_existing_status_contract_and_ends_after_a_new_start()
     -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir_in("/tmp")?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path().canonicalize()?)?;
         let environment = Arc::new(Manual {
             started: std::sync::atomic::AtomicI64::new(1_700_000_000_000),

@@ -750,7 +750,9 @@ mod tests {
         }
     }
     fn fixture() -> Result<(tempfile::TempDir, PathBuf)> {
+        use std::os::unix::fs::PermissionsExt;
         let t = tempfile::tempdir()?;
+        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700))?;
         let root = fs::canonicalize(t.path())?;
         let collaboration = root.join("collaboration");
         fs::DirBuilder::new().mode(0o700).create(&collaboration)?;

@@ -202,9 +202,11 @@ fn recover(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
     #[test]
     fn private_reads_refuse_hardlinks_and_action_lock_never_recovers_unknown_owner() -> Result<()> {
         let t = tempfile::tempdir()?;
+        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700))?;
         let p = fs::canonicalize(t.path())?;
         let path = p.join("record.json");
         write(&path, &json!({"version":1}), true)?;

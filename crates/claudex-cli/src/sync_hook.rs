@@ -124,7 +124,9 @@ mod tests {
 
     #[tokio::test]
     async fn broker_failure_keeps_sync_hint_and_content_free_diagnostics() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = std::fs::canonicalize(temp.path())?;
         let input = json!({"hook_event_name":"Stop","session_id":SESSION,"cwd":"/synthetic/project","prompt":"private hook input"});
         assert!(handle(&root, "codex", &input).await?.is_none());
@@ -145,7 +147,9 @@ mod tests {
 
     #[tokio::test]
     async fn mailbox_stop_continuation_publishes_started_not_completed() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = std::fs::canonicalize(temp.path())?;
         storage::private_directory(&root)?;
         let mailbox = ChatMailbox::new(root.join("collaboration/chat-mailbox"));
@@ -178,7 +182,9 @@ mod tests {
 
     #[tokio::test]
     async fn stopped_and_subagent_hooks_neither_register_nor_publish() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = std::fs::canonicalize(temp.path())?;
         storage::write_json(
             root.join("app-stop.json"),

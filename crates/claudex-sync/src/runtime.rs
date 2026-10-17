@@ -2183,7 +2183,9 @@ mod tests {
     #[test]
     fn archive_refresh_carries_full_history_and_exact_prefix_without_inventing_turns() -> Result<()>
     {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path())?;
         let codex = storage::private_directory(root.join("codex"))?;
         let claude = storage::private_directory(root.join("claude"))?;
@@ -2274,7 +2276,9 @@ mod tests {
     }
     #[tokio::test]
     async fn managed_claude_reads_use_the_saved_reset_bootstrap_proof() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path())?;
         let codex = storage::private_directory(root.join("codex"))?;
         let claude = storage::private_directory(root.join("claude"))?;

@@ -485,6 +485,7 @@ mod tests {
     async fn provided_manager_requires_both_capabilities_and_never_falls_back_on_failure()
     -> Result<()> {
         let t = tempfile::tempdir()?;
+        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700))?;
         let root = fs::canonicalize(t.path())?;
         let binary = root.join("claude");
         platform::publish(&binary, b"synthetic", 0o700)?;
@@ -523,6 +524,7 @@ mod tests {
     async fn native_private_manager_preserves_pinned_integrity_and_single_link_proofs() -> Result<()>
     {
         let t = tempfile::tempdir()?;
+        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700))?;
         let root = fs::canonicalize(t.path())?;
         let prefix = root.join("providers/claude-mod-cli");
         let payload = prefix.join("payload");

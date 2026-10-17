@@ -630,6 +630,7 @@ mod tests {
     #[tokio::test]
     async fn revisions_preserve_newer_events() {
         let t = tempfile::tempdir().unwrap();
+        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let root = fs::canonicalize(t.path()).unwrap();
         let inbox = Inbox::new(&root).unwrap();
         let event = Event {
@@ -648,6 +649,7 @@ mod tests {
     #[tokio::test]
     async fn listener_keeps_the_read_half_open_for_a_delayed_publisher() -> Result<()> {
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = temp.path().canonicalize()?;
         let inbox = Inbox::new(&root)?;
         let listener = inbox.listen().await?;
@@ -665,6 +667,7 @@ mod tests {
     #[tokio::test]
     async fn cloned_consumer_publish_wakes_locally_without_a_socket_roundtrip() -> Result<()> {
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = temp.path().canonicalize()?;
         let inbox = Inbox::new(&root)?;
         let publisher = inbox.clone();
@@ -702,6 +705,7 @@ mod tests {
     #[tokio::test]
     async fn publisher_is_acknowledged_while_consumer_is_busy() {
         let t = tempfile::tempdir().unwrap();
+        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700)).unwrap();
         let root = fs::canonicalize(t.path()).unwrap();
         let inbox = Inbox::new(&root).unwrap();
         let listener = inbox.listen().await.unwrap();
@@ -730,6 +734,7 @@ mod tests {
     async fn failed_listener_publication_removes_only_its_bound_socket_and_can_restart()
     -> Result<()> {
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = temp.path().canonicalize()?;
         let inbox = Inbox::new(&root)?;
         let attempt = inbox
@@ -746,6 +751,7 @@ mod tests {
     async fn failed_startup_preserves_a_replaced_socket_and_unrelated_owner_metadata() -> Result<()>
     {
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = temp.path().canonicalize()?;
         let inbox = Inbox::new(&root)?;
         let preserved = inbox.directory.join("original-socket");
@@ -775,6 +781,7 @@ mod tests {
     #[tokio::test]
     async fn unsafe_listener_owner_is_refused_before_binding_or_removal() -> Result<()> {
         let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = temp.path().canonicalize()?;
         let inbox = Inbox::new(&root)?;
         inbox.initialize()?;

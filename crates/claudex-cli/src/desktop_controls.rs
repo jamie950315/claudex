@@ -273,7 +273,9 @@ mod tests {
 
     #[test]
     fn folder_controls_publish_map_preserve_choices_and_revoke_before_restore() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let fixture = tempfile::tempdir_in("/tmp")?;
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(fixture.path().canonicalize()?)?;
         let config = json!({"version":1,"mode":"desktop","folderProjection":{"enabled":false,"opaque":"preserved"},
             "rendererAdapters":{"relaunchAfterUpdate":false},"desktopLocalHandoff":{"enabled":true,"opaque":1}});
@@ -314,7 +316,9 @@ mod tests {
 
     #[test]
     fn folder_refusal_never_reports_ready_and_failed_restore_keeps_revocation() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let fixture = tempfile::tempdir_in("/tmp")?;
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(fixture.path().canonicalize()?)?;
         let config = json!({"version":1,"mode":"desktop"});
         storage::write_json(root.join("config.json"), &config)?;
@@ -337,7 +341,9 @@ mod tests {
     #[test]
     fn preference_change_revokes_commands_but_preserves_anchors_and_foreign_settings() -> Result<()>
     {
+        use std::os::unix::fs::PermissionsExt;
         let fixture = tempfile::tempdir_in("/tmp")?;
+        std::fs::set_permissions(fixture.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(fixture.path().canonicalize()?)?;
         let config =
             json!({"version":1,"mode":"desktop","folderProjection":{"enabled":true},"opaque":true});

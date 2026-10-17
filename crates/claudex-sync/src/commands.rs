@@ -955,7 +955,9 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn configuration_keeps_the_completed_sweep_but_reconnection_reconciles_again() -> Result<()>
     {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path())?;
         let codex = storage::private_directory(root.join("codex"))?;
         let claude = storage::private_directory(root.join("claude"))?;
@@ -1010,7 +1012,9 @@ mod lifecycle_tests {
     #[tokio::test]
     async fn stopped_and_resuming_hold_keep_listener_alive_without_history_reads_then_release()
     -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(temp.path())?;
         let codex = storage::private_directory(root.join("codex"))?;
         let claude = storage::private_directory(root.join("claude"))?;

@@ -707,6 +707,8 @@ mod tests {
     async fn notification_storm_coalesces_without_delaying_native_started_or_losing_changes()
     -> Result<()> {
         let fixture = tempfile::tempdir_in("/tmp")?;
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(fixture.path(), fs::Permissions::from_mode(0o700))?;
         let root = storage::private_directory(fixture.path().canonicalize()?)?;
         let changed = root.join("completed.jsonl");
         let streaming = root.join("streaming.jsonl");

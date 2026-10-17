@@ -65,7 +65,9 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn missing_controller_key_names_the_exact_file_and_preserves_io_cause() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
         let temporary = tempfile::tempdir()?;
+        std::fs::set_permissions(temporary.path(), std::fs::Permissions::from_mode(0o700))?;
         let root = std::fs::canonicalize(temporary.path())?;
         let error = call(
             &root,

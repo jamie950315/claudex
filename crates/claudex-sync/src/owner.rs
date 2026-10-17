@@ -1619,6 +1619,7 @@ mod tests {
     fn recent_empty_owner_lock_blocks_but_abandoned_publication_can_recover() {
         use std::time::SystemTime;
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let path = tmp.path().join("owner.lock");
         let file = OpenOptions::new()
             .write(true)
