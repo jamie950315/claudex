@@ -121,6 +121,32 @@ measurements. Private inputs and raw records remain outside the repository.
 
 ## From cache-warming.md
 
+Authorized native-scheduler evaluation (2026-10-17) tested alternatives without
+enabling the Claudex warmer or replacing its implementation. A native Codex
+Desktop heartbeat, created through the official automation tool and addressed
+to an existing dedicated test thread, fired after 64.6 seconds in that same
+thread. Its exact marker reply completed without tools, with 49,581 input,
+48,384 cached-input and 12 output tokens. The configured model/effort remained
+`gpt-6.1-sol` / `xhigh`; independent response-model identity was not reported.
+The native history contained the matching heartbeat envelope. The official
+delete action then removed the test automation.
+
+Separately, Claude Code 2.1.299 in a dedicated interactive CLI session used
+native `CronList` and `CronCreate` to create one session-only, non-recurring
+task. It fired at the reported minute in the same session, returning the exact
+marker with actual model `claude-opus-5-5`, four uncached input tokens, 6,013
+cache reads, 317 cache writes and 29 output tokens, with no tools on the
+scheduled request. Those reads covered the preceding request's 6,013-token
+read/write prefix. Creating the task used three model requests; its scheduled
+fire used one. The one-shot task was self-deleting and the owned idle CLI
+exited normally afterward. No persistent Claude schedule was created.
+Claude Desktop input did not arrive during this evaluation, so its same-session
+scheduler was not tested; its empty draft and fullscreen state were restored.
+These runs establish native same-context scheduling and actual cache reuse,
+not multi-cycle retention, busy/restart behavior, or parity with Claudex's
+budgets and stop policies. Private receipts and native identities remain outside
+the repository.
+
 Authorized installed Rust acceptance (2026-10-17, App 1.4.8 / Mod 0.8.46)
 used dedicated native test conversations and the existing signed native hosts:
 
