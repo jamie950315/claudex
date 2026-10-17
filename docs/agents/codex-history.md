@@ -126,7 +126,7 @@ relaxes the independent-source header/session identity proofs.
 Goal continuations may begin with assistant items and
 receive user steering later. Full native reads preserve this order when earlier
 verified user context exists, still requiring a persisted final assistant item
-and withholding active tails. A completed, error-free full-API turn may intentionally retain an
+and withholding active tails. While a later tail turn is `inProgress`, Codex `thread/turns/list` projects earlier rollout turns that lacked a raw closing event as `status: "inProgress"` (`error: null`, `completedAt: null`, `durationMs: null`, all items closed) even though an idle thread reports the same turns as `status: "interrupted"`. In completed-prefix mode, normalize those superseded turns before the last completed response boundary to `"interrupted"` so active and idle prefix exports agree; still reject any preceding `inProgress` turn when no tail turn is active, when any item is `inProgress`, or when `error`, `completedAt` or `durationMs` is non-null. A completed, error-free full-API turn may intentionally retain an
 empty-string final text, as in quiet automation heartbeats. Preserve that item
 and all user/tool/reasoning activity; no text is fabricated or omitted. Missing
 final items, commentary-only endings, non-string text, active items and error

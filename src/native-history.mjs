@@ -73,6 +73,12 @@ function compactionControl(turn) {
 
 const responseBoundary = turn => turn.status === 'completed' && !compactionControl(turn);
 
+function supersededInterruptedTurn(turn) {
+  return turn.status === 'inProgress' && turn.error === null && turn.completedAt === null
+    && (turn.durationMs === undefined || turn.durationMs === null) && turn.itemsView === 'full'
+    && Array.isArray(turn.items) && turn.items.every(item => item?.status !== 'inProgress');
+}
+
 function validateTurn(turn, previousStart, { completedPrefix = false, allowActive = false, hasPriorRequest = false, allowInitialDelegation = false, emptyControl = false } = {}) {
   if (!object(turn) || typeof turn.id !== 'string' || !turn.id || !Array.isArray(turn.items)) fail('malformed turn.');
   if (turn.status === 'inProgress' && !allowActive) fail('wait for the in-progress turn to complete.');
@@ -188,12 +194,17 @@ async function readPass(client, threadId, limits, completedPrefix, resolveInitia
   const lastCompleted = turns.findLastIndex(responseBoundary);
   if (lastCompleted < 0) fail('no completed persisted history is available; wait for a complete turn.');
   if (!completedPrefix && lastCompleted !== turns.length - 1) fail('trailing compaction control requires a completed assistant continuation.');
-  if (completedPrefix && turns.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const exported = completedPrefix ? turns.slice(0, lastCompleted + 1) : turns;
   const incompleteTailCount = turns.length - exported.length;
   // A tail of closed turns (failed or interrupted without a reply) is not
   // published, but no native writer is still producing it.
   const closedTail = incompleteTailCount > 0 && turns.slice(exported.length).every(turn => turn.status !== 'inProgress');
+  if (completedPrefix && incompleteTailCount > 0 && !closedTail) {
+    for (let index = 0; index < lastCompleted; index++) {
+      if (supersededInterruptedTurn(exported[index])) exported[index] = { ...exported[index], status: 'interrupted' };
+    }
+  }
+  if (completedPrefix && exported.slice(0, lastCompleted).some(turn => turn.status === 'inProgress')) fail('an in-progress turn precedes completed history; no valid completed prefix exists.');
   const snapshot = { turns: exported, initialGoal, digest: initialGoal === null ? canonicalDigest(exported)
     : canonicalDigest(JSON.parse(serialize({ turns: exported, initialGoal: initialGoal.request }))),
     itemCount: exported.reduce((sum, turn) => sum + turn.items.length, 0),

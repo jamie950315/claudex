@@ -119,6 +119,16 @@ fn compaction_control(turn: &Value) -> bool {
 fn response_boundary(turn: &Value) -> bool {
     turn["status"] == "completed" && !compaction_control(turn)
 }
+fn superseded_interrupted_turn(turn: &Value) -> bool {
+    turn["status"] == "inProgress"
+        && turn.get("error").is_some_and(Value::is_null)
+        && turn.get("completedAt").is_some_and(Value::is_null)
+        && turn.get("durationMs").is_none_or(Value::is_null)
+        && turn["itemsView"] == "full"
+        && turn["items"]
+            .as_array()
+            .is_some_and(|items| items.iter().all(|item| item["status"] != "inProgress"))
+}
 pub fn initial_delegation(item: &Value) -> bool {
     if item["type"] != "functionCallOutput"
         || item["namespace"] != "codex_app"
@@ -399,15 +409,25 @@ async fn read_pass(
         completed_prefix || last == turns.len() - 1,
         "Trailing native control needs completed continuation."
     );
-    ensure!(
-        !completed_prefix || !turns[..last].iter().any(|t| t["status"] == "inProgress"),
-        "In-progress turn precedes completed prefix."
-    );
     let tail = turns.len() - last - 1;
     let closed = tail > 0
         && turns[last + 1..]
             .iter()
             .all(|t| t["status"] != "inProgress");
+    if completed_prefix && tail > 0 && !closed {
+        // While a later tail turn is active, Codex thread/turns/list projects
+        // earlier rollout turns that lacked a closing event as inProgress even
+        // though the idle thread reports them as interrupted.
+        for turn in &mut turns[..last] {
+            if superseded_interrupted_turn(turn) {
+                turn["status"] = json!("interrupted");
+            }
+        }
+    }
+    ensure!(
+        !completed_prefix || !turns[..last].iter().any(|t| t["status"] == "inProgress"),
+        "In-progress turn precedes completed prefix."
+    );
     if completed_prefix {
         turns.truncate(last + 1);
     }
@@ -882,5 +902,89 @@ mod tests {
             common.messages[0].extra["timestamp"],
             common.messages[1].extra["timestamp"]
         );
+    }
+    struct TurnsRpc(Vec<Value>);
+    #[async_trait]
+    impl Rpc for TurnsRpc {
+        async fn request(&self, method: &str, _: Value) -> Result<Value> {
+            assert_eq!(method, "thread/turns/list");
+            Ok(json!({"data":self.0.clone(),"nextCursor":null}))
+        }
+    }
+    #[tokio::test]
+    async fn superseded_unclosed_turn_matches_idle_interrupted_export_during_active_tail()
+    -> Result<()> {
+        let earlier_idle = json!({"id":"earlier","status":"interrupted","error":null,"itemsView":"full","startedAt":100,"completedAt":null,"durationMs":null,
+            "items":[{"id":"u1","type":"userMessage","content":[{"type":"text","text":"First"}]},{"id":"cmd","type":"commandExecution","status":"completed","aggregatedOutput":"ok"}]});
+        let completed = json!({"id":"completed","status":"completed","error":null,"itemsView":"full","startedAt":200,"completedAt":205,"durationMs":5000,
+            "items":[{"id":"u2","type":"userMessage","content":[{"type":"text","text":"Second"}]},{"id":"a2","type":"agentMessage","phase":"final_answer","text":"Done"}]});
+        let active_tail = json!({"id":"tail","status":"inProgress","error":null,"itemsView":"full","startedAt":300,"completedAt":null,"durationMs":null,
+            "items":[{"id":"u3","type":"userMessage","content":[{"type":"text","text":"Third"}]}]});
+        let mut earlier_active = earlier_idle.clone();
+        earlier_active["status"] = json!("inProgress");
+        let idle = read_stable(
+            &TurnsRpc(vec![earlier_idle.clone(), completed.clone()]),
+            "thread",
+            &Limits::default(),
+            true,
+            false,
+            &NoProofs,
+        )
+        .await?;
+        let active = read_stable(
+            &TurnsRpc(vec![
+                earlier_active.clone(),
+                completed.clone(),
+                active_tail.clone(),
+            ]),
+            "thread",
+            &Limits::default(),
+            true,
+            false,
+            &NoProofs,
+        )
+        .await?;
+        assert_eq!(active.turns, idle.turns);
+        assert_eq!(active.digest, idle.digest);
+        assert!(active.incomplete_tail);
+        assert!(!active.closed_tail);
+        assert_eq!(
+            convert(&active, "thread", "/tmp", None, true)?,
+            convert(&idle, "thread", "/tmp", None, true)?
+        );
+        assert!(
+            read_stable(
+                &TurnsRpc(vec![earlier_active.clone(), completed.clone()]),
+                "thread",
+                &Limits::default(),
+                true,
+                false,
+                &NoProofs,
+            )
+            .await
+            .is_err()
+        );
+        for (pointer, replacement) in [
+            ("/items/1/status", json!("inProgress")),
+            ("/error", json!({"message":"failure"})),
+            ("/completedAt", json!(101)),
+            ("/durationMs", json!(1000)),
+        ] {
+            let mut invalid = earlier_active.clone();
+            *invalid.pointer_mut(pointer).unwrap() = replacement;
+            assert!(
+                read_stable(
+                    &TurnsRpc(vec![invalid, completed.clone(), active_tail.clone()]),
+                    "thread",
+                    &Limits::default(),
+                    true,
+                    false,
+                    &NoProofs,
+                )
+                .await
+                .is_err()
+            );
+        }
+        Ok(())
     }
 }

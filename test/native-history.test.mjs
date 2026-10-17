@@ -235,6 +235,15 @@ test('closed interrupted history before a completed turn remains explicit inert 
   const snapshot = { threadId: 'thread', turns: [interrupted, completed] };
   assert.throws(() => convertNativeTurns(snapshot, { threadId: 'thread', cwd: '/tmp/project' }), /only completed/);
   assert.doesNotThrow(() => convertNativeTurns({ ...snapshot, completedPrefix: true }, { threadId: 'thread', cwd: '/tmp/project' }));
+  const unclosedIdle = { id: 't1', status: 'interrupted', error: null, itemsView: 'full', startedAt: 100, completedAt: null, durationMs: null,
+    items: [user('Earlier', 'u1'), { type: 'commandExecution', id: 'tool-1', status: 'completed', command: 'synthetic' }] };
+  const unclosedActive = { ...unclosedIdle, status: 'inProgress' };
+  const tailActive = { id: 't3', status: 'inProgress', error: null, itemsView: 'full', startedAt: 300, completedAt: null, durationMs: null, items: [user('Running', 'u3')] };
+  const idleExport = await run(client([page([unclosedIdle, completed])]), { completedPrefix: true });
+  const activeExport = await run(client([page([unclosedActive, completed, tailActive])]), { completedPrefix: true });
+  assert.equal(activeExport.digest, idleExport.digest);
+  assert.equal(fingerprint(activeExport.common), fingerprint(idleExport.common));
+  await assert.rejects(run(client([page([unclosedActive, completed])]), { completedPrefix: true }), /in-progress turn precedes completed history/);
 });
 
 test('an exact singleton compaction control between verified history and a later real reply stays inert', async () => {
