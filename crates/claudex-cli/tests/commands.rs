@@ -146,3 +146,14 @@ fn help_and_version_do_not_create_state_or_run_native_providers() -> Result<()> 
     assert!(!root.exists());
     Ok(())
 }
+
+#[test]
+fn unknown_commands_fail_without_creating_state() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = temp.path().join("absent");
+    let result = cli(&root, &["stauts"])?;
+    assert!(!result.status.success());
+    assert!(String::from_utf8(result.stderr)?.contains("Unknown command: stauts"));
+    assert!(!root.exists());
+    Ok(())
+}

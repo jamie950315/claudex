@@ -359,12 +359,20 @@ impl Pipe {
         if unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self {
-            // File owns the valid descriptor until the reactor registration
-            // drops it. No other owner can close or replace this descriptor.
-            fd: unsafe { tokio::io::unix::AsyncFd::register(file) }?,
-            flags,
-        })
+        // File owns the valid descriptor until the reactor registration
+        // drops it. No other owner can close or replace this descriptor.
+        match unsafe { tokio::io::unix::AsyncFd::register(file) } {
+            Ok(fd) => Ok(Self { fd, flags }),
+            Err(error) => {
+                // The open file description may be shared with the host; never
+                // leave it non-blocking after a refused registration.
+                let (file, cause) = error.into_parts();
+                unsafe {
+                    libc::fcntl(file.as_raw_fd(), libc::F_SETFL, flags);
+                }
+                Err(cause)
+            }
+        }
     }
 }
 impl Drop for Pipe {

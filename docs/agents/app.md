@@ -19,6 +19,8 @@ package scripts and selects the exact native platform package, not the wrapper's
 postinstall placeholder. Bundled source/runtime and the signed app bundle/executable
 may be owned by the current user or root, protected from foreign writes. Private
 state, login files and plugin caches must remain owned by the current user. Native package downloads use a clean environment and verified registry integrity;
+the registry integrity must equal the SHA-512 pinned in source for each bootstrap
+wrapper and native package, so a version bump updates its pins together;
 never inherit npm configuration, run package scripts or copy credentials. Native runtime guards and accounts remain.
 Show installed payload/version and fresh loaded-Mod self-report separately.
 mod_wake_status is controller-only, bounded and content-free, never a dispatch
