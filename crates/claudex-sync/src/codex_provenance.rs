@@ -2764,6 +2764,23 @@ process.stdout.write(JSON.stringify(result));
         assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
         f.turns[0]["items"][2]["model"] = json!("gpt-6");
         assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
+        // The stripped serialization alternative still orders the late item
+        // under the placement digest of its API form.
+        f.turns[0]["items"][2] = api.clone();
+        let proof = f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().unwrap();
+        let snapshot: crate::native_history::Snapshot = serde_json::from_value(json!({"turns":f.turns,
+            "digest":"synthetic","itemCount":5,"bytes":0,"pages":1,"completedPrefix":true,"incompleteTail":false,
+            "incompleteTailCount":0,"closedTail":false,"lateItemEvidence":proof})).unwrap();
+        let stripped = crate::native_history::without_vendor_added_nulls(&snapshot).unwrap();
+        for representation in crate::native_order::representations(&stripped).unwrap() {
+            assert_eq!(
+                crate::native_order::entries(&representation).unwrap().len(),
+                crate::native_order::entries(&snapshot).unwrap().len()
+            );
+        }
+        let mut changed = stripped;
+        changed.turns[0]["items"][2]["kind"] = json!("started");
+        assert!(crate::native_order::entries(&changed).is_err());
         f.turns[0]["items"][2] = api;
         // Codex keeps a per-turn working directory the API does not report.
         f.rows[2]["payload"]["cwd"] = json!("/synthetic/other-workspace");

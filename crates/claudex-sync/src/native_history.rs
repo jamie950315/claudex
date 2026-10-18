@@ -701,7 +701,24 @@ pub(crate) fn without_vendor_added_null_fields(item: &Value) -> Option<Value> {
         })
 }
 
-fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot> {
+/// The API form of an item the serialization alternative stripped: its named
+/// vendor fields restored as null.
+pub(crate) fn with_vendor_added_null_fields(item: &Value) -> Option<Value> {
+    let (_, fields) = VENDOR_ADDED_NULL_FIELDS
+        .iter()
+        .find(|(kind, _)| item["type"] == *kind)?;
+    let mut restored = item.as_object()?.clone();
+    let mut changed = false;
+    for field in *fields {
+        if !restored.contains_key(*field) {
+            restored.insert((*field).into(), Value::Null);
+            changed = true;
+        }
+    }
+    changed.then_some(Value::Object(restored))
+}
+
+pub(crate) fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot> {
     let mut selected = snapshot.clone();
     let mut changed = false;
     for item in selected

@@ -12,6 +12,11 @@ pub struct Entry {
     pub item: Option<Value>,
     pub status: Option<Value>,
 }
+fn item_digest(item: &Value) -> Result<String> {
+    Ok(digest_bytes(
+        claudex_core::json::canonical_stringify(item)?.as_bytes(),
+    ))
+}
 fn key(turn: &str, item: &str) -> (String, String) {
     (turn.into(), item.into())
 }
@@ -113,8 +118,11 @@ pub fn entries(snapshot: &Snapshot) -> Result<Vec<Entry>> {
                         || item["type"] == "commandExecution"
                             && matches!(item["status"].as_str(), Some("completed" | "failed")))
                     && placed.insert(identity.clone())
-                    && p["itemDigest"]
-                        == digest_bytes(claudex_core::json::canonical_stringify(item)?.as_bytes()),
+                    && (p["itemDigest"] == item_digest(item)?
+                        || crate::native_history::with_vendor_added_null_fields(item)
+                            .map(|api| item_digest(&api))
+                            .transpose()?
+                            .is_some_and(|digest| p["itemDigest"] == digest)),
                 "Late native identity or closed boundary contradicts API."
             );
             if let Some((index, _)) = boundary {
