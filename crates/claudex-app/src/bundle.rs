@@ -420,7 +420,18 @@ pub async fn build(options: &Options, runner: &dyn Runner) -> Result<Report> {
         })
     }
     .await;
-    operation.with_context(|| format!("App staging preserved at {}.", stage.display()))
+    let report =
+        operation.with_context(|| format!("App staging preserved at {}.", stage.display()))?;
+    // The published bundle and archive were moved or linked out; the rest of
+    // the uniquely named stage is build scratch.
+    fs::remove_dir_all(&stage).with_context(|| {
+        format!(
+            "App published at {}; staging was not removed: {}.",
+            report.app.display(),
+            stage.display()
+        )
+    })?;
+    Ok(report)
 }
 
 #[cfg(test)]
