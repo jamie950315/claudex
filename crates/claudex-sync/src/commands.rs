@@ -452,36 +452,32 @@ pub async fn watch_desktop(
 ) -> Result<()> {
     watch_desktop_with(runtime, bridge, config, None).await
 }
+/// Transient native activity and read races that the next follow-up resolves.
+/// Transport failures, pending recovery and malformed sources are not waits:
+/// they stay visible as blocked.
 fn is_waiting(error: &anyhow::Error) -> bool {
     let text = format!("{error:#}").to_ascii_lowercase();
     [
         "still running",
+        "still in progress",
         "complete assistant",
         "no completed persisted history",
         "in-progress turn",
-        "in progress",
-        "unfinished",
+        "unfinished tool call",
+        "has an unfinished turn",
+        "has unfinished work",
         "incomplete final",
         "incomplete native turn",
-        "empty or invalid conversation",
         "transcript changed while being read",
         "source history changed between complete reads",
         "native history changed between complete reads",
         "native provenance source changed",
         "native provenance rollout changed",
-        "native provenance row is oversized or incomplete",
         "native proof source changed",
         "active writer",
         "destination is active",
-        "claude turn is still running",
         "claude code is open",
         "another bridge operation",
-        "shared codex desktop backend is not ready",
-        "shared codex transport",
-        "could not connect to the shared codex transport",
-        "transport unavailable",
-        "econnrefused",
-        "econnreset",
     ]
     .iter()
     .any(|pattern| text.contains(pattern))
@@ -835,7 +831,9 @@ async fn watch_desktop_control(
                         Err(error)=>json!({"state":"error","error":format!("{error:#}")}),
                     };
                     folder_map_cache = Some(map.clone());
-                    folder_dirty = false;
+                    // A deferred (owner transition) or failed publication has no
+                    // inbox event to mark it dirty again; retry it next pass.
+                    folder_dirty = map["state"] != "ready";
                     map
                 } else {
                     folder_map_cache.clone().unwrap()
@@ -1377,5 +1375,15 @@ mod lifecycle_tests {
         assert!(!is_waiting(&anyhow::anyhow!(
             "Both sides changed; no history was replaced."
         )));
+        for failure in [
+            "Shared Codex transport unavailable: native socket is not present.",
+            "Shared Codex Desktop backend is not ready.",
+            "connect ECONNREFUSED /tmp/codex.sock",
+            "An unfinished transaction requires recovery.",
+            "Empty or invalid conversation working directory.",
+            "Native provenance row is oversized or incomplete.",
+        ] {
+            assert!(!is_waiting(&anyhow::anyhow!(failure)), "{failure}");
+        }
     }
 }
