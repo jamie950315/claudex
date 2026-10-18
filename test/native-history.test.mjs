@@ -379,3 +379,18 @@ test('display-only tool surface screenshots are omitted with an explicit record 
   assert.doesNotMatch(JSON.stringify(same.common), /display-only/);
   await assert.rejects(run(native(), { displayScreenshots: 'yes' }), /invalid display screenshot policy/);
 });
+
+test('vendor-added null fields keep checkpoints saved without them', async () => {
+  const turn = activity => ({ id: 't1', status: 'completed', error: null, itemsView: 'full', startedAt: 100, completedAt: 105, durationMs: 5000,
+    items: [user('Review', 'u1'), activity, { type: 'agentMessage', id: 'a1', phase: 'final_answer', text: 'Done' }] });
+  const before = { type: 'subAgentActivity', id: 'call', kind: 'started', agentThreadId: 'child', agentPath: '/root/review' };
+  const after = { ...before, model: null, reasoningEffort: null };
+  const saved = await run(client([page([turn(before)]), page([turn(before)])]));
+  const checkpoint = { count: saved.common.messages.length, digest: fingerprint(saved.common) };
+  const current = await run(client([page([turn(after)]), page([turn(after)])]), { checkpoint });
+  assert.equal(fingerprint(current.common), checkpoint.digest);
+  const fresh = await run(client([page([turn(after)]), page([turn(after)])]));
+  assert.notEqual(fingerprint(fresh.common), checkpoint.digest);
+  const real = await run(client([page([turn({ ...after, model: 'gpt-6' })]), page([turn({ ...after, model: 'gpt-6' })])]), { checkpoint });
+  assert.notEqual(fingerprint(real.common), checkpoint.digest);
+});

@@ -676,6 +676,38 @@ pub fn convert(
     Ok(common)
 }
 
+/// Fields Codex later added, always null, to item types it already exported.
+/// Checkpoints saved before then serialize those items without them.
+/// subAgentActivity gained model and reasoningEffort in Codex 0.163.
+const VENDOR_ADDED_NULL_FIELDS: &[(&str, &[&str])] =
+    &[("subAgentActivity", &["model", "reasoningEffort"])];
+
+fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot> {
+    let mut selected = snapshot.clone();
+    let mut changed = false;
+    for item in selected
+        .turns
+        .iter_mut()
+        .filter_map(|turn| turn["items"].as_array_mut())
+        .flatten()
+    {
+        let Some((_, fields)) = VENDOR_ADDED_NULL_FIELDS
+            .iter()
+            .find(|(kind, _)| item["type"] == *kind)
+        else {
+            continue;
+        };
+        let map = item.as_object_mut().unwrap();
+        for field in *fields {
+            if map.get(*field).is_some_and(Value::is_null) {
+                map.remove(*field);
+                changed = true;
+            }
+        }
+    }
+    changed.then_some(selected)
+}
+
 /// A serialization alternative is usable only when the entire existing saved
 /// canonical prefix authenticates it. It never selects a new checkpoint.
 pub fn convert_checkpoint(
@@ -688,24 +720,45 @@ pub fn convert_checkpoint(
     if checkpoint.count == 0 || checkpoint.contains(&original)? {
         return Ok(original);
     }
+    if let Some(candidate) = goal_alternative(snapshot, id, cwd, checkpoint)? {
+        return Ok(candidate);
+    }
+    if let Some(selected) = without_vendor_added_nulls(snapshot) {
+        let candidate = convert(&selected, id, cwd, None, true)?;
+        if checkpoint.contains(&candidate)? {
+            return Ok(candidate);
+        }
+        if let Some(candidate) = goal_alternative(&selected, id, cwd, checkpoint)? {
+            return Ok(candidate);
+        }
+    }
+    Ok(original)
+}
+
+fn goal_alternative(
+    snapshot: &Snapshot,
+    id: &str,
+    cwd: &str,
+    checkpoint: &crate::desktop::Checkpoint,
+) -> Result<Option<Common>> {
     let Some(goal) = &snapshot.initial_goal else {
-        return Ok(original);
+        return Ok(None);
     };
     let Some(alternatives) = goal["prefixHashAlternatives"]
         .as_array()
         .filter(|a| a.len() <= 2 && a.iter().all(packet::hex_digest))
     else {
-        return Ok(original);
+        return Ok(None);
     };
     for alternative in alternatives {
         let mut selected = snapshot.clone();
         selected.initial_goal.as_mut().unwrap()["request"]["prefixHash"] = alternative.clone();
         let candidate = convert(&selected, id, cwd, None, true)?;
         if checkpoint.contains(&candidate)? {
-            return Ok(candidate);
+            return Ok(Some(candidate));
         }
     }
-    Ok(original)
+    Ok(None)
 }
 
 /// Raw arrival proof is only needed to recover an existing checkpoint whose
@@ -910,6 +963,45 @@ mod tests {
             assert_eq!(method, "thread/turns/list");
             Ok(json!({"data":self.0.clone(),"nextCursor":null}))
         }
+    }
+    #[tokio::test]
+    async fn vendor_added_null_fields_keep_checkpoints_saved_without_them() -> Result<()> {
+        let turn = |activity: Value| {
+            json!({"id":"turn","status":"completed","error":null,"itemsView":"full","startedAt":100,"completedAt":105,"durationMs":5000,
+                "items":[{"id":"u1","type":"userMessage","content":[{"type":"text","text":"Review"}]},activity,
+                    {"id":"a1","type":"agentMessage","phase":"final_answer","text":"Done"}]})
+        };
+        let read = |activity: Value| async move {
+            read_stable(&TurnsRpc(vec![turn(activity)]), "thread", &Limits::default(), true, false, &NoProofs).await
+        };
+        let before = json!({"id":"call","type":"subAgentActivity","kind":"started","agentThreadId":"child","agentPath":"/root/review"});
+        let mut after = before.clone();
+        after["model"] = Value::Null;
+        after["reasoningEffort"] = Value::Null;
+        let saved = convert(&read(before.clone()).await?, "thread", "/tmp", None, true)?;
+        let checkpoint = crate::desktop::Checkpoint::of(&saved)?;
+        let current = read(after.clone()).await?;
+        assert!(!checkpoint.contains(&convert(&current, "thread", "/tmp", None, true)?)?);
+        assert_eq!(
+            convert_checkpoint(&current, "thread", "/tmp", &checkpoint)?.messages,
+            saved.messages
+        );
+        // New enrollments and checkpoints made with the fields keep them.
+        let with_fields = convert(&current, "thread", "/tmp", None, true)?;
+        assert_eq!(
+            convert_checkpoint(&current, "thread", "/tmp", &crate::desktop::Checkpoint::empty())?,
+            with_fields
+        );
+        assert_eq!(
+            convert_checkpoint(&current, "thread", "/tmp", &crate::desktop::Checkpoint::of(&with_fields)?)?,
+            with_fields
+        );
+        // A non-null value is real content and is never dropped.
+        let mut model = after;
+        model["model"] = json!("gpt-6");
+        let current = read(model).await?;
+        assert!(!checkpoint.contains(&convert_checkpoint(&current, "thread", "/tmp", &checkpoint)?)?);
+        Ok(())
     }
     #[tokio::test]
     async fn superseded_unclosed_turn_matches_idle_interrupted_export_during_active_tail()

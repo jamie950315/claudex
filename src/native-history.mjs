@@ -358,6 +358,22 @@ export async function readStableNativeHistory({ client, threadId, limits: inputL
   return { ...first, threadId, turnCount: first.turns.length, closedTail: first.closedTail && second.closedTail };
 }
 
+// Fields Codex later added, always null, to item types it already exported.
+// Checkpoints saved before then serialize those items without them.
+// subAgentActivity gained model and reasoningEffort in Codex 0.163.
+const VENDOR_ADDED_NULL_FIELDS = { subAgentActivity: ['model', 'reasoningEffort'] };
+
+function withoutVendorAddedNulls(turns) {
+  let changed = false;
+  const selected = turns.map(turn => ({ ...turn, items: turn.items.map(item => {
+    const fields = Object.hasOwn(VENDOR_ADDED_NULL_FIELDS, item?.type) ? VENDOR_ADDED_NULL_FIELDS[item.type] : [];
+    if (!fields.some(field => Object.hasOwn(item, field) && item[field] === null)) return item;
+    changed = true;
+    return Object.fromEntries(Object.entries(item).filter(([key, value]) => !(fields.includes(key) && value === null)));
+  }) }));
+  return changed ? selected : null;
+}
+
 function validateSource(threadId, cwd, suppliedTimestamp) {
   if (typeof threadId !== 'string' || !threadId) fail('thread identity is required.');
   if (typeof cwd !== 'string' || !isAbsolute(cwd)) fail('an absolute source working directory is required.');
@@ -374,7 +390,7 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
   // prefix authenticates it. Never choose a branch or renew a checkpoint.
   if (checkpoint && Number.isSafeInteger(checkpoint.count) && checkpoint.count > 0
     && /^[a-f0-9]{64}$/.test(checkpoint.digest ?? '')
-    && (first.lateItemEvidence || first.initialGoal && fingerprint(common, checkpoint.count) !== checkpoint.digest)) {
+    && (first.lateItemEvidence || fingerprint(common, checkpoint.count) !== checkpoint.digest)) {
     const alternatives = first.initialGoal?.prefixHashAlternatives;
     const goals = [hydrated.initialGoal];
     if (Array.isArray(alternatives) && alternatives.length <= 2
@@ -382,8 +398,10 @@ export async function exportNativeHistory({ client, threadId, cwd, timestamp: su
       goals.push(...alternatives.map(prefixHash => ({ ...first.initialGoal,
         request: { ...first.initialGoal.request, prefixHash } })));
     let matched = false;
-    outer: for (const representation of lateItemRepresentations(hydrated)) for (const initialGoal of goals) {
-      const candidateSnapshot = { ...hydrated, ...representation, initialGoal };
+    const vendor = withoutVendorAddedNulls(hydrated.turns);
+    outer: for (const turns of vendor ? [hydrated.turns, vendor] : [hydrated.turns])
+    for (const representation of lateItemRepresentations({ ...hydrated, turns })) for (const initialGoal of goals) {
+      const candidateSnapshot = { ...hydrated, turns, ...representation, initialGoal };
       const candidate = convertNativeTurns(candidateSnapshot, { threadId, cwd, timestamp: suppliedTimestamp });
       if (candidate.messages.length >= checkpoint.count && fingerprint(candidate, checkpoint.count) === checkpoint.digest) {
         common = candidate; selected = candidateSnapshot; matched = true; break outer;

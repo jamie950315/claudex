@@ -49,6 +49,16 @@ it creates), and their reads replace exactly that data URL with an explicit
 conversations keep their exact representation; never apply the policy to a
 conversation whose checkpoints were made without it.
 
+Codex sometimes adds always-null fields to an item type it already exported
+(Codex 0.163 added `model` and `reasoningEffort` to `subAgentActivity`). Unknown
+items are kept whole as inert data, so the new fields change the canonical bytes of
+conversations checkpointed earlier. `VENDOR_ADDED_NULL_FIELDS` names each such
+field; omitting them is a serialization alternative used only when the entire
+saved checkpoint authenticates it, like goal prefix-hash alternatives. Non-null
+values are never dropped, and new enrollments keep the fields. Add an entry only
+after real histories show an unchanged rollout failing its checkpoint because of
+that field.
+
 Native Codex localImage recovery for originals and owned continuations reads
 metadata.path's current owned regular rollout. After a native rollover, it may
 also read exact previously verified ledger origins, never discover candidate
