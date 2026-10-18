@@ -52,7 +52,7 @@ function references(value, ids) {
  * Each nonempty batch reads one fresh stable rollout. Any unproven candidate
  * throws; no partial allowlist is returned. No candidates require no source I/O.
  */
-export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 480 * 1024 * 1024 }) {
+export function createNativeEmptyTurnResolver({ path, threadId, cwd, originCwd = null, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd) || resolve(cwd) !== cwd
     || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024)
@@ -92,7 +92,8 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
       if (JSON.stringify(rows[index]) !== lines[index]) fail('source record serialization is ambiguous.');
     };
     const directories = await recordedDirectories(rows, cwd);
-    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId || !directories.has(rows[0].payload?.cwd)
+    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId
+      || !directories.has(rows[0].payload?.cwd) && (originCwd === null || rows[0].payload?.cwd !== originCwd)
       || (rows[0].payload.session_id != null && rows[0].payload.session_id !== threadId)
       || rows.slice(1).some(row => row?.type === 'session_meta')) fail('source header differs from the exact native identity.');
     exactRow(0);
@@ -120,7 +121,7 @@ export function createNativeEmptyTurnResolver({ path, threadId, cwd, maxBytes = 
           completed = row; completionIndex = index; break;
         }
         if (row?.type === 'turn_context') {
-          if (row.payload?.turn_id !== turn.id || !directories.has(row.payload.cwd)) fail('empty turn context differs from the API.');
+          if (row.payload?.turn_id !== turn.id || typeof row.payload.cwd !== 'string' || !isAbsolute(row.payload.cwd)) fail('empty turn context differs from the API.');
         } else if (activity(row)) fail('empty turn has model, tool or authored-input records.');
         else {
           const owner = row.payload.internal_chat_message_metadata_passthrough?.turn_id ?? row.payload.turn_id;

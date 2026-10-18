@@ -94,6 +94,9 @@ pub struct Provenance {
     pub path: PathBuf,
     pub thread_id: String,
     pub cwd: PathBuf,
+    /// The creation cwd a verified Codex project move recorded. The rollout
+    /// header keeps it after the thread's cwd changes.
+    pub origin_cwd: Option<PathBuf>,
     pub codex_home: PathBuf,
     /// Raw proof byte bound (at most 480 MiB for late-item proofs).
     pub max_bytes: usize,
@@ -813,6 +816,14 @@ impl Provenance {
                         .is_some_and(|(a, b)| a == b)
         })
     }
+    /// A session header names the thread's current cwd or, after a verified
+    /// project move, the cwd it was created in.
+    fn header_directory(&self, value: &Value) -> bool {
+        self.same_directory(value)
+            || value
+                .as_str()
+                .is_some_and(|s| self.origin_cwd.as_deref() == Some(Path::new(s)))
+    }
     fn boundary(
         &self,
         state: &Lifecycle,
@@ -896,8 +907,12 @@ impl Provenance {
         );
         for index in &state.contexts {
             let context = &source.rows[*index];
+            // Codex records a per-turn working directory the API does not
+            // report; it need not equal the thread's current cwd.
             ensure!(
-                self.same_directory(&context["payload"]["cwd"])
+                context["payload"]["cwd"]
+                    .as_str()
+                    .is_some_and(|s| absolute(Path::new(s)))
                     && *index > state.start
                     && *index < state.stop.unwrap()
                     && time(context)? >= time(start)?
@@ -1045,14 +1060,14 @@ impl Provenance {
                         || (row["payload"]["id"] == self.thread_id
                             && row["payload"]["session_id"] == self.thread_id
                             && row["payload"]["history_mode"] == "paginated"
-                            && self.same_directory(&row["payload"]["cwd"]))),
+                            && self.header_directory(&row["payload"]["cwd"]))),
                 "Native late-item source identity differs at row {index} (ordinal={}, header={}, thread={}, session={}, mode={}, cwd={}).",
                 row["ordinal"] == json!(index),
                 (row["type"] == "session_meta") == source.starts.contains(&index),
                 row["payload"]["id"] == self.thread_id,
                 row["payload"]["session_id"] == self.thread_id,
                 row["payload"]["history_mode"] == "paginated",
-                self.same_directory(&row["payload"]["cwd"])
+                self.header_directory(&row["payload"]["cwd"])
             );
         }
         let mut api = BTreeMap::new();
@@ -1208,7 +1223,9 @@ impl Provenance {
                             .iter()
                             .any(|i| i["id"] == projected["id"]))
                     && selected.insert(text(&projected["id"])?.to_owned())
-                    && projected == *matches[0],
+                    && (projected == *matches[0]
+                        || crate::native_history::without_vendor_added_null_fields(matches[0])
+                            .is_some_and(|api| projected == api)),
                 "Complete native late item differs from the full API item."
             );
             previous = boundary_stop;
@@ -2133,6 +2150,7 @@ mod tests {
         let source = Provenance {
             path: home.join(format!("sessions/2026/10/16/rollout-{THREAD}.jsonl")),
             cwd: home.join("project"),
+            origin_cwd: None,
             codex_home: home,
             max_bytes: MAX_BYTES,
             thread_id: THREAD.into(),
@@ -2734,6 +2752,37 @@ process.stdout.write(JSON.stringify(result));
         );
     }
     #[test]
+    fn late_proofs_accept_vendor_nulls_moved_headers_and_per_turn_directories() {
+        let mut f = late_fixture();
+        f.rows[7]["payload"]["item"] = json!({"type":"SubAgentActivity","id":"late-agent","kind":"completed",
+            "agent_thread_id":SEGMENT,"agent_path":"/root/child"});
+        let mut api = project_agent(&f.rows[7]["payload"]["item"]).unwrap();
+        api["model"] = Value::Null;
+        api["reasoningEffort"] = Value::Null;
+        f.turns[0]["items"][2] = api.clone();
+        write(&f.source.path, &f.rows);
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
+        f.turns[0]["items"][2]["model"] = json!("gpt-6");
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
+        f.turns[0]["items"][2] = api;
+        // Codex keeps a per-turn working directory the API does not report.
+        f.rows[2]["payload"]["cwd"] = json!("/synthetic/other-workspace");
+        write(&f.source.path, &f.rows);
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
+        f.rows[2]["payload"]["cwd"] = json!("relative");
+        write(&f.source.path, &f.rows);
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
+        f.rows[2]["payload"]["cwd"] = json!(f.source.cwd);
+        // The header keeps the creation cwd after a verified project move.
+        f.rows[0]["payload"]["cwd"] = json!("/synthetic/created-here");
+        write(&f.source.path, &f.rows);
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
+        f.source.origin_cwd = Some(PathBuf::from("/synthetic/created-here"));
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
+        f.source.origin_cwd = Some(PathBuf::from("/synthetic/elsewhere"));
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
+    }
+    #[test]
     fn late_arrivals_reject_changed_api_prior_dispatch_and_activity_but_keep_unknown_context() {
         let mut f = late_fixture();
         f.turns[0]["items"][2]["aggregatedOutput"] = json!("changed");
@@ -2929,6 +2978,7 @@ process.stdout.write(JSON.stringify(result));
                 path: PathBuf::from(text(&metadata["path"])?),
                 thread_id: id.into(),
                 cwd: fs::canonicalize(text(&metadata["cwd"])?)?,
+                origin_cwd: None,
                 codex_home: home.clone(),
                 max_bytes: MAX_BYTES,
             };

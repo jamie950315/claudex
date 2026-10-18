@@ -682,6 +682,25 @@ pub fn convert(
 const VENDOR_ADDED_NULL_FIELDS: &[(&str, &[&str])] =
     &[("subAgentActivity", &["model", "reasoningEffort"])];
 
+/// The item without the vendor-added fields it carries as null, if any.
+pub(crate) fn without_vendor_added_null_fields(item: &Value) -> Option<Value> {
+    let (_, fields) = VENDOR_ADDED_NULL_FIELDS
+        .iter()
+        .find(|(kind, _)| item["type"] == *kind)?;
+    let map = item.as_object()?;
+    fields
+        .iter()
+        .any(|field| map.get(*field).is_some_and(Value::is_null))
+        .then(|| {
+            Value::Object(
+                map.iter()
+                    .filter(|(key, value)| !(fields.contains(&key.as_str()) && value.is_null()))
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+            )
+        })
+}
+
 fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot> {
     let mut selected = snapshot.clone();
     let mut changed = false;
@@ -691,18 +710,9 @@ fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot> {
         .filter_map(|turn| turn["items"].as_array_mut())
         .flatten()
     {
-        let Some((_, fields)) = VENDOR_ADDED_NULL_FIELDS
-            .iter()
-            .find(|(kind, _)| item["type"] == *kind)
-        else {
-            continue;
-        };
-        let map = item.as_object_mut().unwrap();
-        for field in *fields {
-            if map.get(*field).is_some_and(Value::is_null) {
-                map.remove(*field);
-                changed = true;
-            }
+        if let Some(stripped) = without_vendor_added_null_fields(item) {
+            *item = stripped;
+            changed = true;
         }
     }
     changed.then_some(selected)

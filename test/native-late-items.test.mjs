@@ -314,7 +314,7 @@ const invalid = [
   ['wrong header', raw => { raw[0].payload.id = afterId; }],
   ['wrong parent API time', (_raw, native) => { native.turns[0].startedAt++; }],
   ['wrong native start second', raw => { raw[1].payload.started_at++; }],
-  ['wrong context cwd', raw => { raw[2].payload.cwd = '/tmp/foreign'; }],
+  ['relative context cwd', raw => { raw[2].payload.cwd = 'relative/project'; }],
   ['wrong exact final reply', raw => { raw[3].payload.last_agent_message += ' changed'; }],
   ['malformed start cannot prove idle', raw => { raw.splice(7, 0, frame('event_msg', { type: 'task_started', turn_id: null }, 201500)); }],
   ['ambiguous activity before arrival', raw => { raw.splice(7, 0, frame('response_item', { type: 'message', role: 'user', content: [] }, 201500)); }],

@@ -85,6 +85,15 @@ test('proves one exact empty lifecycle without inventing a hook or changing nati
   assert.deepEqual(await readFile(source.path), original);
 });
 
+test('per-turn working directories and a moved thread header do not contradict the API', async t => {
+  const moved = await fixture(t, source => { source[2].payload.cwd = '/tmp/other-workspace'; });
+  assert.deepEqual((await run(moved)).turnIds, [turnId]);
+  const header = await fixture(t, source => { source[0].payload.cwd = '/tmp/created-here'; });
+  await assert.rejects(run(header), /Native Codex empty turn:/);
+  const origin = createNativeEmptyTurnResolver({ path: header.path, threadId, cwd, originCwd: '/tmp/created-here' });
+  assert.deepEqual((await origin([turn()], { threadId })).turnIds, [turnId]);
+});
+
 test('native world state is context whatever its fields', async t => {
   const source = await fixture(t, source => {
     source.splice(2, 0, { type: 'world_state', payload: { full: false, state: { environments: [] } } });
@@ -247,7 +256,7 @@ const mutations = [
   ['context order', source => { [source[2], source[3]] = [source[3], source[2]]; }],
   ['start root', source => { source[1].payload.root_turn_id = nextId; }],
   ['context root', source => { source[2].payload.root_turn_id = nextId; }],
-  ['context cwd', source => { source[2].payload.cwd = '/tmp/elsewhere'; }],
+  ['relative context cwd', source => { source[2].payload.cwd = 'relative/project'; }],
   ['context thread', source => { source[2].payload.thread_id = nextId; }],
   ['contradictory turn alias', source => { source[2].payload.turnId = nextId; }],
   ['start time', source => { source[1].payload.started_at++; }],

@@ -59,6 +59,14 @@ values are never dropped, and new enrollments keep the fields. Add an entry only
 after real histories show an unchanged rollout failing its checkpoint because of
 that field.
 
+The same names apply when a late-item proof compares a projected raw item with its
+API item. Codex records a per-turn working directory in `turn_context` that the
+API does not report, and one thread may switch between workspace roots; late-item,
+empty-turn and goal proofs require it to be absolute, not equal to the thread's
+current cwd. A session header keeps the cwd the thread was created in: it must
+equal the current cwd or, for a verified `codex-project-move` record, its
+`relocation.originCwd`. Thread and session identities stay exact.
+
 Native Codex localImage recovery for originals and owned continuations reads
 metadata.path's current owned regular rollout. After a native rollover, it may
 also read exact previously verified ledger origins, never discover candidate

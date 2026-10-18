@@ -5,7 +5,7 @@ import { assertComplete, fingerprint } from './history.mjs';
 import { CODEX_RECONSTRUCTION_NOTICE, isNativeInitialDelegation } from './codex-delegation.mjs';
 import { hydrateNativeLocalImages } from './native-local-images.mjs';
 import { isNativeInitialGoalRequest } from './native-goal-request.mjs';
-import { nativeHistoryEntries, nativeImagePositions, lateItemRepresentations } from './native-history-order.mjs';
+import { nativeHistoryEntries, nativeImagePositions, lateItemRepresentations, withoutVendorAddedNullFields } from './native-history-order.mjs';
 
 export const NATIVE_HISTORY_LIMITS = Object.freeze({
   maxBytes: 16 * 1024 * 1024,
@@ -358,18 +358,13 @@ export async function readStableNativeHistory({ client, threadId, limits: inputL
   return { ...first, threadId, turnCount: first.turns.length, closedTail: first.closedTail && second.closedTail };
 }
 
-// Fields Codex later added, always null, to item types it already exported.
-// Checkpoints saved before then serialize those items without them.
-// subAgentActivity gained model and reasoningEffort in Codex 0.163.
-const VENDOR_ADDED_NULL_FIELDS = { subAgentActivity: ['model', 'reasoningEffort'] };
-
 function withoutVendorAddedNulls(turns) {
   let changed = false;
   const selected = turns.map(turn => ({ ...turn, items: turn.items.map(item => {
-    const fields = Object.hasOwn(VENDOR_ADDED_NULL_FIELDS, item?.type) ? VENDOR_ADDED_NULL_FIELDS[item.type] : [];
-    if (!fields.some(field => Object.hasOwn(item, field) && item[field] === null)) return item;
+    const stripped = withoutVendorAddedNullFields(item);
+    if (stripped === null) return item;
     changed = true;
-    return Object.fromEntries(Object.entries(item).filter(([key, value]) => !(fields.includes(key) && value === null)));
+    return stripped;
   }) }));
   return changed ? selected : null;
 }

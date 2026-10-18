@@ -17,6 +17,8 @@ pub struct RolloutProofs {
     pub path: PathBuf,
     pub thread_id: String,
     pub cwd: PathBuf,
+    /// The creation cwd a verified Codex project move recorded.
+    pub origin_cwd: Option<PathBuf>,
     pub max_bytes: usize,
     cache: std::sync::Mutex<Option<(PathBuf, FileIdentity, std::sync::Arc<Snapshot>)>>,
 }
@@ -43,9 +45,14 @@ impl RolloutProofs {
             path,
             thread_id,
             cwd,
+            origin_cwd: None,
             max_bytes,
             cache: std::sync::Mutex::new(None),
         }
+    }
+    pub fn with_origin_cwd(mut self, origin_cwd: Option<PathBuf>) -> Self {
+        self.origin_cwd = origin_cwd;
+        self
     }
     fn read(&self, id: &str, foreign_writes: bool) -> Result<std::sync::Arc<Snapshot>> {
         use std::os::unix::fs::OpenOptionsExt;
@@ -101,9 +108,10 @@ impl RolloutProofs {
                 .first()
                 .is_some_and(|r| r["type"] == "session_meta"
                     && r["payload"]["id"] == id
-                    && r["payload"]["cwd"]
-                        .as_str()
-                        .is_some_and(|s| same_directory(s, &self.cwd))
+                    && r["payload"]["cwd"].as_str().is_some_and(|s| {
+                        same_directory(s, &self.cwd)
+                            || self.origin_cwd.as_deref() == Some(Path::new(s))
+                    })
                     && present(&r["payload"]["session_id"], &json!(id)))
                 && !data
                     .rows
@@ -213,7 +221,7 @@ impl RolloutProofs {
                         payload["turn_id"] == turn_id
                             && payload["cwd"]
                                 .as_str()
-                                .is_some_and(|s| same_directory(s, &self.cwd)),
+                                .is_some_and(|s| Path::new(s).is_absolute()),
                         "Native empty turn context contradicts the API."
                     );
                 } else {
@@ -346,7 +354,7 @@ impl RolloutProofs {
                     p["turn_id"] == turn["id"]
                         && p["cwd"]
                             .as_str()
-                            .is_some_and(|s| same_directory(s, &self.cwd)),
+                            .is_some_and(|s| Path::new(s).is_absolute()),
                     "Native goal turn context contradicts the source."
                 );
                 context_turn = true;

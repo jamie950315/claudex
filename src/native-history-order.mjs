@@ -72,6 +72,18 @@ export function nativeHistoryEntries(snapshot, { arrivalOrder = snapshot?.native
  * lists it, every one at its arrival boundary, or the first arrivals native
  * and the rest at their boundaries. The checkpoint digest selects one.
  */
+// Fields Codex later added, always null, to item types it already exported.
+// Checkpoints saved before then serialize those items without them.
+// subAgentActivity gained model and reasoningEffort in Codex 0.163.
+const VENDOR_ADDED_NULL_FIELDS = { subAgentActivity: ['model', 'reasoningEffort'] };
+
+/** The item without the vendor-added fields it carries as null, or null. */
+export function withoutVendorAddedNullFields(item) {
+  const fields = Object.hasOwn(VENDOR_ADDED_NULL_FIELDS, item?.type) ? VENDOR_ADDED_NULL_FIELDS[item.type] : [];
+  if (!fields.some(field => Object.hasOwn(item, field) && item[field] === null)) return null;
+  return Object.fromEntries(Object.entries(item).filter(([key, value]) => !(fields.includes(key) && value === null)));
+}
+
 export function lateItemRepresentations(snapshot) {
   const proof = snapshot?.lateItemEvidence;
   if (proof == null) return [{ nativeItemOrder: 'arrival' }];

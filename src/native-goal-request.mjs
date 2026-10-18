@@ -72,7 +72,7 @@ export function hasPortableInitialGoalRequest(message) {
  * only the exact initial goal from the authoritative rollout, never a guessed
  * user message, another rollout, or a partial-history replacement.
  */
-export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes = 480 * 1024 * 1024 }) {
+export function createNativeGoalRequestResolver({ path, threadId, cwd, originCwd = null, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd)
     || !Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024) fail('invalid source identity or byte limit.');
@@ -88,7 +88,8 @@ export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes 
       fail('source changed before its stable read.');
     const rows = data.rows;
     const directories = await recordedDirectories(rows, cwd);
-    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId || !directories.has(rows[0].payload?.cwd)
+    if (rows[0]?.type !== 'session_meta' || rows[0].payload?.id !== threadId
+      || !directories.has(rows[0].payload?.cwd) && (originCwd === null || rows[0].payload?.cwd !== originCwd)
       || rows.slice(1).some(row => row.type === 'session_meta')) fail('source header differs from the exact native identity.');
     const start = rows.findIndex(row => row.type === 'event_msg' && row.payload?.type === 'task_started');
     if (start < 0 || rows[start].payload.turn_id !== turn.id || rows[start].payload.root_turn_id !== turn.id
@@ -107,7 +108,7 @@ export function createNativeGoalRequestResolver({ path, threadId, cwd, maxBytes 
       if (row.type === 'event_msg' && payload?.type === 'thread_goal_updated' && !context)
         fail('initial goal changed before its persisted request.');
       if (row.type === 'turn_context') {
-        if (payload?.turn_id !== turn.id || !directories.has(payload.cwd)) fail('goal turn context differs from the source.');
+        if (payload?.turn_id !== turn.id || typeof payload.cwd !== 'string' || !isAbsolute(payload.cwd)) fail('goal turn context differs from the source.');
         contextTurn = payload.turn_id;
       }
       if (row.type === 'response_item' && payload?.type === 'message' && payload.role === 'user'

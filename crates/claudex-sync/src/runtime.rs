@@ -641,10 +641,18 @@ impl Runtime {
             );
             let physical = native::physical_rollout(&path)?;
             native::safe_native_path(&physical, &self.options.codex_home)?;
+            let origin_cwd = r
+                .extra
+                .get("relocation")
+                .filter(|v| r.verified && v["kind"] == "codex-project-move")
+                .and_then(|v| v["originCwd"].as_str())
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute());
             let provenance = crate::codex_provenance::Provenance {
                 path: path.clone(),
                 thread_id: id.clone(),
                 cwd: cwd.clone(),
+                origin_cwd: origin_cwd.clone(),
                 codex_home: self.options.codex_home.clone(),
                 max_bytes: 480 * 1024 * 1024,
             };
@@ -654,7 +662,8 @@ impl Runtime {
                     id.clone(),
                     cwd.clone(),
                     480 * 1024 * 1024,
-                ),
+                )
+                .with_origin_cwd(origin_cwd),
                 provenance: provenance.clone(),
                 late_items_enabled: false,
             };
@@ -2085,6 +2094,7 @@ mod tests {
                 path,
                 thread_id: id.clone(),
                 cwd: root.clone(),
+                origin_cwd: None,
                 codex_home: root,
                 max_bytes: 1024 * 1024,
             },

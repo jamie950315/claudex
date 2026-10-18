@@ -3,7 +3,7 @@ import { lstat, open, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { nativeItemDigest } from './native-history-order.mjs';
+import { nativeItemDigest, withoutVendorAddedNullFields } from './native-history-order.mjs';
 import { resolveRolloutHistoryBase } from './native-local-images.mjs';
 import { decompressRollout, isCompressedRollout, physicalRolloutPath, recordedDirectories } from './codex-rollout-file.mjs';
 
@@ -134,6 +134,10 @@ function exactFrame(row, line) {
 // compaction-only turn has none), failed with its error, or interrupted.
 // Only the fields this proof relies on are compared; native adds metadata to
 // context rows between versions, and none of it orders a late command.
+// Codex records a per-turn working directory the API does not report; it need
+// not equal the thread's current cwd.
+const absoluteDirectory = value => typeof value === 'string' && isAbsolute(value);
+
 function boundaryProof(state, api, source, directories, { ranCommand = false } = {}) {
   const stopped = state?.stop?.payload;
   const status = stopped?.type === 'turn_aborted' ? 'interrupted' : stopped?.error === undefined ? 'completed' : 'failed';
@@ -153,7 +157,7 @@ function boundaryProof(state, api, source, directories, { ranCommand = false } =
     || stop.payload.completed_at !== undefined && stop.payload.completed_at !== api.completedAt
     || Math.floor(time(start) / 1000) !== api.startedAt || Math.floor(time(stop) / 1000) !== api.completedAt
     || stop.payload.duration_ms !== undefined && !integer(stop.payload.duration_ms) || stop.payload.time_to_first_token_ms !== undefined && !integer(stop.payload.time_to_first_token_ms)
-    || state.contexts.some(context => !directories.has(context.payload.cwd) || context.ordinal <= start.ordinal || context.ordinal >= stop.ordinal
+    || state.contexts.some(context => !absoluteDirectory(context.payload.cwd) || context.ordinal <= start.ordinal || context.ordinal >= stop.ordinal
       || time(context) < time(start) || time(context) > time(stop))) fail('native boundary or context differs from the full API.');
   if (status !== 'completed') return;
   const lastUser = api.items.findLastIndex(item => item.type === 'userMessage');
@@ -205,7 +209,7 @@ async function readHistory(path, threadId, locateRollout, maxBytes) {
  * Native turns and items stay intact; the caller uses placements only for the
  * portable order and still verifies the whole saved canonical checkpoint.
  */
-export function createNativeLateItemResolver({ path, threadId, cwd, locateRollout, maxBytes = 480 * 1024 * 1024 }) {
+export function createNativeLateItemResolver({ path, threadId, cwd, originCwd = null, locateRollout, maxBytes = 480 * 1024 * 1024 }) {
   if (typeof path !== 'string' || !isAbsolute(path) || resolve(path) !== path || !UUID.test(threadId)
     || typeof cwd !== 'string' || !isAbsolute(cwd) || resolve(cwd) !== cwd
     || !integer(maxBytes) || maxBytes < 1 || maxBytes > 480 * 1024 * 1024) fail('invalid source identity or byte limit.');
@@ -245,7 +249,8 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
     for (const index of source.starts) exactFrame(rows[index], source.lines[index]);
     const directories = await recordedDirectories(rows, cwd);
     if (rows.some((row, index) => row?.ordinal !== index || (row.type === 'session_meta') !== source.starts.has(index)
-      || source.starts.has(index) && (!object(row.payload) || row.payload.id !== threadId || !directories.has(row.payload.cwd)
+      || source.starts.has(index) && (!object(row.payload) || row.payload.id !== threadId
+        || !directories.has(row.payload.cwd) && (originCwd === null || row.payload.cwd !== originCwd)
         || row.payload.history_mode !== 'paginated' || row.payload.session_id !== threadId)))
       fail('source header or ordinal chain differs from the exact native identity.');
     const turns = new Map();
@@ -305,7 +310,8 @@ export function createNativeLateItemResolver({ path, threadId, cwd, locateRollou
       // The full API reports a command without output as null.
       if (projected.aggregatedOutput === '' && matches[0]?.aggregatedOutput === null) projected.aggregatedOutput = null;
       if (matches.length !== 1 || snapshot.turns.some(turn => turn.id !== parent.turn.id && turn.items.some(item => item.id === projected.id))
-        || selected.has(projected.id) || !isDeepStrictEqual(projected, matches[0])) fail('complete native item differs from the full API item.');
+        || selected.has(projected.id) || !isDeepStrictEqual(projected, matches[0])
+          && !isDeepStrictEqual(projected, withoutVendorAddedNullFields(matches[0]))) fail('complete native item differs from the full API item.');
       selected.add(projected.id); previousBoundary = boundary.stop.ordinal;
       (after ? placements : withheld).push({ turnId: parent.turn.id, itemId: projected.id, afterTurnId, itemDigest: nativeItemDigest(matches[0]) });
     }
