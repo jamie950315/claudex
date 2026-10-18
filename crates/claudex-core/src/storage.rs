@@ -131,6 +131,14 @@ pub fn is_not_found(error: &anyhow::Error) -> bool {
     })
 }
 
+/// The stable-read refusal raised when the named file was replaced, rewritten or
+/// removed while being read.
+pub fn is_changed_while_reading(error: &anyhow::Error) -> bool {
+    error
+        .chain()
+        .any(|e| e.to_string() == "Transcript changed while being read.")
+}
+
 pub fn private_directory(path: impl AsRef<Path>) -> Result<PathBuf> {
     let path = path.as_ref();
     match fs::symlink_metadata(path) {
@@ -253,9 +261,8 @@ pub struct Snapshot {
 pub fn snapshot(path: impl AsRef<Path>) -> Result<Snapshot> {
     snapshot_with_limit(path, usize::MAX)
 }
-pub fn compressed_rollout_bytes(path: impl AsRef<Path>, max_bytes: usize) -> Result<u64> {
-    let stored = read_stable(path.as_ref())?;
-    let decoder = zstd::stream::read::Decoder::new(stored.bytes.as_slice())
+fn decompress_rollout(stored: &[u8], max_bytes: usize) -> Result<Vec<u8>> {
+    let decoder = zstd::stream::read::Decoder::new(stored)
         .context("Compressed Codex rollout is not a complete zstd stream.")?;
     let mut bytes = Vec::new();
     decoder
@@ -265,34 +272,24 @@ pub fn compressed_rollout_bytes(path: impl AsRef<Path>, max_bytes: usize) -> Res
     if bytes.len() > max_bytes {
         bail!("Compressed Codex rollout exceeds its byte limit.");
     }
-    let (len, valid_end) = match std::str::from_utf8(&bytes) {
-        Ok(text) => (text.len(), text.is_empty() || text.ends_with('\n')),
-        Err(_) => {
-            let text = String::from_utf8_lossy(&bytes);
-            (text.len(), text.is_empty() || text.ends_with('\n'))
-        }
-    };
-    if !valid_end {
+    Ok(bytes)
+}
+/// The logical byte count snapshot_with_limit reports for a compressed rollout,
+/// without parsing its rows.
+pub fn compressed_rollout_bytes(path: impl AsRef<Path>, max_bytes: usize) -> Result<u64> {
+    let bytes = decompress_rollout(&read_stable(path.as_ref())?.bytes, max_bytes)?;
+    let text = String::from_utf8_lossy(&bytes);
+    if !text.is_empty() && !text.ends_with('\n') {
         bail!("Transcript has an incomplete final line.");
     }
-    Ok(len as u64)
+    Ok(text.len() as u64)
 }
 pub fn snapshot_with_limit(path: impl AsRef<Path>, max_bytes: usize) -> Result<Snapshot> {
     let path = path.as_ref();
     let stored = read_stable(path)?;
     let compressed = path.as_os_str().to_string_lossy().ends_with(".jsonl.zst");
     let bytes = if compressed {
-        let decoder = zstd::stream::read::Decoder::new(stored.bytes.as_slice())
-            .context("Compressed Codex rollout is not a complete zstd stream.")?;
-        let mut bytes = Vec::new();
-        decoder
-            .take(max_bytes.saturating_add(1) as u64)
-            .read_to_end(&mut bytes)
-            .context("Compressed Codex rollout is not a complete zstd stream.")?;
-        if bytes.len() > max_bytes {
-            bail!("Compressed Codex rollout exceeds its byte limit.");
-        }
-        bytes
+        decompress_rollout(&stored.bytes, max_bytes)?
     } else {
         stored.bytes
     };

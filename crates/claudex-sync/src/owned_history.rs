@@ -289,7 +289,6 @@ pub fn completed_claude_with_reset(
         Ok(decoded)
     };
     let mut rows = Vec::new();
-    let mut row_offsets = Vec::new();
     let mut cutoff = 0;
     let mut cutoff_rows = 0;
     let mut offset = 0;
@@ -304,7 +303,6 @@ pub fn completed_claude_with_reset(
             anyhow::anyhow!("Malformed native transcript record at line {}.", line_index + 1)
         })?;
         rows.push(row);
-        row_offsets.push(offset);
         let row = rows.last().unwrap();
         if row["isSidechain"] == true {
             continue;
@@ -377,7 +375,6 @@ pub fn completed_claude_with_reset(
             }
         }
     }
-    let _ = row_offsets;
     let authenticate = |row: &Value| -> Result<bool> {
         let Some(key) = key else { return Ok(false) };
         let Some(content) = row["message"]["content"].as_array() else {

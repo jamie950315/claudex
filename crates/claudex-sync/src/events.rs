@@ -115,110 +115,33 @@ pub struct Inbox {
     pub socket: PathBuf,
     local_wake: Arc<Mutex<Option<Weak<Notify>>>>,
 }
-fn lock_contention(error: &anyhow::Error) -> bool {
-    if storage::is_not_found(error) {
-        return true;
-    }
-    let text = format!("{error:#}");
-    [
-        "Another bridge operation holds the lock",
-        "Lock is not a private owned regular file",
-        "Lock identity changed",
-        "Lock state changed during owner publication",
-        "Lock changed during stale recovery",
-        "Malformed lock owner",
-        "Another stale-lock recovery",
-        "Transcript changed while being read",
-    ]
-    .iter()
-    .any(|prefix| text.contains(prefix))
-}
-
-fn retryable_current_lock(path: &Path) -> Option<bool> {
-    use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    let check_missing = || match fs::symlink_metadata(path) {
-        Ok(_) => None,
-        Err(current) => Some(current.kind() == std::io::ErrorKind::NotFound),
+/// A failed inbox lock acquisition is transient contention only when the lock
+/// was released or replaced since the attempt, its new holder has not yet
+/// written its record, or it names a live process.
+fn transient_lock(path: &Path) -> Result<bool> {
+    let data = match storage::read_stable(path) {
+        Ok(data) => data,
+        Err(e) if storage::is_not_found(&e) || storage::is_changed_while_reading(&e) => {
+            return Ok(true);
+        }
+        Err(e) => return Err(e),
     };
-    let mut file = match fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return check_missing(),
-        Err(_) => return Some(false),
-    };
-    let before = match file.metadata() {
-        Ok(m) => m,
-        Err(_) => return Some(false),
-    };
-    if !before.is_file()
-        || before.uid() != storage::uid()
-        || before.mode() & 0o777 != 0o600
-        || before.nlink() > 1
-        || before.len() > 1024
-    {
-        return Some(false);
+    ensure!(
+        data.bytes.len() <= 1024
+            && data.identity.uid == storage::uid().to_string()
+            && data.identity.nlink == "1"
+            && data.identity.mode.parse::<u32>()? & 0o7777 == 0o600,
+        "Unsafe event writer lock."
+    );
+    if data.bytes.is_empty() {
+        return Ok(true);
     }
-    let mtime_ms = before.mtime().saturating_mul(1000) + before.mtime_nsec() / 1_000_000;
-    if before.nlink() == 0 || (before.len() == 0 && storage::now_ms() - mtime_ms <= 1000) {
-        return None;
-    }
-    let mut bytes = Vec::new();
-    if std::io::Read::by_ref(&mut file)
-        .take(1025)
-        .read_to_end(&mut bytes)
-        .is_err()
-        || bytes.len() > 1024
-    {
-        return Some(false);
-    }
-    let owner: Value = match serde_json::from_slice(&bytes) {
-        Ok(v) => v,
-        Err(_) => return Some(false),
-    };
-    let Some(pid) = owner["pid"]
+    let holder: Value = serde_json::from_slice(&data.bytes)?;
+    let pid = holder["pid"]
         .as_u64()
         .filter(|p| *p > 0 && *p <= i32::MAX as u64)
-    else {
-        return Some(false);
-    };
-    if owner["started"]
-        .as_str()
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-        .is_none()
-    {
-        return Some(false);
-    }
-    let after = match file.metadata() {
-        Ok(m) => m,
-        Err(_) => return Some(false),
-    };
-    let named = match fs::symlink_metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return check_missing(),
-        Err(_) => return Some(false),
-    };
-    if named.nlink() == 0 {
-        return None;
-    }
-    if !named.is_file()
-        || named.file_type().is_symlink()
-        || named.uid() != storage::uid()
-        || named.mode() & 0o777 != 0o600
-        || named.nlink() != 1
-    {
-        return Some(false);
-    }
-    let before_id = FileIdentity::from_metadata(&before);
-    if before_id != FileIdentity::from_metadata(&after)
-        || before_id != FileIdentity::from_metadata(&named)
-    {
-        return None;
-    }
-    Some(storage::process_alive(pid as u32).unwrap_or(false))
+        .ok_or_else(|| anyhow::anyhow!("Malformed event writer lock."))?;
+    storage::process_alive(pid as u32)
 }
 
 impl Inbox {
@@ -245,68 +168,33 @@ impl Inbox {
         Ok(())
     }
     pub fn read(&self) -> Result<InboxState> {
-        use std::io::Read;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = match fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&self.path)
-        {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(InboxState {
-                    version: 1,
-                    entries: BTreeMap::new(),
-                });
+        // Writers replace the inbox atomically under the inbox lock; a lock-free
+        // reader that overlaps a replacement rereads the newly named file.
+        let mut attempts = 0;
+        let data = loop {
+            match storage::read_stable(&self.path) {
+                Ok(data) => break data,
+                Err(e) if storage::is_not_found(&e) => {
+                    return Ok(InboxState {
+                        version: 1,
+                        entries: BTreeMap::new(),
+                    });
+                }
+                Err(e) if attempts < 8 && storage::is_changed_while_reading(&e) => {
+                    attempts += 1;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => return Err(e.into()),
         };
-        let before = file.metadata()?;
         ensure!(
-            before.is_file()
-                && before.uid() == storage::uid()
-                && before.mode() & 0o777 == 0o600
-                && before.nlink() <= 1
-                && before.len() <= MAX_BYTES as u64,
+            data.bytes.len() <= MAX_BYTES
+                && data.identity.uid == storage::uid().to_string()
+                && data.identity.nlink == "1"
+                && data.identity.mode.parse::<u32>()? & 0o7777 == 0o600,
             "Unsafe synchronization inbox."
         );
-        let mut bytes = Vec::new();
-        std::io::Read::by_ref(&mut file)
-            .take((MAX_BYTES as u64).saturating_add(1))
-            .read_to_end(&mut bytes)?;
-        ensure!(
-            bytes.len() <= MAX_BYTES,
-            "Synchronization inbox exceeds bound."
-        );
-        let after = file.metadata()?;
-        let before_id = FileIdentity::from_metadata(&before);
-        let after_id = FileIdentity::from_metadata(&after);
-        ensure!(
-            after.is_file()
-                && after.uid() == storage::uid()
-                && after.mode() & 0o777 == 0o600
-                && after.nlink() <= 1
-                && before_id.dev == after_id.dev
-                && before_id.ino == after_id.ino
-                && before_id.size == after_id.size
-                && before_id.mtime_ns == after_id.mtime_ns
-                && (after.nlink() != 1 || before_id.ctime_ns == after_id.ctime_ns),
-            "Synchronization event inbox changed while being read."
-        );
-        let mut named = fs::symlink_metadata(&self.path)?;
-        if named.nlink() == 0 && after_id.same_inode(&FileIdentity::from_metadata(&named)) {
-            named = fs::symlink_metadata(&self.path)?;
-        }
-        ensure!(
-            named.is_file()
-                && !named.file_type().is_symlink()
-                && named.uid() == storage::uid()
-                && named.mode() & 0o777 == 0o600
-                && named.nlink() == 1
-                && named.len() <= MAX_BYTES as u64,
-            "Unsafe synchronization inbox."
-        );
-        let state: InboxState = serde_json::from_slice(&bytes)?;
+        let state: InboxState = serde_json::from_slice(&data.bytes)?;
         ensure!(
             state.version == 1 && state.entries.len() <= MAX_KEYS,
             "Malformed synchronization inbox."
@@ -322,54 +210,12 @@ impl Inbox {
         Ok(state)
     }
     fn write(&self, state: &InboxState) -> Result<()> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut contents = serde_json::to_vec_pretty(state)?;
-        contents.push(b'\n');
+        let value = serde_json::to_value(state)?;
         ensure!(
-            contents.len() <= MAX_BYTES,
+            serde_json::to_vec(&value)?.len() <= MAX_BYTES,
             "Synchronization inbox exceeds bound."
         );
-        let temporary = self.directory.join("inbox.next");
-        match fs::symlink_metadata(&temporary) {
-            Ok(previous) => {
-                ensure!(
-                    previous.is_file()
-                        && !previous.file_type().is_symlink()
-                        && previous.uid() == storage::uid()
-                        && previous.mode() & 0o777 == 0o600
-                        && previous.nlink() == 1
-                        && previous.len() <= MAX_BYTES as u64,
-                    "Unsafe synchronization event scratch file."
-                );
-                fs::remove_file(&temporary)?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) => return Err(e.into()),
-        }
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-            .open(&temporary)?;
-        if let Err(e) = file.write_all(&contents).and_then(|_| file.sync_all()) {
-            let _ = fs::remove_file(&temporary);
-            return Err(e.into());
-        }
-        drop(file);
-        let result = (|| -> Result<()> {
-            fs::rename(&temporary, &self.path)?;
-            fs::File::open(&self.directory)?.sync_all()?;
-            Ok(())
-        })();
-        match fs::remove_file(&temporary) {
-            Ok(()) => (),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-            Err(e) if result.is_ok() => return Err(e.into()),
-            Err(_) => (),
-        }
-        result
+        storage::write_json(&self.path, &value)
     }
     async fn lock(&self) -> Result<FileLock> {
         let path = self.directory.join("inbox.lock");
@@ -378,20 +224,10 @@ impl Inbox {
             match FileLock::acquire(&path, true) {
                 Ok(l) => return Ok(l),
                 Err(e) => {
-                    if !lock_contention(&e) || tokio::time::Instant::now() >= deadline {
+                    if tokio::time::Instant::now() >= deadline || !transient_lock(&path)? {
                         return Err(e);
                     }
-                    let mut retryable;
-                    loop {
-                        tokio::time::sleep(Duration::from_millis(20)).await;
-                        retryable = retryable_current_lock(&path);
-                        if retryable.is_some() || tokio::time::Instant::now() >= deadline {
-                            break;
-                        }
-                    }
-                    if retryable != Some(true) {
-                        return Err(e);
-                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
                 }
             }
         }
@@ -982,38 +818,36 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
-    async fn concurrent_reads_and_publishes_tolerate_atomic_replacement_and_lock_contention()
-    -> Result<()> {
+    async fn lock_free_reads_tolerate_concurrent_atomic_replacement() -> Result<()> {
         let temp = tempfile::tempdir()?;
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
         let root = temp.path().canonicalize()?;
         let inbox = Inbox::new(&root)?;
         inbox.initialize()?;
-        let id = Uuid::new_v4().to_string();
-        let writer_inbox = inbox.clone();
-        let writer = tokio::spawn(async move {
-            for i in 0..40 {
-                writer_inbox
-                    .publish(Event {
-                        side: Side::Codex,
-                        native_id: id.clone(),
-                        kind: if i % 2 == 0 {
-                            Kind::Changed
-                        } else {
-                            Kind::Completed
-                        },
-                        turn_id: None,
-                        remote_id: None,
-                    })
-                    .await?;
-            }
-            Ok::<_, anyhow::Error>(())
-        });
-        for _ in 0..80 {
-            let _ = inbox.list()?;
-            tokio::task::yield_now().await;
-        }
-        writer.await??;
+        inbox
+            .publish(Event {
+                side: Side::Codex,
+                native_id: Uuid::new_v4().to_string(),
+                kind: Kind::Completed,
+                turn_id: None,
+                remote_id: None,
+            })
+            .await?;
+        let state = inbox.read()?;
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let writer = {
+            let (inbox, stop) = (inbox.clone(), stop.clone());
+            std::thread::spawn(move || -> Result<()> {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    inbox.write(&state)?;
+                }
+                Ok(())
+            })
+        };
+        let reads = (0..2000).try_for_each(|_| inbox.read().map(drop));
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        writer.join().unwrap()?;
+        reads?;
         assert_eq!(inbox.list()?.len(), 1);
         Ok(())
     }

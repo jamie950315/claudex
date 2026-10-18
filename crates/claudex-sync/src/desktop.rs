@@ -719,37 +719,6 @@ impl DesktopBridge {
         );
         Ok(())
     }
-    async fn inspect_superseded_batch(&self, batch: &[&Record]) -> Result<()> {
-        match batch {
-            [] => Ok(()),
-            [a] => self.inspect_superseded_original(a).await,
-            [a, b] => {
-                let (ra, rb) = tokio::join!(
-                    self.inspect_superseded_original(a),
-                    self.inspect_superseded_original(b),
-                );
-                ra.and(rb)
-            }
-            [a, b, c] => {
-                let (ra, rb, rc) = tokio::join!(
-                    self.inspect_superseded_original(a),
-                    self.inspect_superseded_original(b),
-                    self.inspect_superseded_original(c),
-                );
-                ra.and(rb).and(rc)
-            }
-            [a, b, c, d] => {
-                let (ra, rb, rc, rd) = tokio::join!(
-                    self.inspect_superseded_original(a),
-                    self.inspect_superseded_original(b),
-                    self.inspect_superseded_original(c),
-                    self.inspect_superseded_original(d),
-                );
-                ra.and(rb).and(rc).and(rd)
-            }
-            _ => unreachable!(),
-        }
-    }
     async fn originals(
         &self,
         state: &State,
@@ -758,17 +727,13 @@ impl DesktopBridge {
         except: Option<&str>,
     ) -> Result<Vec<(String, Value)>> {
         let mut extensions = vec![];
-        let mut batch = Vec::with_capacity(4);
+        let mut originals = vec![];
         for r in state.records.iter().filter(|r| {
             id.is_none_or(|id| r.conversation_id == id)
                 && !frozen.contains(&r.conversation_id)
                 && except != Some(r.id.as_str())
         }) {
             if r.status == "dependency-anchor" {
-                if !batch.is_empty() {
-                    self.inspect_superseded_batch(&batch).await?;
-                    batch.clear();
-                }
                 ensure!(
                     r.managed && r.verified && r.kind == "snapshot" && r.side == Side::Codex,
                     "Invalid dependency anchor record."
@@ -778,15 +743,15 @@ impl DesktopBridge {
                 }
             }
             if r.status == "original" && !r.managed {
-                batch.push(r);
-                if batch.len() == 4 {
-                    self.inspect_superseded_batch(&batch).await?;
-                    batch.clear();
-                }
+                originals.push(r);
             }
         }
-        if !batch.is_empty() {
-            self.inspect_superseded_batch(&batch).await?;
+        // Independent read-only checks; bound how many native reads run at once.
+        for chunk in originals.chunks(4) {
+            futures_util::future::try_join_all(
+                chunk.iter().map(|r| self.inspect_superseded_original(r)),
+            )
+            .await?;
         }
         Ok(extensions)
     }

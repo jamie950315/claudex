@@ -229,6 +229,7 @@ dependencies = [
  "base64",
  "chrono",
  "claudex-core",
+ "futures-util",
  "hex",
  "libc",
  "notify",

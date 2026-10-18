@@ -12,6 +12,7 @@ base64.workspace = true
 chrono.workspace = true
 claudex-core = { path = "../claudex-core" }
 hex.workspace = true
+futures-util.workspace = true
 libc.workspace = true
 notify = "8"
 regex.workspace = true
