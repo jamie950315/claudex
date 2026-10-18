@@ -451,6 +451,49 @@ fn local_body(row: &Value) -> Option<&str> {
             .as_str()
     })
 }
+/// How a Claude row outside the known types is read. Claude writes every
+/// conversation row (user, assistant, system, attachment, progress) through one
+/// chain writer that always sets `parentUuid`, null at the root; session
+/// metadata (titles, tags, modes, worktree and agent settings, request replay
+/// records, ...) never carries it. A new metadata type is therefore not part
+/// of the dialogue, while an unknown row on the chain stays inert data.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaudeMetadata {
+    /// Rows without `parentUuid` are session metadata and are not messages.
+    Omit,
+    /// Checkpoints saved before that rule kept unknown metadata rows as inert
+    /// messages; their saved dialogue is read the way it was written.
+    Legacy,
+}
+/// Claudex's own and already named native rows that are never messages.
+fn known_bookkeeping(kind: Option<&str>) -> bool {
+    matches!(
+        kind,
+        Some(
+            "system"
+                | "progress"
+                | "file-history-snapshot"
+                | "queue-operation"
+                | "custom-title"
+                | "summary"
+                | "last-prompt"
+                | "pr-link"
+                | "claudex-owner"
+                | "bridge-session"
+                | "session-state"
+                | "claudex-repersisted-record"
+                | "mode"
+                | "permission-mode"
+                | "attachment"
+                | "cost-state"
+                | "atis-latch"
+                | "agent-name"
+                | "relocated"
+                | "ai-title"
+                | "file-history-delta"
+        )
+    )
+}
 pub fn decode_claude(text: &str, preserve_compaction: bool, owned: bool) -> Result<Common> {
     decode_claude_authenticated(text, preserve_compaction, owned, None)
 }
@@ -459,6 +502,21 @@ pub fn decode_claude_authenticated(
     preserve_compaction: bool,
     owned: bool,
     authenticate: Option<&dyn Fn(&Value) -> Result<bool>>,
+) -> Result<Common> {
+    decode_claude_with(
+        text,
+        preserve_compaction,
+        owned,
+        authenticate,
+        ClaudeMetadata::Omit,
+    )
+}
+pub fn decode_claude_with(
+    text: &str,
+    preserve_compaction: bool,
+    owned: bool,
+    authenticate: Option<&dyn Fn(&Value) -> Result<bool>>,
+    metadata: ClaudeMetadata,
 ) -> Result<Common> {
     let mut rows: Vec<_> = parse_rows(text)?
         .into_iter()
@@ -789,32 +847,9 @@ pub fn decode_claude_authenticated(
                     extra,
                 });
             }
-        } else if !matches!(
-            row["type"].as_str(),
-            Some(
-                "system"
-                    | "progress"
-                    | "file-history-snapshot"
-                    | "queue-operation"
-                    | "custom-title"
-                    | "summary"
-                    | "last-prompt"
-                    | "pr-link"
-                    | "claudex-owner"
-                    | "bridge-session"
-                    | "session-state"
-                    | "claudex-repersisted-record"
-                    | "mode"
-                    | "permission-mode"
-                    | "attachment"
-                    | "cost-state"
-                    | "atis-latch"
-                    | "agent-name"
-                    | "relocated"
-                    | "ai-title"
-                    | "file-history-delta"
-            )
-        ) {
+        } else if !known_bookkeeping(row["type"].as_str())
+            && (metadata == ClaudeMetadata::Legacy || row.get("parentUuid").is_some())
+        {
             messages.push(Message {
                 role: "assistant".into(),
                 content: vec![inert("Claude native record", row)?],
@@ -1103,6 +1138,84 @@ pub fn decode_codex(text: &str) -> Result<Common> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Session metadata rows exactly as Claude Code 2.1.250-2.1.302 writes
+    /// them: none sits on the parent chain.
+    fn claude_session_metadata(session: &str) -> Vec<Value> {
+        vec![
+            json!({"type":"tag","tag":"review","sessionId":session}),
+            json!({"type":"agent-color","agentColor":"blue","sessionId":session}),
+            json!({"type":"agent-setting","agentSetting":"reviewer","sessionId":session}),
+            json!({"type":"worktree-state","worktreeSession":{"path":"/project/.wt"},"sessionId":session}),
+            json!({"type":"memory-mode","mode":"on","afterUuid":"u1","timestamp":"2026-10-16T00:00:00.000Z","sessionId":session}),
+            json!({"type":"isolation-latch","side":"local","sessionId":session}),
+            json!({"type":"dev-mods","folder":"/project/mods","sessionId":session}),
+            json!({"type":"continued-in","timestamp":"2026-10-16T00:00:00.000Z","sessionId":session,"continuedInSessionId":"next"}),
+            json!({"type":"content-replacement","sessionId":session,"replacements":[{"toolUseId":"t","content":"x"}]}),
+            json!({"type":"frame-link","artifactCount":1,"sessionId":session,"timestamp":"2026-10-16T00:00:00.000Z"}),
+            json!({"type":"ended-by-model","timestamp":"2026-10-16T00:00:00.000Z","sessionId":session}),
+            json!({"type":"history-suppression","sessionId":session,"cause":"migration","ts":"2026-10-16T00:00:00.000Z"}),
+            json!({"type":"api-request","sessionId":session,"id":"r","timestamp":"2026-10-16T00:00:00.000Z","shapeHash":"h","params":{}}),
+            json!({"type":"api-request-blob","sessionId":session,"hash":"h","message":{"role":"user","content":"request body"}}),
+            json!({"type":"artifact-comment-monitor","v":1,"sessionId":session,"artifacts":[]}),
+            json!({"type":"a-future-metadata-kind","sessionId":session,"anything":{"nested":true}}),
+        ]
+    }
+    #[test]
+    fn session_metadata_off_the_parent_chain_is_not_dialogue() -> Result<()> {
+        let session = "session";
+        let row = |kind: &str, id: &str, parent: Option<&str>, content: Value| json!({"type":kind,"uuid":id,"parentUuid":parent,"sessionId":session,"cwd":"/project","message":{"role":kind,"content":content,"stop_reason":"end_turn"}});
+        let dialogue = vec![
+            row("user", "u1", None, json!("First")),
+            row(
+                "assistant",
+                "a1",
+                Some("u1"),
+                json!([{"type":"text","text":"One"}]),
+            ),
+            row("user", "u2", Some("a1"), json!("Second")),
+            row(
+                "assistant",
+                "a2",
+                Some("u2"),
+                json!([{"type":"text","text":"Two"}]),
+            ),
+        ];
+        let metadata = claude_session_metadata(session);
+        let mut interleaved = metadata.clone();
+        interleaved.extend(dialogue[..2].iter().cloned());
+        interleaved.extend(metadata.iter().cloned());
+        interleaved.extend(dialogue[2..].iter().cloned());
+        interleaved.extend(metadata.iter().cloned());
+        let plain = decode_claude(&serialize_rows(&dialogue)?, true, false)?;
+        let read = decode_claude(&serialize_rows(&interleaved)?, true, false)?;
+        assert_eq!(read.messages.len(), 4);
+        assert_eq!(read.fingerprint()?, plain.fingerprint()?);
+        assert_eq!(read.meta["id"], json!(session));
+        // An unknown row on the parent chain may carry content: it stays inert.
+        let mut chained = interleaved.clone();
+        let before_reply = chained.iter().position(|r| r["uuid"] == "a2").unwrap();
+        chained.insert(
+            before_reply,
+            json!({"type":"future-turn-part","uuid":"f","parentUuid":"u2","sessionId":session,"payload":{"kept":"whole"}}),
+        );
+        let read = decode_claude(&serialize_rows(&chained)?, true, false)?;
+        assert_eq!(read.messages.len(), 5);
+        assert!(
+            read.messages[3].content[0]["text"]
+                .as_str()
+                .is_some_and(|t| t.starts_with("[Imported Claude native record;"))
+        );
+        // The earlier reading still reproduces checkpoints saved with it.
+        let legacy = decode_claude_with(
+            &serialize_rows(&interleaved)?,
+            true,
+            false,
+            None,
+            ClaudeMetadata::Legacy,
+        )?;
+        assert_eq!(legacy.messages.len(), 4 + 3 * metadata.len());
+        Ok(())
+    }
     #[test]
     fn queued_owned_compaction_authenticates_single_retained_packet_without_replay() -> Result<()> {
         let mut rows = vec![

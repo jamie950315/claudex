@@ -179,8 +179,16 @@ pub fn claude(home: &Path, registry: &Path, record: &Record) -> Result<Option<Re
             && absent(origin_path)?,
         "Source history changed between complete relocation reads."
     );
-    let mut decoded =
-        owned_history::completed_claude(&raw.text, home, "", &record.native_id, None)?;
+    let mut decoded = owned_history::completed_claude_for_checkpoint(
+        &raw.text,
+        home,
+        "",
+        &record.native_id,
+        None,
+        claudex_core::version::VersionPolicy::Strict,
+        None,
+        &record.checkpoint,
+    )?;
     // Checkpoint counts index portable messages, not native thinking-only
     // placeholders that normalize to no authored content.
     decoded.common.make_portable();

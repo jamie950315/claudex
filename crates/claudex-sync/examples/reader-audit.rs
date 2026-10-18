@@ -11,14 +11,25 @@ fn main() -> anyhow::Result<()> {
             let text = input["text"]
                 .as_str()
                 .ok_or_else(|| anyhow::anyhow!("Missing native text."))?;
-            let common: Common = match input["side"].as_str() {
-                Some("claude") => codecs::decode_claude(text, true, false)?,
-                Some("codex") => codecs::decode_codex(text)?,
+            let (common, legacy): (Common, Option<Common>) = match input["side"].as_str() {
+                Some("claude") => (
+                    codecs::decode_claude(text, true, false)?,
+                    Some(codecs::decode_claude_with(
+                        text,
+                        true,
+                        false,
+                        None,
+                        codecs::ClaudeMetadata::Legacy,
+                    )?),
+                ),
+                Some("codex") => (codecs::decode_codex(text)?, None),
                 _ => anyhow::bail!("Unknown native side."),
             };
             let common = common.portable();
+            // The earlier reading kept unlisted session metadata as inert messages.
+            let legacy_count = legacy.map(|l| l.portable().messages.len());
             Ok(
-                json!({"ok":true,"count":common.messages.len(),"fingerprint":common.fingerprint()?,"messages":common.messages.iter().map(|m|json!({"role":m.role,"content":m.content})).collect::<Vec<_>>()}),
+                json!({"ok":true,"count":common.messages.len(),"legacyCount":legacy_count,"fingerprint":common.fingerprint()?,"messages":common.messages.iter().map(|m|json!({"role":m.role,"content":m.content})).collect::<Vec<_>>()}),
             )
         })();
         let output = match result {
