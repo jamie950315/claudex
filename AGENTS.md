@@ -4,7 +4,7 @@ Local turn-boundary conversation bridge between Codex desktop/CLI and Claude Cod
 Use English for repository content. Keep private transcripts, state, logs, credentials,
 and generated sessions outside the repository.
 
-Claudex.app 2.0.2 packages Claude Mod 0.8.59. Keep application and Mod versions
+Claudex.app 2.0.2 packages Claude Mod 0.8.60. Keep application and Mod versions
 distinct; their authoritative manifests are package.json and
 plugins/claudex/.claude-plugin/plugin.json. Historical release notes describe
 their own releases, not the current setup or permission defaults.
@@ -64,10 +64,14 @@ fixtures use placeholder paths and IDs.
   label, kind, trigger or state, a different order of context. Unknown content
   is kept whole as inert labeled data rather than dropped or refused. Compare
   the fields a proof uses and ignore the others. This governs reading only:
-  writes, retirement, archival, ownership, checkpoints and the frontend
+  writes, retirement, archival, ownership and the frontend
   patches (which change vendor code) keep their exact proofs. When a reader
   is loosened, run it over real local histories in both directions and record
   the counts; a refusal found in real use is first checked against this rule.
+  Checkpoints keep their exact bytes for writes, archival, retirement and
+  identity proofs, but reads that decide whether a conversation continues
+  compare the saved dialogue, and late native items match their API item by
+  identity (docs/agents/sync-events.md, Checkpoints).
 - Read transcript snapshots through a no-follow file descriptor and compare its
   nanosecond file identity with the named file before and after reading. Size and
   modification time alone do not prove stability after a replacement or rewrite.

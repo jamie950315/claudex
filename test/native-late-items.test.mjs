@@ -251,9 +251,17 @@ test('a late sub-agent notification is placed at its arrival like a late command
     source.push(...laterTurn(), notice(300500)); native.turns[0].items.push(api); });
   assert.deepEqual((await prove(running)).placements.map(placement => [placement.itemId, placement.afterTurnId]),
     [['subagent-completed-synthetic', afterId]]);
+  // Content is the API's to re-project; identity and kind are not.
   for (const mutate of [
-    (source, native) => { native.turns[0].items.at(-1).agentPath = '/root/other_agent'; },
+    (source, native) => { native.turns[0].items.at(-1).agentPath = '/root/other_agent'; native.turns[0].items.at(-1).model = null; },
     source => { delete source.at(-1).payload.item.agent_thread_id; },
+  ]) {
+    const changed = await fixture(t, (source, native) => { source.push(notice(203000)); native.turns[0].items.push(structuredClone(api)); mutate(source, native); });
+    assert.equal((await prove(changed)).placements.length, 2);
+  }
+  for (const mutate of [
+    (source, native) => { native.turns[0].items.at(-1).id = 'subagent-other'; },
+    (source, native) => { native.turns[0].items.at(-1).type = 'commandExecution'; },
     source => { source.at(-1).payload.started_at_ms = 203001; },
     source => { source.at(-1).payload.item.type = 'Reasoning'; },
   ]) {
@@ -297,10 +305,12 @@ test('a checkpoint that already holds earlier late commands in native order stil
   assert.match(exported.common.messages[2].content[0].text, /exec-synthetic/);
 });
 
-const invalid = [
-  ['actual command change', (_raw, native) => { native.turns[0].items.at(-1).command += ' changed'; }],
-  ['actual output change', (_raw, native) => { native.turns[0].items.at(-1).aggregatedOutput += ' changed'; }],
-  ['unknown API field', (_raw, native) => { native.turns[0].items.at(-1).newMetadata = null; }],
+// The raw arrival only locates its API item by identity; the API item is
+// what is exported, so changes to either payload's content are accepted.
+const reprojected = [
+  ['command change', (_raw, native) => { native.turns[0].items.at(-1).command += ' changed'; }],
+  ['output change', (_raw, native) => { native.turns[0].items.at(-1).aggregatedOutput += ' changed'; }],
+  ['new API field', (_raw, native) => { native.turns[0].items.at(-1).newMetadata = null; }],
   ['unknown source', raw => { raw.at(-1).payload.item.source = 'agent'; }],
   ['unknown parsed action', raw => { raw.at(-1).payload.item.parsed_cmd[0].type = 'read'; }],
   ['unretained stderr', raw => { raw.at(-1).payload.item.stderr = 'Additional native output.'; }],
@@ -308,6 +318,17 @@ const invalid = [
   ['wrong file URI', raw => { raw.at(-1).payload.item.cwd = 'file://foreign-host/tmp/synthetic%20project'; }],
   ['wrong process binding', (_raw, native) => { native.turns[0].items.at(-1).processId = 'other'; }],
   ['unsafe duration', raw => { raw.at(-1).payload.item.duration.nanos = 1e9; }],
+  ['command outside a file path', raw => { raw.at(-1).payload.item.cwd = 'relative/project'; }],
+  ['command directory differs from the API', raw => { raw.at(-1).payload.item.cwd = pathToFileURL('/tmp/other project').href; }],
+];
+for (const [name, mutate] of reprojected) test(`late provenance accepts ${name}`, async t => {
+  assert.equal((await prove(await fixture(t, mutate))).placements.length, 1);
+});
+
+const invalid = [
+  ['API identity change', (_raw, native) => { native.turns[0].items.at(-1).id = 'exec-other'; }],
+  ['API kind change', (_raw, native) => { native.turns[0].items.at(-1).type = 'subAgentActivity'; }],
+  ['missing raw identity', raw => { delete raw.at(-1).payload.item.id; }],
   ['actual assistant late item', raw => { raw.at(-1).payload.item = { type: 'AgentMessage', id: 'agent-late', content: [] }; }],
   ['wrong thread', raw => { raw.at(-1).payload.thread_id = afterId; }],
   ['unknown late parent', raw => { raw.at(-1).payload.turn_id = '00000000-0000-4000-8000-000000000099'; }],
@@ -321,8 +342,6 @@ const invalid = [
   ['completion recorded after its row', raw => { raw.at(-1).payload.completed_at_ms++; }],
   ['missing parent context', raw => { raw.splice(2, 1); }],
   ['context of another turn identity', raw => { raw[2].payload.root_turn_id = afterId; }],
-  ['command outside a file path', raw => { raw.at(-1).payload.item.cwd = 'relative/project'; }],
-  ['command directory differs from the API', raw => { raw.at(-1).payload.item.cwd = pathToFileURL('/tmp/other project').href; }],
   ['unrecognized activity before the running turn', raw => { raw.push(frame('response_item', { type: 'message' }, 250000), ...laterTurn(), raw.splice(7, 1)[0]); }],
   ['failed stop without an API error', raw => { raw[6].payload.error = { message: 'Synthetic.' }; }],
   ['start after parent stop', raw => { raw.at(-1).payload.started_at_ms = 150000; }],

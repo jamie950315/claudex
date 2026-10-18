@@ -701,23 +701,6 @@ pub(crate) fn without_vendor_added_null_fields(item: &Value) -> Option<Value> {
         })
 }
 
-/// The API form of an item the serialization alternative stripped: its named
-/// vendor fields restored as null.
-pub(crate) fn with_vendor_added_null_fields(item: &Value) -> Option<Value> {
-    let (_, fields) = VENDOR_ADDED_NULL_FIELDS
-        .iter()
-        .find(|(kind, _)| item["type"] == *kind)?;
-    let mut restored = item.as_object()?.clone();
-    let mut changed = false;
-    for field in *fields {
-        if !restored.contains_key(*field) {
-            restored.insert((*field).into(), Value::Null);
-            changed = true;
-        }
-    }
-    changed.then_some(Value::Object(restored))
-}
-
 pub(crate) fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot> {
     let mut selected = snapshot.clone();
     let mut changed = false;
@@ -736,7 +719,9 @@ pub(crate) fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot
 }
 
 /// A serialization alternative is usable only when the entire existing saved
-/// canonical prefix authenticates it. It never selects a new checkpoint.
+/// canonical prefix authenticates its exact bytes. It never selects a new
+/// checkpoint. Without one, the ordinary conversion is returned and the caller
+/// accepts it when the saved dialogue matches.
 pub fn convert_checkpoint(
     snapshot: &Snapshot,
     id: &str,
@@ -796,7 +781,7 @@ pub fn needs_late_item_proof(
     checkpoint: &crate::desktop::Checkpoint,
     common: &Common,
 ) -> Result<bool> {
-    Ok(verified && checkpoint.count > 0 && !checkpoint.contains(common)?)
+    Ok(verified && checkpoint.count > 0 && !checkpoint.contains_dialogue(common)?)
 }
 
 #[cfg(test)]
@@ -912,6 +897,7 @@ mod tests {
         let different = crate::desktop::Checkpoint {
             count: checkpoint.count,
             digest: Some("c".repeat(64)),
+            dialogue: None,
         };
         assert_eq!(
             convert_checkpoint(&snapshot, "id", "/tmp", &different).unwrap(),

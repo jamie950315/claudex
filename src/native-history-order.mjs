@@ -47,8 +47,9 @@ export function nativeHistoryEntries(snapshot, { arrivalOrder = snapshot?.native
       if (!parent || exported !== Boolean(boundary) || exported && (boundary.index < parent.index || boundary.index < previousBoundary
           || !['completed', 'interrupted', 'failed'].includes(boundary.turn.status))
         || !item || !(item.type === 'subAgentActivity' || item.type === 'commandExecution' && ['completed', 'failed'].includes(item.status))
-        || placed.has(identity) || placement.itemDigest !== nativeItemDigest(item)
-          && placement.itemDigest !== nativeItemDigest(withVendorAddedNullFields(item) ?? item)) fail('late item identity or completed boundary differs from the API.');
+        // A placement locates its item by identity; itemDigest is kept as
+        // evidence, not compared with the current payload.
+        || placed.has(identity) || !/^[a-f0-9]{64}$/.test(placement.itemDigest ?? '')) fail('late item identity or completed boundary differs from the API.');
       if (exported) previousBoundary = boundary.index;
       placed.add(identity);
       if (position < native) continue;
@@ -77,13 +78,6 @@ export function nativeHistoryEntries(snapshot, { arrivalOrder = snapshot?.native
 // Checkpoints saved before then serialize those items without them.
 // subAgentActivity gained model and reasoningEffort in Codex 0.163.
 const VENDOR_ADDED_NULL_FIELDS = { subAgentActivity: ['model', 'reasoningEffort'] };
-
-/** The API form of an item the alternative stripped, or null. */
-function withVendorAddedNullFields(item) {
-  const fields = Object.hasOwn(VENDOR_ADDED_NULL_FIELDS, item?.type) ? VENDOR_ADDED_NULL_FIELDS[item.type] : [];
-  const missing = fields.filter(field => !Object.hasOwn(item, field));
-  return missing.length ? { ...item, ...Object.fromEntries(missing.map(field => [field, null])) } : null;
-}
 
 /** The item without the vendor-added fields it carries as null, or null. */
 export function withoutVendorAddedNullFields(item) {

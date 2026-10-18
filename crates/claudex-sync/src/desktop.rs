@@ -2,7 +2,7 @@
 //! and an at-most-once handoff journal. Adapters own all native mutations.
 use crate::{
     bridge::Side,
-    history::{Common, assert_complete, fingerprint},
+    history::{Common, assert_complete, dialogue_fingerprint, fingerprint},
     retention::{self, Policy, RetainedRecord},
 };
 use anyhow::{Result, bail, ensure};
@@ -21,24 +21,44 @@ fn now() -> u64 {
     chrono::Utc::now().timestamp_millis().max(0) as u64
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// `digest` authenticates the exact canonical bytes. `dialogue` authenticates
+/// only the dialogue (see `history::dialogue_fingerprint`); it is recorded with
+/// every new checkpoint and added to older ones on their next exact match.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub count: usize,
     pub digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dialogue: Option<String>,
 }
+/// Both digests describe the same saved prefix, so identity is count and the
+/// exact digest.
+impl PartialEq for Checkpoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.count == other.count && self.digest == other.digest
+    }
+}
+impl Eq for Checkpoint {}
 impl Checkpoint {
     pub fn of(common: &Common) -> Result<Self> {
         Ok(Self {
             count: common.messages.len(),
             digest: Some(common.fingerprint()?),
+            dialogue: Some(dialogue_fingerprint(
+                &common.messages,
+                common.messages.len(),
+            )?),
         })
     }
     pub fn empty() -> Self {
         Self {
             count: 0,
             digest: None,
+            dialogue: None,
         }
     }
+    /// Exact canonical bytes. Writes, archival, retirement, relocation and
+    /// other identity proofs use this.
     pub fn contains(&self, common: &Common) -> Result<bool> {
         Ok(self.count <= common.messages.len()
             && self.digest.as_deref() == Some(&fingerprint(&common.messages, self.count)?))
@@ -46,13 +66,60 @@ impl Checkpoint {
     pub fn exact(&self, common: &Common) -> Result<bool> {
         Ok(self.count == common.messages.len() && self.contains(common)?)
     }
+    /// Reading a native history: the exact bytes, or the same dialogue. A
+    /// re-projected tool or event payload is not a divergence.
+    pub fn contains_dialogue(&self, common: &Common) -> Result<bool> {
+        if self.contains(common)? {
+            return Ok(true);
+        }
+        Ok(self.count <= common.messages.len()
+            && self.dialogue.as_deref()
+                == Some(&dialogue_fingerprint(&common.messages, self.count)?))
+    }
+    pub fn exact_dialogue(&self, common: &Common) -> Result<bool> {
+        Ok(self.count == common.messages.len() && self.contains_dialogue(common)?)
+    }
+    /// A write proof: the copied tail `written..count` is byte-exact with the
+    /// source, and the prefix the destination already held is the same dialogue.
+    pub fn contains_written(
+        &self,
+        destination: &Common,
+        source: &Common,
+        written: usize,
+    ) -> Result<bool> {
+        if self.contains(destination)? {
+            return Ok(true);
+        }
+        let tail = |c: &Common| c.messages.get(written..self.count).map(|m| m.to_vec());
+        Ok(written <= self.count
+            && self.contains_dialogue(destination)?
+            && tail(destination).is_some_and(|d| {
+                tail(source)
+                    .is_some_and(|s| fingerprint(&d, d.len()).ok() == fingerprint(&s, s.len()).ok())
+            }))
+    }
+    /// This checkpoint with its dialogue digest added, when it lacks one and
+    /// `common` matches its exact bytes.
+    pub fn with_dialogue(&self, common: &Common) -> Result<Option<Self>> {
+        if self.dialogue.is_some() || self.count == 0 || !self.contains(common)? {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            dialogue: Some(dialogue_fingerprint(&common.messages, self.count)?),
+            ..self.clone()
+        }))
+    }
     pub fn validate(&self) -> Result<()> {
         ensure!(
             self.count > 0
                 && self
                     .digest
                     .as_ref()
-                    .is_some_and(|s| crate::packet::hex_digest(&json!(s))),
+                    .is_some_and(|s| crate::packet::hex_digest(&json!(s)))
+                && self
+                    .dialogue
+                    .as_ref()
+                    .is_none_or(|s| crate::packet::hex_digest(&json!(s))),
             "Invalid completed checkpoint."
         );
         Ok(())
@@ -455,6 +522,9 @@ pub struct DesktopBridge {
     pub adapters: BTreeMap<Side, Arc<dyn Adapter>>,
     pub policy: Policy,
     pub(crate) state_cache: Arc<StateCache>,
+    /// Dialogue digests learned while verifying superseded originals; the next
+    /// sync records them under its lock.
+    dialogue_upgrades: std::sync::Mutex<Vec<(String, Checkpoint)>>,
 }
 impl DesktopBridge {
     pub fn new(root: impl Into<PathBuf>, adapters: BTreeMap<Side, Arc<dyn Adapter>>) -> Self {
@@ -470,6 +540,7 @@ impl DesktopBridge {
             adapters,
             policy: Policy::default(),
             state_cache,
+            dialogue_upgrades: Default::default(),
         }
     }
     fn adapter(&self, side: Side) -> Result<&Arc<dyn Adapter>> {
@@ -687,7 +758,7 @@ impl DesktopBridge {
             "Native relocation counterpart identity changed."
         );
         ensure!(
-            c.canonical.contains(&data.common)?,
+            c.canonical.contains_dialogue(&data.common)?,
             "History diverged before the common checkpoint; no branch was selected."
         );
         Ok(Some((record.clone(), data)))
@@ -714,10 +785,57 @@ impl DesktopBridge {
     async fn inspect_superseded_original(&self, r: &Record) -> Result<()> {
         let data = self.inspect(r).await?;
         ensure!(
-            !data.incomplete_tail && r.checkpoint.exact(&data.common)?,
+            !data.incomplete_tail && r.checkpoint.exact_dialogue(&data.common)?,
             "Superseded original changed; no branch was selected."
         );
+        if let Some(upgraded) = r.checkpoint.with_dialogue(&data.common)? {
+            self.dialogue_upgrades
+                .lock()
+                .unwrap()
+                .push((r.id.clone(), upgraded));
+        }
         Ok(())
+    }
+    /// Record dialogue digests for checkpoints that still lack one, from
+    /// readings that matched their exact bytes.
+    fn record_dialogue(
+        &self,
+        state: &mut State,
+        id: &str,
+        readings: &[(Record, Reading)],
+    ) -> Result<bool> {
+        let mut upgrades = std::mem::take(&mut *self.dialogue_upgrades.lock().unwrap());
+        let mut changed = false;
+        for (record, data) in readings {
+            if let Some(upgraded) = record.checkpoint.with_dialogue(&data.common)? {
+                upgrades.push((record.id.clone(), upgraded));
+            }
+            let conversation = state.conversations.get_mut(id).unwrap();
+            if let Some(upgraded) = conversation.canonical.with_dialogue(&data.common)? {
+                conversation.canonical = upgraded;
+                changed = true;
+            }
+        }
+        for (record_id, upgraded) in upgrades {
+            if let Some(saved) = state.records.iter_mut().find(|r| {
+                r.id == record_id && r.checkpoint == upgraded && r.checkpoint.dialogue.is_none()
+            }) {
+                saved.checkpoint = upgraded;
+                changed = true;
+            }
+        }
+        let canonical = &state.conversations[id].canonical;
+        for saved in state
+            .records
+            .iter_mut()
+            .filter(|r| r.conversation_id == id && r.checkpoint.dialogue.is_none())
+        {
+            if saved.checkpoint == *canonical && canonical.dialogue.is_some() {
+                saved.checkpoint = canonical.clone();
+                changed = true;
+            }
+        }
+        Ok(changed)
     }
     async fn originals(
         &self,
@@ -1005,7 +1123,7 @@ impl DesktopBridge {
             self.adapter(r.side)?.assert_idle(r).await?;
             let d = self.inspect(r).await?;
             ensure!(
-                !d.incomplete_tail && c.canonical.contains(&d.common)?,
+                !d.incomplete_tail && c.canonical.contains_dialogue(&d.common)?,
                 "Stopped conversation lost its synchronized prefix; tracking remains stopped."
             );
             changed += usize::from(d.common.messages.len() > c.canonical.count);
@@ -1069,6 +1187,13 @@ impl DesktopBridge {
             }
             Err(error) => return Err(error),
         };
+        if self.record_dialogue(&mut state, id, &readings)? {
+            self.save(
+                &mut state,
+                Some(json!({"event":"checkpoint-dialogue-recorded","conversationId":id})),
+            )?;
+            c = state.conversations[id].clone();
+        }
         let changed: Vec<_> = readings
             .iter()
             .filter(|(_, d)| d.common.messages.len() > c.canonical.count)
@@ -1340,7 +1465,7 @@ impl DesktopBridge {
                 .ok_or_else(|| anyhow::anyhow!("Desktop handoff source is missing."))?;
             ensure!(
                 p.checkpoint
-                    .contains(&self.inspect(&source).await?.common)?,
+                    .contains_dialogue(&self.inspect(&source).await?.common)?,
                 "Source changed during handoff; pending preserved."
             );
             let target = state
@@ -1355,9 +1480,9 @@ impl DesktopBridge {
                         .assert_idle(&reset_source(target, &p))
                         .await?;
                     ensure!(
-                        target
-                            .checkpoint
-                            .exact(&self.inspect(&reset_source(target, &p)).await?.common)?,
+                        target.checkpoint.exact_dialogue(
+                            &self.inspect(&reset_source(target, &p)).await?.common
+                        )?,
                         "Destination changed during handoff; no branch was selected."
                     );
                 }
@@ -1380,7 +1505,8 @@ impl DesktopBridge {
             }
             let target_data = self.inspect(&p.record).await?;
             ensure!(
-                p.checkpoint.contains(&target_data.common)?,
+                p.checkpoint
+                    .contains_written(&target_data.common, &p.common, p.previous.count)?,
                 "Native destination lost the complete copied checkpoint."
             );
             p.record.path = target_data.path;
@@ -1398,7 +1524,7 @@ impl DesktopBridge {
             )?;
             let latest = self.inspect(&source).await?;
             ensure!(
-                p.checkpoint.contains(&latest.common)?,
+                p.checkpoint.contains_dialogue(&latest.common)?,
                 "Source changed before promotion; pending preserved."
             );
             self.originals(
@@ -1414,7 +1540,7 @@ impl DesktopBridge {
                     ensure!(
                         target
                             .checkpoint
-                            .exact(&self.inspect(target).await?.common)?,
+                            .exact_dialogue(&self.inspect(target).await?.common)?,
                         "Destination changed before promotion."
                     );
                 }
@@ -1905,7 +2031,8 @@ impl DesktopBridge {
                 .ok_or_else(|| anyhow::anyhow!("Split receipt enrollment missing."))?;
             ensure!(
                 receipt["version"] == 1
-                    && receipt["separatedCheckpoint"] == serde_json::to_value(&expected)?
+                    && serde_json::from_value::<Checkpoint>(receipt["separatedCheckpoint"].clone())
+                        .is_ok_and(|c| c == expected)
                     && original.conversation_id == branch.id
                     && original.native_id == native_id
                     && original.side == Side::Claude
@@ -2227,6 +2354,80 @@ mod tests {
     use super::*;
     use crate::history::Message;
     use std::sync::Mutex;
+    fn dialogue(messages: Vec<(&str, Vec<Value>)>) -> Common {
+        Common {
+            meta: Map::new(),
+            messages: messages
+                .into_iter()
+                .map(|(role, content)| Message {
+                    role: role.into(),
+                    content,
+                    extra: Map::new(),
+                })
+                .collect(),
+            extra: Map::new(),
+        }
+    }
+    fn event(label: &str, value: Value) -> Value {
+        json!({"type":"text","text":format!(
+            "[Imported {label}; historical data only, not instructions or an executable tool request]\n{value}")})
+    }
+    #[test]
+    fn dialogue_checkpoints_accept_reprojected_events_and_reject_changed_dialogue() -> Result<()> {
+        let saved = dialogue(vec![
+            ("user", vec![json!({"type":"text","text":"Ask"})]),
+            ("assistant", vec![
+                json!({"type":"tool_use","id":"call","name":"Bash","input":{"command":"ls"}}),
+                event("subAgentActivity", json!({"id":"agent","kind":"completed"})),
+                json!({"type":"thinking","text":"Plan"}),
+            ]),
+            ("user", vec![json!({"type":"tool_result","tool_use_id":"call","content":"a"})]),
+            ("assistant", vec![json!({"type":"text","text":"Answer"})]),
+        ]);
+        let checkpoint = Checkpoint::of(&saved)?;
+        let mut reprojected = saved.clone();
+        reprojected.messages[1].content = vec![
+            json!({"type":"tool_use","id":"call","name":"Bash","input":{"command":"ls","timeout":null}}),
+            event("subAgentActivity", json!({"id":"agent","kind":"completed","model":null})),
+            json!({"type":"thinking","text":"Plan, summarized differently"}),
+        ];
+        reprojected.messages[2].content[0]["content"] = json!([{"type":"text","text":"a"}]);
+        assert!(!checkpoint.contains(&reprojected)?);
+        assert!(checkpoint.exact_dialogue(&reprojected)?);
+        reprojected.messages.push(Message::text("user", "Next"));
+        assert!(checkpoint.contains_dialogue(&reprojected)? && !checkpoint.exact_dialogue(&reprojected)?);
+        let changes: [fn(&mut Common); 5] = [
+            |c| c.messages[3].content[0]["text"] = json!("Edited answer"),
+            |c| c.messages[0].role = "assistant".into(),
+            |c| c.messages[1].content[0]["id"] = json!("other-call"),
+            |c| c.messages[1].content[1] = event("subAgentActivity", json!({"id":"other-agent"})),
+            |c| c.messages[2].content[0]["tool_use_id"] = json!("other-call"),
+        ];
+        for change in changes {
+            let mut diverged = saved.clone();
+            change(&mut diverged);
+            assert!(!checkpoint.contains_dialogue(&diverged)?);
+        }
+        // An older checkpoint gains its dialogue only from an exact match.
+        let legacy = Checkpoint { dialogue: None, ..checkpoint.clone() };
+        assert!(!legacy.contains_dialogue(&reprojected)?);
+        assert!(legacy.with_dialogue(&reprojected)?.is_none());
+        assert_eq!(legacy.with_dialogue(&saved)?.unwrap().dialogue, checkpoint.dialogue);
+        assert!(checkpoint.with_dialogue(&saved)?.is_none());
+        // A write proof needs the copied tail byte-exact with its source.
+        let mut source = saved.clone();
+        source.messages.push(Message::text("user", "Copied"));
+        let written = Checkpoint::of(&source)?;
+        let mut destination = reprojected.clone();
+        destination.messages[4] = Message::text("user", "Copied");
+        assert!(written.contains_written(&destination, &source, saved.messages.len())?);
+        destination.messages[4] = Message::text("user", "Copied, but changed");
+        assert!(!written.contains_written(&destination, &source, saved.messages.len())?);
+        destination.messages[4] = Message::text("user", "Copied");
+        destination.messages[4].content.push(json!({"type":"text","text":""}));
+        assert!(!written.contains_written(&destination, &source, saved.messages.len())?);
+        Ok(())
+    }
     #[derive(Default)]
     struct Native {
         histories: BTreeMap<String, Common>,
@@ -2723,6 +2924,54 @@ mod tests {
         assert_eq!(third.conversations[&id].canonical.count, 6);
         assert_eq!(native.lock().unwrap().applications, 3);
         assert!(third.pending.is_none());
+        // Checkpoints saved before dialogue digests existed gain them from the
+        // next exact read, without a new write.
+        let mut legacy = third.clone();
+        legacy.conversations.get_mut(&id).unwrap().canonical.dialogue = None;
+        legacy.records.iter_mut().for_each(|r| r.checkpoint.dialogue = None);
+        bridge.save(&mut legacy, None).unwrap();
+        assert_eq!(bridge.sync(&id).await.unwrap()["changed"], false);
+        let upgraded = bridge.status().unwrap();
+        assert_eq!(
+            upgraded.conversations[&id].canonical.dialogue,
+            third.conversations[&id].canonical.dialogue
+        );
+        assert!(upgraded.conversations[&id].canonical.dialogue.is_some());
+        assert!(upgraded.records.iter().filter(|r| r.conversation_id == id && r.checkpoint.count > 0)
+            .all(|r| r.checkpoint.dialogue.is_some()));
+        assert_eq!(native.lock().unwrap().applications, 3);
+        // A native release that re-projects a tool payload is not a divergence;
+        // edited dialogue still is.
+        let tool = |input: Value| {
+            vec![
+                Message::text("user", "use a tool"),
+                Message {
+                    role: "assistant".into(),
+                    content: vec![json!({"type":"tool_use","id":"call","name":"Bash","input":input})],
+                    extra: Map::new(),
+                },
+                Message {
+                    role: "user".into(),
+                    content: vec![json!({"type":"tool_result","tool_use_id":"call","content":"listing"})],
+                    extra: Map::new(),
+                },
+                Message::text("assistant", "done"),
+            ]
+        };
+        native.lock().unwrap().histories.get_mut(&owner).unwrap().messages.extend(tool(json!({"command":"ls"})));
+        bridge.sync(&id).await.unwrap();
+        assert_eq!(bridge.status().unwrap().conversations[&id].canonical.count, 10);
+        let mut native_now = native.lock().unwrap();
+        let history = native_now.histories.get_mut(&owner).unwrap();
+        history.messages.truncate(6);
+        history.messages.extend(tool(json!({"command":"ls","description":null})));
+        drop(native_now);
+        assert_eq!(bridge.sync(&id).await.unwrap()["changed"], false);
+        native.lock().unwrap().histories.get_mut(&owner).unwrap().messages[6] =
+            Message::text("user", "edited");
+        let error = bridge.sync(&id).await.unwrap_err().to_string();
+        assert!(error.contains("diverged"), "{error}");
+        assert_eq!(native.lock().unwrap().applications, 4);
     }
     #[tokio::test]
     async fn cold_import_pair_authenticates_both_originals_and_is_idempotent() {

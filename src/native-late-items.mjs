@@ -1,9 +1,8 @@
 import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
-import { nativeItemDigest, withoutVendorAddedNullFields } from './native-history-order.mjs';
+import { nativeItemDigest } from './native-history-order.mjs';
 import { resolveRolloutHistoryBase } from './native-local-images.mjs';
 import { decompressRollout, isCompressedRollout, physicalRolloutPath, recordedDirectories } from './codex-rollout-file.mjs';
 
@@ -25,71 +24,6 @@ const time = row => {
   return Number.isFinite(value) && new Date(value).toISOString() === row.timestamp ? value : NaN;
 };
 const fail = message => { throw new Error(`Native Codex late item: ${message}`); };
-
-// Match native shlex::try_join, including its split single/double quote chunks.
-// This formats historical data; it never parses or executes a shell command.
-function nativeQuote(value) {
-  if (typeof value !== 'string' || value.includes('\0')) fail('command argv is not losslessly representable.');
-  if (!value) return "''";
-  let rest = Array.from(value), output = '';
-  while (rest.length) {
-    let allowed = rest[0] === '^' ? 2 : 7, index = rest[0] === '^' ? 1 : 0;
-    for (; index < rest.length; index++) {
-      const char = rest[index]; let next = allowed;
-      if (!/^[A-Za-z0-9+./:@\]_-]$/.test(char)) next &= ~1;
-      if (['\'', '^', '\\'].includes(char)) next &= ~2;
-      if (['`', '$', '!', '^'].includes(char)) next &= ~4;
-      if (!next) break;
-      allowed = next;
-    }
-    const chunk = rest.slice(0, index).join(''); rest = rest.slice(index);
-    output += allowed & 1 ? chunk : allowed & 2 ? `'${chunk}'` : `"${chunk.replace(/[\$`"\\]/g, '\\$&')}"`;
-  }
-  return output;
-}
-
-// A command may run outside the thread's working directory; the full API
-// reports the same directory as a plain path.
-function commandDirectory(value) {
-  try {
-    const path = typeof value === 'string' && value.startsWith('file:///') ? fileURLToPath(value) : null;
-    return path !== null && isAbsolute(path) && pathToFileURL(path).href === value ? path : null;
-  } catch { return null; }
-}
-
-function projectCommand(item) {
-  const cwd = commandDirectory(item?.cwd);
-  if (cwd === null || !object(item) || item.type !== 'CommandExecution' || typeof item.id !== 'string' || !item.id
-    || typeof item.source !== 'string' || !/^[a-z]+(?:_[a-z]+)*$/.test(item.source) || !['completed', 'failed'].includes(item.status)
-    || !Array.isArray(item.command) || !item.command.length || !item.command.every(value => typeof value === 'string')
-    || typeof item.process_id !== 'string' || !/^\d+$/.test(item.process_id)
-    || !Number.isSafeInteger(item.exit_code) || !keys(item.duration, ['secs', 'nanos'])
-    || !integer(item.duration.secs) || !integer(item.duration.nanos) || item.duration.nanos >= 1e9
-    || !Number.isSafeInteger(item.duration.secs * 1000 + Math.floor(item.duration.nanos / 1e6))
-    // Output a second field would add, or separate error output, is not
-    // representable in the single API field; absent copies are not a loss.
-    || typeof item.aggregated_output !== 'string' || item.stdout !== undefined && item.stdout !== item.aggregated_output
-    || item.stderr !== undefined && item.stderr !== ''
-    || item.formatted_output !== undefined && item.formatted_output !== item.aggregated_output
-    || !Array.isArray(item.parsed_cmd) || !item.parsed_cmd.length
-    || item.parsed_cmd.some(action => !keys(action, ['type', 'cmd']) || action.type !== 'unknown' || typeof action.cmd !== 'string'))
-    fail('late command has an unsupported or lossy native schema.');
-  return { type: 'commandExecution', id: item.id, pluginId: null, scriptPath: null,
-    command: item.command.map(nativeQuote).join(' '), cwd, processId: item.process_id,
-    source: item.source.replace(/_([a-z])/g, (_, letter) => letter.toUpperCase()), status: item.status,
-    commandActions: item.parsed_cmd.map(action => ({ type: 'unknown', command: action.cmd })),
-    aggregatedOutput: item.aggregated_output, exitCode: item.exit_code,
-    durationMs: item.duration.secs * 1000 + Math.floor(item.duration.nanos / 1e6) };
-}
-
-// A sub-agent notification is recorded on the turn that spawned the agent,
-// whenever it arrives; the API reports the same fields in camel case.
-function projectSubAgent(item) {
-  if (!object(item) || typeof item.id !== 'string' || !item.id || typeof item.kind !== 'string' || !item.kind
-    || typeof item.agent_thread_id !== 'string' || !item.agent_thread_id || typeof item.agent_path !== 'string')
-    fail('late sub-agent activity has an unsupported native schema.');
-  return { type: 'subAgentActivity', id: item.id, kind: item.kind, agentThreadId: item.agent_thread_id, agentPath: item.agent_path };
-}
 
 async function readSource(logicalPath, maxBytes) {
   if (await realpath(dirname(logicalPath)) !== dirname(logicalPath)) fail('source parent is not canonical.');
@@ -305,15 +239,17 @@ export function createNativeLateItemResolver({ path, threadId, cwd, originCwd = 
         fail('late arrival is separated from its closed boundary by unrecognized native activity.');
       boundaryProof(state, parent.turn, source, directories, { ranCommand: true });
       if (after) boundaryProof(boundary, after.turn, source, directories);
-      const projected = subAgent ? projectSubAgent(payload.item) : projectCommand(payload.item);
-      const matches = parent.turn.items.filter(item => item.id === projected.id);
-      // The full API reports a command without output as null.
-      if (projected.aggregatedOutput === '' && matches[0]?.aggregatedOutput === null) projected.aggregatedOutput = null;
-      if (matches.length !== 1 || snapshot.turns.some(turn => turn.id !== parent.turn.id && turn.items.some(item => item.id === projected.id))
-        || selected.has(projected.id) || !isDeepStrictEqual(projected, matches[0])
-          && !isDeepStrictEqual(projected, withoutVendorAddedNullFields(matches[0]))) fail('complete native item differs from the full API item.');
-      selected.add(projected.id); previousBoundary = boundary.stop.ordinal;
-      (after ? placements : withheld).push({ turnId: parent.turn.id, itemId: projected.id, afterTurnId, itemDigest: nativeItemDigest(matches[0]) });
+      // The raw arrival locates its API item by identity; the API item is the
+      // content that is exported, whatever either payload adds.
+      const id = payload.item?.id;
+      if (typeof id !== 'string' || !id) fail('late native item lacks an identity.');
+      const matches = parent.turn.items.filter(item => item.id === id);
+      if (!subAgent && payload.item.type !== 'CommandExecution' || matches.length !== 1
+        || matches[0].type !== (subAgent ? 'subAgentActivity' : 'commandExecution')
+        || snapshot.turns.some(turn => turn.id !== parent.turn.id && turn.items.some(item => item.id === id))
+        || selected.has(id)) fail('late native item identity differs from the full API item.');
+      selected.add(id); previousBoundary = boundary.stop.ordinal;
+      (after ? placements : withheld).push({ turnId: parent.turn.id, itemId: id, afterTurnId, itemDigest: nativeItemDigest(matches[0]) });
     }
     if (!placements.length && !withheld.length) return null;
     // An item whose boundary is not exported yet stays out of this export

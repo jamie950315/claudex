@@ -760,14 +760,21 @@ impl Runtime {
                 common = convert(&snapshot)?;
             }
             if r.verified && r.checkpoint.count > 0 && snapshot.late_item_evidence.is_some() {
+                // Prefer the representation with the saved exact bytes; a
+                // re-projected native payload may leave only the dialogue.
                 let mut matched = None;
+                let mut dialogue = None;
                 for candidate in crate::native_order::representations(&snapshot)? {
                     let converted = convert(&candidate)?;
                     if r.checkpoint.contains(&converted)? {
                         matched = Some((candidate, converted));
                         break;
                     }
+                    if dialogue.is_none() && r.checkpoint.contains_dialogue(&converted)? {
+                        dialogue = Some((candidate, converted));
+                    }
                 }
+                let matched = matched.or(dialogue);
                 let selected = matched.ok_or_else(|| {
                     anyhow::anyhow!(
                         "Native late item ordering does not preserve the complete saved checkpoint."
@@ -778,7 +785,7 @@ impl Runtime {
             }
             if prove_late {
                 ensure!(
-                    r.checkpoint.contains(&common)?,
+                    r.checkpoint.contains_dialogue(&common)?,
                     "Native late item ordering does not preserve the complete saved checkpoint."
                 );
             }

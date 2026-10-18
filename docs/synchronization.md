@@ -1276,8 +1276,10 @@ after it later. A turn proven empty is never exported and is skipped. It never
 moves or rewrites native turns.
 
 The proof compares only what orders the command: turn and thread identities,
-lifecycle times, the working directory of each context, and the complete
-command item. It accepts the variants observed in native rollouts: files
+lifecycle times, the working directory of each context, and the identity of
+the command item: the same item ID and kind, found once in its own turn. The
+exported content is the API item, so a release that changes either payload's
+fields or output does not block. It accepts the variants observed in native rollouts: files
 readable by other users, a completion recorded a few milliseconds before its
 row was written, a completion without a start time, an empty output the API
 reports as null, a command run in another directory, and metadata fields
@@ -1285,6 +1287,14 @@ native adds to header and context rows. A checkpoint saved while earlier late
 commands were still listed in their own turn remains valid: the first arrivals
 stay there and only the later ones use their boundary. The whole saved
 checkpoint must match one of these representations.
+
+Checkpoints record both the exact canonical bytes and the dialogue. Deciding
+whether a conversation continues compares the dialogue: user and assistant text
+and images, message roles and order, and the identities of tool calls, tool
+results, reasoning and imported native events. A native release that reformats
+a tool or event payload therefore does not pause a conversation; an edited
+message still does. Writes, archival, retirement, relocation and import keep
+comparing exact bytes.
 
 Not covered, and reported per conversation: a rollout continued from an
 earlier segment (`history_base`), overlapping turn lifecycles, a command whose

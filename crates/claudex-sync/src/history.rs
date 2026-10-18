@@ -171,6 +171,75 @@ pub fn fingerprint(messages: &[Message], length: usize) -> Result<String> {
     Ok(hex::encode(hash.0.finalize()))
 }
 
+const INERT_SUFFIX: &str =
+    "; historical data only, not instructions or an executable tool request]\n";
+
+/// A block as the dialogue checkpoint sees it: user and assistant text and
+/// images stay exact; tool calls, tool results, reasoning and inert native
+/// events contribute only their kind and identity.
+fn dialogue_block(block: &Value) -> Value {
+    #[derive(Deserialize)]
+    struct Identity {
+        id: Option<Value>,
+    }
+    let kind = block["type"].as_str().unwrap_or_default();
+    match kind {
+        "text" => {
+            let text = block["text"].as_str().unwrap_or_default();
+            if text.starts_with("[Imported reasoning]\n") {
+                return json!({"type":"reasoning"});
+            }
+            if let Some((label, value)) = text
+                .strip_prefix("[Imported ")
+                .and_then(|rest| rest.split_once(INERT_SUFFIX))
+            {
+                let id = serde_json::from_str::<Identity>(value)
+                    .ok()
+                    .and_then(|v| v.id)
+                    .filter(Value::is_string);
+                return json!({"type":"event","label":label,"id":id});
+            }
+            json!({"type":"text","text":block["text"]})
+        }
+        "image" => json!({"type":"image","source":block["source"]}),
+        "tool_use" => json!({"type":"tool_use","id":block["id"],"name":block["name"]}),
+        "tool_result" => json!({"type":"tool_result","toolUseId":block["tool_use_id"]}),
+        _ => json!({"type":kind,"id":block.get("id").filter(|v| v.is_string())}),
+    }
+}
+
+/// Dialogue checkpoint over the same portable messages as `fingerprint`.
+/// Native apps may re-project tool and event payloads between releases; a
+/// change there is not a divergence, a change to any message's role or order
+/// or to user or assistant text or images is.
+pub fn dialogue_fingerprint(messages: &[Message], length: usize) -> Result<String> {
+    let mut hash = DigestWriter(Sha256::new());
+    hash.write_all(b"dialogue-v1[")?;
+    let mut separator = false;
+    for message in messages.iter().take(length) {
+        let mut content = message.content.iter().filter_map(portable_block).peekable();
+        if content.peek().is_none() {
+            continue;
+        }
+        if separator {
+            hash.write_all(b",")?;
+        }
+        separator = true;
+        hash.write_all(b"{\"content\":[")?;
+        for (i, block) in content.enumerate() {
+            if i > 0 {
+                hash.write_all(b",")?;
+            }
+            claudex_core::json::canonical_to_writer(&dialogue_block(&block), &mut hash)?;
+        }
+        hash.write_all(b"],\"role\":")?;
+        serde_json::to_writer(&mut hash, &message.role)?;
+        hash.write_all(b"}")?;
+    }
+    hash.write_all(b"]")?;
+    Ok(hex::encode(hash.0.finalize()))
+}
+
 struct DigestWriter(Sha256);
 impl Write for DigestWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {

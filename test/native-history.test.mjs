@@ -53,7 +53,8 @@ test('late completion ordering refuses changed, ambiguous, incomplete and unauth
   const proof = { placements: [{ turnId: 't1', itemId: 'late', afterTurnId: 't2', itemDigest: nativeItemDigest(late) }],
     sourceIdentity: { ino: '1' }, evidenceDigest: 'b'.repeat(64) };
   for (const bad of [undefined, { ...proof, placements: [proof.placements[0], proof.placements[0]] },
-    { ...proof, placements: [{ ...proof.placements[0], itemDigest: '0'.repeat(64) }] },
+    { ...proof, placements: [{ ...proof.placements[0], itemDigest: 'not a digest' }] },
+    { ...proof, placements: [{ ...proof.placements[0], itemId: 'other' }] },
     { ...proof, placements: [{ ...proof.placements[0], afterTurnId: 'unknown' }] }])
     await assert.rejects(run(client([page(turns)]), { resolveLateItems: async () => bad }), /late item/);
   let serial = 0;

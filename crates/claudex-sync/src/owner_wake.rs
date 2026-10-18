@@ -548,6 +548,7 @@ mod tests {
         let checkpoint = Checkpoint {
             count: 2,
             digest: Some("a".repeat(64)),
+            dialogue: None,
         };
         state.conversations.insert(
             conversation_id.clone(),

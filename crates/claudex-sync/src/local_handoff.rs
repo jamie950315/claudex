@@ -3,7 +3,7 @@
 use crate::{
     bridge::Side,
     codecs,
-    desktop::{Conversation, Reading, Record, State},
+    desktop::{Checkpoint, Conversation, Reading, Record, State},
     desktop_mapping,
     history::digest_bytes,
 };
@@ -724,7 +724,10 @@ impl Publisher {
                         })?;
                     ensure!(
                         saved["path"] == json!(candidate.original.path)
-                            && saved["checkpoint"] == json!(candidate.original.checkpoint)
+                            // The exact count and digest; a dialogue digest
+                            // added since is not a change.
+                            && serde_json::from_value::<Checkpoint>(saved["checkpoint"].clone())
+                                .is_ok_and(|c| c == candidate.original.checkpoint)
                             && crate::packet::hex_digest(&saved["sha256"])
                             && saved["sha256"] == digest_bytes(&raw.bytes[..length]),
                         "Archived Local original no longer preserves its verified byte prefix."

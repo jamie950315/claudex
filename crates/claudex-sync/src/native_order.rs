@@ -1,8 +1,6 @@
 //! Portable display ordering bound to exact native arrival proofs. Native turn
 //! items remain intact; saved checkpoints alone select historical placement.
-use crate::{
-    codex_provenance::ImagePosition, history::digest_bytes, native_history::Snapshot, packet,
-};
+use crate::{codex_provenance::ImagePosition, native_history::Snapshot, packet};
 use anyhow::{Result, ensure};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -11,11 +9,6 @@ pub struct Entry {
     pub turn_id: String,
     pub item: Option<Value>,
     pub status: Option<Value>,
-}
-fn item_digest(item: &Value) -> Result<String> {
-    Ok(digest_bytes(
-        claudex_core::json::canonical_stringify(item)?.as_bytes(),
-    ))
 }
 fn key(turn: &str, item: &str) -> (String, String) {
     (turn.into(), item.into())
@@ -118,11 +111,9 @@ pub fn entries(snapshot: &Snapshot) -> Result<Vec<Entry>> {
                         || item["type"] == "commandExecution"
                             && matches!(item["status"].as_str(), Some("completed" | "failed")))
                     && placed.insert(identity.clone())
-                    && (p["itemDigest"] == item_digest(item)?
-                        || crate::native_history::with_vendor_added_null_fields(item)
-                            .map(|api| item_digest(&api))
-                            .transpose()?
-                            .is_some_and(|digest| p["itemDigest"] == digest)),
+                    // Placements locate their item by identity; itemDigest is
+                    // kept as evidence, not compared with the current payload.
+                    && packet::hex_digest(&p["itemDigest"]),
                 "Late native identity or closed boundary contradicts API."
             );
             if let Some((index, _)) = boundary {
@@ -220,7 +211,8 @@ mod tests {
     fn late_arrival_order_is_exact_and_legacy_checkpoint_representation_is_available() -> Result<()>
     {
         let late = json!({"type":"commandExecution","id":"command","status":"completed","command":"echo fixture","aggregatedOutput":"fixture"});
-        let digest = digest_bytes(claudex_core::json::canonical_stringify(&late)?.as_bytes());
+        let digest =
+            crate::history::digest_bytes(claudex_core::json::canonical_stringify(&late)?.as_bytes());
         let mut snapshot: Snapshot = serde_json::from_value(
             json!({"turns":[{"id":"first","status":"completed","items":[{"type":"userMessage","id":"request","content":[]},late]},{"id":"second","status":"completed","items":[{"type":"agentMessage","id":"reply","text":"Answer"}]}],"digest":"fixture","itemCount":4,"bytes":100,"pages":1,"completedPrefix":true,"incompleteTail":false,"incompleteTailCount":0,"closedTail":false,"lateItemEvidence":{"placements":[{"turnId":"first","itemId":"command","afterTurnId":"second","itemDigest":digest}],"sourceIdentity":{},"evidenceDigest":"a".repeat(64)}}),
         )?;
@@ -242,8 +234,14 @@ mod tests {
             entries(&representations[1])?[1].item.as_ref().unwrap()["id"],
             "reply"
         );
+        // A placement locates its item by identity, whatever the payload now holds.
+        snapshot.turns[0]["items"][1]["aggregatedOutput"] = json!("reformatted");
+        assert_eq!(entries(&snapshot)?.len(), 3);
         snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemDigest"] =
-            json!("b".repeat(64));
+            json!("not a digest");
+        assert!(entries(&snapshot).is_err());
+        snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemDigest"] = json!(digest);
+        snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemId"] = json!("other");
         assert!(entries(&snapshot).is_err());
         Ok(())
     }

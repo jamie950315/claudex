@@ -649,7 +649,11 @@ impl Scheduler {
             None
         };
         let context = json!({"runtime":self.context,"nativeIdentity":identity});
-        if let Some(before) = &before {
+        // A checkpoint saved before dialogue digests existed gets one from its
+        // next real read; reuse would postpone that indefinitely.
+        let canonical = &state.conversations[id].canonical;
+        let needs_dialogue = canonical.count > 0 && canonical.dialogue.is_none();
+        if let Some(before) = before.as_ref().filter(|_| !needs_dialogue) {
             if persistent && identity.is_some() {
                 if self.cache.load(id, before, &context).is_some()
                     && hint(&bridge.status()?, id)?.as_ref() == Some(before)

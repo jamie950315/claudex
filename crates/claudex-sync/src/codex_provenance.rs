@@ -555,6 +555,7 @@ impl Provenance {
     }
 }
 
+#[cfg(test)]
 fn native_quote(value: &str) -> Result<String> {
     ensure!(
         !value.contains('\0'),
@@ -612,6 +613,7 @@ fn native_quote(value: &str) -> Result<String> {
     }
     Ok(output)
 }
+#[cfg(test)]
 fn project_command(item: &Value) -> Result<Value> {
     let uri = text(&item["cwd"])?;
     let parsed = url::Url::parse(uri).context("Native command cwd is not an exact file URI.")?;
@@ -689,6 +691,7 @@ fn project_command(item: &Value) -> Result<Value> {
         "aggregatedOutput":item["aggregated_output"],"exitCode":item["exit_code"],"durationMs":duration.unwrap()}),
     )
 }
+#[cfg(test)]
 fn project_agent(item: &Value) -> Result<Value> {
     ensure!(
         item.is_object()
@@ -1196,40 +1199,31 @@ impl Provenance {
             if let Some(after) = after {
                 self.boundary(boundary, after, &source, false)?;
             }
-            let mut projected = if subagent {
-                project_agent(&p["item"])?
+            // The raw arrival locates its API item by identity; the API item
+            // is the content that is exported, whatever either payload adds.
+            let id = text(&p["item"]["id"]).context("Late native item lacks an identity.")?;
+            let kind = if subagent {
+                "subAgentActivity"
             } else {
-                project_command(&p["item"])?
+                "commandExecution"
             };
             let matches = parent["items"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .filter(|i| i["id"] == projected["id"])
+                .filter(|i| i["id"] == id)
                 .collect::<Vec<_>>();
-            if projected["aggregatedOutput"] == ""
-                && matches
-                    .first()
-                    .is_some_and(|i| i["aggregatedOutput"].is_null())
-            {
-                projected["aggregatedOutput"] = Value::Null;
-            }
             ensure!(
-                matches.len() == 1
+                (subagent || p["item"]["type"] == "CommandExecution")
+                    && matches.len() == 1
+                    && matches[0]["type"] == kind
                     && turns.iter().all(|t| t["id"] == parent["id"]
-                        || !t["items"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .any(|i| i["id"] == projected["id"]))
-                    && selected.insert(text(&projected["id"])?.to_owned())
-                    && (projected == *matches[0]
-                        || crate::native_history::without_vendor_added_null_fields(matches[0])
-                            .is_some_and(|api| projected == api)),
-                "Complete native late item differs from the full API item."
+                        || !t["items"].as_array().unwrap().iter().any(|i| i["id"] == id))
+                    && selected.insert(id.to_owned()),
+                "Late native item identity differs from the full API item."
             );
             previous = boundary_stop;
-            let placement = json!({"turnId":parent["id"],"itemId":projected["id"],"afterTurnId":boundary_id,"itemDigest":history::digest_json(matches[0])?});
+            let placement = json!({"turnId":parent["id"],"itemId":id,"afterTurnId":boundary_id,"itemDigest":history::digest_json(matches[0])?});
             if after.is_some() {
                 placements.push(placement)
             } else {
@@ -2762,7 +2756,11 @@ process.stdout.write(JSON.stringify(result));
         f.turns[0]["items"][2] = api.clone();
         write(&f.source.path, &f.rows);
         assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
+        // Content fields are the API's to change; identity and kind are not.
         f.turns[0]["items"][2]["model"] = json!("gpt-6");
+        f.turns[0]["items"][2]["futureField"] = json!({"novel":true});
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
+        f.turns[0]["items"][2]["type"] = json!("commandExecution");
         assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
         // The stripped serialization alternative still orders the late item
         // under the placement digest of its API form.
@@ -2779,7 +2777,7 @@ process.stdout.write(JSON.stringify(result));
             );
         }
         let mut changed = stripped;
-        changed.turns[0]["items"][2]["kind"] = json!("started");
+        changed.turns[0]["items"][2]["id"] = json!("other-agent");
         assert!(crate::native_order::entries(&changed).is_err());
         f.turns[0]["items"][2] = api;
         // Codex keeps a per-turn working directory the API does not report.
@@ -2803,6 +2801,8 @@ process.stdout.write(JSON.stringify(result));
     fn late_arrivals_reject_changed_api_prior_dispatch_and_activity_but_keep_unknown_context() {
         let mut f = late_fixture();
         f.turns[0]["items"][2]["aggregatedOutput"] = json!("changed");
+        assert!(f.source.late_items(&f.turns, &BTreeSet::new()).unwrap().is_some());
+        f.turns[0]["items"][2]["id"] = json!("other-command");
         assert!(f.source.late_items(&f.turns, &BTreeSet::new()).is_err());
         f = late_fixture();
         f.rows.insert(

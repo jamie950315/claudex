@@ -214,6 +214,7 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
                         crate::desktop::Checkpoint {
                             count: args.required("expected-count")?.parse()?,
                             digest: Some(args.required("expected-digest")?.into()),
+                            dialogue: None,
                         },
                     )
                     .await

@@ -84,14 +84,21 @@ bounded polling harness, not a production fallback.
   it is; a proven empty turn is skipped. A late item whose own closed turn
   lies after the last exported turn (a failed or interrupted tail) is outside
   that export and is proven when its turn is exported; an unknown turn inside
-  the exported range still blocks. Require an exact stable raw/API item
-  match and lifecycle proof, then authenticate the entire existing portable
-  checkpoint. The checkpoint selects the representation: all native, all at
+  the exported range still blocks. By user decision the raw arrival locates
+  its API item by identity only: the same item ID, exactly one match, only in
+  the parent turn, a command arrival matching a `commandExecution` and a
+  sub-agent arrival a `subAgentActivity`. The API item is what is exported,
+  so neither payload's content (output, command text, new or missing fields)
+  is compared. Require that identity and the lifecycle proof, then
+  authenticate the entire existing portable checkpoint (its exact bytes, or
+  its dialogue; see Checkpoints below). The checkpoint selects the representation: all native, all at
   their boundary, or the first arrivals native and the rest at their boundary.
   Row position is the arrival evidence; a completion time may precede its row
   but never follow it. Compare only fields the proof uses: unknown fields of
-  any record are ignored, a time the rollout did not record is not a
-  contradiction, and the projected item must still equal the API item. A
+  any record are ignored and a time the rollout did not record is not a
+  contradiction. A placement's `itemDigest` binds the API item when the proof
+  was made; readers locate the item by identity and require only a well-formed
+  digest, never equality with the current payload. A
   command starts inside its turn; a notification has no duration and starts
   when it arrives.
   Rollouts readable by others are accepted; group or world write access is
@@ -158,6 +165,35 @@ failures identify their actual native source and remain
 visible across unrelated events, rather than pausing the current sync's caller.
 Retain the old activity-interleaved scheduler only for the injected non-event
 harness. Do not defer all new completions until a long cold sweep finishes.
+
+## Checkpoints
+
+A checkpoint is `{count, digest, dialogue}`. `digest` covers the exact canonical
+bytes of the portable messages (`history::fingerprint`). `dialogue`
+(`history::dialogue_fingerprint`) covers every message's role and order, user
+and assistant text and images exactly, and tool calls, tool results, reasoning
+and inert imported native events only by kind and identity (tool call ID and
+name, the result's tool call ID, the event label and its string `id`).
+
+By user decision, reads that decide whether synchronization continues compare
+the dialogue, so a native release that re-projects a tool or event payload is
+not a divergence: the history-diverged and stopped-tracking checks, handoff and
+promotion source/destination change checks, and late-item ordering. An edited,
+removed or reordered message, changed text or image, or a changed tool or event
+identity still blocks. Exact bytes remain the proof for the tail a handoff
+wrote (`contains_written`: messages after the previous checkpoint must equal
+the source byte for byte), archival, retirement, relocation, `split-original`,
+cold import and Local handoff publication. Serialization alternatives (goal
+prefix hashes, vendor-added nulls, late-item representations) still prefer the
+byte-exact representation and use a dialogue match only when none exists.
+
+Checkpoint equality is count and exact digest; saved proofs and receipts that
+embed a checkpoint compare it the same way, so a dialogue digest added later
+is not a change. New checkpoints record both digests. One saved before
+dialogue digests gains its dialogue only from a read that matches its exact
+bytes (`checkpoint-dialogue-recorded`); until then it compares exactly, and the
+cold scheduler does not reuse a cached read for such a conversation. The
+JavaScript reference keeps exact checkpoint comparison.
 
 ## Hook health diagnostics
 
