@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Static synthetic graphs exercise each supported compiler/selection form.
-// The shared copied-cache verifier supplies JS selection and wiring contracts.
+// The copied-cache verifier uses only Rust; Acorn independently checks its output.
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -30,8 +30,13 @@ try {
       '--rust-checker', checker, '--rust-only', 'true'], { timeout: 180000, maxBuffer: 65536 }); }
     catch (error) { failure = error.message; }
     const value = JSON.parse(await readFile(report, 'utf8'));
-    const row = { fixture: name, passed: value.passed, adapters: value.builds[0]?.rust, ...(value.fatal ? { fatal: value.fatal } : {}) };
-    results.push(row); process.stderr.write(`${name}: ${value.passed ? 'passed' : 'failed'}\n`);
+    const expectedRefusal = name === 'competingActions' ? 'chatWake' : name === 'ambiguousHelper' ? 'ownerWake' : null;
+    const actual = value.builds[0]?.adapters;
+    const accepted = expectedRefusal ? !value.fatal && !value.builds[0]?.discovery
+      && Object.entries(actual ?? {}).every(([adapter, result]) => result.status === (adapter === expectedRefusal ? 'failed' : 'passed'))
+      && actual[expectedRefusal]?.phase === 'selection' : value.passed;
+    const row = { fixture: name, passed: accepted, ...(expectedRefusal ? { expectedRefusal } : {}), adapters: actual, ...(value.fatal ? { fatal: value.fatal } : {}) };
+    results.push(row); process.stderr.write(`${name}: ${accepted ? 'passed' : 'failed'}\n`);
     if (failure && value.passed) throw new Error(failure);
   }
 } finally { await rm(temporary, { recursive: true }); }

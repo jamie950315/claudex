@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeDesktopHandoffRuntime } from '../src/claude-desktop-handoff-runtime.mjs';
-import { normalizeClaudeLocalFolderAnchor } from '../src/claude-folder-anchor.mjs';
-import { claudeFolderProjectKey } from '../src/claude-folder-projection.mjs';
-import { createClaudeFolderRuntime } from '../src/claude-folder-runtime.mjs';
+import { createClaudeDesktopHandoffRuntime } from '../crates/claudex-app/host/renderer/claude-desktop-handoff-runtime.mjs';
+import { normalizeClaudeLocalFolderAnchor } from '../crates/claudex-app/host/renderer/claude-folder-anchor.mjs';
+import { claudeFolderProjectKey } from '../crates/claudex-app/host/renderer/claude-folder-projection.mjs';
+import { createClaudeFolderRuntime } from '../crates/claudex-app/host/renderer/claude-folder-runtime.mjs';
 
 function fixture(options = {}) {
   let clock = 10000, tasks = [], errors = [], archives = [], statuses = [];

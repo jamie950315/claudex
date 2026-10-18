@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { syntax, nodes, member } from '../../src/claude-frontend-anchors.mjs';
+import { syntax, nodes, member } from './frontend-static.mjs';
 
 // This validator parses static vendor bytes. It never evaluates a frontend
 // module. Locations, raw literal spellings and harmless empty statements do

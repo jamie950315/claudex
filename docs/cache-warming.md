@@ -412,10 +412,11 @@ assistant/tool items. The confirmation enabled only the target chat with a
 zero refresh attempts/tokens and no next timer.
 
 This proves actual hook-time primary/turn visibility, native blocking and the
-installed controller path, not just direct helper calls. The manual probe
-`dev/cache-warm-probe/codex-command.mjs` uses literal `turn/start` input through
+installed controller path, not just direct helper calls. The historical manual
+probe `dev/cache-warm-probe/codex-command.mjs`, preserved on
+`codex/javascript-legacy`, used literal `turn/start` input through
 the existing shared Desktop backend, never the differently wrapped app-origin
-wake envelope. It makes no model/permission overrides and never replays input.
+wake envelope. It made no model/permission overrides and never replayed input.
 Composer keystrokes, autocomplete and rendered pixels were not exercised;
 native hook output delivery is not a screenshot-based UI acceptance claim.
 This control-command test does not remeasure cache retention or claim free

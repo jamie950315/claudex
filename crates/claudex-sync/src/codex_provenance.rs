@@ -2113,7 +2113,6 @@ mod tests {
     use std::{
         io::Write,
         os::unix::fs::{PermissionsExt, symlink},
-        process::{Command, Stdio},
     };
     const THREAD: &str = "00000000-0000-4000-8000-000000000001";
     const TURN: &str = "00000000-0000-4000-8000-000000000002";
@@ -2225,68 +2224,43 @@ mod tests {
             extra: serde_json::Map::new(),
         }
     }
-    fn js_reference(
-        source: &Provenance,
-        turns: &[Value],
-        operation: &str,
-        retained: &[Value],
-        retained_path: Option<&Path>,
-    ) -> Value {
-        js_reference_result(source, turns, operation, retained, retained_path).unwrap()
+    fn expected_image_turns(turns: &[Value]) -> Value {
+        let mut expected = turns.to_vec();
+        let turn = expected.iter_mut().find(|turn| turn["id"] == TURN).unwrap();
+        let item = turn["items"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|item| item["id"] == "image-item")
+            .unwrap();
+        // Fixed JavaScript result, not derived from the Rust hydration path.
+        item["content"] =
+            serde_json::from_str(include_str!("../fixtures/native-image-content.json")).unwrap();
+        json!(expected)
     }
-    fn js_reference_result(
-        source: &Provenance,
-        turns: &[Value],
-        operation: &str,
-        retained: &[Value],
-        retained_path: Option<&Path>,
-    ) -> Result<Value> {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .to_owned();
-        let script = r#"
-import {createCodexLocalImageResolver,createCodexRolloutLocator,hydrateNativeLocalImages} from './src/native-local-images.mjs';
-import {createNativeLateItemResolver} from './src/native-late-items.mjs';
-let s='';for await(const chunk of process.stdin)s+=chunk;
-const r=JSON.parse(s),locateRollout=createCodexRolloutLocator(r.codexHome);
-if(r.retainedPath===null)delete r.retainedPath;
-let result;
-if(r.operation==='images'){
- const resolveLocalImages=createCodexLocalImageResolver({...r,retainedRollouts:r.retained,locateRollout});
- result=(await hydrateNativeLocalImages({turns:r.turns,threadId:r.threadId},resolveLocalImages,268435456)).turns;
-}else result=await createNativeLateItemResolver({...r,locateRollout,maxBytes:480*1024*1024})({turns:r.turns},{threadId:r.threadId});
-process.stdout.write(JSON.stringify(result));
-"#;
-        let mut child = Command::new("node")
-            .args(["--input-type=module", "-e", script])
-            .current_dir(root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        child.stdin.take().unwrap().write_all(serde_json::to_string(&json!({"path":source.path,"threadId":source.thread_id,"cwd":source.cwd,
-            "codexHome":source.codex_home,"turns":turns,"retained":retained,"retainedPath":retained_path,"operation":operation}))?.as_bytes())?;
-        let out = child.wait_with_output()?;
-        ensure!(
-            out.status.success(),
-            "JS reference failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        Ok(serde_json::from_slice(&out.stdout)?)
+    fn expected_late_proof(source: &Provenance, fixture: &str) -> Value {
+        let fixture = match fixture {
+            "command" => include_str!("../fixtures/late-command-proof.json"),
+            "subagent" => include_str!("../fixtures/late-subagent-proof.json"),
+            "empty-command" => include_str!("../fixtures/late-empty-command-proof.json"),
+            _ => panic!("Unknown frozen late-proof fixture."),
+        };
+        let mut expected: Value = serde_json::from_str(fixture).unwrap();
+        // The expected inode identity comes directly from the fixture file's
+        // metadata. Every semantic field and digest stays frozen.
+        expected["sourceIdentity"] = json!(FileIdentity::from_metadata(
+            &fs::metadata(&source.path).unwrap()
+        ));
+        expected
     }
     #[test]
-    fn images_match_exact_native_completion_and_js_without_reading_attachment_paths() {
+    fn images_match_frozen_native_completion_without_reading_attachment_paths() {
         assert!(!inline(&json!("data:😀😀fo,AAAA")));
         let f = fixture();
         let mut turns = f.turns.clone();
         let evidence = f.source.hydrate(&mut turns, &[], None, 1_048_576).unwrap();
-        assert_eq!(
-            json!(turns),
-            js_reference(&f.source, &f.turns, "images", &[], None)
-        );
+        assert_eq!(json!(turns), expected_image_turns(&f.turns));
+        audit_image_preservation(&f.turns, &turns).unwrap();
         assert_eq!(
             turns[0]["items"][0]["content"][1]["url"],
             "data:image/png;base64,bmF0aXZl"
@@ -2333,7 +2307,7 @@ process.stdout.write(JSON.stringify(result));
         f.rows[6]["payload"] = json!({"type":"turn_aborted","reason":"interrupted","turn_id":TURN});
         f.turns[0]["status"] = json!("interrupted");
         write(&f.source.path, &f.rows);
-        let reference = js_reference(&f.source, &f.turns, "images", &[], None);
+        let reference = expected_image_turns(&f.turns);
         let bytes = fs::read(&f.source.path).unwrap();
         fs::write(
             format!("{}.zst", f.source.path.display()),
@@ -2373,10 +2347,7 @@ process.stdout.write(JSON.stringify(result));
             .unwrap();
         assert_eq!(turns[0]["status"], "interrupted");
         assert!(turns[0]["completedAt"].is_null());
-        assert_eq!(
-            json!(turns),
-            js_reference(&f.source, &f.turns, "images", &[], None)
-        );
+        assert_eq!(json!(turns), expected_image_turns(&f.turns));
         assert_eq!(fs::read(&f.source.path).unwrap(), before);
         for mutation in 0..12 {
             let mut rows = f.rows.clone();
@@ -2434,10 +2405,7 @@ process.stdout.write(JSON.stringify(result));
             .source
             .hydrate(&mut turns, saved, Some(&old), 1_048_576)
             .unwrap();
-        assert_eq!(
-            json!(turns),
-            js_reference(&f.source, &f.turns, "images", saved, Some(&old))
-        );
+        assert_eq!(json!(turns), expected_image_turns(&f.turns));
         let cp = Checkpoint::of(&canonical).unwrap();
         assert!(
             proof
@@ -2573,10 +2541,7 @@ process.stdout.write(JSON.stringify(result));
             write(&f.source.path, &[meta]);
             let mut turns = f.turns.clone();
             let proof = f.source.hydrate(&mut turns, &[], None, 1_048_576).unwrap();
-            assert_eq!(
-                json!(turns),
-                js_reference(&f.source, &f.turns, "images", &[], None)
-            );
+            assert_eq!(json!(turns), expected_image_turns(&f.turns));
             assert!(
                 proof
                     .promote(&common(2), &positions(0), 0, None, &[])
@@ -2685,6 +2650,7 @@ process.stdout.write(JSON.stringify(result));
     }
     fn late_fixture() -> Fixture {
         let mut f = fixture();
+        f.source.cwd = PathBuf::from("/fixture/project");
         let mut rows = vec![framed(
             "session_meta",
             json!({"id":THREAD,"cwd":f.source.cwd,"session_id":THREAD,"history_mode":"paginated"}),
@@ -2724,14 +2690,14 @@ process.stdout.write(JSON.stringify(result));
         f
     }
     #[test]
-    fn late_command_and_subagent_proofs_match_exact_js_arrival_evidence() {
+    fn late_command_and_subagent_proofs_match_frozen_arrival_evidence() {
         let mut f = late_fixture();
         let proof = f
             .source
             .late_items(&f.turns, &BTreeSet::new())
             .unwrap()
             .unwrap();
-        assert_eq!(proof, js_reference(&f.source, &f.turns, "late", &[], None));
+        assert_eq!(proof, expected_late_proof(&f.source, "command"));
         assert_eq!(proof["placements"][0]["afterTurnId"], AFTER);
         f.rows[7]["payload"]["item"] = json!({"type":"SubAgentActivity","id":"late-agent","kind":"completed",
             "agent_thread_id":SEGMENT,"agent_path":"/root/child"});
@@ -2742,7 +2708,7 @@ process.stdout.write(JSON.stringify(result));
                 .late_items(&f.turns, &BTreeSet::new())
                 .unwrap()
                 .unwrap(),
-            js_reference(&f.source, &f.turns, "late", &[], None)
+            expected_late_proof(&f.source, "subagent")
         );
     }
     #[test]
@@ -2890,7 +2856,7 @@ process.stdout.write(JSON.stringify(result));
                 .late_items(&f.turns, &BTreeSet::new())
                 .unwrap()
                 .unwrap(),
-            js_reference(&f.source, &f.turns, "late", &[], None)
+            expected_late_proof(&f.source, "empty-command")
         );
     }
     #[test]
@@ -2935,6 +2901,72 @@ process.stdout.write(JSON.stringify(result));
             .unwrap()
             .unwrap();
         assert_eq!(proof["placements"][0]["afterTurnId"], TURN);
+    }
+    async fn audit_read_turns(
+        client: &claudex_core::rpc::CodexClient,
+        id: &str,
+    ) -> Result<Vec<Value>> {
+        let mut turns = vec![];
+        let mut cursor = Value::Null;
+        for _ in 0..256 {
+            let mut request =
+                json!({"threadId":id,"limit":100,"itemsView":"full","sortDirection":"asc"});
+            if !cursor.is_null() {
+                request["cursor"] = cursor;
+            }
+            let page = client.request("thread/turns/list", request).await?;
+            turns.extend(
+                page["data"]
+                    .as_array()
+                    .context("Invalid full API page.")?
+                    .iter()
+                    .cloned(),
+            );
+            cursor = page["nextCursor"].clone();
+            if cursor.is_null() {
+                return Ok(turns);
+            }
+        }
+        anyhow::bail!("Real audit API pagination exceeds its bound.")
+    }
+    fn audit_image_preservation(original: &[Value], hydrated: &[Value]) -> Result<()> {
+        let mut restored = hydrated.to_vec();
+        for turn in &mut restored {
+            for item in turn["items"]
+                .as_array_mut()
+                .context("Missing hydrated items.")?
+            {
+                if item["type"] != "userMessage" {
+                    continue;
+                }
+                for block in item["content"]
+                    .as_array_mut()
+                    .context("Missing hydrated user content.")?
+                {
+                    ensure!(
+                        block["type"] != "localImage",
+                        "Native local image was not recovered."
+                    );
+                    if let Some(descriptor) = block.get("nativeLocalImage") {
+                        ensure!(
+                            descriptor["type"] == "localImage"
+                                && block["type"] == "image"
+                                && inline(&block["url"]),
+                            "Recovered native image lacks its exact descriptor or inline bytes."
+                        );
+                        *block = descriptor.clone();
+                    }
+                }
+            }
+        }
+        let original = json!(original);
+        let restored = json!(restored);
+        ensure!(
+            original == restored,
+            "Real image recovery changed API content outside an attachment at {}.",
+            first_difference(&original, &restored, "turns").unwrap_or_default()
+        );
+        Ok(())
     }
     #[tokio::test]
     #[ignore = "explicit read-only audit of saved local histories and the already-running shared backend; no model calls"]
@@ -2999,31 +3031,7 @@ process.stdout.write(JSON.stringify(result));
                 codex_home: home.clone(),
                 max_bytes: MAX_BYTES,
             };
-            let mut turns = vec![];
-            let mut cursor = Value::Null;
-            for _ in 0..256 {
-                let mut request =
-                    json!({"threadId":id,"limit":100,"itemsView":"full","sortDirection":"asc"});
-                if !cursor.is_null() {
-                    request["cursor"] = cursor.clone();
-                }
-                let page = client.request("thread/turns/list", request).await?;
-                turns.extend(
-                    page["data"]
-                        .as_array()
-                        .context("Invalid full API page.")?
-                        .iter()
-                        .cloned(),
-                );
-                cursor = page["nextCursor"].clone();
-                if cursor.is_null() {
-                    break;
-                }
-            }
-            ensure!(
-                cursor.is_null(),
-                "Real audit API pagination exceeds its bound."
-            );
+            let turns = audit_read_turns(&client, id).await?;
             if !turns.iter().any(|t| {
                 t["items"].as_array().is_some_and(|a| {
                     a.iter().any(|i| {
@@ -3043,27 +3051,19 @@ process.stdout.write(JSON.stringify(result));
                 .filter(|p| *p != source.path);
             let mut hydrated = turns.clone();
             let evidence = source.hydrate(&mut hydrated, retained, old, 268435456)?;
-            let reference = js_reference(&source, &turns, "images", retained, old);
-            // Compare only recovered user content; unrelated tool bodies can
-            // contain numbers beyond JavaScript's exact integer range.
-            for request in &evidence.requests {
-                let find = |values: &[Value]| {
-                    values.iter().find(|t| t["id"] == request.turn).unwrap()["items"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .find(|i| i["id"] == request.item["id"])
-                        .unwrap()["content"]
-                        .clone()
-                };
-                let expected = find(reference.as_array().context("Missing JS hydrated turns.")?);
-                let actual = find(&hydrated);
-                ensure!(
-                    actual == expected,
-                    "Real native image differential mismatch at {}.",
-                    first_difference(&actual, &expected, "content").unwrap_or_default()
-                );
-            }
+            audit_image_preservation(&turns, &hydrated)?;
+            let repeated = audit_read_turns(&client, id).await?;
+            ensure!(
+                turns == repeated,
+                "Real audit API history changed between complete passes."
+            );
+            let mut rehydrated = repeated.clone();
+            let repeated_evidence = source.hydrate(&mut rehydrated, retained, old, 268435456)?;
+            ensure!(
+                hydrated == rehydrated,
+                "Real image recovery changed between complete passes."
+            );
+            repeated_evidence.verify()?;
             images += evidence.requests.len();
             evidence.verify()?;
             accepted += 1;
@@ -3080,34 +3080,31 @@ process.stdout.write(JSON.stringify(result));
                 late_with_commands += 1;
                 let mut late_source = source.clone();
                 late_source.max_bytes = 480 * 1024 * 1024;
-                let rust = late_source.late_items(&turns, &BTreeSet::new());
-                let reference = js_reference_result(&late_source, &turns, "late", &[], None);
-                match (rust, reference) {
-                    (Ok(rust), Ok(reference)) => {
-                        let actual = rust.clone().unwrap_or(Value::Null);
+                let first = late_source.late_items(&turns, &BTreeSet::new());
+                let second = late_source.late_items(&repeated, &BTreeSet::new());
+                match (first, second) {
+                    (Ok(first), Ok(second)) => {
                         ensure!(
-                            actual == reference,
-                            "Real late-item differential mismatch at {}.",
-                            first_difference(&actual, &reference, "proof").unwrap_or_default()
+                            first == second,
+                            "Real late-item proof changed between complete passes."
                         );
-                        if rust.is_some() {
+                        if first.is_some() {
                             late_accepted += 1;
                         }
                     }
-                    (Err(rust), Err(reference)) => {
-                        // A moved history's old header can contradict its
-                        // current API cwd. Both readers must retain this
-                        // exact ownership refusal; it is not a new label.
+                    (Err(first), Err(second)) => {
+                        // A moved history can contradict its current API cwd;
+                        // preserve and report that ownership refusal on both passes.
                         ensure!(
-                            rust.to_string().contains("source identity differs")
-                                && reference
-                                    .to_string()
-                                    .contains("source header or ordinal chain differs"),
-                            "Real late-item readers refused different proof conditions."
+                            first.to_string().contains("source identity differs")
+                                && second.to_string().contains("source identity differs"),
+                            "Real late-item audit refused an unexpected proof condition."
                         );
                         late_refused += 1;
                     }
-                    _ => anyhow::bail!("Real late-item Rust/JS acceptance differs."),
+                    _ => {
+                        anyhow::bail!("Real late-item acceptance changed between complete passes.")
+                    }
                 }
             }
             if accepted >= 6 {
@@ -3123,7 +3120,7 @@ process.stdout.write(JSON.stringify(result));
             "{}",
             json!({"readOnly":true,"modelRequests":0,"attempted":attempted,"accepted":accepted,
             "imageItems":images,"unavailable":unavailable,"noLongerImages":no_longer_images,
-            "historiesWithCommands":late_with_commands,"lateProofs":late_accepted,"matchingLateRefusals":late_refused})
+            "historiesWithCommands":late_with_commands,"lateProofs":late_accepted,"stableLateRefusals":late_refused})
         );
         Ok(())
     }

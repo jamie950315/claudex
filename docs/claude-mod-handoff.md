@@ -110,18 +110,22 @@ not included. No public release or notarization is implied.
 ## Validate changed inputs
 
 ```sh
-node --test test/mod-self-wake.test.mjs test/claude-mod-self-inbox.test.mjs test/mod-wake.test.mjs test/claude-mod-controller.test.mjs test/claude-mod-bridge.test.mjs
-node bin/claudex-mod.mjs stage \
+cargo build --locked -p claudex-cli
+cargo test --locked -p claudex-app -p claudex-work
+npm run test:hosts
+target/debug/claudex mod stage \
   --root /canonical/private/claudex-state \
   --output /canonical/new/claudex-mod-stage \
-  --node /canonical/trusted/node --native-wake --self-wake
+  --native-wake --self-wake
 claude plugin validate /canonical/new/claudex-mod-stage/plugins/claudex --strict --json
 claude plugin test /canonical/new/claudex-mod-stage/plugins/claudex
 ```
 
 Use the actual intended runtime's compiler/test kit and a create-only stage.
-The source plugin has blank machine defaults and no bundled helper. The documented
-public API baseline is 2.1.287, not an automatic rejection of tested 2.1.286.
+The source plugin has blank machine defaults; staging bundles the native Rust
+companion executable. The former JavaScript engine is frozen on
+`codex/javascript-legacy`. The documented public API baseline is 2.1.287, not an
+automatic rejection of tested 2.1.286.
 The native kit cases stub external operations; they are not rendering or
 model-work evidence. Reuse unchanged valid tests rather than rerunning a full
 suite solely for installation or handoff.
@@ -147,7 +151,7 @@ claude plugin install claudex@claudex-local --scope user
 ```
 
 For an existing installation use its native update flow. Verify the exact
-synchronization root, trusted Node executable and intended nativeWake/selfWake options
+synchronization root, trusted Rust executable and intended nativeWake/selfWake options
 for both claudex@claudex-local and claudex@inline, including retained overrides.
 Use a fresh suitable session when an existing module remains loaded; do not
 restart active apps merely to update a pane. Install receipts and cache versions

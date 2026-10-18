@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildClaudeFolderProjection, claudeFolderProjectKey, lookupClaudeFolderProjection,
-  normalizeClaudeRemoteId } from '../src/claude-folder-projection.mjs';
+  normalizeClaudeRemoteId } from '../crates/claudex-app/host/renderer/claude-folder-projection.mjs';
 
 const cwd = '/Users/example/claudex';
 const remoteId = 'cse_fixture_session_01';

@@ -1,22 +1,22 @@
-# Rust migration
+# Runtime architecture and JavaScript archive
 
-Claudex's runtime implementation is written in Rust. The preserved
-JavaScript implementation remains the behavioral reference;
-it must not become a fallback called by the Rust runtime.
+Claudex has one engine: the Rust Cargo workspace on `main`. JavaScript remains
+only for native hosts, compatibility entry points and developer tooling. The
+former JavaScript engine and behavioral reference suite are preserved on the
+frozen `codex/javascript-legacy` branch, not imported or executed by `main`.
 
-## Completion contract
+## Capability-preservation contract
 
-- Preserve all synchronization, collaboration, setup, installation, recovery,
-  retention, cache-warming and diagnostics capabilities and their entry points.
+- Preserve synchronization, collaboration, setup, installation, recovery,
+  retention, cache warming, diagnostics and their existing entry points.
 - Preserve native accounts, existing state formats, exact checkpoint and
   ownership proofs, permissions, original histories and uncertain-write handling.
-- Keep the native Swift macOS UI. JavaScript may remain only where the host
-  requires it (Claude Mod and injected vendor frontend code), not as the engine.
-- Package the Rust executables through the normal app installation path;
+- Keep the native Swift macOS UI and the JavaScript required by native hosts.
+- Package the Rust executable through the normal app installation path;
   migrate existing owned launch definitions without interrupting native work.
-- Exercise the affected Rust contracts and complete synthetic end-to-end paths.
-  Keep native model/installed Desktop acceptance distinct from synthetic evidence.
-- Do not publish or replace the installed app as part of developing this branch.
+- Exercise affected Rust contracts and complete synthetic end-to-end paths.
+  Native model and installed Desktop acceptance remain separate evidence.
+- Source cleanup does not authorize replacing the installed app or native work.
 
 ## Workspace ownership
 
@@ -30,60 +30,90 @@ it must not become a fallback called by the Rust runtime.
 
 All crates use the workspace edition and dependency versions. Boundary payloads
 retain unknown native fields as inert JSON data; safety-critical internal
-transitions use explicit Rust types. A native record reader must not introduce
-an allowlist of recognized record kinds.
-
-## Integration interfaces
+transitions use explicit Rust types. A native record reader names actual unsafe
+conditions rather than allowlisting recognized record kinds.
 
 The command crates expose `pub async fn run(args: &[String]) -> anyhow::Result<()>`.
 Arguments are the original subcommand arguments without the executable name.
-They must report unsupported commands explicitly, never dispatch the legacy
-JavaScript runtime. Domain modules expose testable typed APIs in addition to
-their command entry point.
+Domain modules expose typed APIs as well as command entry points. Shared storage
+and authenticated JSON serialization live in `claudex-core`; they preserve durable
+file identities and the existing checkpoint bytes, including legacy formats.
 
-Shared synchronous storage functions live in `claudex_core::storage`:
-`read_json`, `read_json_or`, `write_json`, `write_diagnostic_json`, `atomic_write`,
-`publish_exclusive`, `private_directory`, `snapshot`, `hash_bytes`, `hash_json`,
-and `FileLock::acquire`. `FileIdentity` stores nanosecond identity fields as
-decimal strings, matching the existing durable representation. Hashing exists
-to preserve the existing authenticated checkpoint and ownership contracts.
+## Host code is separate from the engine
 
-Migration progress is not release acceptance. Remaining implementation and
-integration gaps must remain explicit until the completion contract is met.
-
-## Signed Desktop transport host
+| Location | Purpose |
+| --- | --- |
+| `crates/claudex-app/host/renderer/` | Six renderer programs embedded by Rust and injected into the native Claude frontend |
+| `crates/claudex-cli/host/codex-host.mjs` | Thin signed-Node process-chain adapter for Codex Desktop |
+| `plugins/claudex/` | Native Claude Mod UI, hooks, commands and skills |
+| `native/` | Swift macOS app and status-display presentation |
+| `bin/*.mjs` | Explicit Node compatibility entry points that forward to Rust |
+| `dev/` and `test/` | Host and maintenance-tool checks; engine contracts live with the Rust crates |
 
 Codex Desktop's app-tools authorizer checks native process ancestry. Its
-OpenAI-signed bundled Node must remain the direct host that starts the native
-Codex backend; a development-signed Rust process cannot replace that identity.
-The host-required JavaScript bootstrap must therefore remain a thin process
-adapter. Rust runs as a sibling sidecar over inherited control pipes, rather
-than being inserted between the backend and its signed parent. Policy,
-ownership journals, socket validation and framing belong in Rust. This
-integration requirement does not justify retaining the JavaScript engine or
-substituting an unsigned Node runtime.
+OpenAI-signed bundled Node remains the direct host that starts the native Codex
+backend. Rust runs as a sibling sidecar over inherited control pipes, not between
+the backend and its signed parent. Policy, ownership journals, socket validation
+and framing belong in Rust. Never substitute an unsigned Node runtime or insert
+a development-signed Rust parent into that protected ancestry.
 
-## Developer entry points
+The renderer programs and native Mod use their host applications' JavaScript
+APIs. They are retained host assets, not a legacy engine or fallback. App packaging
+includes the Rust executable and allowlisted host assets, not a Node distribution
+or engine npm dependencies. The packaged executable is
+`Contents/Resources/engine/bin/claudex`; Swift invokes its `app` subcommand.
 
-Build the native executable with
-`cargo build --locked --release -p claudex-cli` (or `npm run build`), then run
-`bin/claudex`. The npm `claudex` executable points to that same no-Node launcher.
-It resolves checkout symlinks and executes `target/release/claudex`, or the
-absolute executable selected by `CLAUDEX_RUST_ENGINE`. A missing engine fails
-with the build command; startup never compiles, downloads, or dispatches the
-JavaScript engine.
+## Build and check the current source
 
-Explicit `node bin/*.mjs` commands remain thin compatibility hosts that route to
-the corresponding Rust subcommand and forward standard streams, exit status,
-and signals. `bin/claudex-codex.mjs` is the exception to direct spawning: it loads
-the signed-Node sibling transport host described above, keeping the native
-backend's required ancestry. The app builder forwards to `claudex app build`;
-use `--executable` for a built native engine instead of the former
-`--node-distribution` option.
+```sh
+cargo build --locked --release -p claudex-cli
+bin/claudex --help
+cargo test --locked --workspace
 
-`npm test` runs `cargo test --locked --workspace` and the thin entry-point tests.
-The former JavaScript entry points live only in `test/reference/bin/`.
-`npm run test:reference` overlays them into its own temporary source fixture and
-runs the existing behavioral tests there; individual test paths may be supplied
-after `--`. Node dependencies remain development/reference tooling, not Rust
-runtime dependencies. Reference success and Rust parity are separate evidence.
+# JavaScript hosts and maintenance tooling only:
+npm ci --ignore-scripts
+npm run test:hosts
+```
+
+`npm run build` aliases the Cargo build. The npm `claudex` executable is the same
+no-Node `bin/claudex` launcher. It resolves checkout symlinks and executes
+`target/release/claudex`, or the absolute executable selected by
+`CLAUDEX_RUST_ENGINE`. A missing engine fails with the build instruction; startup
+never compiles, downloads or invokes a different engine.
+
+Explicit `node bin/*.mjs` commands forward standard streams, exit status and
+signals to the corresponding Rust subcommand. `bin/claudex-codex.mjs` loads the
+signed-Node sibling host instead of directly spawning Rust as the backend's
+parent. The app builder forwards to `claudex app build`; use `--executable` for a
+built engine, not the removed `--node-distribution` option.
+
+`npm test` runs `cargo test --locked --workspace` followed by `npm run test:hosts`.
+`npm run test:entrypoints` selects the compatibility-entry tests alone. Node
+packages are development dependencies: `acorn` supports vendor-frontend AST
+checks, and `@anthropic-ai/claude-agent-sdk` supports the maintenance schema tool.
+Neither supplies the product engine. Host tests may use Rust test helpers in
+isolated roots; automated checks never start model inference.
+
+## Read the archived JavaScript implementation
+
+The frozen [`codex/javascript-legacy` branch](https://github.com/jamie950315/claudex/tree/codex/javascript-legacy)
+keeps the complete pre-cleanup source, including `src/`, `test/reference/`,
+`dev/test-reference.mjs`, the old engine tests and manual cache-warming probes.
+It includes the Rust migration state as well as the final JavaScript references.
+The earlier [`v1.4.8` tag](https://github.com/jamie950315/claudex/tree/v1.4.8)
+preserves the release before the Rust engine migration.
+
+Use the archive for source history and old experiments; it is not a second
+maintained runtime. For example, inspect an old module without changing the
+current checkout:
+
+```sh
+git fetch origin codex/javascript-legacy
+git show origin/codex/javascript-legacy:src/cold-import.mjs
+```
+
+The old reference command and its dependency lockfile belong to that branch.
+Do not restore them as a fallback on `main`, run the archive against live state,
+or downgrade an installed engine over newer journals or uncertain outcomes.
+Historical release notes and acceptance records retain the commands and versions
+that were actually tested; they are not current build instructions.

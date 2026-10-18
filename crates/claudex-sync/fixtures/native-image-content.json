@@ -1,0 +1,22 @@
+[
+  {
+    "type": "text",
+    "text": "historical 中文 request",
+    "text_elements": []
+  },
+  {
+    "type": "image",
+    "url": "data:image/png;base64,bmF0aXZl",
+    "nativeLocalImage": {
+      "type": "localImage",
+      "path": "/never-read/source image.png",
+      "detail": null
+    },
+    "nativePersistedImageDetail": "original"
+  },
+  {
+    "type": "image",
+    "url": "data:image/png;base64,b3JpZ2luYWw=",
+    "detail": null
+  }
+]

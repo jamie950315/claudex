@@ -826,6 +826,14 @@ mod tests {
     fn catalog_is_data_not_executable() {
         assert!(validate_catalog("const rows = {\"Hi {name}\":[\"A {name}\",\"B {name}\",\"C {name}\",\"D {name}\",\"E {name}\",\"F {name}\",\"G {name}\",\"H {name}\"]};\n\nconst languages = [];").is_ok());
         assert!(validate_catalog("const rows = eval('bad');\n\nconst languages=[];").is_err());
+        for rows in [
+            json!({"Hello": ["Hello"]}),
+            json!({"Value {value}": vec!["Value {other}"; 8]}),
+        ] {
+            let source = format!("const rows = {rows};\n\nconst languages = [];\n");
+            assert!(validate_catalog(&source).is_err());
+        }
+        assert!(validate_catalog("export const catalogs = {};").is_err());
     }
     #[test]
     fn full_payload_is_checked_even_for_metadata() {

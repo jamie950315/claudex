@@ -5,12 +5,15 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import test from 'node:test';
-import { APP_LOCALES } from '../src/app-bundle.mjs';
+const APP_LOCALES = ['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it'];
 
 const directory = new URL('../native/ClaudexApp/Locales/', import.meta.url).pathname;
 test('all nine UI catalogs are complete with matching format placeholders', async () => {
   const english = JSON.parse(await readFile(join(directory, 'en.json'), 'utf8'));
-  assert.deepEqual(APP_LOCALES, ['en', 'zh-Hant', 'zh-Hans', 'ja', 'ko', 'es', 'de', 'fr', 'it']);
+  const builder = await readFile(new URL('../crates/claudex-app/src/bundle.rs', import.meta.url), 'utf8');
+  const locales = builder.match(/pub const LOCALES: &\[&str\] = &\[([\s\S]*?)\];/);
+  assert.ok(locales, 'Rust app builder declares its locale inventory');
+  assert.deepEqual([...locales[1].matchAll(/"([^"]+)"/g)].map(match => match[1]), APP_LOCALES);
   assert.ok(Object.keys(english).length >= 190);
   for (const locale of APP_LOCALES) {
     const values = JSON.parse(await readFile(join(directory, `${locale}.json`), 'utf8'));

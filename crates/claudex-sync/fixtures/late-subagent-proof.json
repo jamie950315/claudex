@@ -1,0 +1,12 @@
+{
+  "placements": [
+    {
+      "turnId": "00000000-0000-4000-8000-000000000002",
+      "itemId": "late-agent",
+      "afterTurnId": "00000000-0000-4000-8000-000000000003",
+      "itemDigest": "e83247d030791deaeaaa4d446bcf54703c6c768cacb0af702334f71243cb9e1f"
+    }
+  ],
+  "sourceIdentity": null,
+  "evidenceDigest": "070f4cfd69f8f008ede8075e3ec7964d5f57b7b40742ef57978303f0eda5ff74"
+}

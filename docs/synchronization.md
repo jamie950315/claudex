@@ -7,7 +7,7 @@ contracts. Synchronization moves completed history without requesting model
 inference. For model execution and delegation, use [collaboration](collaboration.md).
 Use the installed `claudex` executable, or `bin/claudex` from a built developer
 checkout. The Rust runtime architecture is documented in
-[Rust migration](rust-migration.md); historical native acceptance below remains
+[Runtime architecture](rust-migration.md); historical native acceptance below remains
 scoped to the versions and runtimes tested.
 
 ## In this guide
@@ -388,14 +388,14 @@ an accessible supported native transcript are outside this discovery path.
 
 ### Historical Local imports
 
-`src/cold-import.mjs` provides an explicit module API for backfilling supported
-old Codex conversations. It is not a public bulk-import CLI command and does not
-change discovery's initialization cutoff. A private journal reserves one target
+`Importer` in `crates/claudex-sync/src/cold_import.rs` provides an explicit
+module API for backfilling supported old Codex conversations. It is not a public
+bulk-import CLI command and does not change discovery's initialization cutoff. A private journal reserves one target
 per source before publication, so a rerun reuses the same allocation rather than
 creating duplicates or overwriting an existing native file.
 
 The importer publishes a native Claude CLI transcript with a signed archive
-packet, then `DesktopBridge.trackImportedPair()` verifies exact portable-history
+packet, then `DesktopBridge::track_imported_pair()` verifies exact portable-history
 digest, message count and project directory on both sides. The pair remains two
 unmanaged originals, not disposable snapshots; Claudex never overwrites their
 history. The runtime's `importPacket` path authenticates and reconstructs the
@@ -1148,14 +1148,15 @@ archived flag, an absent PID, or a successful reload alone.
 
 ### Native SDK owner path
 
-`src/claude-owner.mjs` provides Desktop synchronization: a persistent native
-Claude SDK process is the only transcript writer, and Claude Desktop connects
-through native Remote Control. Synchronization submits `shouldQuery: false`
-messages; normal user requests from Desktop remain native user turns. The
-component pins SDK `0.3.281` and records CLI `2.1.281` as its strict validated
-baseline; `warn` permits other runtimes to attempt the existing protocol without
-claiming compatibility. It requires normal subscription OAuth and does not copy
-credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
+`crates/claudex-sync/src/owner.rs` provides Desktop synchronization: a persistent
+native Claude process using its SDK protocol is the only transcript writer.
+Claude Desktop connects through native Remote Control. Synchronization submits
+`shouldQuery: false` messages; normal user requests from Desktop remain native user turns. The
+component implements that native protocol directly in Rust. Its strict validated
+CLI baseline is `2.1.281`, originally accepted with SDK `0.3.281`; the Rust owner
+does not load the Node SDK. `warn` permits other runtimes to attempt the existing
+protocol without claiming compatibility. It requires normal subscription OAuth
+and does not copy credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
 even to the default path selects a different native credential namespace, so
 the owner omits that variable for the standard home.
 
@@ -1250,14 +1251,14 @@ When that exact validated sidecar is the only trailing message after a no-query
 image packet, full native graph and packet validation establish a completed
 transport boundary. A genuine newer user turn still remains withheld.
 
-`src/context-packet.mjs` carries reversibly labeled foreign messages as native
-text and inline images, never executable tool requests. A bounded structural
+`crates/claudex-sync/src/packet.rs` carries reversibly labeled foreign messages
+as native text and inline images, never executable tool requests. A bounded structural
 footer authenticates the packet without duplicating its body. The Desktop
 coordinator persists its private signing key, enforces digest chaining, and
 keeps imported packets from looping back as newly authored messages.
 
-`src/native-history.mjs` reads the native paginated `thread/turns/list` API twice,
-requiring complete matching history rather than guessing raw `history_base`
+`crates/claudex-sync/src/native_history.rs` reads the native paginated
+`thread/turns/list` API twice, requiring complete matching history rather than guessing raw `history_base`
 offsets. A real compacted conversation exports all 15 completed turns and round
 trips through the Claude codec. This is saved readable display history, including
 inert tool events and inline images, not decrypted reasoning or recovered
@@ -1382,21 +1383,26 @@ still block retirement safely; they are not deleted to satisfy a count limit.
 ## Verification
 
 ```sh
+cargo test --locked -p claudex-sync -p claudex-cli
+
+# Complete engine and host checks, after npm ci --ignore-scripts:
 npm test
-CLAUDEX_NATIVE_TEST=1 node --test test/bridge-native.test.mjs test/cli.test.mjs test/codex-projection.test.mjs
-CLAUDEX_NATIVE_TEST=1 node --test test/desktop-native.test.mjs
 ```
 
-Native checks use temporary homes and synthetic completed turns, not model
-inference. They verify six alternating handoffs, one active and one archived
-Codex projection, bounded Claude backups, restart/read behavior, zero import
-history rows, cross-process writer protection, project-limited discovery, and
-automatic watching. Pure tests cover twelve roundtrips, conflict handling,
-recovery, quotas, atomic publication, symlinks, images, and visible reasoning.
+Current Rust contracts use temporary roots and synthetic native clients to test
+history decoding, complete-turn delivery, conflicts, recovery, quotas, stable
+storage, ownership and event scheduling. They do not request model inference.
+Host checks cover the retained native-host programs and maintenance tools; the
+old JavaScript engine tests are archived on `codex/javascript-legacy`.
 
-Claude CLI displays a six-turn generated session. The desktop task-reading API
-reads both complete turns of a synthetic Codex projection in the real local
-store; that sample is removed afterward. These no-inference tests are distinct
+Historical no-inference native checks verified six alternating handoffs, one
+active and one archived Codex projection, bounded Claude backups, restart/read
+behavior, zero import history rows, cross-process writer protection,
+project-limited discovery and automatic watching. Their commands and dependencies
+belong to the archived implementation; they are not current Rust test commands.
+At that acceptance checkpoint, Claude CLI displayed a six-turn generated
+session. The desktop task-reading API read both complete turns of a synthetic
+Codex projection in the real local store; that sample was removed afterward. These no-inference tests are distinct
 from the separately authorized live Desktop acceptance above. That acceptance
 also verified a previously compacted real source, automatic history delivery,
 same-ID Claude rendering, native snapshot cleanup and exact canonical equality.
@@ -1411,7 +1417,7 @@ isolated native stores for testing. Runtime data stays outside the repository.
 - [Claude Code sessions](https://code.claude.com/docs/en/sessions)
 - [Claude storage and retention](https://code.claude.com/docs/en/claude-directory)
 - [Thinking signatures](https://platform.claude.com/docs/en/build-with-claude/thinking)
-- [txcript usage](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
+- [Legacy transcript wire-format reference (txcript)](https://github.com/skillsynchq/txcript/blob/main/docs/usage.md)
 
 ## Completion-driven synchronization
 

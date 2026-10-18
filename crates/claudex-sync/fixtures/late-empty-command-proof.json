@@ -1,0 +1,12 @@
+{
+  "placements": [
+    {
+      "turnId": "00000000-0000-4000-8000-000000000002",
+      "itemId": "late-command",
+      "afterTurnId": "00000000-0000-4000-8000-000000000003",
+      "itemDigest": "2023be46043eb71dee635ba918533069af6325941b7f99e99fd8a93a6f859280"
+    }
+  ],
+  "sourceIdentity": null,
+  "evidenceDigest": "887843eaa302615b4f0597fb0ca3970492811fd68ed0cf4ee389d2ac45c1b021"
+}

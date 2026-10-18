@@ -72,7 +72,8 @@ anchors. Test-only dependency injection retains the former
 bounded polling harness, not a production fallback.
 
 - Codex publishes only new independent rollouts and registers them with `thread/resume(path)`; no direct SQLite mutations or external-agent imports.
-- Claude uses native resumable session projections with pinned `txcript` codecs.
+- Claude uses native resumable session projections with the Rust codecs in
+  `crates/claudex-sync/src/codecs.rs`, preserving the existing transcript wire format.
 - Filesystem events are hints; durable checkpoints and source identities determine work.
 - Late native command completions and sub-agent notifications (a
   `SubAgentActivity` row native records on the turn that spawned the agent,
@@ -126,8 +127,8 @@ bounded polling harness, not a production fallback.
   checkpoint match. Exact normal matches and initial enrollment retain their
   existing export path; do not impose proof-reader bounds on ordinary histories.
 - Native completed turns with no full API items require independent stable
-  rollout proof (`native-empty-turn.mjs`) before exclusion from dialogue. Match
-  the turn's identities and times and find no activity. By the tolerance rule
+  rollout proof (`crates/claudex-sync/src/native_proofs.rs`) before exclusion from
+  dialogue. Match the turn's identities and times and find no activity. By the tolerance rule
   under Development the proof names what activity is and accepts everything
   else: a reply, reasoning, a tool call or output, a token or usage record, an
   item completion, a compaction, authored input (a user-role kind beginning
@@ -192,8 +193,8 @@ embed a checkpoint compare it the same way, so a dialogue digest added later
 is not a change. New checkpoints record both digests. One saved before
 dialogue digests gains its dialogue only from a read that matches its exact
 bytes (`checkpoint-dialogue-recorded`); until then it compares exactly, and the
-cold scheduler does not reuse a cached read for such a conversation. The
-JavaScript reference keeps exact checkpoint comparison.
+cold scheduler does not reuse a cached read for such a conversation. The frozen
+JavaScript archive retains its historical exact-checkpoint behavior.
 
 ## Hook health diagnostics
 
@@ -204,8 +205,8 @@ grants approval or blocks otherwise ready synchronization. The native health
 summary surfaces partial renderer failures, origin trust and hook failures
 independently; history and ownership conflicts keep priority.
 
-`bin/claudex-sync-hook.mjs` records content-free failures for input, origin_bind,
-origin_recheck, mailbox and sync in private `sync-hook-health-<provider>.json`.
+The Rust `sync-hook` command (`crates/claudex-cli/src/sync_hook.rs`) records
+content-free failures for input, origin_bind, origin_recheck, mailbox and sync in private `sync-hook-health-<provider>.json`.
 Use fixed allowlisted codes only: never store hook input, native IDs, cwd,
 error text or arbitrary error codes. Each provider retains the latest 16 errors,
 one last error/recovery per phase and counters saturating at 1,000,000,000;

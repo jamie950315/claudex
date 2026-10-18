@@ -2033,7 +2033,7 @@ mod tests {
     }
 
     #[test]
-    fn prime_usage_and_one_compaction_match_existing_engine() {
+    fn prime_usage_and_one_compaction_match_frozen_contract() {
         let (_t, mut rust) = manager();
         let settings = WarmSettings::default();
         let mut configuration = enable();
@@ -2073,34 +2073,10 @@ mod tests {
         let mut actual = rust
             .dispatch("list", json!({}), 3301003, false, &settings)
             .unwrap();
-        let native = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(native.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
-        let native_root = std::fs::canonicalize(native.path()).unwrap();
-        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../src/cache-warm.mjs")
-            .canonicalize()
-            .unwrap();
-        let script = r#"
-          const {CacheWarmManager}=await import(process.argv[1]);let now=1000;
-          const m=new CacheWarmManager({root:process.argv[2],now:()=>now});await m.initialize();
-          const b=(epoch,sequence)=>({sessionId:'session-a',cwd:'/tmp/project',instanceId:'warm-100-uuid',epoch,sequence,phase:'idle'});
-          await m.observe(b(1,1));await m.configure({provider:'claude',sessionId:'session-a',cwd:'/tmp/project',enabled:true,requestId:'request-a',maxRefreshes:1,maxMinutes:60,maxReadTokens:null});
-          const first=await m.claim(b(1,2));const input={...b(1,2),attemptId:first.attempt.id};now=1001;await m.check(input);now=1002;await m.receipt({...input,outcome:'submitted'});
-          now=2000;await m.observe({...b(2,2),attemptId:input.attemptId,sample:{id:'prime-response',startedAt:1001,completedAt:2000,model:'sonnet',effort:'medium',ttlMs:3600000,ttlSource:'native-setting',inputTokens:1000,cacheReadTokens:0,cacheWriteTokens:1000,outputTokens:1,stopReason:'end_turn',attemptId:input.attemptId}});
-          now=3301001;const claim=await m.claim({...b(2,3),kind:'compact'});const compact={...b(2,3),attemptId:claim.attempt.id};now=3301002;await m.check(compact);now=3301003;await m.receipt({...compact,outcome:'compacted'});console.log(JSON.stringify(await m.list()));
-        "#;
-        let output = std::process::Command::new("node")
-            .args(["--input-type=module", "-e", script])
-            .arg(source)
-            .arg(native_root)
-            .output()
-            .expect("Node is required only for migration differential tests.");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let mut expected: Value = serde_json::from_slice(&output.stdout).unwrap();
+        // Captured from the JavaScript engine before its retirement; only
+        // random attempt IDs were replaced by their attempt-list positions.
+        let expected: Value =
+            serde_json::from_str(include_str!("../fixtures/warm-prime-compaction.json")).unwrap();
         fn normalize(v: &mut Value) {
             let ids: Vec<_> = v["attempts"]
                 .as_array()
@@ -2131,7 +2107,6 @@ mod tests {
             walk(v, &ids)
         }
         normalize(&mut actual);
-        normalize(&mut expected);
         assert_eq!(actual, expected);
     }
 }

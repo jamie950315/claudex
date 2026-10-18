@@ -3,16 +3,19 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { catalogs } from '../plugins/claudex/hooks/locales.mjs';
 import { LANGUAGE_IDS, createLocalization, localizedUsage, parsePreferredLanguages, resolveLanguage, translator } from '../plugins/claudex/hooks/localization.mjs';
-import { validateModCatalogSource } from '../src/claude-mod-install.mjs';
 
 test('all Mod catalogs have complete translated keys and exact placeholders', async () => {
-  const source = await readFile(new URL('../plugins/claudex/hooks/locales.mjs', import.meta.url), 'utf8');
-  const rows = validateModCatalogSource(source);
+  const placeholders = text => [...text.matchAll(/\{[A-Za-z][A-Za-z0-9_]*\}/g)].map(match => match[0]).sort();
   assert.deepEqual(Object.keys(catalogs), LANGUAGE_IDS);
-  for (const language of LANGUAGE_IDS) assert.deepEqual(Object.keys(catalogs[language]).sort(), Object.keys(rows).sort());
-  for (const [key, values] of Object.entries(rows)) {
+  for (const language of LANGUAGE_IDS) assert.deepEqual(Object.keys(catalogs[language]).sort(), Object.keys(catalogs.en).sort());
+  for (const key of Object.keys(catalogs.en)) {
     assert.equal(catalogs.en[key], key);
-    LANGUAGE_IDS.slice(1).forEach((language, index) => assert.equal(catalogs[language][key], values[index]));
+    for (const language of LANGUAGE_IDS) {
+      const value = catalogs[language][key];
+      assert.equal(typeof value, 'string');
+      assert.ok(value.trim(), `${language}: ${key}`);
+      assert.deepEqual(placeholders(value), placeholders(key), `${language}: ${key}`);
+    }
   }
   // Catch newly introduced literal labels before shipping an English-only control.
   for (const filename of ['panel.mjs', 'localization.mjs', 'register.mjs']) {
@@ -22,13 +25,6 @@ test('all Mod catalogs have complete translated keys and exact placeholders', as
       assert.ok(Object.hasOwn(catalogs.en, key), `${filename}: ${key}`);
     }
   }
-});
-
-test('catalog validation rejects missing languages and changed placeholder contracts', () => {
-  const source = rows => `const rows = ${JSON.stringify(rows)};\n\nconst languages = [];`;
-  assert.throws(() => validateModCatalogSource(source({ Hello: ['你好'] })), { code: 'MOD_LOCALES' });
-  assert.throws(() => validateModCatalogSource(source({ 'Value {value}': Array(8).fill('值 {other}') })), { code: 'MOD_LOCALES' });
-  assert.throws(() => validateModCatalogSource('export const catalogs = {};'), { code: 'MOD_LOCALES' });
 });
 
 test('system language resolution matches app script and region precedence', () => {

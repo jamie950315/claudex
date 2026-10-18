@@ -1,4 +1,4 @@
-# Rust runtime migration
+# Rust runtime and source ownership
 
 The Cargo workspace implements the complete runtime in Rust, not
 a wrapper around the JavaScript engine. `docs/rust-migration.md` defines the
@@ -11,11 +11,13 @@ workspace checks when shared interfaces or complete workflows change. Do not
 format another active owner's crate or stage its unfinished files implicitly.
 Keep Cargo.lock tracked and build output under ignored `target/`.
 
-Existing JavaScript code and tests remain behavioral references until equivalent
-Rust contracts and complete flows are proven. Do not delete an existing
-capability, replace a native lifecycle proof with a stub, invoke the legacy
-engine as a fallback, or claim a narrow test proves full parity. Preserve
-durable state formats and JavaScript checkpoint serialization bytes. Use
+The former JavaScript engine and its reference suite are frozen on
+`codex/javascript-legacy`, outside `main`. Required host code lives in
+`crates/claudex-app/host/renderer/`, `crates/claudex-cli/host/`, `plugins/claudex/`
+and the thin `bin/*.mjs` entry points. Engine contracts belong to the Rust crates;
+do not restore the legacy engine as a runtime or test dependency. Do not delete
+an existing capability, replace a native lifecycle proof with a stub, or claim a
+narrow test proves complete native acceptance. Preserve durable state formats and JavaScript checkpoint serialization bytes. Use
 `claudex_core::json` for existing authenticated JSON serialization and
 `claudex_core::storage` for exact file identities and safe publication.
 
@@ -48,7 +50,7 @@ The native app resource path for the Rust executable is
 subcommand. Packaging must supply the actual complete executable and required
 host assets, not produce an apparently usable bundle with missing commands.
 Do not replace the installed app, restart native work, run model inference or
-publish this branch as part of source migration.
+publish a release merely as part of source cleanup.
 
 An explicitly composed Runtime may use `new_with_shared_transport_root` to
 admit an existing verified Codex backend through a separate read-only transport
@@ -80,10 +82,12 @@ Explicit Node entry points are transport-only compatibility hosts, including
 stdio/exit/signal forwarding. Codex's signed Node sibling host retains its
 separate ancestry contract. Never import `src/` or `test/reference/` from them.
 
-Use `npm run test:entrypoints` for those hosts. `npm test` runs the Rust workspace
-and entry-point checks. Run the preserved JavaScript behavioral suite explicitly
-with `npm run test:reference [-- test/<name>.test.mjs]`; its temporary overlay is
-test-only and never a fallback or native acceptance claim.
+Use `npm run test:entrypoints` for the thin entry points and `npm run test:hosts`
+for all retained host and maintenance-tool tests. `npm test` runs the Rust
+workspace followed by the host tests. The JavaScript reference suite and its
+runner exist only on the archive branch; current Rust tests must not depend on
+that checkout. Shared wire-format fixtures may preserve the legacy bytes without
+executing the old engine.
 
 The Desktop watch command injects renderer maintenance through WatchLifecycle.
 Subscribe to the shared Source before its first hold check; cache notifications

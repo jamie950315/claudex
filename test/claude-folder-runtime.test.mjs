@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeFolderRuntime } from '../src/claude-folder-runtime.mjs';
-import { claudeFolderProjectKey } from '../src/claude-folder-projection.mjs';
+import { createClaudeFolderRuntime } from '../crates/claudex-app/host/renderer/claude-folder-runtime.mjs';
+import { claudeFolderProjectKey } from '../crates/claudex-app/host/renderer/claude-folder-projection.mjs';
 
 const rows = Object.freeze([Object.freeze({ type: 'local', id: 'local_original', cwd: '/project',
   repoInfo: Object.freeze({ owner: '', name: 'project' }) })]);

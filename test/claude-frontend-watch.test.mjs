@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { openState, regress, runQueue, sightings, submit } from '../dev/frontend-watch/watch.mjs';
 
 const passed = (asset, hash = 'a'.repeat(64)) => ({ status: 'passed', asset, sourceSHA256: hash });
-const report = (entry, overrides = {}) => ({ version: 1, entry, passed: true, adapters: { folders: passed('f.js'), chatWake: passed('c.js'),
+const report = (entry, overrides = {}) => ({ version: 1, engine: 'rust', entry, passed: true, adapters: { folders: passed('f.js'), chatWake: passed('c.js'),
   ownerWake: passed('o.js'), commands: passed('k.js'), ...overrides } });
 async function state(t) {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'claudex-frontend-watch-')));
@@ -58,9 +58,12 @@ test('regression accepts a repaired entry and refuses a changed or lost passing 
   const paths = await state(t);
   await submit(paths, { entry: 'index-old.js', source: 'mac' }); await submit(paths, { entry: 'index-new.js', source: 'mac' });
   const broken = { ...report('index-new.js', { commands: { status: 'failed', phase: 'selection', reason: 'missing' } }), passed: false };
-  await runQueue(paths, { check: async ({ entry }) => entry === 'index-new.js' ? broken : report(entry) });
+  await runQueue(paths, { check: async ({ entry }) => entry === 'index-new.js' ? broken : { ...report(entry), engine: undefined } });
   const repaired = await regress(paths, { check: async ({ entry }) => report(entry) });
   assert.equal(repaired.ok, true);
+  assert.deepEqual(repaired.rows.map(row => [row.entry, row.baselineEngine, row.currentEngine]), [
+    ['index-new.js', 'rust', 'rust'], ['index-old.js', 'javascript-legacy', 'rust'],
+  ]);
   assert.deepEqual(repaired.rows.map(r => [r.entry, r.state]), [['index-new.js', 'passed'], ['index-old.js', 'passed']]);
   const stillBroken = await regress(paths, { check: async ({ entry }) => entry === 'index-new.js' ? broken : report(entry) });
   assert.equal(stillBroken.ok, true);
@@ -86,4 +89,14 @@ test('the first report of each source is kept for every entry, in any state', as
       mac: { at: '2026-10-12T10:00:00.000Z', delayMinutes: 0 }, windows: { at: '2026-10-12T10:42:00.000Z', delayMinutes: 42 } } },
     { entry: 'index-bbb.js', firstSeenAt: '2026-10-12T10:50:00.000Z', sources: { windows: { at: '2026-10-12T10:50:00.000Z', delayMinutes: 0 } } },
   ]);
+});
+
+test('run and regression forward an explicit Rust checker without changing queue/report contracts', async t => {
+  const paths = await state(t), seen = [], rustChecker = '/example/bin/frontend-check';
+  await submit(paths, { entry: 'index-rust.js', source: 'mac' });
+  const check = async options => { seen.push(options); return report(options.entry); };
+  await runQueue(paths, { check, rustChecker });
+  assert.equal((await regress(paths, { check, rustChecker })).ok, true);
+  assert.equal(seen.length, 2);
+  for (const options of seen) assert.deepEqual(options, { entry: 'index-rust.js', store: paths.store, rustChecker });
 });

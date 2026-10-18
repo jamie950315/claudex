@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createClaudeChatWakeRuntime } from '../src/claude-chat-wake-runtime.mjs';
+import { createClaudeChatWakeRuntime } from '../crates/claudex-app/host/renderer/claude-chat-wake-runtime.mjs';
 
 const id = '11111111-1111-4111-8111-111111111111';
 const sessionId = '22222222-2222-4222-8222-222222222222';

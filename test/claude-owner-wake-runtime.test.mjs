@@ -1,9 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { runInNewContext } from 'node:vm';
-import { createClaudeOwnerWakeRuntime } from '../src/claude-owner-wake-runtime.mjs';
-import { buildClaudeOwnerWakeSource, transformClaudeOwnerWakeSource } from '../src/claude-owner-wake-cache.mjs';
+import { createClaudeOwnerWakeRuntime } from '../crates/claudex-app/host/renderer/claude-owner-wake-runtime.mjs';
 
 const attachedClient = callTool => ({
   transport: { _closed: false, pid: null, stderr: null, _port: { postMessage() {}, close() {} } },
@@ -87,72 +84,7 @@ test('renderer bounds activation attempts and reports native grant refusal witho
   assert.match(f.errors.at(-1), /refused/);
 });
 
-test('pinned Code component signals current RC selection and submit before native refusal without changing input', async () => {
-  const runtimeSource = await readFile(new URL('../src/claude-owner-wake-runtime.mjs', import.meta.url), 'utf8');
-  // The live Code asset owns X={id,type} in o8. Shared FM is a different view.
-  const fixtureSource = 'function o8(Te){let X=Te,Z=X?.id??null,De;De=()=>X;let Oe=je(De),fS;fS=async(e,t)=>{if(t?.blocked)return "blocked_transport";let Ge=Oe();return nativeSend(e,t)};return fS}';
-  const source = transformClaudeOwnerWakeSource(fixtureSource, { root: '/private/claudex', runtimeSource });
-  const calls = [], effects = [], events = [], diagnostics = [];
-  const context = { globalThis: { 'claude.web': {
-    LocalSessions: { readFileAtCwd: async (...args) => { calls.push(args); return { contents: JSON.stringify({ version: 1,
-      entries: [{ remoteId: 'cse_open', canonicalCwd: '/synthetic/project', verified: true },
-        { remoteId: 'cse_send', canonicalCwd: '/synthetic/project', verified: true }] }) }; } },
-    LocalAgentModeSessions: { directMcpCallTool: () => { throw new Error('Managed pool must not be used for stdio'); } },
-  } }, __cldxOwnerWakeClient: name => {
-    assert.equal(name, 'claudex-desktop-wake');
-    return attachedClient(async (...args) => { events.push(args); return { structuredContent: { accepted: true } }; });
-  }, je: reader => reader, m: (effect, deps) => { effects.push({ effect, deps }); }, window: { addEventListener() {} }, console: { warn: line => diagnostics.push(line) },
-    Date, capture: null };
-  const nativeImport = 'import{Ga as __cldxOwnerWakeClient}from"./shared-common-mcp-msg-4-EwhHCIE8.js";';
-  assert.equal(source.split(nativeImport).length, 2);
-  runInNewContext(source.replace(nativeImport, ''), context);
-  assert.deepEqual(diagnostics, ['[Claudex owner wake] loaded cc43287c9-6nYyeS-m.js', '[Claudex owner wake] started',
-    '[Claudex owner wake] native APIs map=available mcp=available']);
-  context.o8({ id: 'session_open', type: 'bridge' });
-  await effects[0].effect();
-  await new Promise(resolve => setImmediate(resolve));
-  const submit = context.o8({ id: 'session_send', type: 'bridge' });
-  // A disconnected native path still signals before returning its own refusal.
-  assert.equal(await submit('Private native input', { blocked: true }), 'blocked_transport');
-  await new Promise(resolve => setImmediate(resolve));
-  const input = { prompt: 'Private native input' }, options = { native: true };
-  context.nativeSend = async (value, opts) => { assert.equal(value, input); assert.equal(opts, options); return 'queued by Claude'; };
-  assert.equal(await submit(input, options), 'queued by Claude');
-  assert.deepEqual(calls, [['/private/claudex', 'folder-map.json'], ['/private/claudex', 'folder-map.json']]);
-  assert.equal(effects.length, 2);
-  assert.deepEqual(JSON.parse(JSON.stringify(effects.map(effect => effect.deps))), [['session_open', 'bridge'], ['session_send', 'bridge']]);
-  assert.deepEqual(JSON.parse(JSON.stringify(events)), [
-    [{ name: 'claudex_desktop_owner_wake', arguments: { remoteId: 'cse_open' } }],
-    [{ name: 'claudex_desktop_owner_wake', arguments: { remoteId: 'cse_send' } }],
-  ]);
-  assert.throws(() => buildClaudeOwnerWakeSource(fixtureSource, {}), /unvalidated/);
-  assert.throws(() => transformClaudeOwnerWakeSource(fixtureSource + fixtureSource, {}), /binding changed/);
-  assert.throws(() => transformClaudeOwnerWakeSource(fixtureSource.replace('let Ge=Oe();', ''), {}), /binding changed/);
-  assert.throws(() => transformClaudeOwnerWakeSource('function FM(e){return e.conversationUuid}', {}), /binding changed/);
-  assert.ok(diagnostics.includes('[Claudex owner wake] signal submit matched published'));
-  assert.ok(!diagnostics.join('\n').includes('Private native input'));
-});
 
-test('retained submit callback reads the same current native reference used by native send', async () => {
-  const f = fixture(), effects = [];
-  const fixtureSource = 'function o8(Te){let X=Te,Z=X?.id??null,De;De=()=>X;let Oe=je(De),fS;fS=async(e,t)=>{let Ge=Oe();return Ge};return fS}';
-  const runtimeSource = await readFile(new URL('../src/claude-owner-wake-runtime.mjs', import.meta.url), 'utf8');
-  const source = transformClaudeOwnerWakeSource(fixtureSource, { root: '/private/claudex', runtimeSource });
-  let currentRef = { id: 'local_unrelated', type: 'local' };
-  const context = { globalThis: { 'claude.web': { LocalSessions: { readFileAtCwd: f.options.readMap } } },
-    __cldxOwnerWakeClient: f.options.getClient, je: () => () => currentRef,
-    m: effect => effects.push(effect), window: { addEventListener() {} }, console: { warn() {} }, Date };
-  runInNewContext(source.replace('import{Ga as __cldxOwnerWakeClient}from"./shared-common-mcp-msg-4-EwhHCIE8.js";', ''), context);
-  const retainedSubmit = context.o8(currentRef);
-  currentRef = { id: 'session_owned', type: 'bridge' };
-  context.o8(currentRef);
-  // Native event callbacks can retain an earlier render closure. Its X remains
-  // local, while the native je reference and the selection identify this RC.
-  assert.equal(await retainedSubmit('Private native input'), currentRef);
-  await new Promise(resolve => setImmediate(resolve));
-  await effects[1](); await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(JSON.parse(JSON.stringify(f.calls)), [[{ name: 'claudex_desktop_owner_wake', arguments: { remoteId: 'cse_owned' } }]]);
-});
 
 test('renderer diagnoses native API, map, grant, connection and receipt failures without exposing error text', async () => {
   const cases = [

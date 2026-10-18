@@ -2,9 +2,10 @@
 
 Contributor rules moved out of AGENTS.md; they are binding. Scope: Historical backfill, cold-verification proofs, the cold sweep and foreground scheduling, collection cost rules, and anchor header proofs.
 
-Historical backfill is an explicit module API in `src/cold-import.mjs`, not a public
-CLI command or a changed discovery cutoff. Its private journal reserves one target
-per source before publication. `trackImportedPair()` verifies equal canonical
+Historical backfill is the explicit `Importer` API in
+`crates/claudex-sync/src/cold_import.rs`, not a public CLI command or a changed
+discovery cutoff. Its private journal reserves one target per source before
+publication. `DesktopBridge::track_imported_pair()` verifies equal canonical
 digest/count/cwd and enrolls two unmanaged originals with `discoveryMode: cold-import`.
 The Claude original uses `importPacket: true`, packetVersion 2; runtime reads must
 authenticate its archive without creating an SDK owner. Never overwrite its

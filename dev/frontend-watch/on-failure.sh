@@ -30,7 +30,7 @@ ln -s "$checkout/node_modules" "$worktree/node_modules"
 prompt=$(sed -e "s|{{ENTRY}}|$entry|g" -e "s|{{REPORT}}|$report|g" -e "s|{{STATE}}|$state|g" "$checkout/dev/frontend-watch/repair-prompt.md")
 status=0
 (cd "$worktree" && timeout 3600 claude -p "$prompt" --permission-mode acceptEdits \
-  --allowedTools "Read,Edit,Write,Glob,Grep,Bash(node:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git log:*)") \
+  --allowedTools "Read,Edit,Write,Glob,Grep,Bash(node:*),Bash(cargo:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git log:*)") \
   > "$summary" 2>&1 || status=$?
 commits=$(git -C "$worktree" rev-list --count origin/main..HEAD)
 notify "Claudex: repair draft for $entry finished (exit $status, $commits commit(s)) on branch frontend-repair/$name."

@@ -479,12 +479,14 @@ support before use.
 From a source checkout, build the Rust executable and run the affected contracts:
 
 ```sh
-cargo build -p claudex-cli
-cargo test -p claudex-app
+cargo build --locked -p claudex-cli
+cargo test --locked -p claudex-app
 ```
 
-The existing JavaScript tests remain behavioral references during migration;
-Rust synthetic evidence and native activation evidence remain separate.
+Rust crates own the companion and broker contracts. Retained JavaScript host
+checks run with `npm run test:hosts`; the former engine and reference suite are
+frozen on `codex/javascript-legacy`. Rust synthetic evidence and native activation
+evidence remain separate.
 
 Select the **synchronization root**, with `collaboration/` underneath it. The
 usual repo default is `$HOME/.local/share/claudex`; read the actual installation's

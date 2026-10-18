@@ -56,14 +56,22 @@ function run(program, args, env, input = 'stdin stays unchanged\n') {
   return spawnSync(program, args, { env, input, encoding: 'utf8', timeout: 10_000 });
 }
 
-test('npm points to the native launcher and keeps reference tests explicit', async () => {
+test('npm points to the native launcher with only development host dependencies', async () => {
   const manifest = JSON.parse(await readFile(join(source, 'package.json')));
   const lock = JSON.parse(await readFile(join(source, 'package-lock.json')));
   assert.equal(manifest.bin.claudex, 'bin/claudex');
   assert.equal(lock.packages[''].bin.claudex, 'bin/claudex');
   assert.match(manifest.scripts.build, /^cargo build --locked --release -p claudex-cli$/);
   assert.match(manifest.scripts.test, /^cargo test --locked --workspace/);
-  assert.equal(manifest.scripts['test:reference'], 'node dev/test-reference.mjs');
+  assert.match(manifest.scripts.test, /npm run test:hosts$/);
+  assert.equal(manifest.scripts['test:reference'], undefined);
+  assert.equal(manifest.dependencies, undefined);
+  assert.deepEqual(Object.keys(manifest.devDependencies).sort(), ['@anthropic-ai/claude-agent-sdk', 'acorn']);
+  assert.equal(lock.packages[''].dependencies, undefined);
+  assert.deepEqual(lock.packages[''].devDependencies, manifest.devDependencies);
+  for (const path of ['src', 'test/reference', 'dev/test-reference.mjs']) {
+    await assert.rejects(stat(join(source, path)), { code: 'ENOENT' });
+  }
   for (const name of [...routes.keys(), 'build-claudex-app.mjs', 'rust-entry.mjs']) {
     const text = await readFile(join(source, 'bin', name), 'utf8');
     assert.doesNotMatch(text, /\.\.\/src\/|test\/reference|spawn\(['"]cargo|download/);

@@ -1,0 +1,131 @@
+{
+  "providers": {
+    "claude": "native-mod-only",
+    "codex": "unsupported"
+  },
+  "providerStatus": {
+    "provider": "claude",
+    "closed": false,
+    "reason": null,
+    "code": null,
+    "bindings": 1,
+    "retiredBindings": 0
+  },
+  "policies": [
+    {
+      "provider": "claude",
+      "sessionId": "session-a",
+      "cwd": "/tmp/project",
+      "enabled": false,
+      "generation": 1,
+      "ttlPreference": "1h",
+      "maxMinutes": 60,
+      "maxRefreshes": 1,
+      "maxReadTokens": null,
+      "maxOutputTokens": 256,
+      "until": 3601000,
+      "updatedAt": 1000,
+      "reason": "compacted",
+      "model": "sonnet",
+      "effort": "medium",
+      "ttlMs": 3600000,
+      "primeAt": 1000,
+      "status": "compacted",
+      "bound": true,
+      "cacheResults": {
+        "count": 0,
+        "firstAt": null,
+        "lastAt": null
+      },
+      "phase": "idle",
+      "native": {
+        "phase": "idle"
+      },
+      "totals": {
+        "refreshes": 1,
+        "readTokens": 0,
+        "outputTokens": 1
+      },
+      "sample": {
+        "id": "prime-response",
+        "startedAt": 1001,
+        "completedAt": 2000,
+        "model": "sonnet",
+        "effort": "medium",
+        "ttlMs": 3600000,
+        "ttlSource": "native-setting",
+        "inputTokens": 1000,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 1000,
+        "outputTokens": 1,
+        "stopReason": "end_turn",
+        "attemptId": "attempt-0"
+      },
+      "prime": false,
+      "nextAt": null,
+      "compactAtEnd": true,
+      "compactAt": null,
+      "effectiveTtlMs": 3600000,
+      "budgetKind": "admission-reservation-not-a-native-token-cap"
+    }
+  ],
+  "attempts": [
+    {
+      "id": "attempt-0",
+      "sessionId": "session-a",
+      "cwd": "/tmp/project",
+      "instanceId": "warm-100-uuid",
+      "kind": "prime",
+      "epoch": 1,
+      "generation": 1,
+      "createdAt": 1000,
+      "nextAt": 1000,
+      "expiresAt": 121000,
+      "sampleId": null,
+      "model": null,
+      "effort": null,
+      "state": "verified",
+      "requiredPrefixTokens": 0,
+      "reservedReadTokens": 256,
+      "reservedOutputTokens": 128,
+      "authorizedAt": 1001,
+      "receivedAt": 1002,
+      "responseIds": [
+        "prime-response"
+      ],
+      "actual": {
+        "inputTokens": 1000,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 1000,
+        "outputTokens": 1
+      },
+      "completedAt": 2000,
+      "responseId": "prime-response",
+      "reason": "native-cache-primed"
+    },
+    {
+      "id": "attempt-1",
+      "kind": "compact",
+      "sessionId": "session-a",
+      "cwd": "/tmp/project",
+      "instanceId": "warm-100-uuid",
+      "epoch": 2,
+      "generation": 1,
+      "createdAt": 3301001,
+      "nextAt": 3301001,
+      "expiresAt": 3601001,
+      "sampleId": "prime-response",
+      "model": "sonnet",
+      "effort": "medium",
+      "state": "verified",
+      "requiredPrefixTokens": 1000,
+      "reservedReadTokens": 1256,
+      "reservedOutputTokens": 128,
+      "authorizedAt": 3301002,
+      "reason": "native-compacted",
+      "receivedAt": 3301003
+    }
+  ],
+  "attemptCount": 2,
+  "attemptsTruncated": false
+}

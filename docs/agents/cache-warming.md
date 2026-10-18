@@ -1,6 +1,9 @@
 # Cache warming
 
-Contributor rules moved out of AGENTS.md; they are binding. Scope: Claude and Codex cache warming: commands, limits, broker settings, TTL preferences, ledgers, evidence rules and the developer probes.
+Contributor rules moved out of AGENTS.md; they are binding. Scope: Claude and
+Codex cache warming: commands, limits, broker settings, TTL preferences, ledgers
+and evidence rules. Historical developer probes remain only on the frozen
+`codex/javascript-legacy` branch.
 
 Native-scheduler migration must preserve the existing count, duration, output
 budget, stop, lifecycle and one-use admission contracts. A native scheduled
@@ -12,6 +15,11 @@ admission. Do not replace the current runtime until the native interface can
 preserve these conditions. Keep the existing native Mod `$.clock.after` and
 broker gates when Cron/heartbeat cannot express them; do not silently install
 a weaker scheduler or reduce the supported five-minute cache coverage.
+
+## Historical probes (archive only)
+
+The paths in this section are relative to `codex/javascript-legacy`, not `main`.
+They record the original experiment boundaries, not current runtime entry points.
 
 - `dev/cache-warm-probe` is a manual, authorization-gated Sonnet 5.5/medium
   cache-retention experiment, not an installed warming service. It uses private
@@ -36,6 +44,8 @@ a weaker scheduler or reduce the supported five-minute cache coverage.
   duplicate events do not renew cache evidence. Local sample IDs are not upstream
   response IDs. The separate shipping best-effort adapter requires explicit
   acceptance, not a silent fallback or a change to this probe.
+
+## Runtime warming
 
 Cache warming is separately opt-in per loaded Claude session. The Mod exposes
 `/claudex:warm on [5m|1h]`, `off` and `status` for the current native session
@@ -177,8 +187,8 @@ fields for existing clients/journals and preserve exact requestId payload replay
 but never enforce the old cap or re-enable stopped work. New UI/CLI commands
 reject the removed read-limit option. Duration, refresh-count, output limits
 and every native identity/lifecycle/no-replay check remain unchanged.
-`src/cache-warm.mjs` owns bounded durable policies and one-use attempts; the Mod's cache-warm client
-observes per-request native usage and submits only into its own native owner.
+`crates/claudex-work/src/warm.rs` owns bounded durable policies and one-use
+attempts; the Mod's cache-warm client observes per-request native usage and submits only into its own native owner.
 Never reuse legacy diagnostic observers, ACKs or activity timestamps as cache
 proof. A Claude warm request is a hit when it read the whole preceding prefix,
 or read more than the preceding request itself read (`priorReadTokens`, saved
@@ -242,7 +252,7 @@ panel contexts. Always show the complete preview, including effects and expiry.
 Discard revokes the native confirmation; no UI-only permission or second ledger.
 No startup/inspection path enables warming, starts another owner, changes the
 model/effort or resumes expired work. See docs/cache-warming.md for operation and
-native activation limits. The older developer probe remains separate evidence.
+native activation limits. The archived developer probe remains separate evidence.
 
 Codex Desktop warming is a separate experimental best-effort opt-in through the
 CLI or a separately trusted UserPromptSubmit command hook. Only loaded persistent
@@ -286,7 +296,8 @@ Codex observe/claim RPC, worker controls, uncertain replay, restart auto-resume
 or catch-up bursts. Claude Mod Cache settings remain Claude-only. Source tests and native observer evidence are not proof of
 real warming inference or TTL extension.
 The Codex `/claudex:warm on|off|status` text command runs in
-`bin/claudex-codex-warm-hook.mjs`, never the notification-only sync hook.
+the Rust `warm-hook` command (`crates/claudex-app/src/warm_hook.rs`), never the
+notification-only sync hook. `bin/claudex-codex-warm-hook.mjs` remains a thin host.
 Setup installs its own UserPromptSubmit group and native trust remains a human
 review; report `warmCommand.ready` independently of sync readiness. No model
 prompt skill or custom slash menu is registered. By user decision, on directly
@@ -304,9 +315,9 @@ Recognized commands return blocking output on success or failure, with a
 25-second handler deadline before the 30-second native timeout. Native startup
 failure or untrusted/disabled hooks can still skip interception; document that
 limit. Ordinary input is a no-op. CLI controls remain unchanged; Codex TTL is not
-configurable. Keep the manual `codex-command.mjs` probe outside
-automated tests; it submits literal native input, never the wrapped app-origin
-wake payload, and stops on uncertainty or model activity. Composer keystrokes,
+configurable. The manual `dev/cache-warm-probe/codex-command.mjs` probe is
+preserved only on `codex/javascript-legacy`, outside current automated tests;
+it submits literal native input, never the wrapped app-origin wake payload, and stops on uncertainty or model activity. Composer keystrokes,
 autocomplete and rendered pixels remain unverified; do not promote native
 backend/output evidence into visual UI or cache-retention proof.
 A control-only enrollment turn is not usage evidence. After its idle completion,

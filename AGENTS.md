@@ -33,10 +33,18 @@ fixtures use placeholder paths and IDs.
 
 ## Development
 
-- Node.js 22.15+ (22.x) or 23.8+, ES modules; install with `npm ci`.
-- Run `npm test` for the coordinator and adapter contracts.
-- The Rust migration lives in the Cargo workspace. Read `docs/agents/rust.md`
+- Rust 1.88+ implements the runtime in the Cargo workspace. Read `docs/agents/rust.md`
   before changing its crates, integration entry points or packaging.
+- Run `cargo test --locked --workspace` for runtime contracts. Node.js 22.15+
+  (22.x) or 23.8+ is development-only; `npm ci --ignore-scripts` installs host
+  test, static frontend verification and pinned native-schema tooling.
+  `npm test` runs the Rust workspace and the remaining host/native/tooling tests.
+- The frozen `codex/javascript-legacy` branch preserves the complete pre-cleanup
+  checkout, including the former JavaScript engine and reference suite. The
+  `v1.4.8` tag is the last JavaScript-only release. Main must not restore an
+  alternate engine or depend on that branch for builds or tests. Host-required
+  JavaScript belongs under `crates/*/host/` or `plugins/claudex`, never a second
+  runtime source tree.
 - Native integration checks use isolated temporary homes and synthetic transcripts.
 - Machine-specific notes (hosts, local paths, archives) belong in the untracked `AGENTS.local.md`; read it when present and keep such details out of tracked files.
 - Automated tests never start model inference. Real Desktop reply acceptance requires explicit user authorization; never overwrite live sessions or modify user databases as a test.
@@ -96,17 +104,17 @@ keep this file to project-wide rules and this index, and add a row for a new gui
 | --- | --- |
 | [rust.md](docs/agents/rust.md) | Rust workspace, migration parity, native command integration and Rust packaging |
 | [app.md](docs/agents/app.md) | `native/ClaudexApp`, `bin/claudex-app.mjs`, app-owned Mod installation, window/menu/Quit, localization, signature checks, the CLI-only status display |
-| [sync-events.md](docs/agents/sync-events.md) | Hooks, the sync-events inbox, watchers and event scheduling, Codex/Claude adapter rules, late command completions, `native-empty-turn.mjs`, native command envelopes |
-| [lifecycle.md](docs/agents/lifecycle.md) | `bin/claudex.mjs`, discovery and enrollment, untrack/resume, project moves, holds and pending recovery, dependency anchors, collection, `split-original`, `archive-original`, supervisor and locks |
-| [cold-import.md](docs/agents/cold-import.md) | `src/cold-import.mjs`, cold-verification proofs, sweep/foreground scheduling, collection cost, anchor header proofs |
+| [sync-events.md](docs/agents/sync-events.md) | `claudex-sync` hooks, event source, watchers and scheduling, Codex/Claude adapter rules, late command completions and native command envelopes |
+| [lifecycle.md](docs/agents/lifecycle.md) | Rust CLI commands, discovery and enrollment, untrack/resume, project moves, holds and pending recovery, dependency anchors, collection, `split-original`, `archive-original`, supervisor and locks |
+| [cold-import.md](docs/agents/cold-import.md) | `claudex-sync` cold import, cold-verification proofs, sweep/foreground scheduling, collection cost, anchor header proofs |
 | [claude-history.md](docs/agents/claude-history.md) | Decoding Claude transcripts: ancillary tails, compaction, forks and tool graphs, image originals and sidecars |
 | [codex-history.md](docs/agents/codex-history.md) | Reading Codex histories: `history_base`, history limits, display screenshots, localImage recovery, goals, subagent exclusion |
-| [codex-transport.md](docs/agents/codex-transport.md) | `bin/claudex-codex.mjs`, the shared backend and launcher, `desktop install`, `src/codex-versions.mjs`, version policy, validated baselines |
+| [codex-transport.md](docs/agents/codex-transport.md) | `claudex-cli` launcher and signed host, the shared backend, `desktop install`, `claudex-core` version policy, validated baselines |
 | [desktop-owner.md](docs/agents/desktop-owner.md) | `ClaudeOwner`, DesktopBridge/DesktopRuntime, context packets and archive mode, reverse delivery, owner reset and idle eviction, no-query receipts |
 | [claude-desktop-ui.md](docs/agents/claude-desktop-ui.md) | The Claude Desktop registry, Local sessions, `desktop folders`, `desktop handoffs`, folder map and Local archival |
-| [claude-frontend.md](docs/agents/claude-frontend.md) | `src/claude-frontend-*.mjs`, owner wake, chat-wake/commands/folder cache adapters, `src/claude-renderer-maintenance.mjs`, `src/claude-desktop-relaunch.mjs`, `dev/verify-claude-frontend-builds.mjs` |
-| [cache-warming.md](docs/agents/cache-warming.md) | `src/cache-warm.mjs`, `/claudex:warm`, warm limits and broker settings, the Codex warm hook, `dev/cache-warm-probe` |
-| [collaboration.md](docs/agents/collaboration.md) | `src/collaboration-hub.mjs`, `bin/claudex-collaboration.mjs`, MCP work tools, chat mailbox and native wake, worker permissions, observability, notifications, uncertain work |
+| [claude-frontend.md](docs/agents/claude-frontend.md) | `claudex-app` frontend modules and renderer host resources, owner wake, chat-wake/commands/folder cache adapters, `claudex-cli` renderer maintenance and relaunch, static frontend verification tools |
+| [cache-warming.md](docs/agents/cache-warming.md) | `claudex-app` warm managers and Codex adapters, `/claudex:warm`, warm limits and broker settings, the Codex warm hook |
+| [collaboration.md](docs/agents/collaboration.md) | `claudex-work`, MCP work tools, chat mailbox and native wake, worker permissions, observability, notifications, uncertain work |
 | [claude-mod.md](docs/agents/claude-mod.md) | `plugins/claudex`, `bin/claudex-mod.mjs`, Mod staging/validation, nativeWake/selfWake routes, own-inbox delivery |
 
 Past authorized acceptance runs are recorded in

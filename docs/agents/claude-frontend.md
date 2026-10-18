@@ -31,7 +31,7 @@ RC owns delivery. Promoted recovery reconnects the normal owner without a cached
 handle. Ignored hints have bounded diagnostics, no automatic wake retry.
 Owner discovery shortlists modules/components by role markers, then requires one
 complete identity/send/client proof. Bindings are resolved by declaration through
-src/claude-frontend-scope.mjs, never by comparing minified names: hoisted vars,
+`crates/claudex-app/src/frontend_scope.rs`, never by comparing minified names: hoisted vars,
 catch/loop/pattern bindings and nested writes all count, properties and unrelated
 parameters do not. A name injected into vendor code is checked at the scope it is
 placed in. Callbacks are found by following values, not shapes: a binding is
@@ -52,13 +52,13 @@ store calls catch, bootstraps fall back to inert objects. A wrong anchor or a
 broken runtime may lose a Claudex signal; it must never stop a native send, a
 render or a vendor module's evaluation. This containment is the reason the
 proofs may generalize, not a substitute for them.
-test/claude-frontend-mutations.test.mjs inserts one or two binding forms into
-synthetic components: every accepted mutant must behave exactly like its
-unpatched source and never signal a session the send did not use. Extend its
-names, forms and places when a new construct is recognized. Before changing
-recognition, also run dev/verify-claude-frontend-builds.mjs over the saved real
-build corpora and compare the patch each build receives with the previous
-resolver; an unexplained difference is a regression.
+Rust frontend module tests exercise synthetic component, binding and compiler
+forms: every accepted form must retain native behavior and never signal a
+session the send did not use. Extend these contracts when recognizing a new
+construct. Before changing recognition, also run
+`dev/verify-claude-frontend-builds.mjs` over the saved real build corpora and
+compare selection and native wiring with the previous accepted metadata;
+an unexplained difference is a regression.
 The native LocalSessions switch report (reportSwitchInitiated) carries a session
 ID and type, but it is gated telemetry, absent from the August builds and has
 no counterpart for a Remote Control send. It is not a wake source.
@@ -84,7 +84,7 @@ stays in the inbox for the watcher. A hint served there is acknowledged at once;
 the other control events still wait for the pass. Never start an owner outside
 the coordinator lock, and never report a boundary while a transaction is pending.
 
-src/claude-frontend-graph.mjs discovers the latest fetched index entry from the
+`crates/claudex-app/src/frontend_graph.rs` discovers the latest fetched index entry from the
 private HTTP cache using verified Chromium HttpResponseInfo response timestamps,
 never filesystem mtime (patches change mtime). Require a unique newest entry and
 its root bootstrap. Follow literal static/re-export/dynamic imports within the
@@ -238,7 +238,7 @@ native command, install a same-name prompt skill, or change submission/dispatch
 to make the item appear.
 Use reserved identifiers and the normal original/journal and reload boundaries.
 
-src/claude-renderer-maintenance.mjs is owned by the normal Desktop watcher under
+`crates/claudex-app/src/frontend_maintenance.rs` is owned by the normal Desktop watcher under
 watch.lock. It performs one startup cache pass, then debounces cache-directory
 notifications and serially re-discovers/reapplies all enabled adapters. Exact
 metadata/key hints suppress unchanged JS entries and unrelated HTTP/image writes;
@@ -320,7 +320,7 @@ Restore uses the journal-bound original URL/hash, including older resources.
 The watcher receives notifications after cache writes: it cannot guarantee that a
 new asset is patched before the renderer first evaluates it. A new installation
 is restart-required; unchanged cache is load-not-verified, never proof of live
-reception. By user decision src/claude-desktop-relaunch.mjs makes that restart
+reception. By user decision `crates/claudex-cli/src/claude_relaunch.rs` makes that restart
 once, automatically, only while Claude Desktop has just been opened: every
 enabled adapter is installed for the entry and at least one was written since
 the watcher started (or saved by an earlier watcher: claude-relaunch.json keeps
@@ -373,40 +373,88 @@ add no native calls, archive authority, timers or retry. An evaluated folder
 module is distinct from a started subscription, a finished native read and a
 verified archive outcome.
 
-dev/verify-claude-frontend-builds.mjs is a developer-only static acceptance script.
-It inventories real cached entries and all current/legacy renderer journals,
-validates immutable originals, copies exact import graphs into temporary homes,
-and runs production discovery/installation plus node --check and AST/wiring
-comparison. It compares historical hand-pin transforms with the current runtime
-supplied to both, excluding diagnostic label spelling, and exercises actual
-fs.watch re-application, original/receipt preservation, reinstall and restore.
-It never executes vendor modules, performs inference or mutates live cache/state;
-only metadata reports survive. List exact missing assets and explicit failures.
-Obsolete shared Chat/Cowork owner-wake pins are not equivalent to the required
-Code/attached-stdio design: report their refusal/comparison failure and preserve
-them, never restore directMcpCallTool or the wrong component to pass acceptance.
+The frontend engine is Rust: `crates/claudex-app/src/frontend_*.rs` owns graph
+proofs, selection, transformation, installation and maintenance. The six files
+under `crates/claudex-app/host/renderer/` are injected browser-host runtimes,
+not another engine. JavaScript developer tools download/copy assets, run the
+Rust checker and independently inspect its output with Acorn and `node --check`.
+They never import the archived JavaScript engine.
 
-dev/check-claude-frontend-entry.mjs checks one named entry without Claude
-Desktop: it downloads the entry's complete published import graph from the
-public asset origin and runs resolveClaudeFrontendAdapters, the production
-transforms, node --check and the wiring contracts on static copies. Exit status
-0 means every adapter passed, 1 an adapter failed, 2 the graph was unavailable;
-never treat 2 as an adapter failure. The entry name must come from a real
-Claude Desktop (renderer status `entry.asset`): the page naming it sits behind a
-browser check, which must not be circumvented. A published graph is a superset
-of any cache (2,558 to 2,919 modules against about 1,200 cached), so it shows
-selections that depend on which lazy chunks a user happened to load; a
-difference between the cached and the published target of one build is a
-defect in the selection, not noise. Its store holds vendor code: keep it
-outside the repository and publish only metadata reports. It proves selection
-and transform, never installation into a real cache or live reception.
+Build the developer checker explicitly before using these tools:
+
+```sh
+npm ci --include=dev
+cargo build --locked -p claudex-app --example frontend-check
+node dev/verify-claude-frontend-builds.mjs --last-builds 2 --report /tmp/frontend-report.json
+```
+
+Both checkers and `dev/frontend-watch/watch.mjs run|regress` use the already-built
+`target/debug/examples/frontend-check`, or an absolute `--rust-checker` override.
+A missing executable fails with the build instruction; no tool implicitly runs
+Cargo or switches engines. The service needs the development dependencies for
+its independent Acorn checks. For a persistent service or large real corpora,
+explicitly build with `cargo build --locked --release -p claudex-app --example frontend-check`
+and pass `--rust-checker /absolute/checkout/target/release/examples/frontend-check`;
+the optimized codec and proofs avoid development-build overhead. The legacy
+`--rust-only true` verifier option is accepted for existing callers; all modes now use Rust.
+
+`dev/verify-claude-frontend-builds.mjs` inventories real cached entries and all
+current/legacy renderer journals through the Rust checker, validates immutable
+originals, and copies exact reachable graphs into temporary homes. It runs the
+production Rust selection, complete transforms and installer, `node --check`,
+and independent AST/native-preservation/wiring contracts. It proves idempotent
+reinstall, unchanged journal bytes and exact container restoration. With at
+least two selected entries, actual `fs.watch` notifications feed production
+Rust maintenance in the isolated home and prove reapplication without changing
+earlier originals or receipts. A selected adapter refusal explicitly skips the
+transition and keeps the report failing; it never waits for an impossible ready
+state. One selected entry has no transition claim.
+Every mutation operation of the developer checker requires the explicit private
+sandbox marker and root/home descendants; ordinary inventory/check operations
+never write into the supplied native home or state.
+
+The historical hand-pin JavaScript oracle is archived on
+`codex/javascript-legacy`, not loaded from Git and executed by this checkout.
+Every legacy journal is still validated and inventoried, including resources
+not selected by a current graph. Obsolete shared Chat/Cowork owner-wake pins are
+not equivalent to the required Code/attached-stdio design: keep their evidence,
+never restore directMcpCallTool or the wrong component to pass acceptance.
+Only metadata reports survive. Vendor modules are never evaluated; the checker
+performs no inference, app/service control or live cache/state mutation. List
+exact missing assets and explicit failures.
+
+`dev/check-claude-frontend-entry.mjs` checks one named entry without Claude
+Desktop: it downloads the complete published import graph from the public
+asset origin, then passes the exact static module list to the same Rust
+resolver and transforms. Independent syntax and wiring contracts inspect the
+returned sources. Published-graph bounds are developer-only; they do not relax
+production cache bounds. Exit status 0 means every adapter passed, 1 an adapter
+failed, 2 the graph was unavailable; never treat 2 as an adapter failure. The
+entry name must come from a real Claude Desktop (renderer status `entry.asset`):
+the page naming it sits behind a browser check, which must not be circumvented.
+A published graph is a superset of any cache (2,558 to 2,919 modules against about
+1,200 cached), so selections must not depend on which lazy chunks a user loaded;
+a difference between cached and published targets is a selection defect. Keep
+its vendor-code store outside the repository and publish only metadata reports.
+It proves selection and transform, never real-cache installation or reception.
+
+`dev/verify-rust-frontend-fixtures.mjs /absolute/frontend-check [/absolute/report.json]`
+checks the synthetic compiler, conditional, shared, split and helper-call forms
+through that same copied-cache route. Competing actions and ambiguous helper
+forms must be refused by exactly the affected adapter; a refusal is not a
+positive transform acceptance. The host tests in
+`test/claude-frontend-{published-check,watch}.test.mjs` cover the Rust tool bridge,
+copy/install/notification/restore path, queue/report behavior and missing-checker
+failure without model inference.
 
 dev/frontend-watch/watch.mjs is the maintainer service around that check, for a
 machine without Claude Desktop. `submit` queues an entry name once, `run`
 checks every queued entry and keeps one report per entry, and `regress`
 rechecks every reported entry with the current checkout: an adapter that
 passed must pass again with the same vendor file and hash, while an entry that
-failed may now pass. An unavailable graph stays queued and is never reported
+failed may now pass. Reports identify `engine: "rust"`; regression rows expose
+`baselineEngine` and `currentEngine`, with earlier unlabelled reports identified
+as `javascript-legacy`. The regression acceptance rule is unchanged. An unavailable graph stays queued and is never reported
 as a failure. `sightings` lists when each source first reported each entry, so
 sources can be compared by how soon they see a new frontend. Entry names come only from real Claude Desktop installations
 (observed identical on macOS and Windows for one build); the service never

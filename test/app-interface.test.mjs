@@ -135,7 +135,7 @@ test('graphical Quit waits for verified service shutdown and read-only exits byp
 test('graphical app owns one status item and integrates the bounded health controller', async () => {
   const source = await readFile(new URL('../native/ClaudexApp/main.swift', import.meta.url), 'utf8');
   const controller = await readFile(new URL('../native/ClaudexApp/StatusController.swift', import.meta.url), 'utf8');
-  const builder = await readFile(new URL('../src/app-bundle.mjs', import.meta.url), 'utf8');
+  const builder = await readFile(new URL('../crates/claudex-app/src/bundle.rs', import.meta.url), 'utf8');
   assert.equal((source.match(/NSStatusBar\.system\.statusItem\(/g) || []).length, 1);
   assert.match(source, /statusItem\(withLength: NSStatusItem.squareLength\)/);
   assert.match(source, /statusItem.button\?\.title = ""/);
@@ -153,7 +153,7 @@ test('graphical app owns one status item and integrates the bounded health contr
   assert.match(controller, /guard !readOnly else \{ return \}/);
   assert.match(controller, /gate\.event\(for: report/);
   assert.match(builder, /StatusController\.swift/);
-  assert.match(builder, /ClaudexStatus', 'StatusModel\.swift/);
+  assert.match(builder, /ClaudexStatus\/StatusModel\.swift/);
   assert.equal((source.match(/NSWindow\(contentRect:/g) || []).length, 1);
   assert.doesNotMatch(controller, /NSWindow\(|showStatus|windowWillClose/);
   assert.doesNotMatch(source, /"Open status…"|"Settings…"|Claudex Status|Claudex Settings/);

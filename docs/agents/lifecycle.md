@@ -92,8 +92,8 @@ quota, and have a hard global count cap of 64. They are separate from disposable
 previous snapshots' count/age limits. Missing or changed anchors block; never
 auto-demote them, remove children, or skip preallocation capacity checks.
 
-`bin/claudex.mjs` provides explicit initialization with all-project or selected-project scope, discovery,
-watching, synchronization, recovery, collection, and optional macOS LaunchAgent
+The Rust `bin/claudex` entry point provides explicit initialization with
+all-project or selected-project scope, discovery, watching, synchronization, recovery, collection, and optional macOS LaunchAgent
 installation. Disposable-copy defaults retain one current and one previous copy per side,
 seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent

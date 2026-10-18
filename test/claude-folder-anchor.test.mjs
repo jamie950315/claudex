@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { normalizeClaudeLocalFolderAnchor } from '../src/claude-folder-anchor.mjs';
-import { buildClaudeFolderProjection } from '../src/claude-folder-projection.mjs';
+import { normalizeClaudeLocalFolderAnchor } from '../crates/claudex-app/host/renderer/claude-folder-anchor.mjs';
+import { buildClaudeFolderProjection } from '../crates/claudex-app/host/renderer/claude-folder-projection.mjs';
 
 const localSessionId = 'local_11111111-1111-4111-8111-111111111111';
 const nativeId = '22222222-2222-4222-8222-222222222222';

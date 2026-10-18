@@ -12,7 +12,8 @@ the app-owned journaled installation path described above. `plugins/claudex/hook
 top-level `$` helpers required by the native compiler, and `$.plugin.root` is a
 property, not an event or function. Run the official strict validator and complete
 native test kit against a staged plugin after UI/API changes, in addition
-to affected Node tests. Native tree tests are not real Desktop painting evidence.
+to affected Rust contracts and retained host tests. Native tree tests are not
+real Desktop painting evidence.
 Standalone staging includes the complete native Rust companion executable at
 `runtime/bin/claudex`, not a source-dependent script or JavaScript engine.
 Register invokes that exact binary with `mod-bridge`; no Node option remains.

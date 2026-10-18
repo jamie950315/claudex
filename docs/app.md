@@ -348,16 +348,27 @@ tests native layout without invoking the backend; it is not deployment evidence.
 `--ui-language <locale>` overrides the language only with `--inspect-only` or
 `--ui-smoke`; these modes do not persist the language preference.
 
-From a developer checkout, run `node dev/verify-claude-frontend-builds.mjs` to
-check every locally available cached entry graph and renderer original journal.
+From a developer checkout, build the Rust frontend checker explicitly, then run
+the Node inventory tool:
+
+```sh
+cargo build --locked -p claudex-app --example frontend-check
+node dev/verify-claude-frontend-builds.mjs
+```
+
+The tool checks every locally available cached entry graph and renderer original
+journal through that Rust checker. A missing checker fails with the build
+instruction; the tool never builds it automatically or runs a legacy JS installer.
 Optional `--home`, `--root` and `--report` specify source locations and a metadata
-report outside live state. The script uses temporary cache copies and the real
-installer/watcher, checks syntax with `node --check`, compares native AST/wiring
-with historical hand-pin transforms, and lists exact missing assets and failures.
-Current runtime code is supplied to both transforms; this does not attest to an
-older installed runtime or live renderer reception. Obsolete owner-wake pins into
-Chat/Cowork fail that comparison explicitly; they are never used to restore the
-superseded channel. The script exits nonzero if any required check fails.
+report outside live state; `--rust-checker` selects an absolute already-built
+checker instead of `target/debug/examples/frontend-check`. The script inventories
+cached entries and all original journals, copies verified originals into temporary
+homes, and exercises the Rust installer, reinstall/restore and watcher reapply.
+Node and Acorn independently check syntax, AST anchors and wiring. It lists exact
+missing assets and failures, and exits nonzero if any required check fails.
+These checks do not attest to an older installed runtime or live renderer
+reception; they never execute archived JavaScript transforms or restore obsolete
+Chat/Cowork owner-wake pins.
 
 ## Packaging and distribution
 
@@ -392,8 +403,8 @@ Transcripts, account files, the general repository test suite, local Git history
 and private configuration are not bundled. The Mod's explicitly allowlisted
 native test fixture remains in its payload for native validation. Generated
 bundles, archives and signing details stay outside the repository. The
-[Rust completion contract](rust-migration.md) preserves the original runtime
-capabilities; installed Desktop and model acceptance remain separate from source
+[runtime architecture and preservation contract](rust-migration.md) preserves
+the original runtime capabilities; installed Desktop and model acceptance remain separate from source
 parity and candidate packaging checks.
 
 Automated setup tests use isolated private directories and injected installers.

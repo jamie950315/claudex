@@ -12,20 +12,15 @@
 // Exit status: 0 every adapter passed, 1 at least one adapter failed,
 // 2 the graph could not be obtained (network, bounds or usage).
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { promisify } from 'node:util';
-import { execFile } from 'node:child_process';
-import { crc32, zstdCompressSync } from 'node:zlib';
-import { inspectFolderCache, MAX_CLAUDE_SOURCE_BYTES } from '../src/claude-folder-cache.mjs';
-import { assetImports, transformFolderConsumer } from '../src/claude-frontend-anchors.mjs';
-import { FRONTEND_ASSET_ROOT, resolveClaudeFrontendAdapters } from '../src/claude-frontend-graph.mjs';
-import { buildClaudeRendererCandidate } from '../src/claude-renderer-adapters.mjs';
-import { patchContracts, folderConsumerPatchContract } from '../test/fixtures/claude-frontend-contracts.mjs';
+import { assetImports, FRONTEND_ASSET_ROOT } from '../test/fixtures/frontend-static.mjs';
+import { checkStaticGraph, rustChecker } from './frontend-check-support.mjs';
+const MAX_CLAUDE_SOURCE_BYTES = 4 * 1024 * 1024;
 
-const run = promisify(execFile), adapters = ['folders', 'chatWake', 'ownerWake', 'commands'];
-const usage = 'Usage: node dev/check-claude-frontend-entry.mjs --entry index-<hash>.js [--store DIR] [--report FILE]';
+const adapters = ['folders', 'chatWake', 'ownerWake', 'commands'];
+const usage = 'Usage: node dev/check-claude-frontend-entry.mjs --entry index-<hash>.js [--store DIR] [--report FILE] [--rust-checker EXECUTABLE]';
 // The published graph is larger than any cache (2,919 modules and 117 MB were
 // observed on 2026-10-12, against 1,223 cached). These bounds only stop a
 // runaway download; they are not the production cache bounds.
@@ -38,8 +33,8 @@ const unavailable = message => Object.assign(new Error(message), { unavailable: 
 function parseArguments(argv) {
   const options = {};
   for (let i = 0; i < argv.length; i += 2) {
-    if (!['--entry', '--store', '--report'].includes(argv[i]) || !argv[i + 1]) throw unavailable(usage);
-    options[argv[i].slice(2)] = argv[i + 1];
+    if (!['--entry', '--store', '--report', '--rust-checker'].includes(argv[i]) || !argv[i + 1]) throw unavailable(usage);
+    options[argv[i] === '--rust-checker' ? 'rustChecker' : argv[i].slice(2)] = argv[i + 1];
   }
   if (!assetName(options.entry) || !/^index-/.test(options.entry)) throw unavailable(usage);
   return options;
@@ -97,72 +92,33 @@ async function fetchAsset(url) {
   return Buffer.from(await response.arrayBuffer());
 }
 
-/** A cache container for one vendor source in the layout the production
- * reader and its length-resizing writer accept. Only its source is real.
- */
-export function publishedCacheEntry(url, decoded) {
-  const key = Buffer.from(`1/0/${url}`), body = zstdCompressSync(decoded);
-  const header = Buffer.alloc(24);
-  header.writeBigUInt64LE(0xfcfb6d1ba7725c30n); header.writeUInt32LE(5, 8); header.writeUInt32LE(key.length, 12);
-  const raw = Buffer.from(`HTTP/1.1 200\0content-length:${body.length}\0x-goog-stored-content-length:${body.length}\0\0`);
-  const prefix = Buffer.alloc(40), padding = Buffer.alloc((4 - raw.length % 4) % 4);
-  prefix.writeUInt32LE(prefix.length + raw.length + padding.length - 4, 0);
-  prefix.writeUInt32LE(0x82476d03, 4); prefix.writeUInt32LE(6, 8);
-  const time = 11644473600000000n + BigInt(Date.now() - 10_000) * 1000n;
-  for (const at of [12, 20, 28]) prefix.writeBigInt64LE(time, at);
-  prefix.writeUInt32LE(raw.length, 36);
-  const metadata = Buffer.concat([prefix, raw, padding]);
-  const footer = (flags, data, size) => {
-    const bytes = Buffer.alloc(24);
-    bytes.writeBigUInt64LE(0xf4fa6f45970d41d8n); bytes.writeUInt32LE(flags, 8);
-    bytes.writeUInt32LE(crc32(data), 12); bytes.writeBigUInt64LE(BigInt(size), 16);
-    return bytes;
-  };
-  return Buffer.concat([header, key, body, footer(1, body, 0), metadata, createHash('sha256').update(key).digest(), footer(3, metadata, metadata.length)]);
-}
-
 /** Selection, transform, syntax and wiring for every adapter of one graph. */
-export async function checkPublishedGraph({ modules, entry, temporary }) {
-  const root = join(temporary, 'state'), home = join(temporary, 'home');
+export async function checkPublishedGraph({ modules, entry, temporary, rustChecker: override }) {
+  const checker = await rustChecker(override), root = join(temporary, 'state'), home = join(temporary, 'home');
   await mkdir(root, { recursive: true, mode: 0o700 }); await mkdir(home, { recursive: true, mode: 0o700 });
-  const nodeCheck = async (source, name) => {
-    const path = join(temporary, `${name}.mjs`);
-    await writeFile(path, source, { mode: 0o600 });
-    try { await run(process.execPath, ['--check', path], { maxBuffer: 4096 }); } finally { await rm(path, { force: true }); }
-  };
-  const matched = resolveClaudeFrontendAdapters(modules, FRONTEND_ASSET_ROOT + entry), results = {};
-  for (const adapter of adapters) {
-    const found = matched[adapter];
-    if (found.status !== 'matched') { results[adapter] = { status: 'failed', phase: 'selection', reason: found.reason }; continue; }
-    const { target, bindings, consumer } = found;
-    try {
-      if (target.oversized || !target.canonical) throw new Error('Target source is outside the production reader bounds');
-      const candidate = await buildClaudeRendererCandidate({ root, home, adapter, matched: found,
-        original: publishedCacheEntry(target.url, target.decoded) });
-      const source = inspectFolderCache(candidate, { targetURL: target.url }).source;
-      await nodeCheck(source, `${adapter}-target`);
-      patchContracts[adapter](source, target.source, bindings);
-      results[adapter] = { status: 'passed', asset: target.name, sourceSHA256: target.sourceHash };
-      if (adapter === 'folders' && consumer) {
-        const transformed = transformFolderConsumer(consumer.target.source, consumer.bindings);
-        await nodeCheck(transformed, 'folders-consumer');
-        folderConsumerPatchContract(transformed, consumer.target.source, consumer.bindings);
-        results[adapter].consumer = { asset: consumer.target.name, sourceSHA256: consumer.target.sourceHash };
-      }
-    } catch (error) {
-      results[adapter] = { status: 'failed', phase: 'transform', asset: target.name, reason: String(error.message).slice(0, 240) };
+  const manifest = join(temporary, 'published.json'), sources = join(temporary, 'sources'), output = join(temporary, 'rust');
+  await mkdir(sources, { mode: 0o700 });
+  try {
+    const rows = [];
+    for (const module of modules.values()) {
+      const path = join(sources, module.name);
+      await writeFile(path, module.decoded, { mode: 0o600 }); rows.push({ url: module.url, path });
     }
+    await writeFile(manifest, JSON.stringify(rows), { mode: 0o600 });
+    return (await checkStaticGraph({ checker, root, home, output, published: manifest, entry })).adapters;
+  } finally {
+    await rm(manifest, { force: true }); await rm(sources, { recursive: true, force: true }); await rm(output, { recursive: true, force: true });
   }
-  return results;
 }
 
 /** The complete report for one entry. A graph that cannot be obtained is
  * reported as unavailable, never as failed adapters.
  */
-export async function checkPublishedEntry({ entry, store, fetchSource }) {
+export async function checkPublishedEntry({ entry, store, fetchSource, rustChecker: override }) {
   if (!assetName(entry) || !/^index-/.test(entry)) throw unavailable(usage);
-  const temporary = await mkdtemp(join(tmpdir(), 'claudex-frontend-entry-'));
-  const report = { version: 1, entry, scope: 'published-graph', staticOnly: true, checkedAt: new Date().toISOString() };
+  const checker = await rustChecker(override);
+  const temporary = await realpath(await mkdtemp(join(tmpdir(), 'claudex-frontend-entry-')));
+  const report = { version: 1, engine: 'rust', entry, scope: 'published-graph', staticOnly: true, checkedAt: new Date().toISOString() };
   try {
     const directory = store ? resolve(store) : join(temporary, 'store');
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -171,7 +127,7 @@ export async function checkPublishedEntry({ entry, store, fetchSource }) {
       throw unavailable('Entry bootstrap anchor is absent: not a frontend entry');
     Object.assign(report, { modules: graph.modules.size, bytes: graph.bytes, fetched: graph.fetched,
       outsideReaderBounds: [...graph.modules.values()].filter(m => m.oversized || !m.canonical).map(m => m.name) });
-    report.adapters = await checkPublishedGraph({ modules: graph.modules, entry, temporary });
+    report.adapters = await checkPublishedGraph({ modules: graph.modules, entry, temporary, rustChecker: checker });
     report.passed = adapters.every(adapter => report.adapters[adapter].status === 'passed');
   } catch (error) {
     if (!error.unavailable) throw error;

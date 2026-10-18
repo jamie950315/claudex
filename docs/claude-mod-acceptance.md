@@ -50,9 +50,10 @@ version or test inventory.
 
 ## Single-session main-route acceptance procedure
 
-1. Run `test/mod-self-wake.test.mjs`, `test/claude-mod-self-inbox.test.mjs`,
-   `test/mod-wake.test.mjs` and affected core/transport tests. Verify full
-   regression for these shared persistence/concurrency changes.
+1. Run affected Rust companion, own-inbox, broker and transport contracts with
+   `cargo test --locked -p claudex-app -p claudex-work`. Run retained host checks
+   with `npm run test:hosts`. Verify full regression when shared persistence or
+   concurrency changes require it.
 2. Stage the candidate with nativeWake and selfWake enabled, validate it with the actual target native
    compiler, and run the official test kit. A static validator pass is not loading.
 3. At a safe idle boundary, install the matching broker and plugin without
@@ -89,12 +90,13 @@ and a modern mailbox reader when rolling back.
 
 1. Confirm the reviewed base, clean worktree and patch hashes. Review all added
    files and the existing `AGENTS.md`. Preserve package/lockfile/runtime policy.
-2. Install the original locked dependencies with `npm ci --ignore-scripts`.
-3. Run affected `test/claude-mod-*.test.mjs`, `test/mod-wake.test.mjs` and
-   `test/mod-self-wake.test.mjs` cases in the
-   complete checkout with no failures or newly skipped cases. The real
-   private transport test must execute. Its dispatcher is still a synthetic
-   server; it intentionally starts no model runner.
+2. Build the native CLI with `cargo build --locked -p claudex-cli`; install host
+   tooling dependencies with `npm ci --ignore-scripts` when those checks apply.
+3. Run affected contracts in `claudex-app` and `claudex-work`, plus retained host
+   checks, with no failures or newly skipped cases. The real private Unix transport
+   contract must execute. Its dispatcher is still a synthetic server; it
+   intentionally starts no model runner. Old JavaScript engine tests are archived
+   on `codex/javascript-legacy`, not part of current acceptance.
 4. For shared core/persistence/concurrency changes, run the complete `npm test` or
    reuse still-valid unchanged core evidence with focused tests for the changed
    surface. Compare unrelated failures without modifying live native stores.
@@ -106,8 +108,8 @@ and a modern mailbox reader when rolling back.
 7. Verify the stage is create-only and contains only its allowlisted files. Remove
    an isolated source copy and verify the staged helper can read the real private
    Unix RPC without inference; a doctor-only check does not establish transport
-   completeness. Check the Node executable's canonical path and
-   group/world write bits; select a trusted runtime rather than weakening checks.
+   completeness. Check the staged Rust executable's bytes, executable mode and
+   trusted ownership; never weaken native runtime or private-file checks.
 
 ## B. Official native validator and test kit (no inference)
 
@@ -139,7 +141,7 @@ that option to end-user setup or infer default availability on every runtime.
 They stub process execution, native state and other external calls;
 no sign-in, model request or real network is required. Resolve any native kit or
 UI/event schema mismatch before installation. Keep this evidence separate from
-the Node contract tests and real terminal/Desktop painting.
+the Rust/host contract tests and real terminal/Desktop painting.
 
 The source-level expected inventory is:
 
@@ -171,8 +173,8 @@ action. There should be no permission approval, model.complete or direct fs.writ
 call in the Mod. tool.list and clock.after are expected for SendMessage preflight,
 bounded event-backed wait/reconnection and authorized warming, not history polling.
 
-Inspect the fixed `process.run` target: the packaged Node helper. Its deeper
-private file/RPC effects must be reviewed in source; the Mod validator's call list
+Inspect the fixed `process.run` target: the packaged Rust executable's
+`mod-bridge` command. Its deeper private file/RPC effects must be reviewed in source; the Mod validator's call list
 is not a transitive security audit of child processes.
 
 ## C. Read-only terminal and Desktop UI
@@ -364,11 +366,11 @@ control if a later release needs one.
 ```text
 Date / operator:
 Reviewed base and final commit/diff SHA256:
-OS / architecture / Node executable identity and version:
+OS / architecture / Rust executable identity / host Node version (when used):
 CLI Claude version / Desktop Code version / SDK version / Codex version:
 Mod stage hashes / installed configuration / nativeWake / selfWake / route:
-New Node tests (pass/fail/skip):
-Original npm test (pass/fail/skip):
+Affected Rust and host tests (pass/fail/skip):
+Complete npm test or reused unchanged evidence (pass/fail/skip):
 Native validator (exit code, warnings, declared capabilities):
 Native kit (pass/fail):
 Terminal painting and behavior:

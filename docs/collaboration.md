@@ -2,8 +2,9 @@
 
 [Back to README](../README.md)
 
-Run commands from the repository directory. This guide covers execution, not
-history synchronization; the two capabilities use separate services and state.
+Use the installed `claudex` executable, or `bin/claudex` from a built source
+checkout. This guide covers execution, not history synchronization; the two
+capabilities use separate services and state.
 Current behavior is described for Claudex 2.0.3 and its bundled Mod 0.8.61;
 the verification section identifies historical runtime evidence separately.
 
@@ -20,8 +21,8 @@ Claudex.app configures the independent broker and the `claudex-work` native MCP
 connection during setup. For a CLI-only macOS installation:
 
 ```sh
-node bin/claudex.mjs collaboration install
-node bin/claudex.mjs collaboration status
+bin/claudex collaboration install
+bin/claudex collaboration status
 ```
 
 Native clients must reload their MCP connections through their supported lifecycle;
@@ -750,8 +751,8 @@ Claudex stores separate Codex and Claude default model IDs in the private broker
 state. Configure them in the app's advanced settings or through the running broker:
 
 ```sh
-node bin/claudex.mjs collaboration models
-node bin/claudex.mjs collaboration models --codex-model MODEL_ID --claude-model MODEL_ID
+bin/claudex collaboration models
+bin/claudex collaboration models --codex-model MODEL_ID --claude-model MODEL_ID
 ```
 
 Supply both options when saving; an empty string resets that provider to its
@@ -782,7 +783,7 @@ The same settings panel provides separate provider-native reasoning effort defau
 either complete provider pair without replacing the other. For example:
 
 ```sh
-node bin/claudex.mjs collaboration models --codex-effort high --claude-effort medium
+bin/claudex collaboration models --codex-effort high --claude-effort medium
 ```
 
 An empty effort resets that provider to its native default. `claudex_start` and
@@ -812,7 +813,7 @@ for vendor-specific semantics and policy limits.
 ## Permissions and limits
 
 For a first-time write-enabled installation, use
-`node bin/claudex.mjs collaboration install --allow-write`. For an existing
+`bin/claudex collaboration install --allow-write`. For an existing
 installation, wait for all work to finish and safely stop its collaboration
 LaunchAgent before reinstalling with a different policy. The installer refuses
 to replace a loaded job whose configuration changes. `service stop` controls the

@@ -185,8 +185,8 @@ observer reason when available, without changing native admission or defaults.
 Status/wait remains the result authority.
 
 `collaboration` is an explicit inference-capable work protocol, separate from
-the no-inference history bridge. `src/collaboration-hub.mjs` owns one durable
-work graph: delegation adds a parent edge and handoff transfers the same task's
+the no-inference history bridge. `crates/claudex-work/src/broker.rs` owns one
+durable work graph: delegation adds a parent edge and handoff transfers the same task's
 owner at a completed native boundary. MCP exposes start/send/handoff/status/wait/
 cancel/list through an owner-private Unix socket. Request IDs are idempotent;
 generation capabilities fence old workers. Never launch the next owner before
@@ -220,7 +220,8 @@ An interrupted inventory stays uncertain and blocks shutdown verification until
 controller resolve supplies processInventoryReconciled plus nonempty notes, with
 the leader, group and recorded descendants absent; keep the original evidence.
 
-`bin/claudex-collaboration.mjs` runs the independent broker or stdio MCP facade.
+The Rust `claudex collaboration` command runs the independent broker or stdio
+MCP facade; `bin/claudex-collaboration.mjs` is a thin compatibility entry point.
 Controller-only chat_list/chat_send/chat_status coordinate exact native sessions
 through the private chat-mailbox, not through managed task IDs or a new writer.
 Native SessionStart/UserPromptSubmit/Stop hooks register metadata and offer at most

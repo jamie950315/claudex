@@ -3,8 +3,17 @@ import assert from 'node:assert/strict';
 import { mkdtemp, realpath, rm, chmod } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { CacheWarmManager } from '../src/cache-warm.mjs';
+import { CacheWarmManager } from './helpers/rust-warm-manager.mjs';
 import { createCacheWarmClient, cacheWarmTtl, parseCacheWarmBounds, isCacheWarmTurnText, assertNativeCacheTtlChange, cacheTtlPreference, defaultWarmLimit } from '../plugins/claudex/hooks/cache-warm.mjs';
+
+async function policyManager(t, options) {
+  const manager = new CacheWarmManager(options);
+  t.after(async () => {
+    try { await manager.close(); }
+    finally { await rm(options.root, { recursive: true, force: true }); }
+  });
+  return manager.initialize();
+}
 
 const ID = '11111111-1111-4111-8111-111111111111';
 const PROMPT = 'Cache-retention measurement only. Reply with exactly OK. Do not call tools.';
@@ -620,8 +629,8 @@ test('off cancels pending timers and native recovery is accounted per response',
 
 test('native client integrates with the real policy ledger from opt-in through verified usage', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-mod-')));
-  await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-  const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+  await chmod(root, 0o700);
+  const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now });
   for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
   await f.seed(); await f.enable();
   assert.equal((await manager.list()).policies[0].enabled, true);
@@ -642,8 +651,8 @@ test('native client integrates with the real policy ledger from opt-in through v
 test('on autonomously primes a cold, expired or TTL-changed session and continues its timer', async t => {
   for (const scenario of ['cold', 'expired', 'ttl-change']) {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-prime-')));
-    await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-    const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+    await chmod(root, 0o700);
+    const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now });
     for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
     if (scenario !== 'cold') await f.seed();
     if (scenario === 'expired') f.now += 3600000;
@@ -668,8 +677,8 @@ test('on autonomously primes a cold, expired or TTL-changed session and continue
 test('the first automatic warm retains draft and configuration guards without a prior sample', async t => {
   for (const scenario of ['draft', 'settings', 'off']) {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-prime-guard-')));
-    await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-    const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+    await chmod(root, 0o700);
+    const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now });
     for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
     await f.client.sessionCommand(f.host, ['on'], { kind: 'composer' });
     if (scenario === 'draft') f.draft = 'Unsent user text';
@@ -681,8 +690,8 @@ test('the first automatic warm retains draft and configuration guards without a 
 
 test('configuration invalidation during prime cannot adopt a different model and resume warming', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-prime-config-')));
-  await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-  const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+  await chmod(root, 0o700);
+  const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now });
   for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
   await f.client.sessionCommand(f.host, ['on'], { kind: 'composer' });
   await f.fire(); assert.equal(f.submits, 1);
@@ -700,8 +709,8 @@ test('configuration invalidation during prime cannot adopt a different model and
 
 test('already-started native recovery remains accounted after the policy disables itself', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-mod-')));
-  await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-  const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+  await chmod(root, 0o700);
+  const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now });
   for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
   await f.seed(); await f.enable(); await f.fire();
   for (let index = 0; index < 2; index++) {
@@ -723,8 +732,8 @@ test('already-started native recovery remains accounted after the policy disable
 
 test('an aborted main turn retires successful busy-step evidence instead of scheduling it', async t => {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-mod-')));
-  await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-  const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now }).initialize();
+  await chmod(root, 0o700);
+  const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now });
   for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
   await f.seed(); await f.enable();
   await f.client.turnStart({ turnId: 'interrupted', text: 'Ordinary work' });
@@ -773,8 +782,8 @@ test('the shared compaction choice is saved through preview and confirm, and one
 test('the client compacts natively once after the last warm request, with the real policy ledger', async t => {
   const start = async (more = {}) => {
     const root = await realpath(await mkdtemp(join(tmpdir(), 'claudex-warm-compact-')));
-    await chmod(root, 0o700); t.after(() => rm(root, { recursive: true, force: true }));
-    const f = await fixture(), manager = await new CacheWarmManager({ root, now: () => f.now, ...more }).initialize();
+    await chmod(root, 0o700);
+    const f = await fixture(), manager = await policyManager(t, { root, now: () => f.now, ...more });
     for (const action of ['configure', 'observe', 'claim', 'check', 'receipt', 'list']) f.hooks[action] = request => manager[action](request.params);
     await f.seed(); await f.enable(['maxRefreshes=1']);
     await f.fire(); assert.equal(f.submits, 1);

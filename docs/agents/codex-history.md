@@ -6,8 +6,8 @@ Codex (0.162+) compresses a rollout left unchanged for seven days to
 `<name>.jsonl.zst`, in sessions/ and archived_sessions/, and restores a new plain
 `.jsonl` before its next append; the plain file wins when both exist. The API,
 records and history_base lookups keep the logical `.jsonl` path. Every rollout
-reader resolves the present representation through `src/codex-rollout-file.mjs`,
-proves identity on that physical file and reads the decompressed bytes; byte
+reader resolves the present representation through
+`crates/claudex-core/src/codex_layout.rs`, proves identity on that physical file and reads the decompressed bytes; byte
 offsets, sizes, digests, limits and reported storage bytes apply to the
 decompressed content. A rollout
 is unavailable only when neither representation exists. A representation change

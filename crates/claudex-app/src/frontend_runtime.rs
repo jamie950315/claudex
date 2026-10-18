@@ -4,12 +4,12 @@ use crate::{frontend_ast::*, frontend_folders, frontend_owner, platform};
 use anyhow::{Context, Result, ensure};
 use std::path::Path;
 
-const PROJECTION: &str = include_str!("../../../src/claude-folder-projection.mjs");
-const FOLDER: &str = include_str!("../../../src/claude-folder-runtime.mjs");
-const HANDOFF: &str = include_str!("../../../src/claude-desktop-handoff-runtime.mjs");
-const LOCAL_ANCHOR: &str = include_str!("../../../src/claude-folder-anchor.mjs");
-const CHAT: &str = include_str!("../../../src/claude-chat-wake-runtime.mjs");
-const OWNER: &str = include_str!("../../../src/claude-owner-wake-runtime.mjs");
+const PROJECTION: &str = include_str!("../host/renderer/claude-folder-projection.mjs");
+const FOLDER: &str = include_str!("../host/renderer/claude-folder-runtime.mjs");
+const HANDOFF: &str = include_str!("../host/renderer/claude-desktop-handoff-runtime.mjs");
+const LOCAL_ANCHOR: &str = include_str!("../host/renderer/claude-folder-anchor.mjs");
+const CHAT: &str = include_str!("../host/renderer/claude-chat-wake-runtime.mjs");
+const OWNER: &str = include_str!("../host/renderer/claude-owner-wake-runtime.mjs");
 fn embedded(source: &str) -> Result<String> {
     let ast = syntax(source)?;
     let mut edits = vec![];

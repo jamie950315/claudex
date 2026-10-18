@@ -30,8 +30,8 @@ documents viewed under a release tag remain that release's original snapshot.
 - Rust `1.88+` and Git for source installation. The macOS app bundles its native
   engine and can supply missing CLI components.
 - Node.js `22.15+` (22.x) or `23.8+` only for explicit Node compatibility entry
-  points, host tooling, and the JavaScript reference tests. The normal source
-  launcher runs the Rust engine directly.
+  points, host tooling, and host tests. The normal source launcher runs the
+  Rust engine directly.
 - For Desktop synchronization, the native desktop applications and compatible
   runtimes listed under [Compatibility and verification](#compatibility-and-verification).
 
@@ -278,20 +278,24 @@ Important boundaries:
   lifecycle guards, storage, and recovery.
 - [CLI-only compatibility](docs/compatibility.md): existing installations and
   migration boundaries.
+- [Runtime architecture](docs/rust-migration.md): Rust crate ownership, required
+  host code, and the frozen JavaScript archive.
 - [Contributor instructions](AGENTS.md): implementation and verification contracts.
 
 ```sh
 cargo test --locked --workspace
 
-# Optional Node host checks and legacy behavioral references:
+# Host and maintenance-tool checks:
 npm ci --ignore-scripts
-npm run test:entrypoints
-npm run test:reference
+npm run test:hosts
 ```
 
-`npm test` runs the Rust workspace and the thin entry-point checks. The separate
-reference command runs the preserved JavaScript contracts in an isolated
-temporary checkout; it is not a product runtime path.
+`npm test` runs the Rust workspace and host checks. `npm run test:entrypoints`
+selects only the thin compatibility-entry checks. The engine and its contracts
+live in `crates/`; required JavaScript hosts have separate ownership and do not
+implement a second engine. The frozen `codex/javascript-legacy` branch preserves
+the removed JavaScript implementation and reference suite; see
+[the source map and archive](docs/rust-migration.md).
 
 Automated tests use synthetic work or no-inference native checks. Real model
 acceptance is separately authorized; passing a fixture is not proof of a live
