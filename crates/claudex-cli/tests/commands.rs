@@ -126,7 +126,7 @@ fn help_and_version_do_not_create_state_or_run_native_providers() -> Result<()> 
         .arg("--version")
         .output()?;
     assert!(version.status.success());
-    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 2.0.3");
+    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 2.0.4");
     for arguments in [
         &["app", "--help"][..],
         &["app", "build", "--help"][..],
