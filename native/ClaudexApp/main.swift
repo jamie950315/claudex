@@ -32,6 +32,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
     private var refreshButton: NSButton!
     private var busy = false
     private var stopping = false
+    private var stopPolls = 0
     private var allowTermination = false
     private var report: SetupReport?
     private var lastVerifiedReport: SetupReport?
@@ -192,6 +193,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         // Defer, never cancel: a logout or restart must wait for the services
         // to stop instead of being aborted by this app.
         stopping = true
+        stopPolls = 0
         cacheSettings?.stopping = true
         updateRefreshTimer()
         health.headline = nil
@@ -231,9 +233,13 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
                         self.healthDetail.stringValue += "\n\n" + LD(detail)
                     }
                     self.scheduleWindowFit()
+                    // A status poll never closes owners that became idle after the
+                    // first stop; repeat the idempotent stop every few seconds.
+                    self.stopPolls += 1
+                    let repeatStop = self.stopPolls % 5 == 0
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
                         guard let self, self.stopping else { return }
-                        self.checkStop(statusOnly: true)
+                        self.checkStop(statusOnly: !repeatStop)
                     }
                 }
             case .failure(let error):

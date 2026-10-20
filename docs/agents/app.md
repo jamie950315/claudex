@@ -130,7 +130,9 @@ checks confirm shutdown. Keep the UI responsive while draining; never kill user
 native work or report a merely unloaded launchd job as fully stopped.
 applicationShouldTerminate returns terminateLater and replies once the stop is
 verified (false on failure); never terminateCancel a first request, which aborts
-a logout or restart. The runtime closes idle Claude owners concurrently; a busy
+a logout or restart. While draining, poll read-only status but also repeat the idempotent
+stop every few seconds: owners that were busy at the first stop and became idle
+later are only closed by a stop, never by a status poll. The runtime closes idle Claude owners concurrently; a busy
 owner still refuses after the idle ones are closed. Failures
 remain visible in the app. Closing the window still only hides it. Persist the
 private app-stop.json hold before stopping; hooks must not record events while
