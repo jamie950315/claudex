@@ -10,8 +10,8 @@ Setup installs the command's independent native hook but never trusts it or
 enables warming. The Claude Mod's Cache
 settings pane controls only its own Claude TTL and preferences, not Codex.
 See [Codex confirmation and limitations](cache-warming.md#codex-desktop-experimental-best-effort).
-For the latest published release, **2.0.4**, see [release notes](releases/2.0.4.md) and the
-[published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v2.0.4).
+For the latest published release, **2.0.5**, see [release notes](releases/2.0.5.md) and the
+[published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v2.0.5).
 
 ## Who this is for
 
