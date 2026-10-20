@@ -13,42 +13,38 @@ See [Codex confirmation and limitations](cache-warming.md#codex-desktop-experime
 For the latest published release, **2.0.5**, see [release notes](releases/2.0.5.md) and the
 [published download/checksums](https://github.com/jamie950315/claudex/releases/tag/v2.0.5).
 
-## Who this is for
+## Install
 
 Claudex.app is for Mac users who already have the official ChatGPT/Codex and
-Claude desktop applications installed. It connects those existing installations;
-it does not install, replace, or upgrade the vendor desktop apps.
+Claude desktop apps installed and signed in. It connects those installations;
+it does not install, replace or upgrade them. End users do not need Git,
+Node.js, npm or the Terminal.
 
-The Rust app bundle contains the native Claudex engine, Swift UI and required
-host assets. End users do not need Git, Node.js, npm or terminal configuration.
-Codex Desktop's protected launcher still uses its own OpenAI-signed Node host.
+1. Download the release ZIP, unzip it and move **Claudex.app** into
+   **Applications**. Background services reference the bundle; do not move it
+   while they run.
+2. Open Claudex. The build is development-signed and not notarized; if macOS
+   blocks it, choose **Open Anyway** in **System Settings › Privacy & Security**.
+   Setup starts automatically on first launch, including in background mode.
+3. Allow what the checklist asks for:
+   - **Sign-in:** an official browser sign-in. Desktop and CLI sign-in are not
+     assumed to be interchangeable; credentials are never copied.
+   - **Codex hooks:** type `/hooks` in Codex and trust the exact Claudex hook
+     definitions. Setup preserves existing hooks and never bypasses native
+     trust; an untrusted hook stays a readiness issue. The `PostToolUse` origin
+     hook (binding a collaboration task to its chat) and the optional
+     cache-command hook have their own trust reviews and do not gate ordinary
+     synchronization. See [command activation](cache-warming.md#command-in-the-chatgpt-desktop-codex-page).
+   - **macOS prompts:** notifications and the Claudex login/background item.
+   - **Restart:** a normal, idle restart of Claude or Codex when a row asks.
+4. The checklist reports which integrations are ready and which still need an
+   account, a compatible runtime, an idle native process or an app restart.
 
-## First launch
-
-Claudex.app supports English, Traditional Chinese, Simplified Chinese, Japanese,
-Korean, Spanish, German, French and Italian. The **Language** picker follows the
-system by default; a manual choice takes effect immediately and is remembered.
-Switching languages only changes presentation, never services or conversation
-contents. Menus, health summaries, setup guidance and notifications are localized.
-Unrecognized native diagnostic details remain verbatim beneath a localized label
-so troubleshooting evidence is not changed. CLI output remains English.
-
-1. Put Claudex.app in a stable Applications location before opening it. Background
-   services reference the bundle; do not move it while those services are running.
-2. Open Claudex. On first launch, the main window opens automatically and setup verifies
-   the installed vendor apps, including when first started in background mode.
-3. Complete an official browser sign-in if requested. Desktop sign-in and CLI
-   sign-in are not assumed to be interchangeable. Credentials are never copied.
-4. Review and trust the exact Claudex completion hooks through Codex's native hook
-   review (`/hooks` in Codex CLI). Setup preserves existing hooks and never bypasses
-   native trust. A configured-but-untrusted hook remains an explicit readiness issue.
-   The `PostToolUse` origin hook has its own trust requirement for binding a
-   collaboration task to its calling chat. Ordinary synchronization readiness
-   does not establish that completion-delivery capability.
-   The optional cache-command hook requires its own trust review; it does not
-   gate ordinary synchronization. See [command activation](cache-warming.md#command-in-the-chatgpt-desktop-codex-page).
-5. Let the checklist report which integrations are ready and which require an
-   account, compatible runtime, idle native process, or normal app restart.
+The window and menus support English, Traditional Chinese, Simplified Chinese,
+Japanese, Korean, Spanish, German, French and Italian. **Language** follows the
+system by default; a manual choice applies immediately and is remembered. It
+changes presentation only. Unrecognized native diagnostic details remain
+verbatim beneath a localized label. CLI output remains English.
 
 The signed app bundle and executable may be owned by the current user or root,
 with no group/other write access. Setup verifies the strict deep signature and

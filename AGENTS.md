@@ -20,8 +20,10 @@ to accommodate a documentation-only rebuild.
 
 Keep README.md focused on current capabilities, requirements, setup and concrete
 limits. Put graphical setup in docs/app.md, the work protocol in docs/collaboration.md, native synchronization
-details in docs/synchronization.md, and existing CLI-only installations and
-migration boundaries in docs/compatibility.md. Contributor contracts per area
+details in docs/synchronization.md, and command-line setup, verified versions,
+existing CLI-only installations and migration boundaries in docs/compatibility.md.
+README.md installation stays app-only: download, open, grant the checklist's
+requests; no Terminal steps. Contributor contracts per area
 are in docs/agents/ (see Topic guides below); they are not user documentation.
 Do not use broad maturity labels
 as substitutes for version requirements or explicit unsupported behavior.

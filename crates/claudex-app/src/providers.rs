@@ -420,6 +420,22 @@ pub async fn discover_cached(
 
 pub const CLAUDE_CLI_VERSION: &str = "2.1.283";
 pub const CODEX_CLI_VERSION: &str = "0.158.0-alpha.2.1";
+/// Exact registry integrities of the pinned wrapper and native packages. The
+/// registry response must match them; it is not the only source of trust.
+const CLAUDE_WRAPPER_INTEGRITY: &str = "sha512-/8Y1pe7M15qMOU7RwUEjpFcM8XGVXNzWrWRXXp/0HlGm1k8FcOCxYMA9VR237JUUzzx5DkcQaGvELAo4si7TwA==";
+const CLAUDE_ARM_INTEGRITY: &str = "sha512-GczpJ+FvnOYvxn6XPGHbdqJEZMves6Vc0WKS/g1N2eG39EKKAHxG77e+w4Rjtmf8xgCxNY36Jf/IOfbcyus4zA==";
+const CLAUDE_X64_INTEGRITY: &str = "sha512-yL10X6RsEbc7O5cO9H9dDkQef8owqxShDsE32Z4L712vlVIM2qaYuhvgmn/n2Ra0Y2VmwkoMy6+36+/5vnYlqg==";
+const CODEX_WRAPPER_INTEGRITY: &str = "sha512-UMf3ZIAwKRvwMmD9Gu5W50SKYdB6eqgy/afU5ibiViE/u0/8OuS2dNSpLCFglBsVkok/JT0M7b5w+mW9facc9w==";
+const CODEX_ARM_INTEGRITY: &str = "sha512-DE2W1rlFv4NY7vxBFVsrLGmyd9yUl4UNk9zFADUbmvppS1SWVQdCzeRQkPM0T97ozz9qeqoBd6gbJgQ5l7aKNQ==";
+const CODEX_X64_INTEGRITY: &str = "sha512-wFRNPMW69Wk6VGlbFAk3MqWRpNIlsctFKAPjyQcYLfrBwwMhXW6lcEMefyzrJExmwla3aiTrxAqAkED55MM4hA==";
+fn pinned_integrities(name: &str, arch: &str) -> (&'static str, &'static str) {
+    match (name, arch == "arm64") {
+        ("codex", true) => (CODEX_WRAPPER_INTEGRITY, CODEX_ARM_INTEGRITY),
+        ("codex", false) => (CODEX_WRAPPER_INTEGRITY, CODEX_X64_INTEGRITY),
+        (_, true) => (CLAUDE_WRAPPER_INTEGRITY, CLAUDE_ARM_INTEGRITY),
+        (_, false) => (CLAUDE_WRAPPER_INTEGRITY, CLAUDE_X64_INTEGRITY),
+    }
+}
 fn arch() -> Result<&'static str> {
     match std::env::consts::ARCH {
         "aarch64" => Ok("arm64"),
@@ -508,7 +524,15 @@ async fn install_cli(name: &str, options: &DiscoveryOptions, run: &dyn Runner) -
     } else {
         ("@anthropic-ai/claude-code", CLAUDE_CLI_VERSION)
     };
-    let metadata = crate::package::metadata(wrapper, version, None, &options.home, run).await?;
+    let (wrapper_integrity, native_integrity) = pinned_integrities(name, arch);
+    let metadata = crate::package::metadata(
+        wrapper,
+        version,
+        Some(wrapper_integrity),
+        &options.home,
+        run,
+    )
+    .await?;
     let key = if name == "codex" {
         format!("@openai/codex-darwin-{arch}")
     } else {
@@ -533,8 +557,14 @@ async fn install_cli(name: &str, options: &DiscoveryOptions, run: &dyn Runner) -
         );
         (key, reference.to_string())
     };
-    let native =
-        crate::package::metadata(&native_name, &native_version, None, &options.home, run).await?;
+    let native = crate::package::metadata(
+        &native_name,
+        &native_version,
+        Some(native_integrity),
+        &options.home,
+        run,
+    )
+    .await?;
     ensure!(
         native.value["os"] == serde_json::json!(["darwin"])
             && native.value["cpu"] == serde_json::json!([arch]),

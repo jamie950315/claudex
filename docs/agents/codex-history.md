@@ -135,6 +135,13 @@ must remain nonempty and the completed-event/API item identity is always exact.
 Only absent raw client_id normalizes to API clientId:null; explicit values must
 match exactly, and raw clientId aliases are rejected rather than overwritten.
 
+User input of an unknown kind that carries a path, URL or file ID is refused
+as an external asset. By user decision, `skill` and `mention` inputs (present
+since Codex 0.100) are not: they name context Codex supplied to the model
+(skill instructions, a connector), like AGENTS.md, rather than content the user
+authored, and are kept whole as inert data. `localImage` keeps its rollout
+recovery; `audio`, `localAudio` and other unknown referenced inputs still refuse.
+
 Native metadata, not the rollout header, determines subagent exclusion; ordinary
 forks remain eligible. Automatic discovery keeps raw candidates until exact
 `thread/read` metadata classifies them. A fresh unenrolled native subagent is

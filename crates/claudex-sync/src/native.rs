@@ -308,7 +308,25 @@ impl Driver for NativeDriver {
                     ),
                 "Wait for complete assistant turn with terminal stop reason."
             );
-            codecs::decode_claude(&raw.text, false, record.managed)?
+            let read = |metadata| {
+                codecs::decode_claude_with(&raw.text, false, record.managed, None, metadata)
+            };
+            let current = read(codecs::ClaudeMetadata::Omit)?;
+            // A record saved before session metadata rows left the dialogue
+            // keeps the reading its exact prefix digest was made from.
+            let saved = |common: &crate::history::Common| -> Result<bool> {
+                Ok(common.messages.len() >= record.message_count
+                    && crate::history::fingerprint(&common.messages, record.message_count)?
+                        == record.checkpoint)
+            };
+            if record.message_count == 0 || saved(&current)? {
+                current
+            } else {
+                match read(codecs::ClaudeMetadata::Legacy) {
+                    Ok(legacy) if saved(&legacy)? => legacy,
+                    _ => current,
+                }
+            }
         } else {
             codecs::decode_codex(&raw.text)?
         };

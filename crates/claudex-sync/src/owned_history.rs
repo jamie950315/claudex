@@ -289,6 +289,64 @@ pub fn completed_claude_with_reset(
     policy: claudex_core::version::VersionPolicy,
     reset: Option<&Value>,
 ) -> Result<Decoded> {
+    completed_claude_metadata(
+        text,
+        root,
+        conversation,
+        id,
+        key,
+        policy,
+        reset,
+        codecs::ClaudeMetadata::Omit,
+    )
+}
+/// The completed history read the way `checkpoint` was saved. A checkpoint
+/// made before session metadata rows were left out of the dialogue may hold
+/// them as inert messages; only when the current reading does not contain that
+/// saved dialogue and the earlier reading does is the earlier one returned.
+/// It never selects a new checkpoint.
+#[allow(clippy::too_many_arguments)]
+pub fn completed_claude_for_checkpoint(
+    text: &str,
+    root: &Path,
+    conversation: &str,
+    id: &str,
+    key: Option<&[u8]>,
+    policy: claudex_core::version::VersionPolicy,
+    reset: Option<&Value>,
+    checkpoint: &crate::desktop::Checkpoint,
+) -> Result<Decoded> {
+    let read = |metadata| {
+        completed_claude_metadata(text, root, conversation, id, key, policy, reset, metadata)
+    };
+    let current = read(codecs::ClaudeMetadata::Omit)?;
+    let matches = |decoded: &Decoded| -> Result<bool> {
+        let mut view = decoded.common.clone();
+        view.make_portable();
+        for message in &mut view.messages {
+            message.extra.clear();
+        }
+        checkpoint.contains_dialogue(&view)
+    };
+    if checkpoint.count == 0 || matches(&current)? {
+        return Ok(current);
+    }
+    match read(codecs::ClaudeMetadata::Legacy) {
+        Ok(legacy) if matches(&legacy)? => Ok(legacy),
+        _ => Ok(current),
+    }
+}
+#[allow(clippy::too_many_arguments)]
+fn completed_claude_metadata(
+    text: &str,
+    root: &Path,
+    conversation: &str,
+    id: &str,
+    key: Option<&[u8]>,
+    policy: claudex_core::version::VersionPolicy,
+    reset: Option<&Value>,
+    metadata: codecs::ClaudeMetadata,
+) -> Result<Decoded> {
     let packet_cache: std::cell::RefCell<
         std::collections::HashMap<Vec<Value>, Option<(Vec<Message>, Value)>>,
     > = std::cell::RefCell::new(std::collections::HashMap::new());
@@ -359,7 +417,7 @@ pub fn completed_claude_with_reset(
             && authored_tail[0]["type"] == "user"
             && authored_tail[0]["isMeta"] == true
         {
-            let all = codecs::decode_claude(text, true, true)?;
+            let all = codecs::decode_claude_with(text, true, true, None, metadata)?;
             let annotations = crate::claude_annotations::image_keys(
                 &rows,
                 &all,
@@ -394,11 +452,12 @@ pub fn completed_claude_with_reset(
         };
         Ok(decode_cached(content, key)?.is_some())
     };
-    let native = codecs::decode_claude_authenticated(
+    let native = codecs::decode_claude_with(
         &text[..cutoff],
         true,
         key.is_some(),
         key.map(|_| &authenticate as &dyn Fn(&Value) -> Result<bool>),
+        metadata,
     )?;
     ensure!(
         id.is_empty() || native.meta.get("id") == Some(&json!(id)),
@@ -876,6 +935,65 @@ pub(crate) mod tests {
             *changed[index].pointer_mut(pointer).unwrap() = json!("changed");
             assert!(read(&changed, Some(&proof)).is_err(), "{index}:{pointer}");
         }
+        Ok(())
+    }
+    #[test]
+    fn checkpoints_saved_with_inert_session_metadata_keep_their_reading() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let row = |kind: &str, uuid: &str, parent: Option<&str>, text: &str| json!({"type":kind,"uuid":uuid,"parentUuid":parent,"sessionId":id,"cwd":"/tmp","message":{"role":kind,"content":[{"type":"text","text":text}],"stop_reason":"end_turn"}});
+        let rows = vec![
+            row("user", "u1", None, "First"),
+            json!({"type":"worktree-state","worktreeSession":null,"sessionId":id}),
+            row("assistant", "a1", Some("u1"), "One"),
+            json!({"type":"agent-color","agentColor":"blue","sessionId":id}),
+            row("user", "u2", Some("a1"), "Second"),
+            row("assistant", "a2", Some("u2"), "Two"),
+        ];
+        let text = codecs::serialize_rows(&rows)?;
+        let strict = claudex_core::version::VersionPolicy::Strict;
+        let view = |decoded: &Decoded| {
+            let mut common = decoded.common.clone();
+            common.make_portable();
+            common
+        };
+        let current = completed_claude(&text, temp.path(), "c", &id, None)?;
+        assert_eq!(view(&current).messages.len(), 4);
+        let legacy = completed_claude_metadata(
+            &text,
+            temp.path(),
+            "c",
+            &id,
+            None,
+            strict,
+            None,
+            codecs::ClaudeMetadata::Legacy,
+        )?;
+        assert_eq!(view(&legacy).messages.len(), 6);
+        let read = |checkpoint: &crate::desktop::Checkpoint| {
+            completed_claude_for_checkpoint(
+                &text,
+                temp.path(),
+                "c",
+                &id,
+                None,
+                strict,
+                None,
+                checkpoint,
+            )
+            .map(|d| view(&d).messages.len())
+        };
+        // New and current checkpoints use the dialogue without metadata.
+        assert_eq!(read(&crate::desktop::Checkpoint::empty())?, 4);
+        assert_eq!(read(&crate::desktop::Checkpoint::of(&view(&current))?)?, 4);
+        // A checkpoint saved with inert metadata messages keeps that reading.
+        let mut saved = view(&legacy);
+        saved.messages.truncate(4);
+        assert_eq!(read(&crate::desktop::Checkpoint::of(&saved)?)?, 6);
+        // A saved dialogue neither reading contains stays a divergence.
+        let mut diverged = view(&current);
+        diverged.messages[0] = Message::text("user", "Edited");
+        assert_eq!(read(&crate::desktop::Checkpoint::of(&diverged)?)?, 4);
         Ok(())
     }
     #[test]

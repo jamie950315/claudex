@@ -175,6 +175,20 @@ pub async fn run(raw: &[String]) -> Result<()> {
         println!("claudex {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    if !matches!(
+        command,
+        "init"
+            | "status"
+            | "version-policy"
+            | "doctor"
+            | "recover-lock"
+            | "status-app"
+            | "service"
+            | "service-supervise"
+            | "desktop"
+    ) {
+        bail!("Unknown command: {command}. Run claudex --help.");
+    }
     let root = private_directory(args.root()?)?;
     if command == "init" {
         return output(&initialize(&root, &args)?);
@@ -425,23 +439,29 @@ pub fn initialize(root: &Path, args: &Args) -> Result<Value> {
         bail!("Already initialized; existing configuration was not changed.");
     }
     let home = home()?;
-    let codex_home = fs::canonicalize(
-        args.value("codex-home")
+    let native_home = |option: &str, default: &str| {
+        let path = args
+            .value(option)
             .map(std::path::PathBuf::from)
-            .unwrap_or(home.join(".codex")),
-    )?;
-    let claude_home = fs::canonicalize(
-        args.value("claude-home")
-            .map(std::path::PathBuf::from)
-            .unwrap_or(home.join(".claude")),
-    )?;
+            .unwrap_or(home.join(default));
+        fs::canonicalize(&path).with_context(|| {
+            format!(
+                "Native home {} is unavailable; start the native app once or pass --{option}",
+                path.display()
+            )
+        })
+    };
+    let codex_home = native_home("codex-home", ".codex")?;
+    let claude_home = native_home("claude-home", ".claude")?;
     let projects = args
         .values
         .get("project")
         .into_iter()
         .flatten()
-        .map(fs::canonicalize)
-        .collect::<std::io::Result<Vec<_>>>()?;
+        .map(|project| {
+            fs::canonicalize(project).with_context(|| format!("Project {project} is unavailable"))
+        })
+        .collect::<Result<Vec<_>>>()?;
     let config = json!({"version":1,"codexHome":codex_home,"claudeHome":claude_home,
         "binary":args.value("codex-binary").unwrap_or("codex"),"projects":projects,
         "allProjects":args.flag("all-projects"),"since":now_ms()});
@@ -518,7 +538,8 @@ pub(crate) async fn bounded_version(binary: &str) -> Result<String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true)
-        .spawn()?;
+        .spawn()
+        .with_context(|| format!("Native CLI {binary} could not be started"))?;
     let stdout = child
         .stdout
         .take()

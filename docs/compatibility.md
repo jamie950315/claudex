@@ -1,11 +1,94 @@
-# CLI-only compatibility
+# Command line and compatibility
 
 [Back to README](../README.md) · [Desktop synchronization](synchronization.md)
 
-This guide is for installations that synchronize local CLI session stores
-without the shared Desktop backend. For cross-model subagents or whole-work
+Claudex.app performs every step below automatically. This guide is for source
+checkouts, manually managed installations, and installations that synchronize
+local CLI session stores without the shared Desktop backend. For cross-model subagents or whole-work
 handoff, use the [collaboration guide](collaboration.md); it does not depend on
 this synchronization mode.
+
+## Source checkout
+
+```sh
+git clone https://github.com/jamie950315/claudex.git
+cd claudex
+cargo build --locked --release -p claudex-cli
+```
+
+Run the commands below from the repository directory. `bin/claudex` executes
+`target/release/claudex`; it never builds or downloads an engine at startup.
+Use an absolute `CLAUDEX_RUST_ENGINE` to select another already-built binary.
+The npm `claudex` command uses the same native launcher; `npm run build` is a
+convenience alias for the Cargo command above. Existing explicit
+`node bin/*.mjs` commands are thin compatibility hosts for Rust, not the old
+JavaScript engine. Collaboration and synchronization are installed separately;
+installing one does not enable the other.
+
+### Collaboration from the command line
+
+```sh
+bin/claudex collaboration install
+bin/claudex collaboration status
+```
+
+This installs an independent background broker and registers the `claudex-work`
+MCP connection with Codex and Claude Code. Reload the clients' MCP connections
+through their normal lifecycle; installation does not restart active apps.
+
+Manual CLI installation defaults to read-only work. Choose writable work at
+first installation with `bin/claudex collaboration install --allow-write`. Do
+not apply it as a hot policy change to a loaded broker; stop an existing
+installation safely first. See
+[permissions and limits](collaboration.md#permissions-and-limits).
+
+### Desktop synchronization from the command line
+
+For a **fresh synchronization state root**:
+
+```sh
+bin/claudex init --all-projects
+bin/claudex desktop install
+bin/claudex service install
+bin/claudex status
+bin/claudex doctor
+```
+
+Initialization does not overwrite existing configuration. Desktop installation
+does not migrate an existing CLI-only ledger; see
+[Desktop migration boundaries](#desktop-migration-boundaries). The shared Codex
+backend activates on the next normal desktop-app start. Desktop
+`untrack CONVERSATION_ID` and `resume-tracking CONVERSATION_ID` require the
+owned watcher to be stopped; see
+[history-preserving maintenance](synchronization.md#stop-tracking-while-preserving-history).
+
+### Claude Mod from the command line
+
+Stage the Mod with
+`bin/claudex mod stage --root /absolute/private/root --output /new/marketplace`,
+then follow the [Mod guide](claude-mod.md) for native validation and plugin
+installation. Staging does not install or enable it. Inspect native-wake routes
+with `bin/claudex collaboration native-wake`; change a route only after its own
+native activation acceptance.
+
+## Verified versions
+
+Compatibility is feature-specific. Collaboration acceptance does not expand the
+synchronization runtime allowlist.
+
+| Capability | Version evidence | Verified behavior |
+| --- | --- | --- |
+| Cross-model collaboration | Codex CLI `0.158.0-alpha.2.1`; Claude Code `2.1.283` | Both-direction child delegation and result return, parent resumption after file edits, and consecutive owner transfers under one task ID. |
+| Cooperative in-flight follow-up | Codex CLI `0.159.0-alpha.12.1`; Claude Code `2.1.283` | Both real supervisor/child directions accepted a proactive instruction and completed in generation one, without a child blocker or duplicate invocation. |
+| Claude Mod | Bundled `0.8.64`; Desktop Code `2.1.286`, documented Mod API baseline `2.1.287` | Pane, commands and cache settings; native activation is verified separately from source checks. Installed and loaded versions are separate. See the [Mod guide](claude-mod.md) and [cache-warming guide](cache-warming.md). |
+| Codex cache warming | Desktop native runtime `0.160.0` or later, experimental best-effort | Default-off CLI opt-in and a separately trusted `/claudex:warm` hook. See [limits and confirmation](cache-warming.md#codex-desktop-experimental-best-effort). |
+| Desktop synchronization | Strict Codex baseline `0.155.0-alpha.16.3` / `.16.4`; Claude Code `2.1.281` with SDK `0.3.281` | Native conversation delivery, real Desktop alternation, supported compaction and image cases, identity preservation, and bounded snapshot retirement. |
+
+Manual CLI initialization defaults to `versionPolicy: "strict"`; new graphical
+installations use `warn`, preserving an explicitly selected existing policy.
+`warn` permits attempts on other runtimes without version-only warnings; it does
+not certify them or relax history, ownership, authentication, or conflict
+checks. See [version-only enforcement](synchronization.md#version-only-enforcement).
 
 ## Existing mode and configuration
 

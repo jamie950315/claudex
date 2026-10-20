@@ -330,8 +330,9 @@ impl Inbox {
         let operation = async {
             let mut stream = UnixStream::connect(&self.socket).await?;
             stream.write_all(b"w").await?;
+            // Any acknowledgement byte or EOF ends the wait; the count is irrelevant.
             let mut bytes = [0; 2];
-            stream.read(&mut bytes).await?;
+            let _ = stream.read(&mut bytes).await?;
             Ok::<_, std::io::Error>(())
         };
         match tokio::time::timeout(Duration::from_millis(300), operation).await {

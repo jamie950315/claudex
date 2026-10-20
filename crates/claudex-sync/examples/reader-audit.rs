@@ -13,6 +13,7 @@ fn main() -> anyhow::Result<()> {
                 .ok_or_else(|| anyhow::anyhow!("Missing native text."))?;
             let completed = input["completed"] == true;
             let mut incomplete = None;
+            let mut legacy_count = None;
             let common: Common = match input["side"].as_str() {
                 Some("claude") if completed => {
                     let decoded = owned_history::completed_claude_with_policy(
@@ -26,12 +27,23 @@ fn main() -> anyhow::Result<()> {
                     incomplete = Some(decoded.incomplete_tail);
                     decoded.common
                 }
-                Some("claude") => codecs::decode_claude(text, true, false)?,
+                Some("claude") => {
+                    // The earlier reading kept unlisted session metadata as inert messages.
+                    let legacy = codecs::decode_claude_with(
+                        text,
+                        true,
+                        false,
+                        None,
+                        codecs::ClaudeMetadata::Legacy,
+                    )?;
+                    legacy_count = Some(legacy.portable().messages.len());
+                    codecs::decode_claude(text, true, false)?
+                }
                 Some("codex") => codecs::decode_codex(text)?,
                 _ => anyhow::bail!("Unknown native side."),
             };
             let common = common.portable();
-            let mut output = json!({"ok":true,"count":common.messages.len(),"fingerprint":common.fingerprint()?,"messages":common.messages.iter().map(|m|json!({"role":m.role,"content":m.content})).collect::<Vec<_>>()});
+            let mut output = json!({"ok":true,"count":common.messages.len(),"legacyCount":legacy_count,"fingerprint":common.fingerprint()?,"messages":common.messages.iter().map(|m|json!({"role":m.role,"content":m.content})).collect::<Vec<_>>()});
             if let Some(incomplete) = incomplete {
                 output["incompleteTail"] = json!(incomplete);
             }

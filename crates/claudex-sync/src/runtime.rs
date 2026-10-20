@@ -895,7 +895,7 @@ impl Runtime {
         } else {
             None
         };
-        let mut decoded = owned_history::completed_claude_with_reset(
+        let mut decoded = owned_history::completed_claude_for_checkpoint(
             &data.text,
             &self.options.root,
             &r.conversation_id,
@@ -907,6 +907,7 @@ impl Runtime {
             owned.then_some(self.key.as_slice()),
             self.options.version_policy,
             reset_bootstrap.as_ref(),
+            &r.checkpoint,
         )?;
         if let Some(parent) = fork_parent {
             let path = r.path.parent().unwrap().join(format!("{parent}.jsonl"));

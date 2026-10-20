@@ -13,6 +13,25 @@ change the existing packet or checkpoint contract to transport them as authored
 messages. Truly unknown semantic content remains whole as inert labeled data,
 under the project-wide native reading rule.
 
+Claude Code writes every conversation row (user, assistant, system, attachment,
+progress) through one chain writer that always sets the `parentUuid` key (null at
+the root). Session metadata never carries it: Claude Code's own entry registry
+classes those types as `last-wins`, `accumulate` or `boundary-cleared` state, and
+2.1.250-2.1.302 added them every few releases (`tag`, `agent-color`,
+`agent-setting`, `worktree-state`, `isolation-latch`, `memory-mode`,
+`continued-in`, `content-replacement`, `frame-link`, `ended-by-model`,
+`history-suppression`, `api-request`, `api-request-shape`, `api-request-blob`,
+`dev-mods`, `artifact-*`, `observer-ref`, `fork-context-ref`, ...). So a row of an
+unlisted type without a `parentUuid` key is metadata, not dialogue, without
+naming its type; an unlisted row on the chain stays inert data. Do not add new
+metadata types to the codec list. `api-request-blob` carries a `message` field,
+so the presence of `message` is not the test. Checkpoints saved before this rule
+may hold such rows as inert messages: `ClaudeMetadata::Legacy` reproduces that
+reading, and it is selected only when the current reading does not contain the
+saved dialogue (or, CLI-only, the exact prefix digest) and the legacy one does.
+It never selects a new checkpoint. Before release, run
+`examples/reader-audit.rs` over real local histories and record both counts.
+
 A native assistant response ending with `stop_reason: refusal` and persisted text
 is a completed read boundary too. Preserve its original text and refusal metadata;
 do not rewrite it into a successful answer. A refusal with only withheld/empty

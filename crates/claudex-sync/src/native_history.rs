@@ -544,6 +544,13 @@ fn user_content(item: &Value) -> Result<Vec<Value>> {
                 content.push(image(block)?);
                 extra = auxiliary(block, &["type", "url"]);
             }
+            // A skill or mention names context Codex supplied to the model
+            // (instructions, a connector), like AGENTS.md; it is not content
+            // the user authored. By user decision it is kept as inert data.
+            Some("skill" | "mention") => {
+                content.push(inert("Codex user input", block)?);
+                extra = json!({});
+            }
             _ => {
                 ensure!(
                     !["path", "url", "fileId", "file_id"]
@@ -937,6 +944,25 @@ mod tests {
             )
             .is_err()
         );
+        for kind in ["skill", "mention"] {
+            let block = json!({"type":kind,"name":"review","path":"/home/user/.codex/skills/review/SKILL.md"});
+            let content = user_content(
+                &json!({"type":"userMessage","content":[{"type":"text","text":"$review this"},block]}),
+            )
+            .unwrap();
+            assert_eq!(content.len(), 2);
+            assert_eq!(content[0]["text"], "$review this");
+            assert_eq!(
+                content[1]["text"],
+                inert("Codex user input", &block).unwrap()["text"]
+            );
+        }
+        for kind in ["audio", "localAudio"] {
+            assert!(
+                user_content(&json!({"type":"userMessage","content":[{"type":kind,"path":"/a.wav","url":"file:///a.wav"}]}))
+                    .is_err()
+            );
+        }
     }
     #[test]
     fn closed_status_keeps_the_native_turn_timestamp() {
