@@ -155,6 +155,14 @@ restores an existing project listener's rows; the last total listener stops
 work. Do not retain a background consumer after native unmount. Older graphs
 without the common dispatcher retain their proved project-consumer path;
 ambiguous or disconnected new routing fails explicitly.
+The 2026-10-19 graph creates its Code project/environment components through a
+local factory instead of naming the project component directly in that table.
+Follow the factory only when its immutable declaration synchronously returns
+one component without other statements, its arguments are inert boolean/null
+constants (including minified numeric negations), and that component's sole
+return is a call through the same native JSX binding. Follow that returned
+component's existing JSX route to the proved folder consumer; unrelated calls,
+reassigned factories and disconnected routes remain refused.
 Graphs are bounded to 2,048 cached modules and
 2,048 missing imports (observed older entries reach 1,171 cached modules).
 By user decision, each cache file and decoded/patched JavaScript source is

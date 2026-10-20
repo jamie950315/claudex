@@ -921,13 +921,7 @@ impl Runtime {
                     continue;
                 }
                 let row: Value = serde_json::from_str(line)?;
-                if row["type"] == "assistant"
-                    && row["isSidechain"] != true
-                    && matches!(
-                        row["message"]["stop_reason"].as_str(),
-                        Some("end_turn" | "stop_sequence")
-                    )
-                {
+                if row["isSidechain"] != true && owned_history::completed_claude_assistant(&row) {
                     cutoff = offset;
                 }
             }

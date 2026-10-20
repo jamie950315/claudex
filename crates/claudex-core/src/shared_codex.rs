@@ -24,10 +24,23 @@ fn pair(value: &Value, identity: &storage::FileIdentity) -> bool {
         && value["ino"].as_u64().map(|v| v.to_string()).as_ref() == Some(&identity.ino)
 }
 fn inspect(root: &Path, policy: VersionPolicy) -> Result<Proof> {
-    storage::require_private_directory(root)?;
+    rpc::endpoint_result(
+        storage::require_private_directory(root),
+        "inspect transport root",
+        root,
+    )?;
     let directory = root.join("codex-shared");
-    storage::require_private_directory(&directory)?;
-    let source = storage::read_stable_with_limit(directory.join("owner.json"), 4096)?;
+    rpc::endpoint_result(
+        storage::require_private_directory(&directory),
+        "inspect backend directory",
+        &directory,
+    )?;
+    let manifest_path = directory.join("owner.json");
+    let source = rpc::endpoint_result(
+        storage::read_stable_with_limit(&manifest_path, 4096),
+        "read backend manifest",
+        &manifest_path,
+    )?;
     ensure!(
         source.identity.uid == storage::uid().to_string()
             && source.identity.mode.parse::<u32>()? & 0o7777 == 0o600
@@ -101,8 +114,17 @@ pub async fn connect(
                 "Shared backend native home is invalid."
             );
             ensure!(
-                std::fs::canonicalize(home.as_str().unwrap())?
-                    == std::fs::canonicalize(codex_home)?,
+                std::fs::canonicalize(home.as_str().unwrap()).with_context(|| {
+                    format!(
+                        "Shared backend native home cannot be resolved at {}",
+                        home.as_str().unwrap()
+                    )
+                })? == std::fs::canonicalize(codex_home).with_context(|| {
+                    format!(
+                        "Configured Codex home cannot be resolved at {}",
+                        codex_home.display()
+                    )
+                })?,
                 "Shared backend uses a different Codex home."
             );
         }

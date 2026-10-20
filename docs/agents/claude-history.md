@@ -32,6 +32,13 @@ saved dialogue (or, CLI-only, the exact prefix digest) and the legacy one does.
 It never selects a new checkpoint. Before release, run
 `examples/reader-audit.rs` over real local histories and record both counts.
 
+A native assistant response ending with `stop_reason: refusal` and persisted text
+is a completed read boundary too. Preserve its original text and refusal metadata;
+do not rewrite it into a successful answer. A refusal with only withheld/empty
+reasoning supplies no reply boundary. Keep any later input, companion notice or
+unfinished tool call withheld under the normal complete-prefix rules. This read
+boundary does not change cold-reset, archival, retirement or other write proofs.
+
 - Unmanaged Claude originals may end in native transcript-only task notifications.
   Accept these as ancillary tails only with system provenance, exact queue evidence
   and a parent chain from the completed assistant. Preserve their original bytes

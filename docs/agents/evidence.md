@@ -6,6 +6,28 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Persisted Claude refusal import (2026-10-20)
+
+Installed development-signed App 2.0.6 / Mod 0.8.64 (`c68d493`) recognized
+one previously unenrolled Claude Code conversation whose only completed reply
+ended with `stop_reason: refusal` and persisted text. Normal startup discovery
+and synchronization created a Codex snapshot with the same 284-message canonical
+checkpoint. Native Codex chat readback contained the safety notice, refusal text,
+readable excerpts and authenticated complete-history archive. The native app
+navigation succeeded, and the user confirmed that the chat was visible.
+The later input and empty-reasoning refusal remained an incomplete tail.
+No model request, refused-input replay or native-app restart was performed.
+
+Read-only differential checks used identical stable snapshots of 818 Claude
+and 1,788 Codex files. All previously accepted histories stayed unchanged:
+224 Claude and 438 Codex. Only the target became newly accepted; 593 Claude
+and 1,350 Codex files remained refused by the selected unkeyed audit readers.
+There were no audit exclusions or accepted-prefix regressions. The sync library
+passed 166 tests with one ignored; the CLI help/version test and signed release
+build passed. App-owned installation verified Mod 0.8.64; existing loaded sessions
+were preserved. Another unenrolled source still had an unfinished tool call.
+Private identities, audit results and rollback bundles remain outside Git.
+
 ## Native-scheduler preservation assessment and Desktop acceptance (2026-10-17)
 
 An authorized Claude Desktop Code test on native 2.1.299 created one

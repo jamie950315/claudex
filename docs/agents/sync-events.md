@@ -42,6 +42,13 @@ and acknowledge only the consumed inbox revision. Newer events survive a sync.
 Completion-before-flush gets at most three event-scoped follow-ups at 250/1000/3000
 ms and a completion-armed exact-file notification; started disarms streaming files.
 Never infer completion from a hook alone or resend uncertain native input.
+An endpoint-admission `TransportUnavailable` is one global connection wait,
+not a history block for every scheduled conversation. Preserve completion
+revisions and verification queues, revoke handoff authority, and wait for a
+connection/configuration hint before admitting the backend again. Status-only
+heartbeats never retry admission. Missing histories, permission/identity
+refusals and uncertain native operations retain their existing severity and
+recovery rules.
 Socket notifications are primary: macOS fs.watch registration can lose events.
 The consumer wakes itself directly for events it publishes; the socket's
 delivery deadline is for other processes, and a busy consumer cannot meet it.

@@ -5,7 +5,7 @@
 Use the installed `claudex` executable, or `bin/claudex` from a built source
 checkout. This guide covers execution, not history synchronization; the two
 capabilities use separate services and state.
-Current behavior is described for Claudex 2.0.3 and its bundled Mod 0.8.61;
+Current behavior is described for Claudex 2.0.6 and its bundled Mod 0.8.64;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol

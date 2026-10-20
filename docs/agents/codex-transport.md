@@ -44,7 +44,12 @@ owned projections immediately (native isolated proof). The CLI's raw proxy is
 not compatible with the WS listener. Native socket aliases need strict UID,
 private-directory, inode and target validation, not blanket symlink following.
 An ENOENT during endpoint inspection is a transport-unavailable wait, not a
-fatal history failure. Recheck all socket/manifest identities on the next
+fatal history failure. `rpc::TransportUnavailable` marks only missing transport
+roots, backend manifests and socket endpoint I/O before admission, with the
+failed operation and path retained in diagnostics. Classify this typed error,
+never a bare ENOENT or error-text match. Missing native homes, unsafe permissions,
+invalid aliases and uncertain RPC completion retain their normal refusals.
+Recheck all socket/manifest identities on the next
 connection; permission/alias failures remain strict. Never apply this exception
 to missing transcript/archive files or resend uncertain native writes.
 

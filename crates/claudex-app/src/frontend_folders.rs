@@ -740,23 +740,73 @@ fn mode_consumer(ast: &Value, project_component: &Value) -> Result<Option<ModeCo
     )?;
     let project = field(&table["init"], "project").and_then(|n| field(n, "code"));
     ensure!(
-        project.is_some_and(|n| id(n).is_some())
-            && field(&table["init"], "state")
-                .and_then(|n| field(n, "code"))
-                .is_some()
+        project.is_some_and(|n| {
+            id(n).is_some() || kind(n) == "CallExpression" && id(&n["callee"]).is_some()
+        }) && field(&table["init"], "state")
+            .and_then(|n| field(n, "code"))
+            .is_some()
             && !nodes(dispatcher, |n| member(n, "kind")
                 && scopes.same(&n["object"], &params[1]))
             .is_empty(),
         "Claude frontend anchors: Code group-mode table missing or ambiguous."
     );
     let project = project.unwrap();
+    let factory = kind(project) == "CallExpression";
+    let reference = if factory { &project["callee"] } else { project };
     let wrapper = unique(
         functions(ast)
             .into_iter()
-            .filter(|f| scopes.same(&f["id"], project))
+            .filter(|f| scopes.same(&f["id"], reference))
             .collect(),
         "project mode wrapper",
     )?;
+    let wrapper = if factory {
+        let body = array(&wrapper["body"]["body"]);
+        let returned = &wrapper["body"]["body"][0]["argument"];
+        let render_body = array(&returned["body"]["body"]);
+        let render = &returned["body"]["body"][0]["argument"];
+        let inert = |n: &Value| {
+            kind(n) == "Literal" && (n["value"].is_boolean() || n["value"].is_null())
+                || kind(n) == "UnaryExpression"
+                    && n["operator"] == "!"
+                    && kind(&n["argument"]) == "Literal"
+                    && n["argument"]["value"].is_number()
+        };
+        ensure!(
+            wrapper["async"] != true
+                && wrapper["generator"] != true
+                && array(&wrapper["params"]).iter().all(|p| id(p).is_some())
+                && array(&wrapper["params"]).len() == array(&project["arguments"]).len()
+                && array(&project["arguments"]).iter().all(inert)
+                && scopes
+                    .binding(reference)
+                    .is_some_and(|b| b.declarations.len() == 1)
+                && body.len() == 1
+                && kind(&body[0]) == "ReturnStatement"
+                && matches!(
+                    kind(returned),
+                    "FunctionExpression" | "ArrowFunctionExpression"
+                )
+                && returned["async"] != true
+                && returned["generator"] != true
+                && render_body.len() == 1
+                && kind(&render_body[0]) == "ReturnStatement"
+                && kind(render) == "CallExpression"
+                && scopes.same(&render["callee"], &rendering["callee"])
+                && array(&render["arguments"]).len() == 2
+                && id(&render["arguments"][0]).is_some()
+                && kind(&render["arguments"][1]) == "ObjectExpression"
+                && nodes(ast, |n| (kind(n) == "AssignmentExpression"
+                    && scopes.same(&n["left"], reference))
+                    || (kind(n) == "UpdateExpression"
+                        && scopes.same(&n["argument"], reference)))
+                .is_empty(),
+            "Claude frontend anchors: project mode factory is not a pure component wrapper."
+        );
+        returned
+    } else {
+        wrapper
+    };
     // Follow only native JSX component references, not arbitrary calls or names.
     let mut frontier = vec![wrapper];
     let mut reached = false;
@@ -1275,6 +1325,45 @@ function Parent(all, kind) { const context={allRows:all,projectSectionRows:all,k
         assert!(inspect(&memo_context())?.is_some());
         assert!(inspect("function Folder(rows){return rows;}")?.is_none());
         Ok(())
+    }
+    fn factory_mode() -> String {
+        SOURCE.replace(
+            "function Project({projectSectionRows}) { return jsx(Wrapper, {sessions:projectSectionRows}); }",
+            "function ProjectFactory(environment) { return function({projectSectionRows}) { return jsx(Wrapper, {sessions:projectSectionRows,groupByEnvironment:environment}); }; }",
+        ).replace("project:{code:Project}", "project:{code:ProjectFactory(!1)}, environment:{code:ProjectFactory(!0)}")
+    }
+    #[test]
+    fn project_mode_factory_returns_the_same_proved_folder_component() -> Result<()> {
+        assert!(inspect(&factory_mode())?.is_some());
+        assert!(
+            inspect(&factory_mode().replace("ProjectFactory(!1)", "ProjectFactory(false)"))?
+                .is_some()
+        );
+        Ok(())
+    }
+    #[test]
+    fn effectful_reassigned_or_disconnected_project_factories_are_refused() {
+        for source in [
+            factory_mode().replace("function ProjectFactory", "async function ProjectFactory"),
+            factory_mode().replace("return function({", "return async function({"),
+            factory_mode().replace("ProjectFactory(!1)", "ProjectFactory(other())"),
+            factory_mode().replace("return function({", "sideEffect(); return function({"),
+            factory_mode().replace(
+                "jsx(Wrapper, {sessions:projectSectionRows",
+                "jsx(State, {sessions:projectSectionRows",
+            ),
+            factory_mode().replace(
+                "function ProjectFactory(environment)",
+                "function ProjectFactory(environment=other())",
+            ),
+            factory_mode() + "ProjectFactory = other;",
+            factory_mode() + "var ProjectFactory = other;",
+        ] {
+            assert!(
+                inspect(&source).is_err(),
+                "Accepted changed project factory: {source}"
+            );
+        }
     }
     #[test]
     fn disconnected_shadowed_or_changed_mode_contracts_cannot_install_a_lifecycle_patch() {

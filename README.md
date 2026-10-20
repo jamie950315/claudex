@@ -4,9 +4,9 @@ Let Codex and Claude Code work together on your Mac: ask one to delegate a task
 to the other, hand a task over, message an existing chat, and continue a
 conversation in the other app.
 
-Current build: **Claudex.app 2.0.3**, bundling **Claude Mod 0.8.61**
-· [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.3)
-· [Release notes](docs/releases/2.0.3.md)
+Current build: **Claudex.app 2.0.6**, bundling **Claude Mod 0.8.64**.
+Latest published release: **2.0.5** · [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.5)
+· [Release notes](docs/releases/2.0.5.md)
 
 ## Requirements
 
@@ -19,8 +19,8 @@ your accounts' normal usage.
 
 ## Install
 
-1. Download `Claudex-v2.0.3-macOS-arm64.zip` from the
-   [release page](https://github.com/jamie950315/claudex/releases/tag/v2.0.3),
+1. Download `Claudex-v2.0.5-macOS-arm64.zip` from the
+   [release page](https://github.com/jamie950315/claudex/releases/tag/v2.0.5),
    unzip it, and drag **Claudex.app** into **Applications**. Do not move it later.
 2. Open Claudex. The build is development-signed, not notarized, so macOS may
    block the first launch. Go to **System Settings › Privacy & Security** and

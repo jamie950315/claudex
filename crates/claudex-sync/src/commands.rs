@@ -331,6 +331,9 @@ async fn discover_desktop(
         {
             Ok(result) => enrolled.push(result),
             Err(error) if error.is::<discovery::CodexSubagentSource>() => (),
+            Err(error) if error.is::<claudex_core::rpc::TransportUnavailable>() => {
+                return Err(error);
+            }
             Err(error) => {
                 if unsupported.len() < 100 {
                     unsupported.push(json!({"side":source.side,"nativeId":source.native_id,"reason":format!("{error:#}")}));
@@ -483,6 +486,24 @@ fn is_waiting(error: &anyhow::Error) -> bool {
     .iter()
     .any(|pattern| text.contains(pattern))
 }
+fn sync_error(
+    error: &anyhow::Error,
+    id: &str,
+    blocked: &mut BTreeMap<String, String>,
+    transport_wait: &mut Option<String>,
+) -> bool {
+    if error.is::<claudex_core::rpc::TransportUnavailable>() {
+        blocked.remove(id);
+        *transport_wait = Some(format!("{error:#}"));
+        false
+    } else if is_waiting(error) {
+        blocked.remove(id);
+        true
+    } else {
+        blocked.insert(id.into(), format!("{error:#}"));
+        true
+    }
+}
 pub async fn watch_desktop_with(
     runtime: Arc<Runtime>,
     bridge: DesktopBridge,
@@ -528,6 +549,7 @@ async fn watch_desktop_control(
         let mut startup = true;
         let mut hooks_refresh=true;
         let mut hook_status=Value::Null;
+        let mut transport_wait: Option<String> = None;
         let mut candidates = VecDeque::<discovery::Source>::new();
         let mut background = VecDeque::<String>::new();
         let mut followups = BTreeMap::<String, (usize, tokio::time::Instant)>::new();
@@ -608,19 +630,36 @@ async fn watch_desktop_control(
                     unknown.get_mut(&key).unwrap().2 = now + Duration::from_millis(delays[step + 1]);
                 } else { unknown.remove(&key); }
             }
-            if handoff_enabled && !work.is_empty() && !actions_revoked_since_publish {
+            if handoff_enabled && (startup || !work.is_empty()) && !actions_revoked_since_publish {
                 runtime.revoke_handoff_actions()?;
                 actions_revoked_since_publish = true;
                 handoff_revoked = true;
             }
             if pending_error.is_none() {
-                if hooks_refresh {hook_status=match runtime.synchronization_hooks().await {Ok(status)=>status,Err(error)=>json!({"ready":false,"reason":format!("{error:#}")})};hooks_refresh=false;}
+                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {hooks_refresh=true;}
+                if hooks_refresh {
+                    match runtime.synchronization_hooks().await {
+                        Ok(status) => { hook_status=status; transport_wait=None; }
+                        Err(error) if error.is::<claudex_core::rpc::TransportUnavailable>() => {
+                            transport_wait=Some(format!("{error:#}"));
+                        }
+                        Err(error) => { hook_status=json!({"ready":false,"reason":format!("{error:#}")}); transport_wait=None; }
+                    }
+                    hooks_refresh=false;
+                }
+                if transport_wait.is_some() {
+                    // Only connection/configuration hints were inspected. Keep
+                    // completion revisions and the history queues for reconnect.
+                    let inspected=work.iter().filter(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)).cloned().collect::<Vec<_>>();
+                    inbox.acknowledge(&inspected).await?;
+                }
+            }
+            if pending_error.is_none() && transport_wait.is_none() {
                 if !work.is_empty() || observe_needed {
                     let state = bridge.status()?;
                     source.observe(&work, &state, &inbox)?;
                     observe_needed = false;
                 }
-                if work.iter().any(|r|matches!(r.event.kind,Kind::Reconnect|Kind::Configuration)) {hooks_refresh=true;}
                 if work.iter().any(|r|r.event.kind==Kind::Reconnect) {
                     startup=true;
                     initial_sweep_completed_at=None;
@@ -661,7 +700,14 @@ async fn watch_desktop_control(
                         }
                         if ids.is_empty() {
                             let only = HashSet::from([receipt.event.key()]);
-                            let update = discover_desktop(&bridge, config, Some(only.clone())).await?;
+                            let update = match discover_desktop(&bridge, config, Some(only.clone())).await {
+                                Ok(update) => update,
+                                Err(error) if error.is::<claudex_core::rpc::TransportUnavailable>() => {
+                                    transport_wait=Some(format!("{error:#}"));
+                                    break;
+                                }
+                                Err(error) => return Err(error),
+                            };
                             merge_discovery(&mut unsupported, update, Some(&only));
                         }
                         let state = bridge.status()?;
@@ -689,19 +735,20 @@ async fn watch_desktop_control(
                                     if value["changed"] == true { observe_needed = true; }
                                     value["changed"] == false || value["incompleteTail"] == true
                                 }
-                                Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
-                                Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
+                                Err(error) => sync_error(&error,&id,&mut blocked,&mut transport_wait),
                             };
                             if retry && matches!(receipt.event.kind, Kind::Completed | Kind::Interrupted | Kind::Idle | Kind::Changed) {
                                 followups.insert(id, (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
                             } else { followups.remove(&id); }
+                            if transport_wait.is_some() { break; }
                         }
+                        if transport_wait.is_some() { break; }
                         consumed.push(receipt.clone());
                     }
                     source.observe(&work, &bridge.status()?, &inbox)?;
                     inbox.acknowledge(&consumed).await?;
                 }
-                if bridge.status()?.pending.is_none() && !hooks::app_stopped(&bridge.root)? {
+                if transport_wait.is_none() && bridge.status()?.pending.is_none() && !hooks::app_stopped(&bridge.root)? {
                     let due = followups.iter().filter(|(_, (_, when))| *when <= tokio::time::Instant::now())
                         .map(|(id, (step, _))| (id.clone(), *step)).collect::<Vec<_>>();
                     for (id, step) in due {
@@ -724,16 +771,16 @@ async fn watch_desktop_control(
                                 if value["changed"] == true { observe_needed = true; }
                                 value["changed"] == false || value["incompleteTail"] == true
                             }
-                            Err(error) if is_waiting(&error) => { blocked.remove(&id); true },
-                            Err(error) => { blocked.insert(id.clone(), format!("{error:#}")); true }
+                            Err(error) => sync_error(&error,&id,&mut blocked,&mut transport_wait),
                         };
                         if retry && step + 1 < delays.len() {
                             followups.insert(id, (step + 1, tokio::time::Instant::now() + Duration::from_millis(delays[step + 1])));
                         } else { followups.remove(&id); }
+                        if transport_wait.is_some() { break; }
                     }
                     // Only one cold history per pass; native completions get
                     // first service before the next potentially expensive read.
-                    if !*shutdown.borrow() && !hooks::app_stopped(&bridge.root)? && inbox.list()?.is_empty() && bridge.status()?.pending.is_none() {
+                    if transport_wait.is_none() && !*shutdown.borrow() && !hooks::app_stopped(&bridge.root)? && inbox.list()?.is_empty() && bridge.status()?.pending.is_none() {
                         if startup {
                             if handoff_enabled && !actions_revoked_since_publish {
                                 runtime.revoke_handoff_actions()?;
@@ -762,7 +809,15 @@ async fn watch_desktop_control(
                                 handoff_revoked = true;
                             }
                             let key = format!("{}:{}", candidate.side.name(), candidate.native_id.to_lowercase());
-                            let update = enroll_candidate(&bridge, candidate).await?;
+                            let update = match enroll_candidate(&bridge, &candidate).await {
+                                Ok(update) => update,
+                                Err(error) if error.is::<claudex_core::rpc::TransportUnavailable>() => {
+                                    transport_wait=Some(format!("{error:#}"));
+                                    candidates.push_front(candidate);
+                                    json!({"enrolled":[],"unsupportedSources":[],"absentSources":[]})
+                                }
+                                Err(error) => return Err(error),
+                            };
                             let enrolled = update["enrolled"].as_array().into_iter().flatten().collect::<Vec<_>>();
                             if !enrolled.is_empty() {
                                 folder_dirty = true;
@@ -801,16 +856,15 @@ async fn watch_desktop_control(
                                         followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
                                     }
                                 }
-                                Err(error) if is_waiting(&error) => {
-                                    blocked.remove(&id);
-                                    followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
-                                }
                                 Err(error) => {
-                                    blocked.insert(id.clone(), format!("{error:#}"));
-                                    followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                                    if sync_error(&error,&id,&mut blocked,&mut transport_wait) {
+                                        followups.insert(id.clone(), (0, tokio::time::Instant::now() + Duration::from_millis(delays[0])));
+                                    }
                                 }
                             }
-                            if initial_sweep_completed_at.is_none() {
+                            if transport_wait.is_some() {
+                                background.push_front(id);
+                            } else if initial_sweep_completed_at.is_none() {
                                 checked_conversations.insert(id);
                                 checking_conversation_count = checked_conversations.len() + background.len();
                             }
@@ -826,6 +880,7 @@ async fn watch_desktop_control(
             }
             let folder_map = if config["folderProjection"]["enabled"] != true {json!({"state":"disabled"})}
                 else if pending_error.is_some() {folder_dirty = true; json!({"state":"waiting","deferred":"pending"})}
+                else if transport_wait.is_some() {folder_dirty = true; json!({"state":"waiting","deferred":"transport"})}
                 else if folder_dirty || folder_map_cache.is_none() {
                     let map = match runtime.publish_folders().await {
                         Ok(mut map)=>{map["state"]=json!(if map["deferred"].is_null(){"ready"}else{"waiting"});map},
@@ -841,7 +896,7 @@ async fn watch_desktop_control(
                 };
             let renderer=lifecycle.as_ref().map(|l|l.status()).unwrap_or(Value::Null);let folder_projection=folder_view(&folder_map,&renderer);
             let handoff_full = sweep_full_handoff || tokio::time::Instant::now() >= handoff_maintenance;
-            if handoff_enabled && !sweep_in_progress && handoff_publication_needed(handoff_full, &handoff_scope, handoff_revoked) {
+            if handoff_enabled && transport_wait.is_none() && !sweep_in_progress && handoff_publication_needed(handoff_full, &handoff_scope, handoff_revoked) {
                 let value = match runtime.publish_handoffs(&desktop_registry, if handoff_full {None} else {Some(&handoff_scope)}).await {
                     Ok(mut value) => {value["state"]=json!(if value["deferred"].is_null(){"ready"}else{"waiting"});value}, Err(error) => json!({"state":"error","actions":0,"error":format!("{error:#}")})
                 };
@@ -852,7 +907,8 @@ async fn watch_desktop_control(
                 handoff_scope.clear();
                 local_handoff = value;
             } else if !handoff_enabled { local_handoff = json!({"state":"disabled","enabled":false}); }
-            if !startup && pending_error.is_none() && candidates.is_empty() && background.is_empty() {
+            else if transport_wait.is_some() { local_handoff = json!({"state":"waiting","actions":0,"deferred":"transport"}); }
+            if !startup && pending_error.is_none() && transport_wait.is_none() && candidates.is_empty() && background.is_empty() {
                 initial_sweep_completed_at.get_or_insert_with(storage::now_ms);
             }
             let mut status=watch_status(&blocked,pending_error.as_deref(),&unsupported,false,lifecycle.as_ref(),if startup{None}else{Some(candidates.len()+background.len())},initial_sweep_completed_at);
@@ -864,6 +920,16 @@ async fn watch_desktop_control(
                 Value::Null
             };
             status["hookStatus"]=hook_status.clone();if pending_error.is_none() && hook_status["ready"] == false {status["synchronization"]=json!("blocked");status["blocked"]=json!({"scope":"hooks","reason":hook_status["reason"]});}status["coldVerificationCache"]=scheduler.cache.diagnostics();status["folderProjection"]=folder_projection;status["localHandoff"]=local_handoff.clone();status["rendererAdapters"]=renderer;
+            if let Some(reason)=&transport_wait {
+                status["transport"]=json!({"state":"waiting","reason":reason});
+                if pending_error.is_none() && blocked.is_empty() {
+                    status["synchronization"]=json!("waiting");
+                    status["blocked"]=Value::Null;
+                    status["waiting"]=json!(reason);
+                }
+                status["currentOperation"]=Value::Null;
+                status["foregroundCompletedAt"]=Value::Null;
+            }
             let health = json!({
                 "applicationHold": status["applicationHold"],
                 "synchronization": status["synchronization"],
@@ -920,6 +986,8 @@ async fn watch_desktop_control(
             // preserved inbox. Source failures and shutdown still wake it.
             if pending_error.is_some() {
                 tokio::select! { _=tokio::time::sleep(timeout)=>(), _=shutdown.changed()=>(), _=source.failed()=>source.check()? }
+            } else if transport_wait.is_some() {
+                tokio::select! { result=listener.wait_hint(Duration::from_secs(30), &mut shutdown)=>result?, _=source.failed()=>source.check()? }
             } else {
                 tokio::select! { result=listener.wait(timeout, &mut shutdown)=>{ receipts = result?; let _ = receipts; }, _=source.failed()=>source.check()? }
             }
@@ -933,13 +1001,21 @@ async fn watch_desktop_control(
         None => Ok(()),
     };
     let close_result = close_runtime(&runtime).await;
-    let outcome = result.and(source_result).and(listener_result).and(lifecycle_result).and(close_result);
+    let outcome = result
+        .and(source_result)
+        .and(listener_result)
+        .and(lifecycle_result)
+        .and(close_result);
     let mut status = storage::read_json_or(bridge.root.join("watcher-status.json"), json!({}))?;
     status["coldVerificationCache"] = scheduler.cache.diagnostics();
     status["pid"] = json!(std::process::id());
     status["running"] = json!(false);
     status["updatedAt"] = json!(storage::now_ms());
-    status["error"] = outcome.as_ref().err().map(|error|json!(format!("{error:#}").chars().take(2000).collect::<String>())).unwrap_or(Value::Null);
+    status["error"] = outcome
+        .as_ref()
+        .err()
+        .map(|error| json!(format!("{error:#}").chars().take(2000).collect::<String>()))
+        .unwrap_or(Value::Null);
     diagnostics(&bridge.root, &status)?;
     outcome
 }
@@ -954,7 +1030,7 @@ fn event_conversations(state: &crate::desktop::State, receipt: &Receipt) -> BTre
         .map(|r| r.conversation_id.clone())
         .collect()
 }
-async fn enroll_candidate(bridge: &DesktopBridge, source: discovery::Source) -> Result<Value> {
+async fn enroll_candidate(bridge: &DesktopBridge, source: &discovery::Source) -> Result<Value> {
     if matches!(fs::symlink_metadata(&source.cwd), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
     {
         return Ok(
@@ -972,6 +1048,7 @@ async fn enroll_candidate(bridge: &DesktopBridge, source: discovery::Source) -> 
         Err(error) if error.is::<discovery::CodexSubagentSource>() => {
             Ok(json!({"enrolled":[],"unsupportedSources":[],"absentSources":[]}))
         }
+        Err(error) if error.is::<claudex_core::rpc::TransportUnavailable>() => Err(error),
         Err(error) => Ok(
             json!({"enrolled":[],"unsupportedSources":[{"side":source.side,"nativeId":source.native_id,"reason":format!("{error:#}")}],"absentSources":[]}),
         ),
@@ -1131,7 +1208,11 @@ mod lifecycle_tests {
         assert!(error.to_string().contains("Injected partial lifecycle"));
         let status = storage::read_json(root.join("watcher-status.json"))?;
         assert_eq!(status["running"], false);
-        assert!(status["error"].as_str().is_some_and(|s| s.contains("Injected partial lifecycle")));
+        assert!(
+            status["error"]
+                .as_str()
+                .is_some_and(|s| s.contains("Injected partial lifecycle"))
+        );
         assert!(lifecycle.stopped.load(Ordering::SeqCst));
         assert!(!root.join("watch.lock").exists());
         let inbox = Inbox::new(&root)?;
@@ -1170,7 +1251,7 @@ mod lifecycle_tests {
         }
     }
     async fn until_status(root: &Path, predicate: impl Fn(&Value) -> bool) -> Result<Value> {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(15), async {
             loop {
                 let value = storage::read_json_or(root.join("watcher-status.json"), Value::Null)?;
                 if predicate(&value) {
@@ -1179,15 +1260,106 @@ mod lifecycle_tests {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
-        .await?
+        .await
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "{error}; last watcher status: {}",
+                storage::read_json_or(root.join("watcher-status.json"), Value::Null)
+                    .unwrap_or(Value::Null)
+            )
+        })?
+    }
+    async fn synthetic_backend(root: &Path) -> Result<tokio::task::JoinHandle<Result<()>>> {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::{accept_async, tungstenite::Message};
+        let directory = storage::private_directory(root.join("codex-shared"))?;
+        let socket = directory.join("app.sock");
+        let listener = tokio::net::UnixListener::bind(&socket)?;
+        fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
+        let identity = storage::FileIdentity::from_metadata(&fs::symlink_metadata(&socket)?);
+        let pair = json!({"dev":identity.dev.parse::<u64>()?,"ino":identity.ino.parse::<u64>()?});
+        storage::write_json(
+            directory.join("owner.json"),
+            &json!({
+                "version":1,"pid":std::process::id(),"childPid":std::process::id(),
+                "cliVersion":"codex-cli 0.155.0-alpha.16.4","listenerPath":socket,"socketPath":socket,
+                "listenerIdentity":pair,"socketIdentity":pair
+            }),
+        )?;
+        let root = root.to_owned();
+        Ok(tokio::spawn(async move {
+            let mut ws = accept_async(listener.accept().await?.0).await?;
+            while let Some(frame) = ws.next().await {
+                let frame = match frame {
+                    Ok(frame) => frame,
+                    Err(tokio_tungstenite::tungstenite::Error::Protocol(tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)) => break,
+                    Err(error) => return Err(error.into()),
+                };
+                if frame.is_close() {
+                    break;
+                }
+                let request: Value = serde_json::from_slice(&frame.into_data())?;
+                if request.get("id").is_none() {
+                    continue;
+                }
+                let result = match request["method"].as_str() {
+                    Some("initialize") => json!({}),
+                    Some("hooks/list") => json!({"data":[{"cwd":root,"hooks":[],"errors":[]}]}),
+                    method => bail!("Unexpected synthetic backend method: {method:?}"),
+                };
+                ws.send(Message::Text(
+                    json!({"id":request["id"],"result":result})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+            }
+            Ok(())
+        }))
     }
     #[tokio::test]
-    async fn configuration_keeps_the_completed_sweep_but_reconnection_reconciles_again() -> Result<()>
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let temp = tempfile::tempdir()?;
-        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
-        let root = storage::private_directory(temp.path())?;
+    async fn enrollment_preserves_endpoint_failure_type_and_missing_history_stays_blocked()
+    -> Result<()> {
+        let temp = tempfile::tempdir_in("/tmp")?;
+        let root = fs::canonicalize(temp.path())?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude});
+        let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
+        let source = discovery::Source {
+            side: Side::Codex,
+            path: codex.join("native.jsonl"),
+            native_id: "00000000-0000-4000-8000-000000000003".into(),
+            cwd: root.display().to_string(),
+        };
+        let error = enroll_candidate(&runtime.bridge(), &source)
+            .await
+            .unwrap_err();
+        assert!(error.is::<claudex_core::rpc::TransportUnavailable>());
+        let mut blocked = BTreeMap::new();
+        let mut wait = None;
+        assert!(!sync_error(&error, "conversation", &mut blocked, &mut wait));
+        assert!(blocked.is_empty());
+        assert!(wait.is_some());
+        let history_error = anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(sync_error(
+            &history_error,
+            "conversation",
+            &mut blocked,
+            &mut wait
+        ));
+        assert_eq!(blocked.len(), 1);
+        assert!(!root.join("desktop-state.json").exists());
+        runtime.close().await?;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn missing_backend_waits_globally_preserves_completions_and_recovers_on_connection()
+    -> Result<()> {
+        let temp = tempfile::tempdir_in("/tmp")?;
+        let root = fs::canonicalize(temp.path())?;
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
         let codex = storage::private_directory(root.join("codex"))?;
         let claude = storage::private_directory(root.join("claude"))?;
         let config = json!({"codexHome":codex,"claudeHome":claude});
@@ -1197,7 +1369,61 @@ mod lifecycle_tests {
             let bridge = runtime.bridge();
             watch_desktop_control(runtime, bridge, &config, None, Some(receiver)).await
         });
-        let first = until_status(&root, |v| v["initialSweepCompletedAt"].is_number()).await?;
+        let status = until_status(&root, |v| v["transport"]["state"] == "waiting").await?;
+        assert_eq!(status["synchronization"], "waiting");
+        assert_eq!(status["blockedConversationCount"], 0);
+        assert!(status["blocked"].is_null());
+        assert!(status["initialSweepCompletedAt"].is_null());
+        assert_eq!(status["checkedConversationCount"], 0);
+        let inbox = Inbox::new(&root)?;
+        inbox
+            .publish(crate::events::Event {
+                side: Side::Codex,
+                native_id: "00000000-0000-4000-8000-000000000003".into(),
+                kind: Kind::Completed,
+                turn_id: None,
+                remote_id: None,
+            })
+            .await?;
+        until_status(&root, |v| {
+            v["updatedAt"].as_i64() > status["updatedAt"].as_i64()
+        })
+        .await?;
+        let preserved = inbox.list()?;
+        assert_eq!(preserved.len(), 1);
+        assert_eq!(preserved[0].event.kind, Kind::Completed);
+        assert!(!root.join("desktop-state.json").exists());
+        let backend = synthetic_backend(&root).await?;
+        let status = until_status(&root, |v| v["initialSweepCompletedAt"].is_number()).await?;
+        assert!(status["transport"].is_null());
+        assert_eq!(status["blockedConversationCount"], 0);
+        assert!(inbox.list()?.is_empty());
+        shutdown.send(true)?;
+        tokio::time::timeout(Duration::from_secs(5), running).await???;
+        tokio::time::timeout(Duration::from_secs(5), backend).await???;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn configuration_keeps_the_completed_sweep_but_reconnection_reconciles_again()
+    -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude});
+        let backend = synthetic_backend(&root).await?;
+        let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let mut running = tokio::spawn(async move {
+            let bridge = runtime.bridge();
+            watch_desktop_control(runtime, bridge, &config, None, Some(receiver)).await
+        });
+        let first = tokio::select! {
+            status = until_status(&root, |v| v["initialSweepCompletedAt"].is_number()) => status?,
+            result = &mut running => bail!("Watcher ended before initial status: {result:?}"),
+        };
         let inbox = Inbox::new(&root)?;
         for _ in 0..2 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1239,6 +1465,7 @@ mod lifecycle_tests {
         .await?;
         shutdown.send(true)?;
         tokio::time::timeout(Duration::from_secs(5), running).await???;
+        tokio::time::timeout(Duration::from_secs(5), backend).await???;
         Ok(())
     }
     #[tokio::test]
@@ -1252,6 +1479,7 @@ mod lifecycle_tests {
         let claude = storage::private_directory(root.join("claude"))?;
         let config =
             json!({"codexHome":codex,"claudeHome":claude,"folderProjection":{"enabled":true}});
+        let backend = synthetic_backend(&root).await?;
         let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
         // A read of even the ledger during this hold would fail immediately.
         storage::atomic_write(root.join("desktop-state.json"), b"not a ledger")?;
@@ -1326,6 +1554,7 @@ mod lifecycle_tests {
         );
         shutdown.send(true)?;
         tokio::time::timeout(Duration::from_secs(5), running).await???;
+        tokio::time::timeout(Duration::from_secs(5), backend).await???;
         assert!(lifecycle.stopped.load(Ordering::SeqCst));
         assert!(!root.join("watch.lock").exists());
         Ok(())
@@ -1356,10 +1585,30 @@ mod lifecycle_tests {
         assert_eq!(folder_view(&error, &skipped), error);
         let deferred = json!({"state":"waiting","deferred":"pending","updatedAt":99});
         assert_eq!(folder_view(&deferred, &skipped), deferred);
-        let value = watch_status(&BTreeMap::new(), None, &json!({}), false, None, Some(0), Some(123));
+        let value = watch_status(
+            &BTreeMap::new(),
+            None,
+            &json!({}),
+            false,
+            None,
+            Some(0),
+            Some(123),
+        );
         assert_eq!(value["initialSweepCompletedAt"], 123);
-        let pending = watch_status(&BTreeMap::new(), None, &json!({}), false, None, Some(5), None);
-        assert!(pending.get("initialSweepCompletedAt").is_some_and(Value::is_null));
+        let pending = watch_status(
+            &BTreeMap::new(),
+            None,
+            &json!({}),
+            false,
+            None,
+            Some(5),
+            None,
+        );
+        assert!(
+            pending
+                .get("initialSweepCompletedAt")
+                .is_some_and(Value::is_null)
+        );
         assert!(value["blocked"].is_null());
         assert_eq!(value["blockedConversationCount"], 0);
         assert!(value["updatedAt"].is_number());
