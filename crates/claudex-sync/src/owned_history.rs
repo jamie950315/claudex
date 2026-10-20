@@ -238,6 +238,20 @@ pub fn decode_codex_native(
         incomplete_tail: snapshot.incomplete_tail,
     })
 }
+/// Read boundaries only: persisted refusal text is a reply, withheld reasoning is not.
+pub(crate) fn completed_claude_assistant(row: &Value) -> bool {
+    row["type"] == "assistant"
+        && (matches!(
+            row["message"]["stop_reason"].as_str(),
+            Some("end_turn" | "stop_sequence")
+        ) || row["message"]["stop_reason"] == "refusal"
+            && (row["message"]["content"].is_string()
+                || row["message"]["content"].as_array().is_some_and(|blocks| {
+                    blocks
+                        .iter()
+                        .any(|block| block["type"] == "text" && block["text"].is_string())
+                })))
+}
 /// Complete native prefixes are selected on the raw rows. The whole selected
 /// graph is decoded before packet expansion; unknown records stay inert data.
 pub fn completed_claude(
@@ -300,19 +314,17 @@ pub fn completed_claude_with_reset(
             continue;
         }
         let row: Value = serde_json::from_str(trimmed).map_err(|_| {
-            anyhow::anyhow!("Malformed native transcript record at line {}.", line_index + 1)
+            anyhow::anyhow!(
+                "Malformed native transcript record at line {}.",
+                line_index + 1
+            )
         })?;
         rows.push(row);
         let row = rows.last().unwrap();
         if row["isSidechain"] == true {
             continue;
         }
-        if row["type"] == "assistant"
-            && matches!(
-                row["message"]["stop_reason"].as_str(),
-                Some("end_turn" | "stop_sequence")
-            )
-        {
+        if completed_claude_assistant(row) {
             cutoff = offset;
             cutoff_rows = rows.len();
         }
@@ -864,6 +876,50 @@ pub(crate) mod tests {
             *changed[index].pointer_mut(pointer).unwrap() = json!("changed");
             assert!(read(&changed, Some(&proof)).is_err(), "{index}:{pointer}");
         }
+        Ok(())
+    }
+    #[test]
+    fn native_refusal_text_is_a_completed_prefix_without_completing_withheld_output() -> Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let mut rows = vec![
+            json!({"type":"user","uuid":"request","sessionId":id,"cwd":"/tmp","message":{"role":"user","content":"Fixture request"}}),
+            json!({"type":"assistant","uuid":"refusal","parentUuid":"request","sessionId":id,"cwd":"/tmp","message":{"role":"assistant","content":[{"type":"text","text":"This response was refused."}],"stop_reason":"refusal"}}),
+        ];
+        let read = |rows: &[Value]| {
+            completed_claude(&codecs::serialize_rows(rows)?, temp.path(), "c", &id, None)
+        };
+        let complete = read(&rows)?;
+        assert!(!complete.incomplete_tail);
+        assert_eq!(complete.common.messages.len(), 2);
+        assert_eq!(complete.common.messages[1].extra["stop_reason"], "refusal");
+        assert_eq!(
+            complete.common.messages[1].content[0]["text"],
+            "This response was refused."
+        );
+        rows.extend([
+            json!({"type":"user","uuid":"next","parentUuid":"refusal","sessionId":id,"cwd":"/tmp","message":{"role":"user","content":"Next request"}}),
+            json!({"type":"assistant","uuid":"withheld","parentUuid":"next","sessionId":id,"cwd":"/tmp","message":{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"fixture"}],"stop_reason":"refusal"}}),
+            json!({"type":"user","uuid":"notice","parentUuid":"withheld","sessionId":id,"cwd":"/tmp","isMeta":true,"turnCompanion":true,"message":{"role":"user","content":"The response was withheld. Do not repeat it."}}),
+        ]);
+        let prefix = read(&rows)?;
+        assert!(prefix.incomplete_tail);
+        assert_eq!(prefix.common, complete.common);
+        assert!(read(&rows[2..]).is_err());
+        let mut unfinished = rows[..2].to_vec();
+        unfinished[1]["message"]["content"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"type":"tool_use","id":"unanswered","name":"Fixture","input":{}}));
+        assert!(
+            read(&unfinished)
+                .unwrap_err()
+                .to_string()
+                .contains("Unfinished tool call")
+        );
+        unfinished[1]["message"]["stop_reason"] = json!("tool_use");
+        assert!(read(&unfinished).is_err());
         Ok(())
     }
     #[test]

@@ -13,6 +13,13 @@ change the existing packet or checkpoint contract to transport them as authored
 messages. Truly unknown semantic content remains whole as inert labeled data,
 under the project-wide native reading rule.
 
+A native assistant response ending with `stop_reason: refusal` and persisted text
+is a completed read boundary too. Preserve its original text and refusal metadata;
+do not rewrite it into a successful answer. A refusal with only withheld/empty
+reasoning supplies no reply boundary. Keep any later input, companion notice or
+unfinished tool call withheld under the normal complete-prefix rules. This read
+boundary does not change cold-reset, archival, retirement or other write proofs.
+
 - Unmanaged Claude originals may end in native transcript-only task notifications.
   Accept these as ancillary tails only with system provenance, exact queue evidence
   and a parent chain from the completed assistant. Preserve their original bytes
