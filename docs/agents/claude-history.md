@@ -19,6 +19,11 @@ do not rewrite it into a successful answer. A refusal with only withheld/empty
 reasoning supplies no reply boundary. Keep any later input, companion notice or
 unfinished tool call withheld under the normal complete-prefix rules. This read
 boundary does not change cold-reset, archival, retirement or other write proofs.
+A tool call in a response stopped with `stop_reason: refusal` never ran, and the
+native transcript keeps it without a result. When no `tool_result` answers it, it
+is kept whole as inert labeled data, not an open tool call, so the conversation
+is not paused as an unfinished tool call (also after the user continues). The
+same call in a response that was not refused stays unfinished.
 
 - Unmanaged Claude originals may end in native transcript-only task notifications.
   Accept these as ancillary tails only with system provenance, exact queue evidence

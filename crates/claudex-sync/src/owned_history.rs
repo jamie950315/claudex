@@ -912,14 +912,25 @@ pub(crate) mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!({"type":"tool_use","id":"unanswered","name":"Fixture","input":{}}));
+        // A refused response never ran its tool call: it stays as inert data,
+        // also when the conversation continues afterwards.
+        let withheld_call = read(&unfinished)?;
+        assert!(!withheld_call.incomplete_tail);
         assert!(
-            read(&unfinished)
-                .unwrap_err()
-                .to_string()
-                .contains("Unfinished tool call")
+            withheld_call.common.messages[1]
+                .content
+                .iter()
+                .all(|block| block["type"] != "tool_use")
         );
-        unfinished[1]["message"]["stop_reason"] = json!("tool_use");
-        assert!(read(&unfinished).is_err());
+        let mut continued = unfinished.clone();
+        continued.extend([
+            json!({"type":"user","uuid":"after","parentUuid":"refusal","sessionId":id,"cwd":"/tmp","message":{"role":"user","content":"Continue"}}),
+            json!({"type":"assistant","uuid":"answer","parentUuid":"after","sessionId":id,"cwd":"/tmp","message":{"role":"assistant","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"}}),
+        ]);
+        assert_eq!(read(&continued)?.common.messages.len(), 4);
+        // The same call from a response that was not refused is still unfinished.
+        continued[1]["message"]["stop_reason"] = json!("tool_use");
+        assert!(read(&continued).is_err());
         Ok(())
     }
     #[test]

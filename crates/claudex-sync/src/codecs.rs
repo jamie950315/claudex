@@ -697,6 +697,15 @@ pub fn decode_claude_authenticated(
             }
         }
     }
+    // A response stopped by a refusal never ran its tool calls; the native
+    // transcript keeps them without a result.
+    let answered: HashSet<&str> = rows
+        .iter()
+        .filter_map(|row| row["message"]["content"].as_array())
+        .flatten()
+        .filter(|block| block["type"] == "tool_result")
+        .filter_map(|block| block["tool_use_id"].as_str())
+        .collect();
     let mut messages = vec![];
     let mut meta = Map::new();
     for i in order {
@@ -769,7 +778,20 @@ pub fn decode_claude_authenticated(
                     vec![json!({"type":"text","text":s})]
                 }
             } else if let Some(blocks) = native.as_array() {
-                blocks.iter().map(content_portable).collect::<Result<_>>()?
+                let refused = row["message"]["stop_reason"] == "refusal";
+                blocks
+                    .iter()
+                    .map(|block| {
+                        let unrun = refused
+                            && block["type"] == "tool_use"
+                            && !block["id"].as_str().is_some_and(|id| answered.contains(id));
+                        if unrun {
+                            inert("Claude tool call withheld by a refusal; it did not run", block)
+                        } else {
+                            content_portable(block)
+                        }
+                    })
+                    .collect::<Result<_>>()?
             } else {
                 vec![inert("Claude message", row)?]
             };
