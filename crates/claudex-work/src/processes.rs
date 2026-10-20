@@ -31,7 +31,7 @@ pub async fn table() -> Result<Vec<ProcessIdentity>> {
     let out = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         Command::new("/bin/ps")
-            .args(["-axo", "pid=,ppid=,pgid=,uid=,lstart="])
+            .args(["-axo", "pid=,ppid=,pgid=,uid=,stat=,lstart="])
             .env("LC_ALL", "C")
             .env("TZ", "UTC")
             .output(),
@@ -44,21 +44,26 @@ pub async fn table() -> Result<Vec<ProcessIdentity>> {
     let mut rows = vec![];
     for line in text.lines().filter(|s| !s.trim().is_empty()) {
         let parts = line.split_whitespace().collect::<Vec<_>>();
-        if parts.len() != 9 || rows.len() >= 16384 {
+        if parts.len() != 10 || rows.len() >= 16384 {
             bail!("Native process inventory contains malformed metadata.");
         }
         static START: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
             regex::Regex::new(r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([1-9]|[12][0-9]|3[01]) [0-2][0-9]:[0-5][0-9]:[0-5][0-9] [0-9]{4}$").unwrap()
         });
-        if !START.is_match(&parts[4..].join(" ")) {
+        if !START.is_match(&parts[5..].join(" ")) {
             bail!("Native process start identity is malformed.");
+        }
+        // A zombie has exited and holds no resources; only its table entry
+        // remains until its parent reaps it, which may never happen.
+        if parts[4].starts_with('Z') {
+            continue;
         }
         rows.push(ProcessIdentity {
             pid: parts[0].parse()?,
             ppid: parts[1].parse()?,
             pgid: parts[2].parse()?,
             uid: parts[3].parse()?,
-            started_at: parts[4..].join(" "),
+            started_at: parts[5..].join(" "),
         });
     }
     Ok(rows)
