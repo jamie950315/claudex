@@ -1,5 +1,5 @@
 use anyhow::Result;
-use claudex_core::rpc::{CodexClient, RpcError, inspect_codex_socket};
+use claudex_core::rpc::{CodexClient, RpcError, TransportUnavailable, inspect_codex_socket};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::{
@@ -99,6 +99,7 @@ async fn disconnected_write_is_uncertain_and_is_never_replayed() -> Result<()> {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("completion is unknown"));
+    assert!(!error.is::<TransportUnavailable>());
     assert!(client.request("thread/read", json!({})).await.is_err());
     client.close().await?;
     server.await??;
@@ -114,12 +115,34 @@ async fn socket_aliases_and_permissions_do_not_bypass_native_endpoint_guards() -
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     assert_eq!(inspect_codex_socket(&path)?.socket_path, path);
     fs::set_permissions(&path, fs::Permissions::from_mode(0o666))?;
-    assert!(inspect_codex_socket(&path).is_err());
+    assert!(
+        !inspect_codex_socket(&path)
+            .unwrap_err()
+            .is::<TransportUnavailable>()
+    );
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let alias = root.path().join("alias.sock");
     symlink(&path, &alias)?;
-    assert!(inspect_codex_socket(&alias).is_err());
+    assert!(
+        !inspect_codex_socket(&alias)
+            .unwrap_err()
+            .is::<TransportUnavailable>()
+    );
     fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755))?;
     assert!(inspect_codex_socket(&path).is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_socket_is_endpoint_unavailability_without_native_work() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700))?;
+    let path = root.path().join("absent.sock");
+    let error = CodexClient::connect(&path).await.err().unwrap();
+    let unavailable = error.downcast_ref::<TransportUnavailable>().unwrap();
+    assert_eq!(unavailable.operation, "inspect listener");
+    assert_eq!(unavailable.path, path);
+    assert!(claudex_core::storage::is_not_found(&error));
+    assert_eq!(fs::read_dir(root.path())?.count(), 0);
     Ok(())
 }

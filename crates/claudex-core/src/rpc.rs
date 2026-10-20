@@ -31,6 +31,47 @@ use tokio_tungstenite::{
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
 const UNKNOWN: &str = "completion is unknown, do not retry writes automatically";
 
+/// A missing endpoint before admission, not a missing history or uncertain RPC.
+#[derive(Debug)]
+pub struct TransportUnavailable {
+    pub operation: &'static str,
+    pub path: PathBuf,
+    detail: String,
+}
+impl std::fmt::Display for TransportUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Shared Codex transport unavailable: {} at {}: {}",
+            self.operation,
+            self.path.display(),
+            self.detail
+        )
+    }
+}
+impl std::error::Error for TransportUnavailable {}
+
+/// Apply only to endpoint I/O. Other native files and admission refusals retain
+/// their original failure; an unavailable endpoint never authorizes a retry.
+pub(crate) fn endpoint_result<T>(
+    result: Result<T>,
+    operation: &'static str,
+    path: &Path,
+) -> Result<T> {
+    result.map_err(|error| {
+        if crate::storage::is_not_found(&error) {
+            let context = TransportUnavailable {
+                operation,
+                path: path.to_owned(),
+                detail: error.to_string(),
+            };
+            error.context(context)
+        } else {
+            error
+        }
+    })
+}
+
 #[derive(Clone, Debug)]
 pub struct SocketEndpoint {
     pub socket_path: PathBuf,
@@ -41,9 +82,17 @@ pub fn inspect_codex_socket(path: &Path) -> Result<SocketEndpoint> {
     if !path.is_absolute() {
         bail!("The Codex socket path must be absolute");
     }
-    let entry = fs::symlink_metadata(path)
-        .context("Shared Codex transport unavailable: native socket is not present.")?;
-    let directory = fs::symlink_metadata(path.parent().context("Socket parent is absent")?)?;
+    let entry = endpoint_result(
+        fs::symlink_metadata(path).map_err(Into::into),
+        "inspect listener",
+        path,
+    )?;
+    let parent = path.parent().context("Socket parent is absent")?;
+    let directory = endpoint_result(
+        fs::symlink_metadata(parent).map_err(Into::into),
+        "inspect listener directory",
+        parent,
+    )?;
     if !directory.is_dir()
         || directory.file_type().is_symlink()
         || directory.mode() & 0o777 != 0o700
@@ -53,7 +102,11 @@ pub fn inspect_codex_socket(path: &Path) -> Result<SocketEndpoint> {
         bail!("The Codex socket must be owner-only in a private directory");
     }
     let target = if entry.file_type().is_symlink() {
-        let target = fs::read_link(path)?;
+        let target = endpoint_result(
+            fs::read_link(path).map_err(Into::into),
+            "read listener alias",
+            path,
+        )?;
         let expected = fs::canonicalize("/tmp")?.join(format!("codex-daemon-{}", uid()));
         let name = target.file_name().and_then(|s| s.to_str()).unwrap_or("");
         if !target.is_absolute()
@@ -65,7 +118,11 @@ pub fn inspect_codex_socket(path: &Path) -> Result<SocketEndpoint> {
         {
             bail!("Unexpected native Codex socket alias");
         }
-        let m = fs::symlink_metadata(&expected)?;
+        let m = endpoint_result(
+            fs::symlink_metadata(&expected).map_err(Into::into),
+            "inspect native socket directory",
+            &expected,
+        )?;
         if !m.is_dir()
             || m.file_type().is_symlink()
             || m.uid() != uid()
@@ -77,7 +134,11 @@ pub fn inspect_codex_socket(path: &Path) -> Result<SocketEndpoint> {
     } else {
         path.to_owned()
     };
-    let socket = fs::symlink_metadata(&target)?;
+    let socket = endpoint_result(
+        fs::symlink_metadata(&target).map_err(Into::into),
+        "inspect native socket",
+        &target,
+    )?;
     if !socket.file_type().is_socket()
         || socket.file_type().is_symlink()
         || socket.uid() != uid()
@@ -97,11 +158,16 @@ pub async fn connect_codex_socket(
     max_payload: usize,
 ) -> Result<WebSocketStream<UnixStream>> {
     let endpoint = inspect_codex_socket(path)?;
-    let stream = timeout(
-        Duration::from_secs(30),
-        UnixStream::connect(&endpoint.socket_path),
-    )
-    .await??;
+    let stream = endpoint_result(
+        timeout(
+            Duration::from_secs(30),
+            UnixStream::connect(&endpoint.socket_path),
+        )
+        .await?
+        .map_err(Into::into),
+        "connect native socket",
+        &endpoint.socket_path,
+    )?;
     let fresh = inspect_codex_socket(path)?;
     if endpoint.socket_path != fresh.socket_path
         || endpoint.listener_identity != fresh.listener_identity
