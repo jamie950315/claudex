@@ -139,7 +139,12 @@ rows and filters untouched. This inventory covers native loaded pages, not an
 assertion that every server session is loaded. Where the already imported native
 Code metadata module exposes its exact-ID no-store GET reader, native DTO
 normalizer and bridge classifier, prove those bodies and reuse that reader as
-the replacement authority. Capture raw fetch, active organization, Code-enabled
+the replacement authority.
+From the 2026-10-21 graph the reader's API base constant and organization
+header factory are imported by name from a shared module. Follow only that
+unique named import to its module-level declaration and apply the same literal
+and one-parameter header proofs; a local declaration beside the import, an
+unresolved import or a changed definition refuse. Capture raw fetch, active organization, Code-enabled
 and cloud-access hooks from the native prefetch/exact-ID lookup caller; import
 them under reserved aliases and invoke hooks unconditionally. Supply the reader
 only in Code mode. Read only the valid intent's ID, require native Code/cloud

@@ -2,10 +2,10 @@
 //! This never discovers credentials, invokes a session, or paginates a list.
 use crate::{
     frontend_ast::*,
-    frontend_bindings::{Imported, ModuleGraph, resolve_url},
+    frontend_bindings::{Imported, ModuleGraph, Resolver, resolve_url},
     frontend_scope::Scopes,
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
 #[derive(Clone, Debug)]
@@ -92,13 +92,50 @@ fn getter_declaration<'a>(
         "native metadata captured getter",
     )
 }
+/// A module-level declaration, local or, from the 2026-10-21 graph, imported by
+/// name from the shared module that now declares the API base and headers.
+fn declaration(
+    ast: &Value,
+    scopes: &Scopes<'_>,
+    reference: &Value,
+    imported: &dyn Fn(&Value, &Value) -> Result<Option<Value>>,
+    name: &str,
+) -> Result<Value> {
+    let locals = array(&ast["body"])
+        .iter()
+        .flat_map(|n| match kind(n) {
+            "FunctionDeclaration" => vec![n],
+            "VariableDeclaration" => array(&n["declarations"]).iter().collect(),
+            _ => vec![],
+        })
+        .filter(|n| scopes.same(&n["id"], reference))
+        .collect::<Vec<_>>();
+    let imports = array(&ast["body"])
+        .iter()
+        .filter(|n| kind(n) == "ImportDeclaration")
+        .flat_map(|n| array(&n["specifiers"]).iter().map(move |s| (n, s)))
+        .filter(|(_, s)| scopes.same(&s["local"], reference))
+        .collect::<Vec<_>>();
+    match (locals.as_slice(), imports.as_slice()) {
+        ([local], []) => Ok((*local).clone()),
+        ([], [(declaration, spec)]) if kind(spec) == "ImportSpecifier" => {
+            imported(declaration, spec)?
+                .with_context(|| format!("Claude frontend anchors: {name} import is unresolved."))
+        }
+        _ => anyhow::bail!("Claude frontend anchors: {name} missing or ambiguous."),
+    }
+}
 fn empty_call(node: &Value) -> bool {
     kind(node) == "CallExpression"
         && id(&node["callee"]).is_some()
         && array(&node["arguments"]).is_empty()
 }
 
-fn prove(ast: &Value, path: &str) -> Result<MetadataReader> {
+fn prove(
+    ast: &Value,
+    path: &str,
+    imported: &dyn Fn(&Value, &Value) -> Result<Option<Value>>,
+) -> Result<MetadataReader> {
     let scopes = Scopes::analyze(ast);
     let read = unique(
         functions(ast)
@@ -156,9 +193,15 @@ fn prove(ast: &Value, path: &str) -> Result<MetadataReader> {
             && literal(field(options, "cache")?, "no-store"),
         "Native metadata lookup must remain a single default GET, not another endpoint or write."
     );
-    let base = getter_declaration(ast, &scopes, &parts[0])?;
+    let base = declaration(
+        ast,
+        &scopes,
+        &parts[0],
+        imported,
+        "native metadata API base",
+    )?;
     ensure!(
-        literal(&base["init"], "/v1/code/sessions"),
+        kind(&base) == "VariableDeclarator" && literal(&base["init"], "/v1/code/sessions"),
         "Native metadata API base changed."
     );
     let headers = field(options, "headers")?;
@@ -170,20 +213,24 @@ fn prove(ast: &Value, path: &str) -> Result<MetadataReader> {
         }),
         "native organization headers",
     )?;
-    let header_function = unique(
-        functions(ast)
-            .into_iter()
-            .filter(|f| scopes.same(&f["id"], &header_call["callee"]))
-            .collect(),
+    let header_function = declaration(
+        ast,
+        &scopes,
+        &header_call["callee"],
+        imported,
         "native organization header factory",
     )?;
+    let header_scopes = Scopes::analyze(&header_function);
     let header_parameter = &header_function["params"][0];
     let header_value = &header_function["body"]["body"][0]["argument"];
     ensure!(
-        array(&header_function["params"]).len() == 1
+        kind(&header_function) == "FunctionDeclaration"
+            && header_function["async"] != true
+            && array(&header_function["params"]).len() == 1
             && array(&header_function["body"]["body"]).len() == 1
+            && kind(&header_function["body"]["body"][0]) == "ReturnStatement"
             && kind(header_value) == "ObjectExpression"
-            && scopes.same(
+            && header_scopes.same(
                 field(header_value, "x-organization-uuid")?,
                 header_parameter
             ),
@@ -395,14 +442,21 @@ pub fn resolve(source: &str, url: &str, graph: &dyn ModuleGraph) -> Result<Optio
             continue;
         };
         if source.contains("\"fetchCcrV2Session\"") && source.contains("/v1/code/sessions") {
-            candidates.push((path, source));
+            candidates.push((path, module, source));
         }
     }
     if candidates.is_empty() {
         return Ok(None);
     }
-    let (path, source) = unique(candidates, "native metadata API module")?;
-    Ok(Some(prove(&syntax(source)?, path)?))
+    let (path, module, source) = unique(candidates, "native metadata API module")?;
+    let resolver = Resolver::new(source, &module, graph)?;
+    let imported = |declaration: &Value, spec: &Value| {
+        resolver
+            .imported(declaration, spec)?
+            .map(|resolved| resolver.definition(&resolved))
+            .transpose()
+    };
+    Ok(Some(prove(&resolver.ast, path, &imported)?))
 }
 
 #[cfg(test)]
@@ -432,9 +486,82 @@ function lookup(ids){
 }
 export{read,normalize,bridge};
 "#;
+    fn no_imports(_: &Value, _: &Value) -> Result<Option<Value>> {
+        Ok(None)
+    }
+    const ROOT: &str = crate::frontend_bindings::ASSET_ROOT;
+    fn graph(constants: &str, metadata: &str) -> crate::frontend_bindings::Modules {
+        [("constants.js", constants), ("metadata.js", metadata)]
+            .into_iter()
+            .map(|(name, source)| {
+                let url = format!("{ROOT}{name}");
+                let module = crate::frontend_bindings::Module::parse(url.clone(), source).unwrap();
+                (url, module)
+            })
+            .collect()
+    }
+    fn imported_base(constants: &str, import: &str) -> Result<Option<MetadataReader>> {
+        let metadata = SOURCE
+            .replace(
+                "const base='/v1/code/sessions',cache={};",
+                "const cache={};",
+            )
+            .replace(
+                "function headers(org){return {'x-organization-uuid':org};}\n",
+                "",
+            )
+            .replacen("import{", import, 1)
+            .replace("'fetchCcrV2Session'", "\"fetchCcrV2Session\"");
+        let modules = graph(constants, &metadata);
+        resolve(
+            "import{read}from'./metadata.js';",
+            &format!("{ROOT}consumer.js"),
+            &modules,
+        )
+    }
+    #[test]
+    fn imported_api_base_and_headers_are_proven() {
+        let constants = "var base='/v1/code/sessions',other='/v1/sessions';\
+            function sS(org){return {'x-organization-uuid':org};}export{base,other,sS};";
+        let import = "import{base,sS as headers}from'./constants.js';import{";
+        let reader = imported_base(constants, import).unwrap().unwrap();
+        assert_eq!(reader.read, "read");
+        for (constants, import) in [
+            (
+                constants.replace("'/v1/code/sessions'", "'/v1/other'"),
+                import,
+            ),
+            (constants.replace("export{base,", "export{"), import),
+            (
+                constants.replace("export{base,other,sS}", "export{base,other}"),
+                import,
+            ),
+            (
+                constants.replace("'x-organization-uuid':org", "'x-organization-uuid':other"),
+                import,
+            ),
+            (
+                constants.replace("function sS(org)", "async function sS(org)"),
+                import,
+            ),
+            (
+                constants.into(),
+                "import{base,sS as headers}from'./missing.js';import{",
+            ),
+            (
+                constants.into(),
+                "import{base,sS as headers}from'./constants.js';const base='/v1/code/sessions';import{",
+            ),
+        ] {
+            assert!(
+                imported_base(&constants, import).is_err(),
+                "{constants} {import}"
+            );
+        }
+    }
     #[test]
     fn exact_reader_and_existing_account_access_are_proven() {
-        let p = prove(&syntax(SOURCE).unwrap(), "./metadata.js").unwrap();
+        let p = prove(&syntax(SOURCE).unwrap(), "./metadata.js", &no_imports).unwrap();
         assert_eq!(
             (p.read.as_str(), p.normalize.as_str(), p.is_bridge.as_str()),
             ("read", "normalize", "bridge")
@@ -462,7 +589,12 @@ export{read,normalize,bridge};
             ),
         ] {
             assert!(
-                prove(&syntax(&SOURCE.replace(from, to)).unwrap(), "./metadata.js").is_err(),
+                prove(
+                    &syntax(&SOURCE.replace(from, to)).unwrap(),
+                    "./metadata.js",
+                    &no_imports
+                )
+                .is_err(),
                 "{from}"
             );
         }
