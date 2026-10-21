@@ -272,11 +272,42 @@ with the original conversation title, without a `[Claudex]` prefix; it does not
 append into the original Codex task. After verifying and promoting the new
 version, the bridge archives the superseded original through the native API.
 The original's contents remain preserved, but it leaves the main task list.
+An idle original ending in interrupted work is instead left unarchived, with
+that unfinished tail intact. A saved full-history proof detects any later
+change, including changes outside the completed synchronized prefix. Only the
+completed history continues in the new task.
 Continue in the current same-title task after switching back. If a superseded
 original is used again,
 its changed history stops synchronization explicitly instead of being silently
 ignored or choosing one branch. Resolve that conflict before further delivery
 or backup collection; neither history is overwritten.
+
+### Adopt an edited prefix before its first Claude delivery
+
+If a Codex edit removes the end of an enrolled conversation while its first
+Claude handoff is still prepared, ordinary recovery preserves the old handoff
+and stops. To explicitly choose the shorter edited history, stop Claudex normally
+and inspect that exact pending operation:
+
+```sh
+claudex resolve-edited-source CONVERSATION_ID --id NATIVE_ID \
+  --operation-id OPERATION_ID --inspect
+```
+
+Use the inspected message count and digest to confirm the selection:
+
+```sh
+claudex resolve-edited-source CONVERSATION_ID --id NATIVE_ID \
+  --operation-id OPERATION_ID --expected-count MESSAGE_COUNT --expected-digest SHA256
+```
+
+The command requires a byte-exact shorter prefix and proof that the new Claude
+destination never received an append. It preserves the complete old transaction
+and history in an immutable private receipt before adopting the selected prefix.
+It sends no native message and leaves every native file intact. Reopen Claudex
+to synchronize the selected history normally. Applied or uncertain delivery,
+active work, independently edited content and an existing counterpart remain
+blocked; this command cannot merge branches or cancel an uncertain write.
 
 ### Stop tracking while preserving history
 
@@ -842,7 +873,8 @@ unrelated manual names are not overwritten. Existing verified Local predecessors
 are eligible only when native Local handoffs are enabled and all guards pass. An older
 pending transaction retains its saved name and archive behavior during recovery.
 If an older preserved original has not been archived, it must pass the same
-preflight before a new same-title generation is allocated.
+preflight before a new same-title generation is allocated, or retain its exact
+closed-tail preservation proof without acquiring archival authority.
 
 Titles are display labels, not synchronization credentials. Native IDs, managed
 records, authenticated packets and checkpoints identify each version. Removing

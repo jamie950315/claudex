@@ -87,6 +87,15 @@ preserved original or compare it to the newer canonical checkpoint. Recovery
 also rechecks a replaced destination after a durable native apply, before
 promotion, so concurrent work cannot be silently left behind.
 
+An idle current, self-contained, non-fork Codex original with a closed interrupted
+tail can instead be preserved without archival. Before allocation, require its exact completed
+checkpoint and two matching stable full native snapshots; journal the complete
+raw-history proof on that record with the pending handoff. All later reads,
+including restart recovery, require the same raw bytes, native identity, path,
+cwd and closed idle lifecycle. Any change in the withheld tail blocks. Never
+copy the unfinished tail, replay it, or use this preservation proof for archival,
+retirement, deletion or a writer lease.
+
 Existing dependent originals are not migrated
 by force. The preserved original remains a separate fixed copy, not a backup
 that grows on every synchronization round.

@@ -562,6 +562,193 @@ impl Runtime {
         );
         Ok((owner, retired))
     }
+    fn unapplied_owner_snapshot(&self, r: &Record, processes: &str) -> Result<Value> {
+        ensure!(
+            r.side == Side::Claude
+                && r.managed
+                && r.kind == "owner"
+                && codecs::claude_path(&self.options.claude_home, &r.cwd, &r.native_id)? == r.path,
+            "Unapplied owner requires its exact planned native path."
+        );
+        let path = self.options.root.join("owners").join(format!(
+            "{}.json",
+            digest_bytes(r.conversation_id.as_bytes())
+        ));
+        storage::require_private_directory(path.parent().unwrap())?;
+        let lease = PathBuf::from(format!("{}.lock", path.display()));
+        let absent = |path: &Path| -> Result<bool> {
+            match fs::symlink_metadata(path) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(error.into()),
+                Ok(_) => Ok(false),
+            }
+        };
+        let stopped = || -> Result<bool> {
+            if !crate::hooks::app_stopped(&self.options.root)? {
+                return Ok(false);
+            }
+            let value = storage::read_json(self.options.root.join("app-stop.json"))?;
+            Ok(value["stopped"] == true
+                && value["resuming"] != true
+                && absent(&self.options.root.join("watch.lock"))?)
+        };
+        ensure!(
+            stopped()?,
+            "Stop Claudex normally before resolving an edited source."
+        );
+        ensure!(
+            absent(&lease)? && absent(&r.path)?,
+            "Claude target has a lease or native transcript; handoff preserved."
+        );
+        let mut parent = r.path.parent().unwrap();
+        while absent(parent)? {
+            parent = parent
+                .parent()
+                .ok_or_else(|| anyhow::anyhow!("Native target parent is unavailable."))?;
+        }
+        ensure!(
+            fs::canonicalize(parent)? == parent && parent.starts_with(&self.options.claude_home),
+            "Unapplied native target has an unsafe parent."
+        );
+        let raw = storage::read_stable_with_limit(&path, 16 * 1024 * 1024)?;
+        let (owner, retired) = self.saved_owner(r)?;
+        ensure!(
+            !retired
+                && raw.identity.uid == storage::uid().to_string()
+                && raw.identity.mode.parse::<u32>()? & 0o7777 == 0o600
+                && raw.identity.nlink == "1"
+                && serde_json::from_slice::<Value>(&raw.bytes)? == owner
+                && [
+                    "pending",
+                    "lastAppend",
+                    "reset",
+                    "lastReset",
+                    "retainedGeneration",
+                    "registration",
+                    "remoteId",
+                    "blocked"
+                ]
+                .iter()
+                .all(|key| owner[*key].is_null()),
+            "Claude owner has applied, uncertain or changed state; handoff preserved."
+        );
+        for line in processes.lines().filter(|line| !line.trim().is_empty()) {
+            let line = line.trim_start();
+            let split = line
+                .find(char::is_whitespace)
+                .ok_or_else(|| anyhow::anyhow!("Native process inventory is malformed."))?;
+            ensure!(
+                line[..split].parse::<u32>().is_ok_and(|pid| pid > 0)
+                    && !line[split..].trim().is_empty(),
+                "Native process inventory is malformed."
+            );
+            ensure!(
+                !line[split..].contains(&r.native_id),
+                "Claude target still has a live native process; stop it normally."
+            );
+        }
+        ensure!(
+            !processes.trim().is_empty(),
+            "Native process inventory is unavailable."
+        );
+        let after = storage::read_stable_with_limit(&path, 16 * 1024 * 1024)?;
+        ensure!(
+            raw.identity == after.identity
+                && raw.bytes == after.bytes
+                && absent(&lease)?
+                && absent(&r.path)?
+                && stopped()?,
+            "Claude target changed while proving it unapplied."
+        );
+        Ok(
+            json!({"version":1,"nativeId":r.native_id,"path":r.path,"statePath":path,
+            "stateIdentity":raw.identity,"state":owner,"transcriptAbsent":true,"leaseAbsent":true,"nativeProcessAbsent":true}),
+        )
+    }
+    async fn edited_source_snapshot(&self, r: &Record) -> Result<(Reading, Value)> {
+        ensure!(
+            r.side == Side::Codex
+                && !r.managed
+                && r.verified
+                && r.kind == "original"
+                && r.status == "current",
+            "Edited-source selection requires the verified current Codex original."
+        );
+        let first = self.metadata(&r.native_id).await?;
+        let path = PathBuf::from(
+            first["path"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("Edited native source path missing."))?,
+        );
+        let settled = |metadata: &Value| {
+            metadata["cwd"] == r.cwd
+                && matches!(
+                    metadata["status"]["type"].as_str(),
+                    Some("idle" | "notLoaded" | "systemError")
+                )
+        };
+        ensure!(
+            settled(&first) && self.safe_cwd(&r.cwd)? == Path::new(&r.cwd),
+            "Edited source is active or its working directory changed."
+        );
+        let raw = || -> Result<_> {
+            let physical = native::physical_rollout(&path)?;
+            native::safe_native_path(&physical, &self.options.codex_home)?;
+            let snapshot = storage::snapshot_with_limit(&physical, 480 * 1024 * 1024)?;
+            let identity = &snapshot.file_identity;
+            ensure!(
+                identity.uid == storage::uid().to_string()
+                    && identity.mode.parse::<u32>()? & 0o22 == 0
+                    && snapshot.text.ends_with('\n')
+                    && snapshot
+                        .rows
+                        .first()
+                        .is_some_and(|row| row["type"] == "session_meta"
+                            && row["payload"]["id"] == r.native_id
+                            && row["payload"]
+                                .get("session_id")
+                                .is_none_or(|id| *id == r.native_id)
+                            && row["payload"]["cwd"]
+                                .as_str()
+                                .is_some_and(|cwd| Path::new(cwd).is_absolute()
+                                    && fs::canonicalize(cwd).ok().as_deref()
+                                        == Some(Path::new(&r.cwd)))),
+                "Edited native source has unsafe bytes, identity or project."
+            );
+            Ok(json!({"physicalPath":physical,"hash":snapshot.hash,"fileIdentity":identity}))
+        };
+        let before = raw()?;
+        let mut witness = r.clone();
+        witness.path = path.clone();
+        witness.checkpoint = crate::desktop::Checkpoint::empty();
+        witness.verified = false;
+        witness.extra.remove("localImageRollouts");
+        let mut selected = self.inspect(&witness).await?;
+        selected.common.make_portable();
+        let last = self.metadata(&r.native_id).await?;
+        let after = raw()?;
+        ensure!(
+            settled(&last)
+                && first["id"] == last["id"]
+                && first["path"] == last["path"]
+                && first["forkedFromId"] == last["forkedFromId"]
+                && before == after
+                && selected.native_id == r.native_id
+                && selected.path == path
+                && selected.common.cwd()? == r.cwd
+                // A native systemError is terminal only when both full API
+                // passes prove an excluded, closed failed/interrupted tail.
+                && (!(first["status"]["type"] == "systemError" || last["status"]["type"] == "systemError")
+                    || selected.incomplete_tail && selected.extra.get("closedTail") == Some(&json!(true)))
+                && (!selected.incomplete_tail
+                    || selected.extra.get("closedTail") == Some(&json!(true))),
+            "Edited source changed or contains active work; handoff preserved."
+        );
+        Ok((
+            selected,
+            json!({"version":1,"nativeId":r.native_id,"cwd":r.cwd,"path":path,"raw":after}),
+        ))
+    }
     fn reset_options(&self, cwd: &str) -> crate::owner_reset::Options {
         crate::owner_reset::Options {
             claude_home: self.options.claude_home.clone(),
@@ -814,7 +1001,11 @@ impl Runtime {
             {
                 common.meta.insert("title".into(), title.clone());
             }
-            let bytes = if physical.as_os_str().to_string_lossy().ends_with(".jsonl.zst") {
+            let bytes = if physical
+                .as_os_str()
+                .to_string_lossy()
+                .ends_with(".jsonl.zst")
+            {
                 storage::compressed_rollout_bytes(&physical, 480 * 1024 * 1024)?
             } else {
                 fs::symlink_metadata(&physical)?.len()
@@ -1124,6 +1315,130 @@ impl Runtime {
             "Native retirement history changed."
         );
         Ok(d)
+    }
+    fn closed_tail_raw(&self, r: &Record) -> Result<(PathBuf, storage::FileIdentity, String)> {
+        use std::{borrow::Cow, io::Read};
+        const MAX_BYTES: usize = 480 * 1024 * 1024;
+        ensure!(
+            r.path.is_absolute()
+                && r.path.parent().is_some_and(|parent| {
+                    fs::canonicalize(parent).ok().as_deref() == Some(parent)
+                }),
+            "Preserved closed-tail path must be absolute and canonical."
+        );
+        let physical = native::physical_rollout(&r.path)?;
+        native::safe_native_path(&physical, &self.options.codex_home)?;
+        let raw = storage::read_stable_with_limit(&physical, MAX_BYTES)?;
+        ensure!(
+            raw.identity.uid == storage::uid().to_string()
+                && raw.identity.mode.parse::<u32>()? & 0o22 == 0,
+            "Preserved closed-tail history must be owned and not writable by others."
+        );
+        let bytes = if physical
+            .as_os_str()
+            .to_string_lossy()
+            .ends_with(".jsonl.zst")
+        {
+            let decoder = zstd::stream::read::Decoder::new(raw.bytes.as_slice())?;
+            let mut bytes = Vec::new();
+            decoder.take(MAX_BYTES as u64 + 1).read_to_end(&mut bytes)?;
+            ensure!(
+                bytes.len() <= MAX_BYTES,
+                "Preserved closed-tail history exceeds its byte limit."
+            );
+            Cow::Owned(bytes)
+        } else {
+            Cow::Borrowed(raw.bytes.as_slice())
+        };
+        ensure!(
+            bytes.last() == Some(&b'\n'),
+            "Preserved closed-tail history has an incomplete final line."
+        );
+        let header: Value =
+            serde_json::from_slice(bytes.split(|b| *b == b'\n').next().unwrap_or_default())?;
+        ensure!(
+            header["payload"]["history_base"].is_null()
+                && header["payload"]["forked_from_id"].is_null(),
+            "Closed-tail preservation requires self-contained native history without a history_base or fork parent."
+        );
+        let cwd = self.safe_cwd(&r.cwd)?;
+        let header_cwd = header["payload"]["cwd"].as_str();
+        let origin = r
+            .extra
+            .get("relocation")
+            .filter(|v| v["kind"] == "codex-project-move")
+            .and_then(|v| v["originCwd"].as_str());
+        ensure!(
+            header["type"] == "session_meta"
+                && header["payload"]["id"] == r.native_id
+                && header["payload"]
+                    .get("session_id")
+                    .is_none_or(|v| v.is_null() || *v == r.native_id)
+                && header_cwd.is_some_and(|s| {
+                    Path::new(s).is_absolute()
+                        && (fs::canonicalize(s).ok().as_ref() == Some(&cwd) || origin == Some(s))
+                }),
+            "Preserved closed-tail native header identity or project changed."
+        );
+        // Native compression preserves the logical rollout bytes. The caller
+        // still compares the physical representation and exact identity across
+        // its canonical read, so a concurrent compression is a changed source.
+        Ok((physical, raw.identity, storage::hash_bytes(&bytes)))
+    }
+    async fn preserved_closed_tail_snapshot(&self, r: &Record) -> Result<(Value, Reading)> {
+        ensure!(
+            r.side == Side::Codex
+                && !r.managed
+                && r.verified
+                && r.kind == "original"
+                && matches!(r.status.as_str(), "current" | "original"),
+            "Only a verified unmanaged Codex original may preserve a closed tail."
+        );
+        r.checkpoint.validate()?;
+        let first = self.metadata(&r.native_id).await?;
+        ensure!(
+            first["forkedFromId"].is_null(),
+            "Closed-tail preservation requires self-contained native history without a fork parent."
+        );
+        ensure!(
+            first["cwd"] == r.cwd
+                && first["path"] == json!(r.path)
+                && matches!(first["status"]["type"].as_str(), Some("idle" | "notLoaded")),
+            "Preserved closed-tail native identity, path, project or idle state changed."
+        );
+        let before = self.closed_tail_raw(r)?;
+        let mut data = self.inspect(r).await?;
+        data.common.make_portable();
+        ensure!(
+            data.incomplete_tail
+                && data.extra.get("closedTail") == Some(&json!(true))
+                && data.native_id == r.native_id
+                && data.path == r.path
+                && data.common.cwd()? == r.cwd
+                && r.checkpoint.exact(&data.common)?,
+            "Preserved closed-tail history changed or contains an active tail."
+        );
+        let latest = self.metadata(&r.native_id).await?;
+        ensure!(
+            latest["id"] == first["id"]
+                && latest["cwd"] == first["cwd"]
+                && latest["path"] == first["path"]
+                && latest["forkedFromId"].is_null()
+                && matches!(
+                    latest["status"]["type"].as_str(),
+                    Some("idle" | "notLoaded")
+                ),
+            "Preserved closed-tail metadata changed during verification."
+        );
+        let after = self.closed_tail_raw(r)?;
+        ensure!(
+            before == after,
+            "Preserved closed-tail raw history changed during verification."
+        );
+        Ok((
+            json!({"version":1,"nativeId":r.native_id,"cwd":r.cwd,"path":r.path,"hash":after.2}),
+            data,
+        ))
     }
     async fn dependency_anchor_snapshot(&self, r: &Record) -> Result<(Value, u64)> {
         ensure!(
@@ -1440,6 +1755,68 @@ impl Adapter for NativeAdapter {
     async fn inspect(&self, r: &Record) -> Result<Reading> {
         ensure!(r.side == self.side, "Wrong native adapter side.");
         self.runtime.inspect(r).await
+    }
+    async fn inspect_edited_source(&self, r: &Record) -> Result<(Reading, Value)> {
+        ensure!(
+            self.side == Side::Codex,
+            "Wrong edited-source adapter side."
+        );
+        self.runtime.edited_source_snapshot(r).await
+    }
+    async fn prove_unapplied_owner(&self, r: &Record) -> Result<Value> {
+        ensure!(
+            self.side == Side::Claude
+                && !self
+                    .runtime
+                    .owners
+                    .lock()
+                    .await
+                    .contains_key(&r.conversation_id),
+            "Claude owner is live in this runtime; stop it normally."
+        );
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-axo", "pid=,command="])
+            .output()?;
+        ensure!(
+            output.status.success(),
+            "Native process inventory is unavailable."
+        );
+        self.runtime
+            .unapplied_owner_snapshot(r, std::str::from_utf8(&output.stdout)?)
+    }
+    async fn preserve_closed_tail(&self, r: &Record) -> Result<Value> {
+        ensure!(
+            self.side == Side::Codex
+                && r.status == "current"
+                && !r.extra.contains_key("preservedClosedTail"),
+            "Closed-tail preservation requires an unpreserved current Codex original."
+        );
+        Ok(self.runtime.preserved_closed_tail_snapshot(r).await?.0)
+    }
+    async fn inspect_preserved_closed_tail(&self, r: &Record) -> Result<Reading> {
+        ensure!(
+            self.side == Side::Codex,
+            "Wrong preserved closed-tail adapter side."
+        );
+        let proof = r
+            .extra
+            .get("preservedClosedTail")
+            .ok_or_else(|| anyhow::anyhow!("Missing preserved closed-tail proof."))?;
+        ensure!(
+            packet::exact_keys(proof, &["version", "nativeId", "cwd", "path", "hash"])
+                && proof["version"] == 1
+                && proof["nativeId"] == r.native_id
+                && proof["cwd"] == r.cwd
+                && proof["path"] == json!(r.path)
+                && packet::hex_digest(&proof["hash"]),
+            "Malformed preserved closed-tail proof or changed native identity."
+        );
+        let (current, data) = self.runtime.preserved_closed_tail_snapshot(r).await?;
+        ensure!(
+            *proof == current,
+            "Preserved closed-tail raw history changed."
+        );
+        Ok(data)
     }
     async fn reconcile_relocation(
         &self,
@@ -2078,6 +2455,537 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct ClosedTailFixture {
+        _temp: tempfile::TempDir,
+        runtime: Arc<Runtime>,
+        record: Record,
+        backend: Arc<Mutex<Value>>,
+        client: CodexClient,
+        server: tokio::task::JoinHandle<Result<()>>,
+    }
+    impl ClosedTailFixture {
+        async fn new() -> Result<Self> {
+            use futures_util::{SinkExt, StreamExt};
+            use std::os::unix::fs::PermissionsExt;
+            use tokio_tungstenite::{accept_async, tungstenite::Message};
+            let temp = tempfile::tempdir_in("/tmp")?;
+            let root = storage::private_directory(temp.path())?;
+            fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+            let codex = storage::private_directory(root.join("codex"))?;
+            let claude = storage::private_directory(root.join("claude"))?;
+            let runtime = Runtime::new(Options::from_config(
+                &root,
+                &json!({"codexHome":codex,"claudeHome":claude}),
+            )?)?;
+            let id = Uuid::new_v4().to_string();
+            let path = codex.join(format!("{id}.jsonl"));
+            storage::publish_exclusive(
+                &path,
+                codecs::serialize_rows(&[
+                    json!({"type":"session_meta","payload":{"id":id,"cwd":root}}),
+                    json!({"type":"event_msg","payload":{"type":"turn_aborted","turn_id":"tail","reason":"interrupted"}}),
+                ])?,
+            )?;
+            let backend = Arc::new(Mutex::new(json!({
+                "metadata":{"id":id,"cwd":root,"path":path,"status":{"type":"idle"}},
+                "turns":[
+                    {"id":"completed","status":"completed","error":null,"itemsView":"full","startedAt":100,"completedAt":101,"durationMs":1000,
+                        "items":[{"id":"u1","type":"userMessage","content":[{"type":"text","text":"Request"}]},{"id":"a1","type":"agentMessage","phase":"final_answer","text":"Answer"}]},
+                    {"id":"tail","status":"interrupted","error":null,"itemsView":"full","startedAt":200,"completedAt":null,"durationMs":null,
+                        "items":[{"id":"u2","type":"userMessage","content":[{"type":"text","text":"Interrupted request"}]}]}
+                ]
+            })));
+            let socket = root.join("native.sock");
+            let listener = tokio::net::UnixListener::bind(&socket)?;
+            fs::set_permissions(&socket, fs::Permissions::from_mode(0o600))?;
+            let state = backend.clone();
+            let server = tokio::spawn(async move {
+                let mut ws = accept_async(listener.accept().await?.0).await?;
+                while let Some(frame) = ws.next().await {
+                    let frame = match frame {
+                        Ok(frame) => frame,
+                        Err(tokio_tungstenite::tungstenite::Error::Protocol(
+                            tokio_tungstenite::tungstenite::error::ProtocolError::ResetWithoutClosingHandshake,
+                        )) => break,
+                        Err(error) => return Err(error.into()),
+                    };
+                    if frame.is_close() {
+                        break;
+                    }
+                    let request: Value = serde_json::from_slice(&frame.into_data())?;
+                    if request.get("id").is_none() {
+                        continue;
+                    }
+                    let mut state = state.lock().await;
+                    let result = match request["method"].as_str() {
+                        Some("initialize") => json!({}),
+                        Some("thread/read") => json!({"thread":state["metadata"]}),
+                        Some("thread/turns/list") => {
+                            if let Some(bytes) = state.as_object_mut().unwrap().remove("rewrite") {
+                                fs::write(
+                                    state["metadata"]["path"].as_str().unwrap(),
+                                    bytes.as_str().unwrap(),
+                                )?;
+                            }
+                            if state["activateAfterRead"] == true {
+                                state["metadata"]["status"]["type"] = json!("active");
+                            }
+                            let result = json!({"data":state["turns"],"nextCursor":null});
+                            if state
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("changeAfterFirstPass")
+                                == Some(json!(true))
+                            {
+                                state["turns"][0]["items"][1]["text"] = json!("Changed API answer");
+                            }
+                            if let Some(path) =
+                                state.as_object_mut().unwrap().remove("moveAfterRead")
+                            {
+                                state["metadata"]["path"] = path;
+                            }
+                            result
+                        }
+                        method => bail!("Unexpected closed-tail fixture request: {method:?}"),
+                    };
+                    drop(state);
+                    ws.send(Message::Text(
+                        json!({"id":request["id"],"result":result})
+                            .to_string()
+                            .into(),
+                    ))
+                    .await?;
+                }
+                Ok(())
+            });
+            let client = CodexClient::connect(&socket).await?;
+            client.initialize().await?;
+            *runtime.client.lock().await = Some(client.clone());
+            let mut record = Record::source(Side::Codex, &path, &id);
+            record.cwd = root.to_string_lossy().into_owned();
+            record.conversation_id = Uuid::new_v4().to_string();
+            let common = runtime.inspect(&record).await?.common.portable();
+            record.checkpoint = crate::desktop::Checkpoint::of(&common)?;
+            record.verified = true;
+            Ok(Self {
+                _temp: temp,
+                runtime,
+                record,
+                backend,
+                client,
+                server,
+            })
+        }
+        fn adapter(&self) -> NativeAdapter {
+            NativeAdapter {
+                runtime: self.runtime.clone(),
+                side: Side::Codex,
+            }
+        }
+        async fn preserved(&self) -> Result<Record> {
+            let mut record = self.record.clone();
+            record.extra.insert(
+                "preservedClosedTail".into(),
+                self.adapter().preserve_closed_tail(&record).await?,
+            );
+            Ok(record)
+        }
+        async fn close(self) -> Result<()> {
+            self.client.close().await?;
+            self.server.await??;
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn edited_source_native_selection_uses_fresh_stable_idle_history_not_saved_checkpoint()
+    -> Result<()> {
+        for failure in ["none", "raw", "api", "active", "path", "cwd"] {
+            let f = ClosedTailFixture::new().await?;
+            let mut record = f.record.clone();
+            // Selection intentionally bypasses only the obsolete checkpoint,
+            // while still validating source identity and native proof inputs.
+            record.checkpoint.count += 2;
+            match failure {
+                "raw" => f.backend.lock().await["rewrite"] = json!("{\"type\":\"changed\"}\n"),
+                "api" => f.backend.lock().await["changeAfterFirstPass"] = json!(true),
+                "active" => f.backend.lock().await["activateAfterRead"] = json!(true),
+                "path" => {
+                    f.backend.lock().await["moveAfterRead"] =
+                        json!(f.record.path.with_file_name("other.jsonl"))
+                }
+                "cwd" => f.backend.lock().await["metadata"]["cwd"] = json!("/changed"),
+                _ => (),
+            }
+            let result = f.runtime.edited_source_snapshot(&record).await;
+            if failure == "none" {
+                let (reading, proof) = result?;
+                assert_eq!(reading.common.messages.len(), 2);
+                assert!(reading.incomplete_tail);
+                assert_eq!(reading.extra["closedTail"], true);
+                assert_eq!(proof["path"], json!(f.record.path));
+                assert!(proof["raw"]["fileIdentity"]["mtimeNs"].is_string());
+            } else {
+                assert!(result.is_err(), "{failure}");
+            }
+            f.close().await?;
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn edited_source_system_error_requires_stably_closed_excluded_tail() -> Result<()> {
+        for status in ["failed", "interrupted", "inProgress", "noTail"] {
+            let f = ClosedTailFixture::new().await?;
+            {
+                let mut backend = f.backend.lock().await;
+                backend["metadata"]["status"]["type"] = json!("systemError");
+                if status == "noTail" {
+                    backend["turns"].as_array_mut().unwrap().truncate(1);
+                } else {
+                    backend["turns"][1]["status"] = json!(status);
+                    if status == "failed" {
+                        backend["turns"][1]["error"] = json!({"message":"continuation_history_incomplete/cipher_incompatible"});
+                    }
+                }
+            }
+            let result = f.runtime.edited_source_snapshot(&f.record).await;
+            if matches!(status, "failed" | "interrupted") {
+                let (reading, _) = result?;
+                assert!(f.record.checkpoint.exact(&reading.common)?);
+                assert!(reading.incomplete_tail);
+                assert_eq!(reading.extra["closedTail"], true);
+            } else {
+                assert!(result.is_err(), "{status}");
+            }
+            f.close().await?;
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn edited_source_unapplied_owner_proof_refuses_applied_uncertain_live_and_unsafe_state()
+    -> Result<()> {
+        for failure in [
+            "none",
+            "transcript",
+            "lease",
+            "process",
+            "unavailableProcesses",
+            "pending",
+            "lastAppend",
+            "reset",
+            "lastReset",
+            "registration",
+            "remoteId",
+            "session",
+            "permissions",
+            "watch",
+            "notStopped",
+        ] {
+            use std::os::unix::fs::PermissionsExt;
+            let f = ClosedTailFixture::new().await?;
+            let runtime = &f.runtime;
+            let mut r = Record::source(
+                Side::Claude,
+                Path::new("/unused"),
+                &Uuid::new_v4().to_string(),
+            );
+            r.conversation_id = Uuid::new_v4().to_string();
+            r.cwd = f.record.cwd.clone();
+            r.managed = true;
+            r.kind = "owner".into();
+            r.path = codecs::claude_path(&runtime.options.claude_home, &r.cwd, &r.native_id)?;
+            storage::private_directory(r.path.parent().unwrap())?;
+            let owners = storage::private_directory(runtime.options.root.join("owners"))?;
+            let path = owners.join(format!(
+                "{}.json",
+                digest_bytes(r.conversation_id.as_bytes())
+            ));
+            let mut owner = json!({"version":1,"sessionId":r.native_id,"conversationId":r.conversation_id,"cwd":r.cwd,"claudeHome":runtime.options.claude_home,
+                "pending":null,"lastAppend":null,"registration":null,"remoteId":null});
+            let mut processes = "1 /sbin/launchd\n".to_owned();
+            storage::write_json(
+                runtime.options.root.join("app-stop.json"),
+                &json!({"version":1,"stopped":true}),
+            )?;
+            match failure {
+                "transcript" => fs::write(&r.path, "native content")?,
+                "lease" => fs::write(format!("{}.lock", path.display()), "lease")?,
+                "process" => {
+                    processes = format!("123 /native/claude --session-id={}\n", r.native_id)
+                }
+                "unavailableProcesses" => processes.clear(),
+                "session" => owner["sessionId"] = json!(Uuid::new_v4().to_string()),
+                "watch" => fs::write(runtime.options.root.join("watch.lock"), "watch")?,
+                "notStopped" => storage::write_json(
+                    runtime.options.root.join("app-stop.json"),
+                    &json!({"version":1,"stopped":false}),
+                )?,
+                "pending" | "lastAppend" | "reset" | "lastReset" | "registration" | "remoteId" => {
+                    owner[failure] = json!({"uncertain":true})
+                }
+                _ => (),
+            }
+            storage::write_json(&path, &owner)?;
+            if failure == "permissions" {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+            }
+            let before = fs::read(&path)?;
+            let result = runtime.unapplied_owner_snapshot(&r, &processes);
+            assert_eq!(result.is_ok(), failure == "none", "{failure}: {result:?}");
+            assert_eq!(fs::read(&path)?, before);
+            f.close().await?;
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn preserved_closed_tail_survives_saved_record_and_runtime_restart_without_archival()
+    -> Result<()> {
+        let f = ClosedTailFixture::new().await?;
+        let mut record = f.preserved().await?;
+        let initial = f.adapter().inspect_preserved_closed_tail(&record).await?;
+        assert!(initial.incomplete_tail);
+        assert_eq!(initial.extra["closedTail"], true);
+        assert!(record.checkpoint.exact(&initial.common)?);
+        record.status = "original".into();
+        let saved = f.runtime.options.root.join("preserved-record.json");
+        storage::write_json(&saved, &serde_json::to_value(record)?)?;
+        let restored: Record = serde_json::from_value(storage::read_json(&saved)?)?;
+        let restarted = Runtime::new(f.runtime.options.clone())?;
+        *restarted.client.lock().await = Some(f.client.clone());
+        let adapter = NativeAdapter {
+            runtime: restarted.clone(),
+            side: Side::Codex,
+        };
+        assert!(
+            restored.checkpoint.exact(
+                &adapter
+                    .inspect_preserved_closed_tail(&restored)
+                    .await?
+                    .common
+            )?
+        );
+        let compressed = PathBuf::from(format!("{}.zst", restored.path.display()));
+        storage::publish_exclusive(
+            &compressed,
+            zstd::stream::encode_all(fs::read(&restored.path)?.as_slice(), 1)?,
+        )?;
+        fs::remove_file(&restored.path)?;
+        assert!(
+            restored.checkpoint.exact(
+                &adapter
+                    .inspect_preserved_closed_tail(&restored)
+                    .await?
+                    .common
+            )?
+        );
+        assert!(restarted.unchanged(&restored).await.is_err());
+        assert!(
+            restarted
+                .original_archive_snapshot(&restored)
+                .await
+                .is_err()
+        );
+        assert!(
+            adapter
+                .assert_can_archive_original(&restored)
+                .await
+                .is_err()
+        );
+        assert!(adapter.hide(&restored).await.is_err());
+        assert!(adapter.remove(&restored).await.is_err());
+        assert!(adapter.preserve_closed_tail(&restored).await.is_err());
+        f.close().await
+    }
+    #[tokio::test]
+    async fn preserved_closed_tail_rejects_raw_only_rewrites_and_verification_races() -> Result<()>
+    {
+        let f = ClosedTailFixture::new().await?;
+        let record = f.preserved().await?;
+        let original = fs::read_to_string(&record.path)?;
+        let rewritten = original.replace("interrupted\"", "cancelled\"");
+        assert_ne!(original, rewritten);
+        fs::write(&record.path, &rewritten)?;
+        assert!(
+            record
+                .checkpoint
+                .exact(&f.runtime.inspect(&record).await?.common.portable())?
+        );
+        assert_eq!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Preserved closed-tail raw history changed."
+        );
+        fs::write(&record.path, &original)?;
+        f.adapter().inspect_preserved_closed_tail(&record).await?;
+        f.backend.lock().await["rewrite"] = json!(rewritten);
+        assert_eq!(
+            f.adapter()
+                .preserve_closed_tail(&f.record)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Preserved closed-tail raw history changed during verification."
+        );
+        f.close().await
+    }
+    #[tokio::test]
+    async fn preserved_closed_tail_requires_idle_closed_tail_and_exact_checkpoint() -> Result<()> {
+        let f = ClosedTailFixture::new().await?;
+        let record = f.preserved().await?;
+        f.backend.lock().await["metadata"]["status"]["type"] = json!("active");
+        assert!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("idle state changed")
+        );
+        f.backend.lock().await["metadata"]["status"]["type"] = json!("idle");
+        f.backend.lock().await["turns"][1]["status"] = json!("inProgress");
+        assert!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("active tail")
+        );
+        f.backend.lock().await["turns"][1]["status"] = json!("interrupted");
+        let mut divergent = record.clone();
+        divergent.checkpoint.digest = Some("0".repeat(64));
+        let divergence = f
+            .adapter()
+            .inspect_preserved_closed_tail(&divergent)
+            .await
+            .unwrap_err();
+        assert!(
+            divergence.to_string().contains("history changed"),
+            "{divergence:#}"
+        );
+        f.backend.lock().await["activateAfterRead"] = json!(true);
+        assert_eq!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Preserved closed-tail metadata changed during verification."
+        );
+        f.close().await
+    }
+    #[tokio::test]
+    async fn preserved_closed_tail_rejects_malformed_proofs_and_native_identity_changes()
+    -> Result<()> {
+        let f = ClosedTailFixture::new().await?;
+        let record = f.preserved().await?;
+        for (key, value) in [
+            ("version", json!(2)),
+            ("nativeId", json!(Uuid::new_v4().to_string())),
+            ("cwd", json!("/different")),
+            ("path", json!("/different.jsonl")),
+            ("hash", Value::Null),
+            ("extra", json!(true)),
+        ] {
+            let mut malformed = record.clone();
+            malformed.extra.get_mut("preservedClosedTail").unwrap()[key] = value;
+            assert!(
+                f.adapter()
+                    .inspect_preserved_closed_tail(&malformed)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Malformed preserved closed-tail proof")
+            );
+        }
+        f.backend.lock().await["metadata"]["id"] = json!(Uuid::new_v4().to_string());
+        assert_eq!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Native thread identity changed."
+        );
+        f.backend.lock().await["metadata"]["id"] = json!(record.native_id);
+        f.backend.lock().await["metadata"]["path"] =
+            json!(f.runtime.options.codex_home.join("different.jsonl"));
+        assert!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("path, project or idle")
+        );
+        f.backend.lock().await["metadata"]["path"] = json!(record.path);
+        let raw = fs::read_to_string(&record.path)?
+            .replace(&record.native_id, &Uuid::new_v4().to_string());
+        fs::write(&record.path, raw)?;
+        assert_eq!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "Preserved closed-tail native header identity or project changed."
+        );
+        f.close().await
+    }
+    #[tokio::test]
+    async fn preserved_closed_tail_requires_self_contained_native_history() -> Result<()> {
+        let f = ClosedTailFixture::new().await?;
+        let record = f.preserved().await?;
+        f.backend.lock().await["metadata"]["forkedFromId"] = json!(Uuid::new_v4().to_string());
+        assert!(
+            f.adapter()
+                .preserve_closed_tail(&f.record)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("self-contained")
+        );
+        assert!(
+            f.adapter()
+                .inspect_preserved_closed_tail(&record)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("self-contained")
+        );
+        f.backend.lock().await["metadata"]["forkedFromId"] = Value::Null;
+        let original = storage::snapshot(&record.path)?;
+        for (field, value) in [
+            (
+                "history_base",
+                json!({"thread_id":Uuid::new_v4().to_string(),"end_ordinal_exclusive":1,"end_byte_offset":100}),
+            ),
+            ("forked_from_id", json!(Uuid::new_v4().to_string())),
+        ] {
+            let mut rows = original.rows.clone();
+            rows[0]["payload"][field] = value;
+            fs::write(&record.path, codecs::serialize_rows(&rows)?)?;
+            assert!(
+                f.adapter()
+                    .preserve_closed_tail(&f.record)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("self-contained")
+            );
+            assert!(
+                f.adapter()
+                    .inspect_preserved_closed_tail(&record)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("self-contained")
+            );
+        }
+        f.close().await
+    }
     #[tokio::test]
     async fn late_proof_gate_skips_normal_reads_and_preserves_admitted_proof_failures() -> Result<()>
     {

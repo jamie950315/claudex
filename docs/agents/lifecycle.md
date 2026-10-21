@@ -122,6 +122,18 @@ snapshot whose planned rollout file is absent and whose thread Codex does not
 know wrote nothing natively, so its conversation is held with the failure
 reason and the others continue. Applied, promoted, owner-reusing and
 original-archive transactions, and any unreadable answer, are always recovered.
+An explicit user choice may instead resolve the narrowly proven edited-source
+case with `resolve-edited-source`: only a prepared first Claude handoff, no
+counterpart or reuse, an idle Codex original and a strictly shorter byte-exact
+prefix of the saved canonical history qualify. A native `systemError` is
+settled only when both full API reads prove an excluded closed failed or
+interrupted tail; an active or unexplained error state still blocks. Prove the
+Claude target never received an append under its closed owner lease. Preserve the complete prior
+transaction/history in a durable immutable receipt before atomically adopting
+the selected checkpoint and clearing that exact pending operation. Preview is
+read-only; confirmation binds the operation, source, count and digest. Retain
+the receipt across restart and repeat confirmation. This is never automatic
+recovery or permission to cancel applied, promoted or uncertain work.
 Missing tracked transcript paths are explicit history blocks, not repeated
 worker crashes. Preserve the saved native identity/path and pending evidence.
 A removed saved working directory (such as a cleaned-up Codex worktree) is the
@@ -207,6 +219,10 @@ journals, checkpoints, ownership, inbox or any state that authorizes work.
 The supervisor reads terminal watcher diagnostics with the app reader's 1 MiB
 bound, preserving the exact worker PID and private stable-file checks; renderer
 status may exceed 64 KiB. Ownership and lock files retain their 64 KiB bound.
+
+Closed-tail preservation during reverse synchronization is not archival authority.
+Keep the original unarchived and enrolled with its full raw-history proof;
+restart, recovery and collection must verify that proof before proceeding.
 
 Explicit `archive-original CONVERSATION_ID --id NATIVE_ID` reconciliation may
 also preserve-archive an unchanged legacy original plus its completed/unloaded

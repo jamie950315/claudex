@@ -31,7 +31,7 @@ impl Args {
         let mut input = raw.iter();
         while let Some(value) = input.next() {
             if let Some(key) = value.strip_prefix("--") {
-                if matches!(key, "help" | "watch") {
+                if matches!(key, "help" | "watch" | "inspect") {
                     args.flags.insert(key.into());
                     continue;
                 }
@@ -49,6 +49,7 @@ impl Args {
                         "record-id",
                         "expected-count",
                         "expected-digest",
+                        "operation-id",
                         "provider"
                     ]
                     .contains(&key),
@@ -147,7 +148,7 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
         .unwrap_or("help");
     if args.flags.contains("help") || command == "help" {
         println!(
-            "Claudex synchronization: track, sync, watch, gc, recover, abort, untrack, resume-tracking, split-original, archive-original, hooks install|status"
+            "Claudex synchronization: track, sync, watch, gc, recover, abort, untrack, resume-tracking, split-original, resolve-edited-source, archive-original, hooks install|status"
         );
         return Ok(());
     }
@@ -205,6 +206,32 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
             "gc" => bridge.collect().await,
             "untrack" => bridge.untrack(args.id()?, false).await,
             "resume-tracking" => bridge.resume_tracking(args.id()?).await,
+            "resolve-edited-source" => {
+                let inspect = args.flags.contains("inspect");
+                ensure!(
+                    !inspect
+                        || args.value("expected-count").is_none()
+                            && args.value("expected-digest").is_none(),
+                    "Use --inspect without expected checkpoint flags; inspection never commits."
+                );
+                let expected = if inspect {
+                    None
+                } else {
+                    Some(crate::desktop::Checkpoint {
+                        count: args.required("expected-count")?.parse()?,
+                        digest: Some(args.required("expected-digest")?.into()),
+                        dialogue: None,
+                    })
+                };
+                bridge
+                    .resolve_edited_source(
+                        args.id()?,
+                        args.required("id")?,
+                        args.required("operation-id")?,
+                        expected,
+                    )
+                    .await
+            }
             "split-original" => {
                 bridge
                     .split_original(
@@ -257,7 +284,11 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
         "abort" => bridge.abort().await?,
         "gc" => bridge.collect().await?,
         "watch" => return watch_legacy(bridge, &config).await,
-        "untrack" | "resume-tracking" | "split-original" | "archive-original" => {
+        "untrack"
+        | "resume-tracking"
+        | "split-original"
+        | "resolve-edited-source"
+        | "archive-original" => {
             bail!("This enrollment command requires Desktop mode.")
         }
         _ => bail!("Unknown synchronization command: {command}"),

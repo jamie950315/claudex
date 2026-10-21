@@ -393,6 +393,13 @@ pub trait Adapter: Send + Sync {
     async fn hide(&self, record: &Record) -> Result<Map<String, Value>>;
     async fn remove(&self, record: &Record) -> Result<()>;
     async fn exists(&self, record: &Record) -> Result<bool>;
+    /// Explicit conflict resolution only, never ordinary checkpoint recovery.
+    async fn inspect_edited_source(&self, _record: &Record) -> Result<(Reading, Value)> {
+        bail!("Edited-source selection proof is unavailable.")
+    }
+    async fn prove_unapplied_owner(&self, _record: &Record) -> Result<Value> {
+        bail!("Unapplied Claude owner proof is unavailable.")
+    }
     async fn reconcile_relocation(
         &self,
         _record: &Record,
@@ -425,6 +432,12 @@ pub trait Adapter: Send + Sync {
     }
     async fn assert_can_archive_original(&self, _record: &Record) -> Result<()> {
         bail!("Original archival proof is unavailable; nothing allocated.")
+    }
+    async fn preserve_closed_tail(&self, _record: &Record) -> Result<Value> {
+        bail!("Closed original tail preservation proof is unavailable.")
+    }
+    async fn inspect_preserved_closed_tail(&self, _record: &Record) -> Result<Reading> {
+        bail!("Preserved original tail verification is unavailable.")
     }
     async fn archive_original(&self, _record: &Record) -> Result<Map<String, Value>> {
         bail!("Original archival is unavailable; intent preserved.")
@@ -578,7 +591,12 @@ impl DesktopBridge {
             .find(|r| r.conversation_id == id && r.side == side && r.status == "current")
     }
     pub async fn inspect(&self, record: &Record) -> Result<Reading> {
-        let mut data = self.adapter(record.side)?.inspect(record).await?;
+        let adapter = self.adapter(record.side)?;
+        let mut data = if record.extra.contains_key("preservedClosedTail") {
+            adapter.inspect_preserved_closed_tail(record).await?
+        } else {
+            adapter.inspect(record).await?
+        };
         ensure!(
             record.native_id.is_empty() || data.native_id == record.native_id,
             "Native source identity changed; synchronization paused."
@@ -785,7 +803,10 @@ impl DesktopBridge {
     async fn inspect_superseded_original(&self, r: &Record) -> Result<()> {
         let data = self.inspect(r).await?;
         ensure!(
-            !data.incomplete_tail && r.checkpoint.exact_dialogue(&data.common)?,
+            (!data.incomplete_tail
+                || r.extra.contains_key("preservedClosedTail")
+                    && data.extra.get("closedTail") == Some(&json!(true)))
+                && r.checkpoint.exact_dialogue(&data.common)?,
             "Superseded original changed; no branch was selected."
         );
         if let Some(upgraded) = r.checkpoint.with_dialogue(&data.common)? {
@@ -1273,7 +1294,7 @@ impl DesktopBridge {
         if let Some(target) = &target {
             self.adapter(side)?.assert_idle(target).await?;
         }
-        let original = if side == Side::Codex
+        let mut original = if side == Side::Codex
             && !(context_refresh
                 && changed.is_empty()
                 && target.as_ref().is_some_and(|t| t.managed))
@@ -1294,10 +1315,35 @@ impl DesktopBridge {
         } else {
             None
         };
+        let mut preserved_original = None;
         if let Some(original) = &original {
-            self.adapter(side)?
-                .assert_can_archive_original(original)
-                .await?;
+            if original.extra.contains_key("preservedClosedTail") {
+                self.inspect(original).await?;
+                preserved_original = Some((
+                    original.id.clone(),
+                    original.extra["preservedClosedTail"].clone(),
+                ));
+            } else if original.status == "current" {
+                let data = &readings
+                    .iter()
+                    .find(|(r, _)| r.id == original.id)
+                    .ok_or_else(|| anyhow::anyhow!("Original destination reading is missing."))?
+                    .1;
+                if data.incomplete_tail && data.extra.get("closedTail") == Some(&json!(true)) {
+                    preserved_original = Some((
+                        original.id.clone(),
+                        self.adapter(side)?.preserve_closed_tail(original).await?,
+                    ));
+                }
+            }
+            if preserved_original.is_none() {
+                self.adapter(side)?
+                    .assert_can_archive_original(original)
+                    .await?;
+            }
+        }
+        if preserved_original.is_some() {
+            original = None;
         }
         let owner_relocation = side == Side::Claude
             && upkeep.is_some_and(|(s, k)| *s == side && k == "relocation")
@@ -1399,6 +1445,15 @@ impl DesktopBridge {
             "Invalid native handoff plan."
         );
         let checkpoint = Checkpoint::of(&common)?;
+        if let Some((record_id, proof)) = preserved_original {
+            state
+                .records
+                .iter_mut()
+                .find(|r| r.id == record_id)
+                .ok_or_else(|| anyhow::anyhow!("Preserved original destination is missing."))?
+                .extra
+                .insert("preservedClosedTail".into(), proof);
+        }
         state.pending = Some(
             Pending {
                 phase: Phase::Prepared,
@@ -1906,6 +1961,221 @@ impl DesktopBridge {
         )?;
         Ok(json!({"abandoned":true,"conversationId":id}))
     }
+    /// Adopt an explicitly selected shorter native prefix, preserving the full
+    /// former handoff before changing the ledger. This is not normal recovery.
+    pub async fn resolve_edited_source(
+        &self,
+        id: &str,
+        native_id: &str,
+        operation_id: &str,
+        expected: Option<Checkpoint>,
+    ) -> Result<Value> {
+        for value in [id, native_id, operation_id] {
+            ensure!(
+                Uuid::parse_str(value)?.to_string() == value,
+                "Exact UUID required."
+            );
+        }
+        if let Some(expected) = &expected {
+            expected.validate()?;
+        }
+        let _lock = self.lock()?;
+        let mut state = self.status()?;
+        let receipt_path = self
+            .root
+            .join("edited-source-resolutions")
+            .join(format!("{operation_id}.json"));
+        let receipt = match storage::read_stable_with_limit(&receipt_path, 512 * 1024 * 1024) {
+            Ok(file) => {
+                storage::require_private_directory(receipt_path.parent().unwrap())?;
+                ensure!(
+                    file.identity.uid == storage::uid().to_string()
+                        && file.identity.mode.parse::<u32>()? & 0o7777 == 0o600
+                        && file.identity.nlink == "1",
+                    "Edited-source receipt must be private and single-link."
+                );
+                Some(serde_json::from_slice::<Value>(&file.bytes)?)
+            }
+            Err(error) if storage::is_not_found(&error) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(receipt) = &receipt {
+            let selected: Checkpoint =
+                serde_json::from_value(receipt["selectedCheckpoint"].clone())?;
+            let source_id = receipt["source"]["id"].as_str().unwrap_or("");
+            let retained: Common = serde_json::from_value(receipt["selectedCommon"].clone())?;
+            let previous: Pending = serde_json::from_value(receipt["pending"].clone())?;
+            ensure!(
+                receipt["version"] == 1
+                    && receipt["conversation"]["id"] == id
+                    && receipt["source"]["nativeId"] == native_id
+                    && receipt["pending"]["operationId"] == operation_id
+                    && selected.exact(&retained)?
+                    && previous.checkpoint.exact(&previous.common)?
+                    && selected.count < previous.checkpoint.count
+                    && selected.contains(&previous.common)?
+                    && expected.as_ref().is_none_or(|e| e == &selected),
+                "Edited-source receipt does not match the explicit selection."
+            );
+            if state.records.iter().any(|r| {
+                r.id == source_id
+                    && r.conversation_id == id
+                    && r.native_id == native_id
+                    && r.extra.get("editedSourceResolution") == Some(&json!(operation_id))
+            }) {
+                return Ok(
+                    json!({"changed":false,"resolved":true,"conversationId":id,"nativeId":native_id,
+                    "operationId":operation_id,"checkpoint":selected,"receipt":receipt_path}),
+                );
+            }
+        }
+        let Some(PendingOperation::Handoff(pending)) = state.pending.clone() else {
+            bail!("Exact prepared Desktop handoff is required for edited-source resolution.");
+        };
+        let conversation = state
+            .conversations
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Unknown Desktop conversation."))?;
+        let source = state
+            .records
+            .iter()
+            .find(|r| r.id == pending.source_id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Edited-source record is missing."))?;
+        ensure!(
+            pending.phase == Phase::Prepared
+                && pending.operation_id == operation_id
+                && !pending.reuse
+                && pending.target_id.is_none()
+                && pending.archive_original_id.is_none()
+                && pending.extra.is_empty()
+                && pending.previous == Checkpoint::empty()
+                && pending.record.conversation_id == id
+                && pending.record.side == Side::Claude
+                && pending.record.managed
+                && !pending.record.verified
+                && pending.record.kind == "owner"
+                && pending.record.status == "current"
+                && pending.record.checkpoint == Checkpoint::empty()
+                && pending.record.cwd == conversation.cwd
+                && ["contextReset", "contextRefresh", "relocation"]
+                    .iter()
+                    .all(|k| !pending.record.extra.contains_key(*k))
+                && conversation.tracked()
+                && source.conversation_id == id
+                && source.native_id == native_id
+                && source.side == Side::Codex
+                && !source.managed
+                && source.verified
+                && source.kind == "original"
+                && source.status == "current"
+                && source.cwd == conversation.cwd
+                && !source.extra.contains_key("preservedClosedTail")
+                && !source.extra.contains_key("relocation")
+                && source.checkpoint == conversation.canonical
+                && source.checkpoint == pending.checkpoint
+                && pending.checkpoint.exact(&pending.common)?
+                && pending.common.cwd()? == conversation.cwd
+                && state
+                    .records
+                    .iter()
+                    .filter(|r| r.conversation_id == id)
+                    .count()
+                    == 1
+                && state.records.iter().all(|r| r.id != pending.record.id
+                    && !(r.side == Side::Claude && r.native_id == pending.record.native_id))
+                && state
+                    .records
+                    .iter()
+                    .filter(|r| r.side == Side::Codex && r.native_id == native_id)
+                    .count()
+                    == 1,
+            "Edited-source resolution only supports an unapplied first Claude handoff from its exact current Codex original."
+        );
+        let target_proof = self
+            .adapter(Side::Claude)?
+            .prove_unapplied_owner(&pending.record)
+            .await?;
+        let (mut selected, source_proof) = self
+            .adapter(Side::Codex)?
+            .inspect_edited_source(&source)
+            .await?;
+        selected.common.make_portable();
+        for message in &mut selected.common.messages {
+            message.extra.clear();
+        }
+        assert_complete(&selected.common)?;
+        let checkpoint = Checkpoint::of(&selected.common)?;
+        ensure!(
+            selected.native_id == native_id
+                && selected.common.cwd()? == conversation.cwd
+                && (!selected.incomplete_tail
+                    || selected.extra.get("closedTail") == Some(&json!(true)))
+                && checkpoint.count < pending.checkpoint.count
+                && checkpoint.contains(&pending.common)?
+                && expected.as_ref().is_none_or(|e| e == &checkpoint),
+            "Selected native history is not the exact expected shorter completed prefix; nothing changed."
+        );
+        let result = json!({"changed":false,"resolved":false,"conversationId":id,"nativeId":native_id,
+            "operationId":operation_id,"checkpoint":checkpoint,"savedCheckpoint":pending.checkpoint,
+            "selectedPath":selected.path,"closedTail":selected.extra.get("closedTail"),"neverApplied":true,"receipt":receipt_path});
+        if expected.is_none() {
+            return Ok(result);
+        }
+        let candidate = json!({"version":1,"conversation":conversation,"source":source,"pending":pending,
+            "selectedCheckpoint":checkpoint,"selectedCommon":selected.common,"selectedPath":selected.path,
+            "sourceProof":source_proof,"targetProof":target_proof});
+        if let Some(receipt) = receipt {
+            ensure!(
+                receipt == candidate,
+                "Edited-source resolution backup conflicts with current proofs; nothing changed."
+            );
+        } else {
+            storage::private_directory(receipt_path.parent().unwrap())?;
+            storage::require_private_directory(receipt_path.parent().unwrap())?;
+            storage::publish_exclusive(&receipt_path, serde_json::to_vec_pretty(&candidate)?)?;
+        }
+        // Recheck after durable backup, before the single ledger publication.
+        let (mut latest, latest_proof) = self
+            .adapter(Side::Codex)?
+            .inspect_edited_source(&source)
+            .await?;
+        latest.common.make_portable();
+        ensure!(
+            latest_proof == source_proof
+                && checkpoint.exact(&latest.common)?
+                && self
+                    .adapter(Side::Claude)?
+                    .prove_unapplied_owner(&pending.record)
+                    .await?
+                    == target_proof,
+            "Edited-source native evidence changed after backup; pending handoff preserved."
+        );
+        let saved = state
+            .records
+            .iter_mut()
+            .find(|r| r.id == source.id)
+            .unwrap();
+        saved.checkpoint = checkpoint.clone();
+        saved.path = selected.path;
+        saved.bytes = selected.bytes;
+        saved.extra.remove("localImageRollouts");
+        saved
+            .extra
+            .extend(committed_extra(selected.extra, checkpoint.count));
+        saved
+            .extra
+            .insert("editedSourceResolution".into(), json!(operation_id));
+        state.conversations.get_mut(id).unwrap().canonical = checkpoint.clone();
+        state.pending = None;
+        self.save(&mut state, Some(json!({"event":"edited-source-resolved","conversationId":id,
+            "nativeId":native_id,"operationId":operation_id,"previousCheckpoint":pending.checkpoint,"checkpoint":checkpoint})))?;
+        Ok(
+            json!({"changed":true,"resolved":true,"conversationId":id,"nativeId":native_id,
+            "operationId":operation_id,"checkpoint":checkpoint,"receipt":receipt_path}),
+        )
+    }
     async fn assert_unchanged(&self, r: &Record) -> Result<Reading> {
         ensure!(
             r.managed && r.verified && r.kind == "snapshot",
@@ -2376,26 +2646,38 @@ mod tests {
     fn dialogue_checkpoints_accept_reprojected_events_and_reject_changed_dialogue() -> Result<()> {
         let saved = dialogue(vec![
             ("user", vec![json!({"type":"text","text":"Ask"})]),
-            ("assistant", vec![
-                json!({"type":"tool_use","id":"call","name":"Bash","input":{"command":"ls"}}),
-                event("subAgentActivity", json!({"id":"agent","kind":"completed"})),
-                json!({"type":"thinking","text":"Plan"}),
-            ]),
-            ("user", vec![json!({"type":"tool_result","tool_use_id":"call","content":"a"})]),
+            (
+                "assistant",
+                vec![
+                    json!({"type":"tool_use","id":"call","name":"Bash","input":{"command":"ls"}}),
+                    event("subAgentActivity", json!({"id":"agent","kind":"completed"})),
+                    json!({"type":"thinking","text":"Plan"}),
+                ],
+            ),
+            (
+                "user",
+                vec![json!({"type":"tool_result","tool_use_id":"call","content":"a"})],
+            ),
             ("assistant", vec![json!({"type":"text","text":"Answer"})]),
         ]);
         let checkpoint = Checkpoint::of(&saved)?;
         let mut reprojected = saved.clone();
         reprojected.messages[1].content = vec![
             json!({"type":"tool_use","id":"call","name":"Bash","input":{"command":"ls","timeout":null}}),
-            event("subAgentActivity", json!({"id":"agent","kind":"completed","model":null})),
+            event(
+                "subAgentActivity",
+                json!({"id":"agent","kind":"completed","model":null}),
+            ),
             json!({"type":"thinking","text":"Plan, summarized differently"}),
         ];
         reprojected.messages[2].content[0]["content"] = json!([{"type":"text","text":"a"}]);
         assert!(!checkpoint.contains(&reprojected)?);
         assert!(checkpoint.exact_dialogue(&reprojected)?);
         reprojected.messages.push(Message::text("user", "Next"));
-        assert!(checkpoint.contains_dialogue(&reprojected)? && !checkpoint.exact_dialogue(&reprojected)?);
+        assert!(
+            checkpoint.contains_dialogue(&reprojected)?
+                && !checkpoint.exact_dialogue(&reprojected)?
+        );
         let changes: [fn(&mut Common); 5] = [
             |c| c.messages[3].content[0]["text"] = json!("Edited answer"),
             |c| c.messages[0].role = "assistant".into(),
@@ -2409,10 +2691,16 @@ mod tests {
             assert!(!checkpoint.contains_dialogue(&diverged)?);
         }
         // An older checkpoint gains its dialogue only from an exact match.
-        let legacy = Checkpoint { dialogue: None, ..checkpoint.clone() };
+        let legacy = Checkpoint {
+            dialogue: None,
+            ..checkpoint.clone()
+        };
         assert!(!legacy.contains_dialogue(&reprojected)?);
         assert!(legacy.with_dialogue(&reprojected)?.is_none());
-        assert_eq!(legacy.with_dialogue(&saved)?.unwrap().dialogue, checkpoint.dialogue);
+        assert_eq!(
+            legacy.with_dialogue(&saved)?.unwrap().dialogue,
+            checkpoint.dialogue
+        );
         assert!(checkpoint.with_dialogue(&saved)?.is_none());
         // A write proof needs the copied tail byte-exact with its source.
         let mut source = saved.clone();
@@ -2424,7 +2712,9 @@ mod tests {
         destination.messages[4] = Message::text("user", "Copied, but changed");
         assert!(!written.contains_written(&destination, &source, saved.messages.len())?);
         destination.messages[4] = Message::text("user", "Copied");
-        destination.messages[4].content.push(json!({"type":"text","text":""}));
+        destination.messages[4]
+            .content
+            .push(json!({"type":"text","text":""}));
         assert!(!written.contains_written(&destination, &source, saved.messages.len())?);
         Ok(())
     }
@@ -2450,6 +2740,10 @@ mod tests {
         promotions: Vec<String>,
         fail_resolved_inspection: bool,
         fail_inspect: Option<String>,
+        closed_tails: BTreeMap<String, Value>,
+        edited_reads: usize,
+        change_edited_proof: bool,
+        refuse_unapplied: bool,
     }
     struct Mock {
         side: Side,
@@ -2457,6 +2751,25 @@ mod tests {
     }
     #[async_trait]
     impl Adapter for Mock {
+        async fn inspect_edited_source(&self, r: &Record) -> Result<(Reading, Value)> {
+            let reading = self.inspect(r).await?;
+            let mut native = self.native.lock().unwrap();
+            native.edited_reads += 1;
+            let revision = if native.change_edited_proof {
+                native.edited_reads
+            } else {
+                0
+            };
+            Ok((reading, json!({"rawRevision":revision})))
+        }
+        async fn prove_unapplied_owner(&self, r: &Record) -> Result<Value> {
+            let native = self.native.lock().unwrap();
+            ensure!(
+                !native.refuse_unapplied && !native.histories.contains_key(&r.native_id),
+                "Synthetic owner is applied or uncertain."
+            );
+            Ok(json!({"neverApplied":true,"nativeId":r.native_id}))
+        }
         async fn inspect(&self, r: &Record) -> Result<Reading> {
             let mut state = self.native.lock().unwrap();
             if state.fail_inspect.as_deref() == Some(&r.native_id) {
@@ -2473,8 +2786,11 @@ mod tests {
                 native_id: r.native_id.clone(),
                 path: r.path.clone(),
                 bytes: 10,
-                incomplete_tail: false,
-                extra: Map::new(),
+                incomplete_tail: state.closed_tails.contains_key(&r.native_id),
+                extra: json!({"closedTail":state.closed_tails.contains_key(&r.native_id)})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
             })
         }
         async fn assert_idle(&self, _r: &Record) -> Result<()> {
@@ -2618,8 +2934,42 @@ mod tests {
                 .histories
                 .contains_key(&r.native_id))
         }
-        async fn assert_can_archive_original(&self, _r: &Record) -> Result<()> {
+        async fn assert_can_archive_original(&self, r: &Record) -> Result<()> {
+            ensure!(
+                !self
+                    .native
+                    .lock()
+                    .unwrap()
+                    .closed_tails
+                    .contains_key(&r.native_id),
+                "Native retirement history changed."
+            );
             Ok(())
+        }
+        async fn preserve_closed_tail(&self, r: &Record) -> Result<Value> {
+            let s = self.native.lock().unwrap();
+            ensure!(
+                r.side == Side::Codex
+                    && !r.managed
+                    && r.status == "current"
+                    && r.checkpoint.exact(&s.histories[&r.native_id])?,
+                "Invalid preserved original."
+            );
+            s.closed_tails
+                .get(&r.native_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("No closed tail."))
+        }
+        async fn inspect_preserved_closed_tail(&self, r: &Record) -> Result<Reading> {
+            let d = self.inspect(r).await?;
+            ensure!(
+                self.native.lock().unwrap().closed_tails.get(&r.native_id)
+                    == r.extra.get("preservedClosedTail")
+                    && d.incomplete_tail
+                    && r.checkpoint.exact(&d.common)?,
+                "Preserved original tail changed."
+            );
+            Ok(d)
         }
         async fn archive_original(&self, r: &Record) -> Result<Map<String, Value>> {
             self.hide(r).await
@@ -2713,6 +3063,247 @@ mod tests {
             .insert(source.native_id.clone(), history());
         (tmp, DesktopBridge::new(root, adapters), native, source)
     }
+    async fn edited_fixture() -> Result<(
+        tempfile::TempDir,
+        DesktopBridge,
+        Arc<Mutex<Native>>,
+        String,
+        Pending,
+        Checkpoint,
+    )> {
+        let (tmp, bridge, native, source) = fixture();
+        let mut old = native.lock().unwrap().histories[&source.native_id].clone();
+        extend(&mut old, "removed request");
+        native
+            .lock()
+            .unwrap()
+            .histories
+            .insert(source.native_id.clone(), old.clone());
+        let id = bridge.track(source, Some("Saved logical title")).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let mut state = bridge.status()?;
+        let source = state.records[0].clone();
+        let mut target = Record::source(
+            Side::Claude,
+            Path::new("/synthetic-target"),
+            &Uuid::new_v4().to_string(),
+        );
+        target.conversation_id = id.clone();
+        target.cwd = source.cwd.clone();
+        target.managed = true;
+        target.kind = "owner".into();
+        let pending = Pending {
+            phase: Phase::Prepared,
+            operation_id: Uuid::new_v4().to_string(),
+            record: target,
+            source_id: source.id,
+            target_id: None,
+            archive_original_id: None,
+            reuse: false,
+            common: old,
+            checkpoint: source.checkpoint,
+            previous: Checkpoint::empty(),
+            extra: Map::new(),
+        };
+        state.pending = Some(pending.clone().into());
+        bridge.save(&mut state, None)?;
+        let mut n = native.lock().unwrap();
+        n.histories
+            .get_mut(&source.native_id)
+            .unwrap()
+            .messages
+            .truncate(2);
+        let expected = Checkpoint::of(&n.histories[&source.native_id])?;
+        drop(n);
+        Ok((tmp, bridge, native, id, pending, expected))
+    }
+    #[tokio::test]
+    async fn edited_source_resolution_preserves_full_old_history_and_is_restart_idempotent()
+    -> Result<()> {
+        let (_tmp, bridge, native, id, pending, expected) = edited_fixture().await?;
+        let source = bridge.status()?.records[0].clone();
+        let preview = bridge
+            .resolve_edited_source(&id, &source.native_id, &pending.operation_id, None)
+            .await?;
+        assert_eq!(preview["checkpoint"]["count"], 2);
+        assert!(bridge.status()?.pending.is_some());
+        assert!(!bridge.root.join("edited-source-resolutions").exists());
+        let result = bridge
+            .resolve_edited_source(
+                &id,
+                &source.native_id,
+                &pending.operation_id,
+                Some(expected.clone()),
+            )
+            .await?;
+        assert_eq!(result["resolved"], true);
+        let path = PathBuf::from(result["receipt"].as_str().unwrap());
+        let backup = storage::read_stable(&path)?;
+        let receipt: Value = serde_json::from_slice(&backup.bytes)?;
+        assert_eq!(receipt["pending"], serde_json::to_value(&pending)?);
+        assert_eq!(receipt["source"], serde_json::to_value(&source)?);
+        assert_eq!(
+            receipt["pending"]["common"]["messages"]
+                .as_array()
+                .unwrap()
+                .len(),
+            4
+        );
+        let state = bridge.status()?;
+        assert!(state.pending.is_none());
+        assert_eq!(state.conversations[&id].canonical, expected);
+        assert_eq!(state.conversations[&id].title, "Saved logical title");
+        assert_eq!(
+            state.records[0].extra["editedSourceResolution"],
+            pending.operation_id
+        );
+        let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+        assert_eq!(
+            restarted
+                .resolve_edited_source(
+                    &id,
+                    &source.native_id,
+                    &pending.operation_id,
+                    Some(expected)
+                )
+                .await?["changed"],
+            false
+        );
+        assert_eq!(storage::read_stable(path)?.bytes, backup.bytes);
+        assert_eq!(native.lock().unwrap().applications, 0);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn edited_source_resolution_rejects_mismatched_selection_and_unsafe_plans() -> Result<()>
+    {
+        for failure in [
+            "operation",
+            "native",
+            "expected",
+            "sourceCheckpoint",
+            "canonical",
+            "counterpart",
+            "applied",
+            "uncertain",
+            "notPrefix",
+            "reuse",
+            "phase",
+        ] {
+            let (_tmp, bridge, native, id, pending, expected) = edited_fixture().await?;
+            let mut state = bridge.status()?;
+            let mut source = state.records[0].clone();
+            let mut operation = pending.operation_id.clone();
+            let mut selected = expected.clone();
+            match failure {
+                "operation" => operation = Uuid::new_v4().to_string(),
+                "native" => source.native_id = Uuid::new_v4().to_string(),
+                "expected" => selected.digest = Some("f".repeat(64)),
+                "sourceCheckpoint" => state.records[0].checkpoint = expected,
+                "canonical" => state.conversations.get_mut(&id).unwrap().canonical = expected,
+                "counterpart" => state.records.push(pending.record.clone()),
+                "applied" => {
+                    native
+                        .lock()
+                        .unwrap()
+                        .histories
+                        .insert(pending.record.native_id.clone(), pending.common.clone());
+                }
+                "uncertain" => native.lock().unwrap().refuse_unapplied = true,
+                "notPrefix" => {
+                    native
+                        .lock()
+                        .unwrap()
+                        .histories
+                        .get_mut(&source.native_id)
+                        .unwrap()
+                        .messages[0] = Message::text("user", "edited first message")
+                }
+                "reuse" => {
+                    let Some(PendingOperation::Handoff(p)) = &mut state.pending else {
+                        panic!()
+                    };
+                    p.reuse = true;
+                }
+                "phase" => {
+                    let Some(PendingOperation::Handoff(p)) = &mut state.pending else {
+                        panic!()
+                    };
+                    p.phase = Phase::Applied;
+                }
+                _ => unreachable!(),
+            }
+            bridge.save(&mut state, None)?;
+            let before = storage::read_stable(bridge.root.join("desktop-state.json"))?.bytes;
+            assert!(
+                bridge
+                    .resolve_edited_source(&id, &source.native_id, &operation, Some(selected))
+                    .await
+                    .is_err(),
+                "{failure}"
+            );
+            assert_eq!(
+                storage::read_stable(bridge.root.join("desktop-state.json"))?.bytes,
+                before,
+                "{failure}"
+            );
+            assert!(
+                !bridge.root.join("edited-source-resolutions").exists(),
+                "{failure}"
+            );
+            assert_eq!(native.lock().unwrap().applications, 0);
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn edited_source_resolution_recovers_backup_before_ledger_and_refuses_changed_raw_proof()
+    -> Result<()> {
+        let (_tmp, bridge, native, id, pending, expected) = edited_fixture().await?;
+        let source = bridge.status()?.records[0].clone();
+        let old_ledger = storage::read_stable(bridge.root.join("desktop-state.json"))?.bytes;
+        bridge
+            .resolve_edited_source(
+                &id,
+                &source.native_id,
+                &pending.operation_id,
+                Some(expected.clone()),
+            )
+            .await?;
+        // Simulate termination after exclusive receipt publication but before ledger publication.
+        storage::atomic_write(bridge.root.join("desktop-state.json"), &old_ledger)?;
+        let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+        assert_eq!(
+            restarted
+                .resolve_edited_source(
+                    &id,
+                    &source.native_id,
+                    &pending.operation_id,
+                    Some(expected.clone())
+                )
+                .await?["changed"],
+            true
+        );
+        storage::atomic_write(bridge.root.join("desktop-state.json"), &old_ledger)?;
+        native.lock().unwrap().change_edited_proof = true;
+        let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+        assert!(
+            restarted
+                .resolve_edited_source(
+                    &id,
+                    &source.native_id,
+                    &pending.operation_id,
+                    Some(expected)
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            storage::read_stable(bridge.root.join("desktop-state.json"))?.bytes,
+            old_ledger
+        );
+        Ok(())
+    }
     fn move_source(native: &Arc<Mutex<Native>>, record: &Record) -> Relocation {
         let mut n = native.lock().unwrap();
         let mut moved = record.clone();
@@ -2738,6 +3329,107 @@ mod tests {
         n.relocations
             .insert(record.native_id.clone(), relocation.clone());
         relocation
+    }
+    #[tokio::test]
+    async fn reverse_sync_preserves_closed_original_tail_across_recovery() -> Result<()> {
+        for lost_reply in [false, true] {
+            let (_tmp, bridge, native, source) = fixture();
+            let original_id = source.native_id.clone();
+            native.lock().unwrap().closed_tails.insert(
+                original_id.clone(),
+                json!({"raw":"original interrupted tail"}),
+            );
+            let id = bridge.track(source, None).await?["conversationId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            bridge.sync(&id).await?;
+            let state = bridge.status()?;
+            let claude = bridge.current(&state, &id, Side::Claude).unwrap();
+            {
+                let mut n = native.lock().unwrap();
+                extend(
+                    n.histories.get_mut(&claude.native_id).unwrap(),
+                    "Claude continuation",
+                );
+                n.fail_after_apply = lost_reply;
+            }
+            if lost_reply {
+                assert!(bridge.sync(&id).await.is_err());
+                let s = bridge.status()?;
+                let PendingOperation::Handoff(p) = s.pending.unwrap() else {
+                    panic!()
+                };
+                assert!(p.archive_original_id.is_none());
+                assert_eq!(p.phase, Phase::Prepared);
+                // A new bridge simulates a restart, with no in-memory proof cache.
+                let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+                restarted.recover().await?;
+            } else {
+                bridge.sync(&id).await?;
+            }
+            let s = bridge.status()?;
+            assert!(s.pending.is_none());
+            let original = s
+                .records
+                .iter()
+                .find(|r| r.native_id == original_id)
+                .unwrap();
+            assert_eq!(original.status, "original");
+            assert!(original.extra.contains_key("preservedClosedTail"));
+            assert!(!original.extra.contains_key("archivedAt"));
+            assert!(!native.lock().unwrap().hidden.contains(&original_id));
+            assert_eq!(native.lock().unwrap().applications, 2);
+            assert_eq!(bridge.sync(&id).await?["changed"], false);
+            // Even a change only in the excluded raw tail must stop synchronization.
+            native.lock().unwrap().closed_tails.insert(
+                original_id.clone(),
+                json!({"raw":"changed interrupted tail"}),
+            );
+            assert!(
+                bridge
+                    .sync(&id)
+                    .await
+                    .unwrap_err()
+                    .to_string()
+                    .contains("tail changed")
+            );
+            assert_eq!(native.lock().unwrap().applications, 2);
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn preserved_closed_tail_change_after_apply_keeps_pending_without_replay() -> Result<()> {
+        let (_tmp, bridge, native, source) = fixture();
+        let original = source.native_id.clone();
+        native
+            .lock()
+            .unwrap()
+            .closed_tails
+            .insert(original.clone(), json!({"raw":"closed"}));
+        let id = bridge.track(source, None).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        bridge.sync(&id).await?;
+        let s = bridge.status()?;
+        let claude = bridge.current(&s, &id, Side::Claude).unwrap();
+        {
+            let mut n = native.lock().unwrap();
+            extend(n.histories.get_mut(&claude.native_id).unwrap(), "reverse");
+            n.fail_after_apply = true;
+        }
+        assert!(bridge.sync(&id).await.is_err());
+        native
+            .lock()
+            .unwrap()
+            .closed_tails
+            .insert(original.clone(), json!({"raw":"changed"}));
+        assert!(bridge.recover().await.is_err());
+        assert!(bridge.status()?.pending.is_some());
+        assert_eq!(native.lock().unwrap().applications, 2);
+        assert!(!native.lock().unwrap().hidden.contains(&original));
+        Ok(())
     }
     #[tokio::test]
     async fn context_reset_promotes_new_native_identity_and_recovers_without_resend() -> Result<()>
@@ -2927,8 +3619,16 @@ mod tests {
         // Checkpoints saved before dialogue digests existed gain them from the
         // next exact read, without a new write.
         let mut legacy = third.clone();
-        legacy.conversations.get_mut(&id).unwrap().canonical.dialogue = None;
-        legacy.records.iter_mut().for_each(|r| r.checkpoint.dialogue = None);
+        legacy
+            .conversations
+            .get_mut(&id)
+            .unwrap()
+            .canonical
+            .dialogue = None;
+        legacy
+            .records
+            .iter_mut()
+            .for_each(|r| r.checkpoint.dialogue = None);
         bridge.save(&mut legacy, None).unwrap();
         assert_eq!(bridge.sync(&id).await.unwrap()["changed"], false);
         let upgraded = bridge.status().unwrap();
@@ -2937,8 +3637,13 @@ mod tests {
             third.conversations[&id].canonical.dialogue
         );
         assert!(upgraded.conversations[&id].canonical.dialogue.is_some());
-        assert!(upgraded.records.iter().filter(|r| r.conversation_id == id && r.checkpoint.count > 0)
-            .all(|r| r.checkpoint.dialogue.is_some()));
+        assert!(
+            upgraded
+                .records
+                .iter()
+                .filter(|r| r.conversation_id == id && r.checkpoint.count > 0)
+                .all(|r| r.checkpoint.dialogue.is_some())
+        );
         assert_eq!(native.lock().unwrap().applications, 3);
         // A native release that re-projects a tool payload is not a divergence;
         // edited dialogue still is.
@@ -2947,28 +3652,49 @@ mod tests {
                 Message::text("user", "use a tool"),
                 Message {
                     role: "assistant".into(),
-                    content: vec![json!({"type":"tool_use","id":"call","name":"Bash","input":input})],
+                    content: vec![
+                        json!({"type":"tool_use","id":"call","name":"Bash","input":input}),
+                    ],
                     extra: Map::new(),
                 },
                 Message {
                     role: "user".into(),
-                    content: vec![json!({"type":"tool_result","tool_use_id":"call","content":"listing"})],
+                    content: vec![
+                        json!({"type":"tool_result","tool_use_id":"call","content":"listing"}),
+                    ],
                     extra: Map::new(),
                 },
                 Message::text("assistant", "done"),
             ]
         };
-        native.lock().unwrap().histories.get_mut(&owner).unwrap().messages.extend(tool(json!({"command":"ls"})));
+        native
+            .lock()
+            .unwrap()
+            .histories
+            .get_mut(&owner)
+            .unwrap()
+            .messages
+            .extend(tool(json!({"command":"ls"})));
         bridge.sync(&id).await.unwrap();
-        assert_eq!(bridge.status().unwrap().conversations[&id].canonical.count, 10);
+        assert_eq!(
+            bridge.status().unwrap().conversations[&id].canonical.count,
+            10
+        );
         let mut native_now = native.lock().unwrap();
         let history = native_now.histories.get_mut(&owner).unwrap();
         history.messages.truncate(6);
-        history.messages.extend(tool(json!({"command":"ls","description":null})));
+        history
+            .messages
+            .extend(tool(json!({"command":"ls","description":null})));
         drop(native_now);
         assert_eq!(bridge.sync(&id).await.unwrap()["changed"], false);
-        native.lock().unwrap().histories.get_mut(&owner).unwrap().messages[6] =
-            Message::text("user", "edited");
+        native
+            .lock()
+            .unwrap()
+            .histories
+            .get_mut(&owner)
+            .unwrap()
+            .messages[6] = Message::text("user", "edited");
         let error = bridge.sync(&id).await.unwrap_err().to_string();
         assert!(error.contains("diverged"), "{error}");
         assert_eq!(native.lock().unwrap().applications, 4);

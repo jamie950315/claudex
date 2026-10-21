@@ -16,6 +16,64 @@ fn cli(root: &Path, args: &[&str]) -> Result<Output> {
 }
 
 #[test]
+fn edited_source_command_routes_explicit_preview_and_requires_commit_selection() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = claudex_core::storage::private_directory(temp.path())?;
+    let codex = claudex_core::storage::private_directory(root.join("codex"))?;
+    let claude = claudex_core::storage::private_directory(root.join("claude"))?;
+    claudex_core::storage::write_json(
+        root.join("config.json"),
+        &json!({"version":1,"mode":"desktop","codexHome":codex,"claudeHome":claude}),
+    )?;
+    let id = "00000000-0000-4000-8000-000000000001";
+    let rejected = cli(
+        &root,
+        &[
+            "resolve-edited-source",
+            id,
+            "--id",
+            id,
+            "--operation-id",
+            id,
+            "--inspect",
+            "--expected-count",
+            "2",
+        ],
+    )?;
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("inspection never commits"));
+    let missing = cli(
+        &root,
+        &[
+            "resolve-edited-source",
+            id,
+            "--id",
+            id,
+            "--operation-id",
+            id,
+        ],
+    )?;
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("Missing --expected-count"));
+    let preview = cli(
+        &root,
+        &[
+            "resolve-edited-source",
+            id,
+            "--id",
+            id,
+            "--operation-id",
+            id,
+            "--inspect",
+        ],
+    )?;
+    assert!(!preview.status.success());
+    assert!(String::from_utf8_lossy(&preview.stderr).contains("Exact prepared Desktop handoff"));
+    assert!(!root.join("edited-source-resolutions").exists());
+    Ok(())
+}
+
+#[test]
 fn supervisor_entry_preserves_an_explicit_worker_executable() -> Result<()> {
     let temp = tempfile::tempdir_in("/tmp")?;
     let base = temp.path().canonicalize()?;
@@ -126,7 +184,7 @@ fn help_and_version_do_not_create_state_or_run_native_providers() -> Result<()> 
         .arg("--version")
         .output()?;
     assert!(version.status.success());
-    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 2.0.8");
+    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 2.0.9");
     for arguments in [
         &["app", "--help"][..],
         &["app", "build", "--help"][..],
