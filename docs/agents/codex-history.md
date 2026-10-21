@@ -15,8 +15,11 @@ between checks is a changed source, never a silent switch.
 A same-thread rollover can retain its original `forked_from_id` and fork
 ordinal while `history_base` references a later segment of that same thread.
 Use the referenced segment's exact owner to distinguish rollover from a real
-cross-thread fork. Only the cross-thread link compares the fork boundary;
-segment identity, contiguous ordinal coverage and byte-prefix proofs stay exact.
+cross-thread link. A fork of a fork may reference its physical ancestor directly;
+`forked_from_id` still names its immediate logical parent, not that byte source.
+Cross-thread links keep the exact fork ordinal. The explicitly named segment,
+its actual owner, contiguous ordinals, byte prefix and complete API image items
+remain the content proof.
 Raw rollout proofs (empty-turn, goal, late-item) compare the working directory,
 not its spelling: Codex records the path it was started in, which may be an
 alias (symlink) of the canonical directory, and its API may report either form.
@@ -117,9 +120,10 @@ By user decision, images the current and retained rollouts do not prove may come
 from the declared history_base chain (fork or rollover), nearest segment first.
 Each link is located only by its exact segment ID in the native layout
 (sessions/YYYY/MM/DD or archived_sessions; root <thread>.jsonl or
-<thread>_<segment>.jsonl, exactly one match), and its session_meta must belong
-to the forked_from thread (fork, with matching forked_from_ordinal_exclusive) or
-the same thread (rollover). Rows carry contiguous native ordinals; only rows
+<thread>_<segment>.jsonl, exactly one match), and its session_meta must name the
+exact physical source thread. A cross-thread link keeps the matching forked_from_ordinal_exclusive; its source can be an
+ancestor of the immediate logical fork parent. Same-thread links are rollovers.
+Rows carry contiguous native ordinals; only rows
 before end_ordinal_exclusive count. Observed end_byte_offset values can land a
 few bytes inside an adjacent row, so the offset must fall within the last
 included or first excluded row. The referenced segment may keep growing; only

@@ -509,13 +509,15 @@ impl Provenance {
             );
             let (next, size) = self.header(&path)?;
             let id = text(&next["id"])?;
-            // A rollover retains the thread's original fork metadata. Only a
-            // link that actually crosses to its parent uses that fork boundary.
+            // A rollover retains the original logical parent. A later fork can
+            // reference an ancestor's physical segment directly, so that parent
+            // is not necessarily this segment's owner. The explicit base names
+            // the physical source; only a cross-thread link uses the fork bound.
             if id != owner {
                 ensure!(
-                    meta["forked_from_id"] == id
+                    meta["forked_from_id"].as_str().is_some_and(valid_uuid)
                         && meta["forked_from_ordinal_exclusive"] == base["end_ordinal_exclusive"],
-                    "Native fork ordinal or parent contradicts its history_base."
+                    "Native fork ordinal contradicts its history_base."
                 );
             }
             let name = path.file_name().unwrap().to_string_lossy();
@@ -2591,6 +2593,19 @@ mod tests {
         let proof = f.source.hydrate(&mut turns, &[], None, 1_048_576).unwrap();
         assert_eq!(json!(turns), expected_image_turns(&f.turns));
         proof.verify().unwrap();
+        // A fork of this fork may point straight at the physical ancestor
+        // while keeping its immediate logical parent in forked_from_id.
+        let mut shortcut = f.source.clone();
+        shortcut.thread_id = TURN.into();
+        shortcut.path = fork_path.with_file_name(format!("rollout-{TURN}.jsonl"));
+        write(&shortcut.path, &[json!({"type":"session_meta","ordinal":7,"payload":{
+            "id":TURN,"cwd":f.source.cwd,"forked_from_id":SEGMENT,
+            "forked_from_ordinal_exclusive":7,
+            "history_base":{"thread_id":THREAD,"end_byte_offset":parent_bytes,"end_ordinal_exclusive":7}}})]);
+        let mut shortcut_turns = f.turns.clone();
+        let shortcut_proof = shortcut.hydrate(&mut shortcut_turns, &[], None, 1_048_576).unwrap();
+        assert_eq!(json!(shortcut_turns), expected_image_turns(&f.turns));
+        shortcut_proof.verify().unwrap();
         // The real cross-thread fork boundary remains exact.
         fork["payload"]["forked_from_ordinal_exclusive"] = json!(6);
         write(&fork_path, &[fork]);
