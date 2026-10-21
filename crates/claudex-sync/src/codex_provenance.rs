@@ -502,15 +502,6 @@ impl Provenance {
                     && end_ordinal < ordinal,
                 "Invalid or overlong native history_base reference."
             );
-            let expected = if !meta["forked_from_id"].is_null() {
-                ensure!(
-                    meta["forked_from_ordinal_exclusive"] == base["end_ordinal_exclusive"],
-                    "Native fork ordinal contradicts its history_base."
-                );
-                text(&meta["forked_from_id"])?.to_owned()
-            } else {
-                owner.clone()
-            };
             let path = self.locate(segment)?;
             ensure!(
                 seen.insert(path.clone()),
@@ -518,6 +509,15 @@ impl Provenance {
             );
             let (next, size) = self.header(&path)?;
             let id = text(&next["id"])?;
+            // A rollover retains the thread's original fork metadata. Only a
+            // link that actually crosses to its parent uses that fork boundary.
+            if id != owner {
+                ensure!(
+                    meta["forked_from_id"] == id
+                        && meta["forked_from_ordinal_exclusive"] == base["end_ordinal_exclusive"],
+                    "Native fork ordinal or parent contradicts its history_base."
+                );
+            }
             let name = path.file_name().unwrap().to_string_lossy();
             let named = if id == segment {
                 name.ends_with(&format!("-{segment}.jsonl"))
@@ -525,7 +525,7 @@ impl Provenance {
                 name.ends_with(&format!("-{id}_{segment}.jsonl"))
             };
             ensure!(
-                id == expected && named && size >= end_byte,
+                named && size >= end_byte,
                 "Native history_base segment identity or byte coverage differs."
             );
             let start = if next["history_base"].is_null() {
@@ -2561,6 +2561,40 @@ mod tests {
             fs::write(&old, changed).unwrap();
             assert!(proof.verify().is_err());
         }
+    }
+    #[test]
+    fn forked_thread_rollover_keeps_its_original_fork_boundary() {
+        let mut f = fixture();
+        for (i, row) in f.rows.iter_mut().enumerate() {
+            row["ordinal"] = json!(i);
+        }
+        write(&f.source.path, &f.rows);
+        let parent_bytes = fs::metadata(&f.source.path).unwrap().len();
+        let fork_path = f.source.path.with_file_name(format!("rollout-{SEGMENT}_{AFTER}.jsonl"));
+        let mut fork = json!({"type":"session_meta","ordinal":7,"payload":{
+            "id":SEGMENT,"cwd":f.source.cwd,"forked_from_id":THREAD,
+            "forked_from_ordinal_exclusive":7,
+            "history_base":{"thread_id":THREAD,"end_byte_offset":parent_bytes,"end_ordinal_exclusive":7}}});
+        write(&fork_path, &[fork.clone()]);
+        let fork_bytes = fs::metadata(&fork_path).unwrap().len();
+        f.source.thread_id = SEGMENT.into();
+        f.source.path = fork_path.with_file_name(format!("rollout-{SEGMENT}_{TURN}.jsonl"));
+        write(&f.source.path, &[json!({"type":"session_meta","ordinal":8,"payload":{
+            "id":SEGMENT,"cwd":f.source.cwd,"forked_from_id":THREAD,
+            "forked_from_ordinal_exclusive":7,
+            "history_base":{"thread_id":AFTER,"end_byte_offset":fork_bytes,"end_ordinal_exclusive":8}}})]);
+        let chain = f.source.resolve_history_base().unwrap();
+        assert_eq!(chain.len(), 2);
+        assert_eq!(chain[0].thread_id, SEGMENT);
+        assert_eq!(chain[1].thread_id, THREAD);
+        let mut turns = f.turns.clone();
+        let proof = f.source.hydrate(&mut turns, &[], None, 1_048_576).unwrap();
+        assert_eq!(json!(turns), expected_image_turns(&f.turns));
+        proof.verify().unwrap();
+        // The real cross-thread fork boundary remains exact.
+        fork["payload"]["forked_from_ordinal_exclusive"] = json!(6);
+        write(&fork_path, &[fork]);
+        assert!(f.source.resolve_history_base().is_err());
     }
     #[test]
     fn image_aliases_ambiguous_segments_and_uncommitted_retained_images_are_refused() {

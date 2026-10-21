@@ -12,6 +12,11 @@ offsets, sizes, digests, limits and reported storage bytes apply to the
 decompressed content. A rollout
 is unavailable only when neither representation exists. A representation change
 between checks is a changed source, never a silent switch.
+A same-thread rollover can retain its original `forked_from_id` and fork
+ordinal while `history_base` references a later segment of that same thread.
+Use the referenced segment's exact owner to distinguish rollover from a real
+cross-thread fork. Only the cross-thread link compares the fork boundary;
+segment identity, contiguous ordinal coverage and byte-prefix proofs stay exact.
 Raw rollout proofs (empty-turn, goal, late-item) compare the working directory,
 not its spelling: Codex records the path it was started in, which may be an
 alias (symlink) of the canonical directory, and its API may report either form.
