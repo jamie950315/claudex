@@ -325,3 +325,20 @@ An isolated signed-wrapper native startup exposes the 47 app tools without chang
 Late-item proof with a turn its runtime left open (2026-10-14, Codex 0.162.0-alpha.17.2): a backend restart ended a running turn without a closing record in three tracked threads. Across 1,635 local rollouts, 485 starts follow a still-open turn (most inside inherited fork prefixes); one names that turn afterwards, with a completion record, and remains a refused overlap. Replayed read-only through the shared backend against saved checkpoints: the affected thread with six earlier late arrivals was refused before the change and matches its whole 2,871-message checkpoint after it; six other tracked threads containing such a turn match their checkpoints both before and after. The API reported the open turn in progress in the three threads with a later running turn and interrupted, without a completion time, in idle threads.
 
 Dialogue checkpoints and identity-only late items (2026-10-18, Mod 0.8.60): a temporary read-only audit decoded 762 local Claude transcripts and 55 Claudex Codex projections (124 raw rollouts are not projection files and were skipped). Every exact checkpoint also matched its own dialogue. Re-projecting tool inputs, tool results and inert native event payloads (an added null field, reformatted result content) changed the exact bytes of 154 histories; all 154 still matched their dialogue. Of 1,295 real divergences (an edited user or assistant text, a dropped first message, a changed tool call identity), all 1,295 were refused. Synthetic tests cover changed roles, event identities and tool result identities, the legacy checkpoint upgrade and the byte-exact handoff tail.
+
+## Interrupted original and explicit edited-source recovery (2026-10-21)
+
+Local App 2.0.10 / Mod 0.8.68 acceptance used normal signed-bundle installation,
+Quit/drain and app-owned startup without restarting either native desktop app.
+The startup sweep completed verification of 530 conversation pairs in both
+native directions, with no genuine source/conversation blocks or pending transaction.
+The interrupted original stayed unarchived under its persisted full-history
+proof; its continuation and Claude matched at 1,746 messages. An explicitly
+authorized never-sent first handoff retained its full 86-message transaction in
+an immutable receipt, adopted the exact edited 82-message prefix and delivered
+it normally. Native readback matched both checkpoints. A nested fork that
+referenced a physical ancestor also delivered matching 114-message histories.
+Installed and freshly observed Mod versions were 0.8.68; actual app pixels
+showed synchronization ready. Recovery and acceptance issued no model requests.
+Workspace contracts passed 404 tests with six intentional ignores; native
+image/fork regressions retained exact segment, ordinal and byte-prefix checks.
