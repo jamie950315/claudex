@@ -472,11 +472,10 @@ as a failure. `sightings` lists when each source first reported each entry, so
 sources can be compared by how soon they see a new frontend. Entry names come only from real Claude Desktop installations
 (observed identical on macOS and Windows for one build); the service never
 requests one from claude.ai. A failed entry starts the executable named in
-CLAUDEX_FRONTEND_ON_FAILURE once. on-failure.sh notifies, then lets Claude
-Code draft a repair from repair-prompt.md on a `frontend-repair/<entry>` branch
-in a separate worktree. It never pushes, changes versions or touches the
-checkout the service runs from; a maintainer reviews the branch and verifies
-it in a real Claude Desktop before release. Host names, paths, schedules and
+CLAUDEX_FRONTEND_ON_FAILURE once. on-failure.sh only notifies; by user
+decision (2026-10-22) the service never starts a model to draft a repair. A
+maintainer repairs the adapters and verifies them in a real Claude Desktop
+before release. Host names, paths, schedules and
 notification settings are deployment details and stay out of tracked files.
 dev/frontend-watch/read-windows-entry.ps1 reads the newest entry name from a
 Windows Claude Desktop, read-only. Windows keeps its HTTP cache in the
