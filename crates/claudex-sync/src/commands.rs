@@ -664,6 +664,14 @@ async fn watch_desktop_control(
                 handoff_maintenance=tokio::time::Instant::now();
                 held=false;
             }
+            if last_status.is_none() {
+                // A start or resume has published no pass yet. Its first pass
+                // can be long, so the heartbeat reports initial checking.
+                let mut status=watch_status(&blocked,None,&unsupported,false,lifecycle.as_ref(),None,initial_sweep_completed_at);
+                status["folderProjection"]=json!({"state":"waiting","deferred":"initial_verification"});
+                status["localHandoff"]=local_handoff.clone();
+                last_status = Some(status);
+            }
             let mut pending_error = None;
             if bridge.status()?.pending.is_some() {
                 if handoff_enabled && !actions_revoked_since_publish {
