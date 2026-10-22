@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.11**, with **Claude Mod 0.8.69** bundled.
+Current build: **Claudex.app 2.0.12**, with **Claude Mod 0.8.70** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.

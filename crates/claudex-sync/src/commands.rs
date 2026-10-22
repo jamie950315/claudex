@@ -377,6 +377,36 @@ async fn discover_desktop(
 fn diagnostics(root: &Path, value: &Value) -> Result<()> {
     storage::write_diagnostic_json(root.join("watcher-status.json"), value)
 }
+const OPERATION_HEARTBEAT: Duration = Duration::from_secs(10);
+/// Awaits one native operation while a status-only heartbeat republishes the
+/// last written status with fresh timestamps. It reads no history, advances
+/// nothing and never cancels the operation; a failed write is reported only
+/// after the operation has finished.
+async fn with_heartbeat<T>(
+    root: &Path,
+    last: Option<&Value>,
+    interval: Duration,
+    operation: impl std::future::Future<Output = T>,
+) -> Result<T> {
+    tokio::pin!(operation);
+    let mut ticks = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+    let mut failure = None;
+    let output = loop {
+        tokio::select! {
+            output = &mut operation => break output,
+            _ = ticks.tick() => {
+                if let (Some(last), None) = (last, &failure) {
+                    let mut status = last.clone();
+                    let at = storage::now_ms();
+                    status["updatedAt"] = json!(at);
+                    status["at"] = json!(at);
+                    failure = diagnostics(root, &status).err();
+                }
+            }
+        }
+    };
+    failure.map_or(Ok(output), Err)
+}
 fn folder_view(map: &Value, renderer: &Value) -> Value {
     if map.is_null() || map["state"] == "error" || !map["deferred"].is_null() {
         return map.clone();
@@ -602,6 +632,7 @@ async fn watch_desktop_control(
         let mut last_progress_health: Option<Value> = None;
         let mut published_first_operation = false;
         let mut observe_needed = true;
+        let mut last_status: Option<Value> = None;
         loop {
             source.check()?;
             if *shutdown.borrow() { break; }
@@ -613,6 +644,8 @@ async fn watch_desktop_control(
                     handoff_revoked = true;
                 }
                 let mut status=watch_status(&blocked,None,&unsupported,true,lifecycle.as_ref(),None,initial_sweep_completed_at);status["folderProjection"]=json!({"state":"waiting","deferred":"application-hold"});status["localHandoff"]=json!({"state":"waiting","actions":0,"deferred":"application-hold"});diagnostics(&bridge.root,&status)?;
+                // A held status must not be republished once work resumes.
+                last_status = None;
                 last_progress_at = None;
                 last_progress_health = None;
                 tokio::select! {result=listener.wait_hint(Duration::from_secs(30),&mut shutdown)=>result?,_=source.failed()=>source.check()?}
@@ -753,7 +786,8 @@ async fn watch_desktop_control(
                         for id in ids {
                             if !state.conversations[&id].tracked() { continue; }
                             background.retain(|queued| queued != &id);
-                            let outcome = scheduler.sync(&runtime, &bridge, &id).await;
+                            let outcome = with_heartbeat(&bridge.root, last_status.as_ref(), OPERATION_HEARTBEAT,
+                                scheduler.sync(&runtime, &bridge, &id)).await?;
                             let retry = match outcome {
                                 Ok(value) if value["tracking"] == "stopped" => {
                                     blocked.remove(&id);
@@ -791,7 +825,8 @@ async fn watch_desktop_control(
                             actions_revoked_since_publish = true;
                             handoff_revoked = true;
                         }
-                        let retry = match scheduler.sync(&runtime,&bridge,&id).await {
+                        let retry = match with_heartbeat(&bridge.root, last_status.as_ref(), OPERATION_HEARTBEAT,
+                            scheduler.sync(&runtime,&bridge,&id)).await? {
                             Ok(value) if value["tracking"] == "stopped" => {
                                 blocked.remove(&id);
                                 observe_needed = true;
@@ -840,7 +875,8 @@ async fn watch_desktop_control(
                                 handoff_revoked = true;
                             }
                             let key = format!("{}:{}", candidate.side.name(), candidate.native_id.to_lowercase());
-                            let update = match enroll_candidate(&bridge, &candidate).await {
+                            let update = match with_heartbeat(&bridge.root, last_status.as_ref(), OPERATION_HEARTBEAT,
+                                enroll_candidate(&bridge, &candidate)).await? {
                                 Ok(update) => update,
                                 Err(error) if error.is::<claudex_core::rpc::TransportUnavailable>() => {
                                     transport_wait=Some(format!("{error:#}"));
@@ -870,7 +906,8 @@ async fn watch_desktop_control(
                                 handoff_revoked = true;
                             }
                             handoff_scope.insert(id.clone());
-                            let outcome = scheduler.sync(&runtime, &bridge, &id).await;
+                            let outcome = with_heartbeat(&bridge.root, last_status.as_ref(), OPERATION_HEARTBEAT,
+                                scheduler.sync(&runtime, &bridge, &id)).await?;
                             match outcome {
                                 Ok(value) if value["tracking"] == "stopped" => {
                                     blocked.remove(&id);
@@ -1007,6 +1044,7 @@ async fn watch_desktop_control(
                 if !status["currentOperation"].is_null() {
                     published_first_operation = true;
                 }
+                last_status = Some(status);
             }
             let mut timeout = followups.values().map(|(_, when)| when.saturating_duration_since(tokio::time::Instant::now()))
                 .chain(unknown.values().map(|(_, _, when)| when.saturating_duration_since(tokio::time::Instant::now())))
@@ -1158,6 +1196,48 @@ mod lifecycle_tests {
         os::unix::fs::PermissionsExt,
         sync::atomic::{AtomicBool, Ordering},
     };
+    #[tokio::test]
+    async fn long_operation_refreshes_the_last_status_without_cancelling_it() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
+        let last = json!({"updatedAt":1,"at":1,"synchronization":"ready","foregroundCompletedAt":1});
+        let finished = AtomicBool::new(false);
+        let output = with_heartbeat(temp.path(), Some(&last), Duration::from_millis(20), async {
+            tokio::time::sleep(Duration::from_millis(120)).await;
+            finished.store(true, Ordering::SeqCst);
+            7
+        })
+        .await?;
+        assert_eq!(output, 7);
+        assert!(finished.load(Ordering::SeqCst));
+        let written = storage::read_json(temp.path().join("watcher-status.json"))?;
+        assert!(written["updatedAt"].as_i64().unwrap() > 1);
+        assert_eq!(written["at"], written["updatedAt"]);
+        // Only timestamps change: no completion or health is implied.
+        assert_eq!(written["foregroundCompletedAt"], 1);
+        assert_eq!(written["synchronization"], "ready");
+        // Without a published status there is nothing to republish.
+        let quiet = tempfile::tempdir()?;
+        with_heartbeat(quiet.path(), None, Duration::from_millis(5), tokio::time::sleep(Duration::from_millis(30))).await?;
+        assert!(!quiet.path().join("watcher-status.json").exists());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn heartbeat_write_failure_waits_for_the_operation() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        // A regular file where the status directory belongs makes every write fail.
+        let blocked = temp.path().join("not-a-directory");
+        fs::write(&blocked, b"")?;
+        let finished = AtomicBool::new(false);
+        let result = with_heartbeat(&blocked, Some(&json!({})), Duration::from_millis(5), async {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            finished.store(true, Ordering::SeqCst);
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(finished.load(Ordering::SeqCst));
+        Ok(())
+    }
     #[test]
     fn idle_pass_does_not_revoke_or_renew_an_unexpired_handoff() {
         let empty = BTreeSet::new();
