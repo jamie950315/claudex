@@ -153,6 +153,18 @@ and read again before the final Local/manifest rechecks. A source/account change
 fences in-flight reads; equal source tuples do not cancel ordinary renders.
 Native absence, failure, access refusal or mismatch never falls back to visible
 rows. Older graphs without this capability retain their existing row proof.
+Graphs fetched up to 2026-10-17 declare the prefetch caller as a module-level
+`var` arrow function rather than a function declaration; the same unique
+prefetch proof covers both forms, and the reader, normalizer, classifier and
+lookup remain function declarations. Graphs fetched up to 2026-10-15 have no
+browser-only guard before the reader's request; the request, failure and
+return proofs are unchanged, and any other extra statement still refuses.
+Graphs fetched up to 2026-10-14 also prefetch the session's events with the
+same headers: every authenticated prefetch request must use one raw fetch
+binding, and requests through different callees refuse.
+The 2026-10-12 graph index-CWtaU7tp.js constructs the raw Code context in a
+module the folder helper does not import; it stays refused rather than gaining
+a new vendor import edge.
 Do not guess endpoints, paginate inventories, invoke owners or start model work.
 Both use one store and poller; each actual subscription owns an idempotent
 cleanup token, even when callbacks are identical. The last common listener

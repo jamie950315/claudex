@@ -145,22 +145,24 @@ fn prove(
         "native exact-ID metadata reader",
     )?;
     let params = array(&read["params"]);
-    let body = array(&read["body"]["body"]);
+    let throws = |n: &Value| kind(n) == "IfStatement" && kind(&n["consequent"]) == "ThrowStatement";
+    // Graphs fetched up to 2026-10-15 have no leading browser-only guard.
+    let body = match array(&read["body"]["body"]) {
+        [guard, rest @ ..] if rest.len() == 3 && throws(guard) => rest,
+        body => body,
+    };
     ensure!(
         params.len() == 4
             && params.iter().all(|p| id(p).is_some())
             && read["async"] == true
-            && body.len() == 4
-            && kind(&body[0]) == "IfStatement"
-            && kind(&body[0]["consequent"]) == "ThrowStatement"
-            && kind(&body[1]) == "VariableDeclaration"
-            && array(&body[1]["declarations"]).len() == 1
-            && kind(&body[2]) == "IfStatement"
-            && kind(&body[2]["consequent"]) == "ThrowStatement"
-            && kind(&body[3]) == "ReturnStatement",
+            && body.len() == 3
+            && kind(&body[0]) == "VariableDeclaration"
+            && array(&body[0]["declarations"]).len() == 1
+            && throws(&body[1])
+            && kind(&body[2]) == "ReturnStatement",
         "Native exact-ID reader lifecycle changed."
     );
-    let response = &body[1]["declarations"][0];
+    let response = &body[0]["declarations"][0];
     let request = &response["init"]["argument"];
     ensure!(
         kind(&response["init"]) == "AwaitExpression"
@@ -303,9 +305,17 @@ fn prove(
         "Native bridge classifier identity changed."
     );
 
+    // Graphs fetched up to 2026-10-17 compile this hook as `var name=()=>{...}`.
+    let hooks = array(&ast["body"])
+        .iter()
+        .filter(|n| kind(n) == "VariableDeclaration")
+        .flat_map(|n| array(&n["declarations"]))
+        .map(|n| &n["init"])
+        .filter(|f| matches!(kind(f), "ArrowFunctionExpression" | "FunctionExpression"));
     let prefetch = unique(
         functions(ast)
             .into_iter()
+            .chain(hooks)
             .filter(|f| contains_literal(f, "Failed to prefetch session") && has_path(f))
             .collect(),
         "native exact-ID prefetch context",
@@ -343,17 +353,23 @@ fn prove(
         }),
         "native prefetch header capture",
     )?;
-    let prefetch_request = unique(
-        nodes(prefetch, |n| {
-            kind(n) == "CallExpression"
-                && has_path(&n["arguments"][0])
-                && array(&n["arguments"]).len() == 2
-                && field(&n["arguments"][1], "headers")
-                    .is_ok_and(|v| scopes.same(v, &prefetch_header_binding["id"]))
-        }),
-        "native authenticated prefetch request",
-    )?;
-    let fetch = getter_declaration(prefetch, &scopes, &prefetch_request["callee"])?;
+    // Graphs fetched up to 2026-10-14 also prefetch events with the same fetch.
+    let prefetch_requests = nodes(prefetch, |n| {
+        kind(n) == "CallExpression"
+            && has_path(&n["arguments"][0])
+            && array(&n["arguments"]).len() == 2
+            && field(&n["arguments"][1], "headers")
+                .is_ok_and(|v| scopes.same(v, &prefetch_header_binding["id"]))
+    });
+    ensure!(
+        prefetch_requests
+            .first()
+            .is_some_and(|first| prefetch_requests
+                .iter()
+                .all(|n| scopes.same(&n["callee"], &first["callee"]))),
+        "Claude frontend anchors: native authenticated prefetch request missing or ambiguous."
+    );
+    let fetch = getter_declaration(prefetch, &scopes, &prefetch_requests[0]["callee"])?;
     ensure!(
         empty_call(&fetch["init"]),
         "Native raw fetch must come from its existing context getter."
@@ -570,6 +586,60 @@ export{read,normalize,bridge};
         assert_eq!(p.account_hook.exported, "Account");
         assert_eq!(p.cloud_hook.exported, "Cloud");
         assert_eq!(p.enabled_hook.exported, "Enabled");
+        let unguarded = SOURCE.replace(" if(local(id))throw Error('local only');\n", "");
+        let p = prove(&syntax(&unguarded).unwrap(), "./metadata.js", &no_imports).unwrap();
+        assert_eq!(p.read, "read");
+        for from in [" let response", " return decode"] {
+            let doubled = SOURCE.replace(
+                from,
+                &format!(" if(local(id))throw Error('again');\n{from}"),
+            );
+            assert!(
+                prove(&syntax(&doubled).unwrap(), "./metadata.js", &no_imports).is_err(),
+                "{from}"
+            );
+        }
+        let request = "let response=await fetch(`/v1/code/sessions/${encode(id)}`,{headers:h});";
+        let events = |callee: &str| {
+            SOURCE.replace(
+                request,
+                &format!("{request}let events=await {callee}(`/v1/code/sessions/${{encode(id)}}/events`,{{headers:h}});"),
+            )
+        };
+        let p = prove(
+            &syntax(&events("fetch")).unwrap(),
+            "./metadata.js",
+            &no_imports,
+        )
+        .unwrap();
+        assert_eq!(p.fetch_hook.exported, "Fetch");
+        assert!(
+            prove(
+                &syntax(&events("other")).unwrap(),
+                "./metadata.js",
+                &no_imports
+            )
+            .is_err()
+        );
+        let arrow = SOURCE.replace("function prefetch(){", "var prefetch=()=>{");
+        let p = prove(&syntax(&arrow).unwrap(), "./metadata.js", &no_imports).unwrap();
+        assert_eq!(p.fetch_hook.exported, "Fetch");
+        assert_eq!(p.account_hook.exported, "Account");
+        for to in ["var prefetch=(Fetch)=>{", "var prefetch=(Account)=>{"] {
+            let shadowed = SOURCE.replace("function prefetch(){", to);
+            assert!(
+                prove(&syntax(&shadowed).unwrap(), "./metadata.js", &no_imports).is_err(),
+                "{to}"
+            );
+        }
+        let declared = &SOURCE
+            [SOURCE.find("function prefetch(){").unwrap()..SOURCE.find("function lookup").unwrap()];
+        let both = format!(
+            "{arrow}{}",
+            declared.replace("function prefetch", "function again")
+        );
+        let error = prove(&syntax(&both).unwrap(), "./metadata.js", &no_imports).unwrap_err();
+        assert!(error.to_string().contains("prefetch context"), "{error}");
     }
     #[test]
     fn changed_request_or_account_provenance_is_refused() {
