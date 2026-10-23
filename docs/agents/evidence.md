@@ -6,6 +6,29 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Persisted Codex realtime voice transcripts (2026-10-23)
+
+Development-signed App 2.0.16 / Mod 0.8.74 (`5aaba5b`) reconstructed a closed
+voice source through two complete API reads and stable rollout evidence. Six
+speaker transcript segments, two unchanged API handoffs and all selected native
+session/lifecycle metadata produced 20 canonical messages, without creating an
+agentMessage or final response. Normal app-managed enrollment and delivery
+verified identical 20-message Codex/Claude checkpoints with no pending operation.
+The installed GUI no longer showed the missing-final-response warning; its normal
+background startup reconciliation was still proceeding at 563/571, with no
+tracked-conversation blocks. Native apps were not restarted and no model prompt
+or input replay was used. Bundled, installed and freshly observed Mod were 0.8.74.
+
+Enrollment-scoped `realtimeHistory: "transcript-v1"` preserves earlier API-based
+representations. Two real previously tracked voice records retained their exact
+4- and 540-message checkpoints, including their original relocation records.
+New enrollment retained its 20-message checkpoint after Runtime restart.
+The sync suite passed 206 tests with one ignored; final cold-policy changes
+passed ten scoped tests, voice checks twelve and Mod host checks 45. The remaining
+workspace checks passed 216 tests in aggregate; one existing shared-source renderer
+test timed out in the parallel run and passed its isolated exact rerun.
+Private audit limits, raw snapshots and recovery bundles stay outside Git.
+
 ## Interrupted Codex image-turn read boundary (2026-10-23)
 
 Development-signed App 2.0.15 / Mod 0.8.73 (`4545004`) read an interrupted
