@@ -54,7 +54,7 @@ impl RolloutProofs {
         self.origin_cwd = origin_cwd;
         self
     }
-    fn read(&self, id: &str, foreign_writes: bool) -> Result<std::sync::Arc<Snapshot>> {
+    pub(crate) fn read(&self, id: &str, foreign_writes: bool) -> Result<std::sync::Arc<Snapshot>> {
         use std::os::unix::fs::OpenOptionsExt;
         ensure!(
             self.thread_id == id
@@ -572,6 +572,11 @@ fn references(value: &Value, ids: &BTreeSet<String>) -> bool {
 }
 #[async_trait]
 impl Proofs for RolloutProofs {
+    async fn realtime(&self, id: &str, turns: &[Value]) -> Result<Option<Value>> {
+        let data = self.read(id, true)?;
+        crate::cold_cache::asset(&native::physical_rollout(&self.path)?, &data.file_identity);
+        crate::native_realtime::prove(&data, id, turns)
+    }
     async fn empty_turns(&self, id: &str, turns: &[Value]) -> Result<Option<Value>> {
         Ok(Some(self.empty(id, turns)?))
     }

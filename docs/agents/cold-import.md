@@ -7,6 +7,10 @@ Historical backfill is the explicit `Importer` API in
 discovery cutoff. Its private journal reserves one target per source before
 publication. `DesktopBridge::track_imported_pair()` verifies equal canonical
 digest/count/cwd and enrolls two unmanaged originals with `discoveryMode: cold-import`.
+New allocations persist `realtimeHistory: "transcript-v1"` before reading and
+publishing, and pairing copies it to the conversation and both records. A resumed
+allocation without that policy keeps its original API-only representation;
+never reinterpret an already published packet or silently rebaseline its digest.
 The Claude original uses `importPacket: true`, packetVersion 2; runtime reads must
 authenticate its archive without creating an SDK owner. Never overwrite its
 bootstrap, replace a Desktop-owned file, or collect either original as a backup.

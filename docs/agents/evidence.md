@@ -25,10 +25,10 @@ source was unavailable. Two documented late-item ownership refusals remained
 stable across both passes. The audit harness was updated to recognize its
 existing cross-thread-fork refusal, without changing that runtime guard.
 
-One independently discovered voice-only source remains unimported: its full API
+At that checkpoint, one independently discovered voice-only source was unimported: its full API
 has two completed, error-free user-only handoff turns, while assistant replies
-exist only in realtime transcript segments. This separate format limitation
-remains visible; the synchronized image conversation is not blocked by it.
+exist only in realtime transcript segments. That separate format limitation
+remained visible; the synchronized image conversation was not blocked by it.
 Bundled and installed Mod 0.8.73 were verified; existing loaded sessions were
 preserved rather than restarted to obtain a fresh observer.
 

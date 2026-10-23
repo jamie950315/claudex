@@ -178,7 +178,14 @@ impl Importer {
             state.pending.is_none(),
             "Recover pending Desktop handoff before allocating a cold import."
         );
-        let source = Record::source(Side::Codex, path, native);
+        let mut source = Record::source(Side::Codex, path, native);
+        if entry.is_null() {
+            crate::native_realtime::enroll(&mut source.extra);
+        } else if let Some(policy) = entry.get(crate::native_realtime::POLICY_KEY) {
+            source
+                .extra
+                .insert(crate::native_realtime::POLICY_KEY.into(), policy.clone());
+        }
         let data = self.bridge.inspect(&source).await?;
         let digest = data.common.fingerprint()?;
         let count = data.common.messages.len();
@@ -207,6 +214,8 @@ impl Importer {
             target.extra.insert("importPacket".into(), json!(true));
             target.extra.insert("packetVersion".into(), json!(2));
             entry = json!({"phase":"prepared","conversationId":id,"sourceNativeId":native,"digest":digest,"count":count,"cwd":cwd,"title":title.or_else(||data.common.meta.get("title").and_then(Value::as_str)).unwrap_or("Claudex conversation"),"createdAt":storage::now_ms(),"operationId":Uuid::new_v4(),"target":target});
+            entry[crate::native_realtime::POLICY_KEY] =
+                source.extra[crate::native_realtime::POLICY_KEY].clone();
             journal["sources"][native] = entry.clone();
             storage::write_json(self.root.join("cold-imports.json"), &journal)?;
         }
@@ -346,9 +355,7 @@ mod tests {
             Ok(true)
         }
     }
-    #[tokio::test]
-    async fn publication_recovers_exact_existing_native_packet_without_reallocation_or_rewrite()
-    -> Result<()> {
+    async fn recover_publication(legacy: bool) -> Result<()> {
         let temp = tempfile::tempdir()?;
         let root = storage::private_directory(temp.path().join("root"))?;
         let codex = storage::private_directory(temp.path().join("codex"))?;
@@ -388,8 +395,15 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("Injected cold source"));
-        let prepared = importer.status()?["sources"][&native].clone();
+        let mut journal = importer.status()?;
+        let mut prepared = journal["sources"][&native].clone();
         assert_eq!(prepared["phase"], "prepared");
+        assert_eq!(prepared["realtimeHistory"], "transcript-v1");
+        if legacy {
+            prepared.as_object_mut().unwrap().remove("realtimeHistory");
+            journal["sources"][&native] = prepared.clone();
+            storage::write_json(root.join("cold-imports.json"), &journal)?;
+        }
         let target = importer.validate(&prepared, &native)?;
         let before = storage::read_stable(&target.path)?;
         assert!(importer.bridge.status()?.records.is_empty());
@@ -404,6 +418,16 @@ mod tests {
         assert_eq!(after.bytes, before.bytes);
         let state = importer.bridge.status()?;
         assert_eq!(state.records.len(), 2);
+        assert_eq!(
+            crate::native_realtime::enabled(&state.conversations[&target.conversation_id].extra)?,
+            !legacy
+        );
+        assert!(
+            state
+                .records
+                .iter()
+                .all(|r| crate::native_realtime::enabled(&r.extra).unwrap() == !legacy)
+        );
         assert!(
             state
                 .records
@@ -425,6 +449,11 @@ mod tests {
             before.identity
         );
         Ok(())
+    }
+    #[tokio::test]
+    async fn publication_recovers_exact_packet_and_its_original_realtime_policy() -> Result<()> {
+        recover_publication(false).await?;
+        recover_publication(true).await
     }
     #[test]
     fn javascript_allocation_descriptor_is_not_a_full_ledger_record() -> Result<()> {

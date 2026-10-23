@@ -714,6 +714,41 @@ mod tests {
         Ok((temp, cache))
     }
     #[test]
+    fn verification_hints_bind_realtime_policy_on_conversations_and_records() -> Result<()> {
+        use crate::{
+            bridge::Side,
+            desktop::{Checkpoint, Conversation, Record},
+        };
+        let (_temp, cache) = fixture()?;
+        let id = Uuid::new_v4().to_string();
+        let mut state = State::default();
+        state.conversations.insert(
+            id.clone(),
+            Conversation {
+                id: id.clone(),
+                cwd: cache.root.to_string_lossy().into(),
+                title: "Historical".into(),
+                canonical: Checkpoint::empty(),
+                extra: json!({"discoveryMode":"cold-import"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            },
+        );
+        let path = cache.root.join("source.jsonl");
+        storage::publish_exclusive(&path, b"native history")?;
+        let mut record = Record::source(Side::Codex, &path, &Uuid::new_v4().to_string());
+        record.conversation_id = id.clone();
+        state.records.push(record);
+        let legacy = hint(&state, &id)?.unwrap();
+        crate::native_realtime::enroll(&mut state.conversations.get_mut(&id).unwrap().extra);
+        let conversation = hint(&state, &id)?.unwrap();
+        assert_ne!(legacy, conversation);
+        crate::native_realtime::enroll(&mut state.records[0].extra);
+        assert_ne!(conversation, hint(&state, &id)?.unwrap());
+        Ok(())
+    }
+    #[test]
     fn proofs_survive_restart_bind_assets_and_revoke_failed_verification() -> Result<()> {
         let (_temp, cache) = fixture()?;
         let id = Uuid::new_v4().to_string();

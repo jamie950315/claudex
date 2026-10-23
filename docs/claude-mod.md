@@ -1,10 +1,13 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.73
+## Current companion: 0.8.74
 
-Claudex.app 2.0.15 installs, updates and checks its bundled Mod automatically;
+Claudex.app 2.0.16 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.74 packages the Claudex 2.0.16 runtime, preserving newly enrolled closed Codex voice
+transcripts, speaker order, session metadata and complete native handoffs through
+stable API and rollout proofs. Original audio is not reconstructed.
 Version 0.8.73 packages the Claudex 2.0.15 runtime, preserving complete interrupted
 image turns when the full native API and their completed successor establish
 the read boundary even without a raw abort event.
@@ -531,7 +534,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.73-review"
+STAGE="$PARENT/claudex-0.8.74-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -552,7 +555,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.73-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.74-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

@@ -170,6 +170,16 @@ pub fn validate_codex_native_bootstrap(
     let (_, metadata) = decode_packet(root, &content, conversation, id, key)?
         .ok_or_else(|| anyhow::anyhow!("Missing authenticated owned bootstrap."))?;
     validate_bootstrap(&metadata)?;
+    if let Some(proof) = &snapshot.realtime {
+        ensure!(
+            !proof["records"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|r| r["beforeTurnId"] == first["id"]),
+            "Owned bootstrap cannot contain earlier realtime history."
+        );
+    }
     if let Some(proof) = &snapshot.late_item_evidence {
         ensure!(
             !proof["placements"]

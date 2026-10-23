@@ -168,6 +168,41 @@ and all user/tool/reasoning activity; no text is fabricated or omitted. Missing
 final items, commentary-only endings, non-string text, active items and error
 turns retain their existing guards. Rendered text length is not completion proof.
 Never fabricate a user message to force role alternation.
+New enrollments persist `realtimeHistory: "transcript-v1"` on the conversation
+and every record it creates. Only that policy enables realtime reconstruction.
+Existing records without it retain their API-only representation and original
+raw-proof requirements; never upgrade them implicitly, retry a failed checkpoint
+with a different representation, or omit a newly unsupported API tail to keep a
+checkpoint matching. An input-only API handoff on a legacy record still fails
+the original final-response guard. The policy is selected before the first read,
+survives managed handoffs and restart, and is bound by cold-verification hints.
+Cold-import allocations save it before publication; a resumed allocation without
+it keeps its original API-only contract.
+
+Policy-enabled realtime voice histories keep their persisted `realtime_item` transcript segments
+in speaker order with exact text. Preserve each complete original row, including
+unknown event types and extra fields, as inert metadata; keep the full API handoff
+items unchanged too. The ordinary two-pass native reader admits realtime evidence
+only for native `threadSource: voice_chat` or an API realtime-delegation input.
+Read the exact native metadata rollout with the usual no-follow, ownership,
+foreign-write, nanosecond identity and byte-limit checks, and compare the selected
+raw evidence across both complete API passes. Record that raw dependency in cold
+verification, since voice activity need not add an API turn.
+
+A completed input-only transcript-tail flush is a historical control boundary
+only when one closed raw session proves its exact transcript delta, persisted
+input, completed UserMessage and full API identity/content, plus its native
+start/completion identities and recorded times. Preserve the native lifecycle
+records instead of inventing an agentMessage or final answer. Any known raw model,
+reasoning, tool or item-start activity absent from the API, an incomplete session,
+ambiguous identity or changed source still blocks that boundary. Unknown handoff
+context remains whole inert data, not inferred model activity. Place realtime
+records at their exact raw arrival positions relative to API item completions;
+normal text continuations retain the full canonical prefix. Withhold open voice
+sessions as incomplete tails. Recovery requires the session records in the exact
+current rollout; missing inherited realtime evidence is never reconstructed from
+the handoff text alone. These read proofs do not authorize archival, retirement,
+ownership changes or native writes; their existing exact guards remain unchanged.
 Desktop create_thread can deliver the first request as a codex_app function
 output instead of a userMessage. Only its exact initial delegation envelope
 establishes request context; preserve the event's assistant role and full inert

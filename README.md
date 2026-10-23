@@ -4,7 +4,7 @@ Let Codex and Claude Code work together on your Mac: ask one to delegate a task
 to the other, hand a task over, message an existing chat, and continue a
 conversation in the other app.
 
-Current build: **Claudex.app 2.0.15**, bundling **Claude Mod 0.8.73**.
+Current build: **Claudex.app 2.0.16**, bundling **Claude Mod 0.8.74**.
 Latest published release: **2.0.5** · [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.5)
 · [Release notes](docs/releases/2.0.5.md)
 
@@ -71,8 +71,9 @@ access). **Quit Claudex** stops its services safely; closing the window does not
 - Incomplete or opaque histories, conflicting edits on both sides and active
   native writers pause synchronization instead of discarding anything. Failed
   or uncertain writes are never replayed automatically.
-- Codex voice-only chats whose replies exist only in realtime transcripts cannot
-  currently be imported; their full history API exposes no assistant reply.
+- Newly enrolled Codex voice chats preserve saved speaker transcripts and native
+  handoffs, not original audio. Existing checkpoints keep their representation;
+  open realtime sessions wait for a persisted closed boundary.
 - Vendor app updates can require Claudex to revalidate its integrations; the
   checklist reports this.
 

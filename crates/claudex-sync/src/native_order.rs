@@ -9,6 +9,7 @@ pub struct Entry {
     pub turn_id: String,
     pub item: Option<Value>,
     pub status: Option<Value>,
+    pub realtime: Option<Value>,
 }
 fn key(turn: &str, item: &str) -> (String, String) {
     (turn.into(), item.into())
@@ -131,6 +132,7 @@ pub fn entries(snapshot: &Snapshot) -> Result<Vec<Entry>> {
                         turn_id: turn.into(),
                         item: Some((*item).clone()),
                         status: None,
+                        realtime: None,
                     });
             }
         }
@@ -144,6 +146,7 @@ pub fn entries(snapshot: &Snapshot) -> Result<Vec<Entry>> {
                     turn_id: turn.into(),
                     item: Some(item.clone()),
                     status: None,
+                    realtime: None,
                 });
             }
         }
@@ -156,9 +159,66 @@ pub fn entries(snapshot: &Snapshot) -> Result<Vec<Entry>> {
                 turn_id: turn.into(),
                 item: None,
                 status: Some(status),
+                realtime: None,
             });
         }
         entries.extend(after.remove(turn).unwrap_or_default());
+    }
+    if let Some(proof) = &snapshot.realtime {
+        crate::native_realtime::validate(proof)?;
+        let mut additions = BTreeMap::<usize, Vec<Entry>>::new();
+        let mut previous = 0;
+        for record in proof["records"].as_array().unwrap() {
+            let (position, turn_id) = if let Some(turn) = record["beforeTurnId"].as_str() {
+                let item = record["beforeItemId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Realtime item anchor missing."))?;
+                let position = entries
+                    .iter()
+                    .position(|e| {
+                        e.turn_id == turn && e.item.as_ref().is_some_and(|i| i["id"] == item)
+                    })
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("Realtime anchor is absent from exported API history.")
+                    })?;
+                (position, turn)
+            } else {
+                let turn = record["afterTurnId"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Realtime turn anchor missing."))?;
+                let position =
+                    entries
+                        .iter()
+                        .rposition(|e| e.turn_id == turn)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Realtime boundary is absent from exported API history."
+                            )
+                        })?
+                        + 1;
+                (position, turn)
+            };
+            ensure!(
+                position >= previous && record["row"].is_object(),
+                "Realtime record ordering contradicts API history."
+            );
+            previous = position;
+            additions.entry(position).or_default().push(Entry {
+                turn_id: turn_id.into(),
+                item: None,
+                status: None,
+                realtime: Some(record["row"].clone()),
+            });
+        }
+        let end = entries.len();
+        let mut merged = vec![];
+        for (position, entry) in entries.into_iter().enumerate() {
+            merged.extend(additions.remove(&position).unwrap_or_default());
+            merged.push(entry);
+        }
+        merged.extend(additions.remove(&end).unwrap_or_default());
+        ensure!(additions.is_empty(), "Unplaced realtime historical event.");
+        entries = merged;
     }
     Ok(entries)
 }
@@ -211,8 +271,9 @@ mod tests {
     fn late_arrival_order_is_exact_and_legacy_checkpoint_representation_is_available() -> Result<()>
     {
         let late = json!({"type":"commandExecution","id":"command","status":"completed","command":"echo fixture","aggregatedOutput":"fixture"});
-        let digest =
-            crate::history::digest_bytes(claudex_core::json::canonical_stringify(&late)?.as_bytes());
+        let digest = crate::history::digest_bytes(
+            claudex_core::json::canonical_stringify(&late)?.as_bytes(),
+        );
         let mut snapshot: Snapshot = serde_json::from_value(
             json!({"turns":[{"id":"first","status":"completed","items":[{"type":"userMessage","id":"request","content":[]},late]},{"id":"second","status":"completed","items":[{"type":"agentMessage","id":"reply","text":"Answer"}]}],"digest":"fixture","itemCount":4,"bytes":100,"pages":1,"completedPrefix":true,"incompleteTail":false,"incompleteTailCount":0,"closedTail":false,"lateItemEvidence":{"placements":[{"turnId":"first","itemId":"command","afterTurnId":"second","itemDigest":digest}],"sourceIdentity":{},"evidenceDigest":"a".repeat(64)}}),
         )?;
@@ -240,7 +301,8 @@ mod tests {
         snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemDigest"] =
             json!("not a digest");
         assert!(entries(&snapshot).is_err());
-        snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemDigest"] = json!(digest);
+        snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemDigest"] =
+            json!(digest);
         snapshot.late_item_evidence.as_mut().unwrap()["placements"][0]["itemId"] = json!("other");
         assert!(entries(&snapshot).is_err());
         Ok(())

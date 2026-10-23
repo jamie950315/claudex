@@ -196,9 +196,19 @@ struct RuntimeProofs {
     rollout: crate::native_proofs::RolloutProofs,
     provenance: crate::codex_provenance::Provenance,
     late_items_enabled: bool,
+    realtime_policy: bool,
+    realtime_enabled: bool,
 }
 #[async_trait]
 impl native_history::Proofs for RuntimeProofs {
+    async fn realtime(&self, id: &str, turns: &[Value]) -> Result<Option<Value>> {
+        if !self.realtime_policy
+            || !self.realtime_enabled && !crate::native_realtime::has_handoff(turns)
+        {
+            return Ok(None);
+        }
+        native_history::Proofs::realtime(&self.rollout, id, turns).await
+    }
     async fn empty_turns(&self, id: &str, turns: &[Value]) -> Result<Option<Value>> {
         native_history::Proofs::empty_turns(&self.rollout, id, turns).await
     }
@@ -305,6 +315,7 @@ impl Runtime {
             include_str!("owned_history.rs"),
             include_str!("native_history.rs"),
             include_str!("native_proofs.rs"),
+            include_str!("native_realtime.rs"),
             include_str!("native_order.rs"),
             include_str!("codex_provenance.rs"),
             include_str!("rollout_header.rs"),
@@ -853,6 +864,8 @@ impl Runtime {
                 .with_origin_cwd(origin_cwd),
                 provenance: provenance.clone(),
                 late_items_enabled: false,
+                realtime_policy: crate::native_realtime::enabled(&r.extra)?,
+                realtime_enabled: thread["threadSource"] == "voice_chat",
             };
             let mut snapshot = native_history::read_stable(
                 &client,
@@ -3009,6 +3022,8 @@ mod tests {
                 max_bytes: 1024 * 1024,
             },
             late_items_enabled: false,
+            realtime_policy: false,
+            realtime_enabled: false,
         };
         let turns = vec![json!({"items":[{"type":"commandExecution"}]})];
         let empty = std::collections::BTreeSet::new();
@@ -3016,6 +3031,37 @@ mod tests {
             native_history::Proofs::late_items(&proofs, &id, &turns, &empty)
                 .await?
                 .is_none()
+        );
+        assert!(
+            native_history::Proofs::realtime(&proofs, &id, &turns)
+                .await?
+                .is_none()
+        );
+        let handoff = vec![
+            json!({"items":[{"type":"userMessage","content":[{"type":"text","text":"<realtime_delegation>"}]}]}),
+        ];
+        proofs.realtime_enabled = true;
+        assert!(
+            native_history::Proofs::realtime(&proofs, &id, &handoff)
+                .await?
+                .is_none()
+        );
+        proofs.realtime_policy = true;
+        assert!(
+            native_history::Proofs::realtime(&proofs, &id, &turns)
+                .await
+                .is_err()
+        );
+        proofs.realtime_enabled = false;
+        assert!(
+            native_history::Proofs::realtime(&proofs, &id, &turns)
+                .await?
+                .is_none()
+        );
+        assert!(
+            native_history::Proofs::realtime(&proofs, &id, &handoff)
+                .await
+                .is_err()
         );
         proofs.late_items_enabled = true;
         assert!(

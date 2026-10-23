@@ -41,11 +41,15 @@ A Claude conversation continued from Codex starts in the permission mode set by
 you start yourself would; a project's committed settings cannot raise it. The mode
 is read when Claudex starts that conversation's Claude process.
 
-Codex voice-only chats are not imported when their full history API exposes only
-user handoff items and their assistant replies remain in separate realtime
-transcript segments. A completed native status alone cannot supply the missing
-reply. These sources remain visible in diagnostics; existing synchronized
-conversations continue normally.
+Newly enrolled Codex voice chats preserve saved realtime transcript segments in their native
+speaker order, with session events and additional metadata kept as inert history.
+The complete API handoff items are retained too. Two complete API reads and stable
+rollout proofs must agree on the closed realtime session and its persisted flush
+turn; a completed user-only status is not sufficient by itself. Original audio
+is not recovered. Ordinary text continuations still require their native final
+response, and active realtime tails remain withheld. Previously enrolled histories
+keep their API-based representation and exact checkpoints; an update does not
+insert older transcript segments into their saved prefix.
 
 ## Desktop integration
 

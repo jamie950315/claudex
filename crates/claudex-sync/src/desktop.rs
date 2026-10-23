@@ -913,6 +913,7 @@ impl DesktopBridge {
         source
             .extra
             .insert("displayScreenshots".into(), json!("omitted"));
+        crate::native_realtime::enroll(&mut source.extra);
         let data = self.inspect(&source).await?;
         if let Some(saved) = state
             .records
@@ -944,6 +945,7 @@ impl DesktopBridge {
             .unwrap_or_else(|| "Claudex conversation".into());
         let mut extra = Map::new();
         extra.insert("displayScreenshots".into(), json!("omitted"));
+        crate::native_realtime::inherit(&source.extra, &mut extra);
         state.conversations.insert(
             id.clone(),
             Conversation {
@@ -975,7 +977,7 @@ impl DesktopBridge {
         &self,
         id: &str,
         source: Record,
-        target: Record,
+        mut target: Record,
         title: &str,
     ) -> Result<Value> {
         Uuid::parse_str(id)?;
@@ -1021,6 +1023,7 @@ impl DesktopBridge {
                 json!({"conversationId":id,"existing":true,"tracking":if state.conversations[id].tracked(){"active"}else{"stopped"}}),
             );
         }
+        crate::native_realtime::inherit(&source.extra, &mut target.extra);
         let from = self.inspect(&source).await?;
         let to = self.inspect(&target).await?;
         let canonical = Checkpoint::of(&from.common)?;
@@ -1034,6 +1037,11 @@ impl DesktopBridge {
             canonical.exact(&latest.common)? && latest.common.cwd()? == cwd,
             "Cold-import source changed during pairing."
         );
+        let mut extra = json!({"discoveryMode":"cold-import"})
+            .as_object()
+            .unwrap()
+            .clone();
+        crate::native_realtime::inherit(&source.extra, &mut extra);
         state.conversations.insert(
             id.into(),
             Conversation {
@@ -1045,10 +1053,7 @@ impl DesktopBridge {
                     title.into()
                 },
                 canonical: canonical.clone(),
-                extra: json!({"discoveryMode":"cold-import"})
-                    .as_object()
-                    .unwrap()
-                    .clone(),
+                extra,
             },
         );
         for (mut record, data) in [(source, latest), (target, to)] {
@@ -1383,6 +1388,7 @@ impl DesktopBridge {
                 context_refresh,
             })
             .await?;
+        crate::native_realtime::inherit(&c.extra, &mut record.extra);
         let reuse = target
             .as_ref()
             .is_some_and(|t| t.managed && t.native_id == record.native_id);
@@ -2411,6 +2417,7 @@ impl DesktopBridge {
         let receipt = json!({"version":1,"fromConversationId":id,"originalNativeId":native_id,"originalRecordId":record_id,"previousCheckpoint":original.checkpoint,"separatedCheckpoint":expected,"at":now()});
         let mut extra = Map::new();
         extra.insert("originalSplit".into(), receipt);
+        crate::native_realtime::inherit(&original.extra, &mut extra);
         state.conversations.insert(
             branch_id.clone(),
             Conversation {
@@ -3698,6 +3705,46 @@ mod tests {
         let error = bridge.sync(&id).await.unwrap_err().to_string();
         assert!(error.contains("diverged"), "{error}");
         assert_eq!(native.lock().unwrap().applications, 4);
+    }
+    #[tokio::test]
+    async fn realtime_policy_enrolls_new_records_but_never_upgrades_existing_histories()
+    -> Result<()> {
+        for legacy in [false, true] {
+            let (_temp, bridge, _native, source) = fixture();
+            let id = bridge.track(source.clone(), None).await?["conversationId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let mut state = bridge.status()?;
+            assert!(crate::native_realtime::enabled(
+                &state.conversations[&id].extra
+            )?);
+            assert!(crate::native_realtime::enabled(&state.records[0].extra)?);
+            if legacy {
+                state
+                    .conversations
+                    .get_mut(&id)
+                    .unwrap()
+                    .extra
+                    .remove(crate::native_realtime::POLICY_KEY);
+                state.records[0]
+                    .extra
+                    .remove(crate::native_realtime::POLICY_KEY);
+                bridge.save(&mut state, None)?;
+            }
+            assert_eq!(bridge.track(source, None).await?["existing"], true);
+            bridge.sync(&id).await?;
+            let state = bridge.status()?;
+            assert_eq!(
+                crate::native_realtime::enabled(&state.conversations[&id].extra)?,
+                !legacy
+            );
+            assert!(state.records.len() >= 2);
+            for record in &state.records {
+                assert_eq!(crate::native_realtime::enabled(&record.extra)?, !legacy);
+            }
+        }
+        Ok(())
     }
     #[tokio::test]
     async fn cold_import_pair_authenticates_both_originals_and_is_idempotent() {

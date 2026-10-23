@@ -28,6 +28,7 @@ pub mod native_chat;
 pub mod native_history;
 pub mod native_order;
 pub mod native_proofs;
+pub mod native_realtime;
 pub mod original_archive;
 pub mod owned_history;
 pub mod owner;

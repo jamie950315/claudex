@@ -75,10 +75,15 @@ pub struct Snapshot {
     pub native_item_order: Option<String>,
     #[serde(default)]
     pub late_item_native: usize,
+    #[serde(default)]
+    pub realtime: Option<Value>,
 }
 
 #[async_trait]
 pub trait Proofs: Send + Sync {
+    async fn realtime(&self, _thread_id: &str, _turns: &[Value]) -> Result<Option<Value>> {
+        Ok(None)
+    }
     async fn late_items(
         &self,
         _thread_id: &str,
@@ -152,6 +157,7 @@ fn validate_turn(
     prior_request: bool,
     allow_delegation: bool,
     empty_control: bool,
+    realtime_control: bool,
 ) -> Result<Option<i64>> {
     ensure!(
         turn.is_object()
@@ -220,7 +226,7 @@ fn validate_turn(
     if prior_request && compaction_control(turn) {
         return Ok(started.or(previous));
     }
-    if status == "completed" {
+    if status == "completed" && !realtime_control {
         let agent = last_agent
             .ok_or_else(|| anyhow::anyhow!("Completed native turn lacks final response."))?;
         // Quiet native turns may close with an intentionally empty final
@@ -332,7 +338,6 @@ async fn read_pass(
             })
             .cloned()
             .collect();
-        let mut controls = HashSet::new();
         if !empty.is_empty() {
             if let Some(proof) = proofs.empty_turns(id, &empty).await? {
                 let turn_ids = proof["turnIds"]
@@ -345,54 +350,27 @@ async fn read_pass(
                         && turn_ids.iter().zip(&empty).all(|(id, t)| *id == t["id"]),
                     "Invalid empty-turn provenance."
                 );
-                for value in turn_ids {
-                    controls.insert(
-                        value
-                            .as_str()
-                            .ok_or_else(|| anyhow::anyhow!("Invalid empty-turn identity."))?
-                            .to_owned(),
-                    );
-                }
                 evidence.push(json!({"apiDigest":digest_json(&json!(empty))?,"proof":proof}));
             }
         }
         for turn in data {
-            if turns.is_empty()
-                && turn["status"] == "completed"
-                && turn["items"].as_array().is_some_and(|a| {
-                    a.iter().any(|i| i["type"] == "agentMessage")
-                        && !a.iter().any(|i| i["type"] == "userMessage")
-                        && !a.first().is_some_and(initial_delegation)
-                })
-            {
-                goal = proofs.initial_goal(id, turn).await?;
-                prior_request = goal.is_some();
-            }
-            let control = turn["id"].as_str().is_some_and(|id| controls.contains(id));
-            previous = validate_turn(
-                turn,
-                previous,
-                completed_prefix,
-                prior_request,
-                turns.is_empty(),
-                control,
-            )?;
-            let native_id = turn["id"].as_str().unwrap();
+            let native_id = turn["id"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("Native turn identity missing."))?;
             ensure!(
                 ids.insert(native_id.to_owned()),
                 "Duplicate native turn identity across pages."
             );
-            let native_items = turn["items"].as_array().unwrap();
+            let native_items = turn["items"]
+                .as_array()
+                .ok_or_else(|| anyhow::anyhow!("Native turn items missing."))?;
             items += native_items.len();
             ensure!(
                 items <= limits.max_items,
                 "Native history item limit exceeded."
             );
-            prior_request |= native_items.iter().any(|i| i["type"] == "userMessage")
-                || turns.is_empty() && native_items.first().is_some_and(initial_delegation);
-            if !control {
-                turns.push(turn.clone());
-            }
+            turns.push(turn.clone());
         }
         match next {
             None => break,
@@ -402,6 +380,55 @@ async fn read_pass(
             }
         }
     }
+    let realtime = proofs.realtime(id, &turns).await?;
+    if let Some(proof) = &realtime {
+        crate::native_realtime::validate(proof)?;
+        bytes += canonical(&proof["records"])?.len();
+        ensure!(
+            bytes <= limits.max_bytes,
+            "Reconstructed realtime history exceeds its byte limit."
+        );
+        ensure!(
+            items + proof["records"].as_array().unwrap().len() <= limits.max_items,
+            "Reconstructed realtime history exceeds its item limit."
+        );
+    }
+    let controls = evidence
+        .iter()
+        .flat_map(|e| e["proof"]["turnIds"].as_array().into_iter().flatten())
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    let mut retained = vec![];
+    for turn in &turns {
+        if retained.is_empty()
+            && turn["status"] == "completed"
+            && turn["items"].as_array().is_some_and(|a| {
+                a.iter().any(|i| i["type"] == "agentMessage")
+                    && !a.iter().any(|i| i["type"] == "userMessage")
+                    && !a.first().is_some_and(initial_delegation)
+            })
+        {
+            goal = proofs.initial_goal(id, turn).await?;
+            prior_request = goal.is_some();
+        }
+        let control = controls.contains(turn["id"].as_str().unwrap());
+        previous = validate_turn(
+            turn,
+            previous,
+            completed_prefix,
+            prior_request,
+            retained.is_empty(),
+            control,
+            crate::native_realtime::control(realtime.as_ref(), turn["id"].as_str().unwrap()),
+        )?;
+        let native_items = turn["items"].as_array().unwrap();
+        prior_request |= native_items.iter().any(|i| i["type"] == "userMessage")
+            || retained.is_empty() && native_items.first().is_some_and(initial_delegation);
+        if !control {
+            retained.push(turn.clone());
+        }
+    }
+    let mut turns = retained;
     let last = turns.iter().rposition(response_boundary).ok_or_else(|| {
         anyhow::anyhow!("No completed persisted native history; wait for complete turn.")
     })?;
@@ -435,11 +462,17 @@ async fn read_pass(
         .iter()
         .map(|t| t["items"].as_array().unwrap().len())
         .sum();
-    let digest = if let Some(goal) = &goal {
+    let mut digest = if let Some(goal) = &goal {
         digest_json(&json!({"turns":turns,"initialGoal":goal["request"]}))?
     } else {
         digest_json(&json!(turns))?
     };
+    if let Some(proof) = &realtime {
+        digest = digest_json(&json!({"apiDigest":digest,"realtime":proof["evidenceDigest"]}))?;
+    }
+    let realtime_tail = realtime
+        .as_ref()
+        .is_some_and(|p| p["incompleteTail"] == true);
     let empty = evidence
         .iter()
         .flat_map(|e| e["proof"]["turnIds"].as_array().into_iter().flatten())
@@ -454,14 +487,15 @@ async fn read_pass(
         bytes,
         pages,
         completed_prefix,
-        incomplete_tail: tail > 0,
-        incomplete_tail_count: tail,
+        incomplete_tail: tail > 0 || realtime_tail,
+        incomplete_tail_count: tail + usize::from(realtime_tail),
         closed_tail: closed,
         empty_turn_evidence: evidence,
         initial_goal: goal,
         late_item_evidence,
         native_item_order: None,
         late_item_native: 0,
+        realtime,
     };
     crate::native_order::entries(&snapshot)?;
     Ok(snapshot)
@@ -481,6 +515,7 @@ pub async fn read_stable(
     ensure!(
         first.digest == second.digest
             && first.empty_turn_evidence == second.empty_turn_evidence
+            && first.realtime == second.realtime
             && first.initial_goal == second.initial_goal
             && first.late_item_evidence == second.late_item_evidence,
         "Native source history changed between complete reads."
@@ -606,6 +641,10 @@ pub fn convert(
         messages.push(message);
     }
     for entry in crate::native_order::entries(snapshot)? {
+        if let Some(row) = entry.realtime.as_ref() {
+            messages.push(crate::native_realtime::message(row)?);
+            continue;
+        }
         let turn = snapshot
             .turns
             .iter()
@@ -809,15 +848,36 @@ mod tests {
                 {"id":"request","type":"userMessage","content":[{"type":"text","text":"Report only when attention is needed."}]},
                 {"id":"inspection","type":"commandExecution","status":"completed","aggregatedOutput":"Progressing normally."},
                 {"id":"final","type":"agentMessage","phase":"final_answer","text":""}]});
-        let snapshot = read_stable(&QuietTurnRpc(turn.clone()), "thread", &Limits::default(), true, false, &NoProofs).await?;
+        let snapshot = read_stable(
+            &QuietTurnRpc(turn.clone()),
+            "thread",
+            &Limits::default(),
+            true,
+            false,
+            &NoProofs,
+        )
+        .await?;
         assert_eq!(snapshot.turns, vec![turn.clone()]);
         assert_eq!(snapshot.item_count, 3);
         assert!(!snapshot.incomplete_tail);
         let common = convert(&snapshot, "thread", "/tmp", None, false)?;
         assert_eq!(common.messages.len(), 3);
-        assert_eq!(common.messages[2].content[0], json!({"type":"text","text":""}));
-        assert!(common.messages[1].content[0]["text"].as_str().unwrap().contains("Progressing normally."));
-        assert!(common.messages[2].content[1]["text"].as_str().unwrap().contains("final_answer"));
+        assert_eq!(
+            common.messages[2].content[0],
+            json!({"type":"text","text":""})
+        );
+        assert!(
+            common.messages[1].content[0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("Progressing normally.")
+        );
+        assert!(
+            common.messages[2].content[1]["text"]
+                .as_str()
+                .unwrap()
+                .contains("final_answer")
+        );
         for (pointer, replacement) in [
             ("/items/2/text", Value::Null),
             ("/items/2/phase", json!("commentary")),
@@ -826,12 +886,34 @@ mod tests {
         ] {
             let mut invalid = turn.clone();
             *invalid.pointer_mut(pointer).unwrap() = replacement;
-            assert!(read_stable(&QuietTurnRpc(invalid), "thread", &Limits::default(), true, false, &NoProofs).await.is_err());
+            assert!(
+                read_stable(
+                    &QuietTurnRpc(invalid),
+                    "thread",
+                    &Limits::default(),
+                    true,
+                    false,
+                    &NoProofs
+                )
+                .await
+                .is_err()
+            );
         }
         let mut active = turn;
         active["status"] = json!("inProgress");
         active["completedAt"] = Value::Null;
-        assert!(read_stable(&QuietTurnRpc(active), "thread", &Limits::default(), true, false, &NoProofs).await.is_err());
+        assert!(
+            read_stable(
+                &QuietTurnRpc(active),
+                "thread",
+                &Limits::default(),
+                true,
+                false,
+                &NoProofs
+            )
+            .await
+            .is_err()
+        );
         Ok(())
     }
     #[test]
@@ -884,6 +966,7 @@ mod tests {
             incomplete_tail: false,
             incomplete_tail_count: 0,
             closed_tail: false,
+            realtime: None,
             empty_turn_evidence: vec![],
             late_item_evidence: None,
             native_item_order: None,
@@ -925,6 +1008,7 @@ mod tests {
             incomplete_tail: false,
             incomplete_tail_count: 0,
             closed_tail: false,
+            realtime: None,
             empty_turn_evidence: vec![],
             initial_goal: None,
             late_item_evidence: None,
@@ -979,6 +1063,7 @@ mod tests {
             incomplete_tail: false,
             incomplete_tail_count: 0,
             closed_tail: false,
+            realtime: None,
             empty_turn_evidence: vec![],
             initial_goal: None,
             late_item_evidence: None,
@@ -1011,7 +1096,15 @@ mod tests {
                     {"id":"a1","type":"agentMessage","phase":"final_answer","text":"Done"}]})
         };
         let read = |activity: Value| async move {
-            read_stable(&TurnsRpc(vec![turn(activity)]), "thread", &Limits::default(), true, false, &NoProofs).await
+            read_stable(
+                &TurnsRpc(vec![turn(activity)]),
+                "thread",
+                &Limits::default(),
+                true,
+                false,
+                &NoProofs,
+            )
+            .await
         };
         let before = json!({"id":"call","type":"subAgentActivity","kind":"started","agentThreadId":"child","agentPath":"/root/review"});
         let mut after = before.clone();
@@ -1028,18 +1121,33 @@ mod tests {
         // New enrollments and checkpoints made with the fields keep them.
         let with_fields = convert(&current, "thread", "/tmp", None, true)?;
         assert_eq!(
-            convert_checkpoint(&current, "thread", "/tmp", &crate::desktop::Checkpoint::empty())?,
+            convert_checkpoint(
+                &current,
+                "thread",
+                "/tmp",
+                &crate::desktop::Checkpoint::empty()
+            )?,
             with_fields
         );
         assert_eq!(
-            convert_checkpoint(&current, "thread", "/tmp", &crate::desktop::Checkpoint::of(&with_fields)?)?,
+            convert_checkpoint(
+                &current,
+                "thread",
+                "/tmp",
+                &crate::desktop::Checkpoint::of(&with_fields)?
+            )?,
             with_fields
         );
         // A non-null value is real content and is never dropped.
         let mut model = after;
         model["model"] = json!("gpt-6");
         let current = read(model).await?;
-        assert!(!checkpoint.contains(&convert_checkpoint(&current, "thread", "/tmp", &checkpoint)?)?);
+        assert!(!checkpoint.contains(&convert_checkpoint(
+            &current,
+            "thread",
+            "/tmp",
+            &checkpoint
+        )?)?);
         Ok(())
     }
     #[tokio::test]
