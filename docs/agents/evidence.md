@@ -6,6 +6,31 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Working-directory removal during unpublished handoff (2026-10-23)
+
+Development-signed App 2.0.17 / Mod 0.8.75 (`a45a30e`) was installed through
+normal stop/drain, bundle replacement and app-owned startup. Its ordinary watcher
+recovered a real prepared Codex snapshot after a disposable source directory had
+been removed: independent native and file absence proofs led to one atomic
+pending cancellation and stopped enrollment. The source record and canonical
+checkpoint remained identical; its original native file remained present.
+Another conversation completed its normal handoff after this recovery, with no
+pending error or tracked-conversation block. The real GUI replaced the paused
+warning with normal background-history checking. This was scoped recovery
+acceptance; the full startup history sweep was still running at observation.
+Bundled, installed and freshly observed loaded Mod versions were 0.8.75.
+No native app restart, model prompt, transcript edit or uncertain resend was used.
+
+Five new isolated regressions cover mid-read and mid-plan directory removal,
+restart/exclusion and unrelated delivery, absent unpublished versus applied or
+uncertain pending work, no resend after a native write, and independent absence
+proofs for Codex's not-loaded response. Workspace tests passed 375 checks before
+one watcher scheduling check timed out under the parallel run; that exact check
+passed alone. The remaining work-crate checks passed 44 tests, the final added
+post-write regression passed, and Mod/entrypoint host checks passed 52 tests.
+The signed complete app build and installed deep/strict signature verification
+passed. Private recovery bundles and machine-specific evidence stay outside Git.
+
 ## Persisted Codex realtime voice transcripts (2026-10-23)
 
 Development-signed App 2.0.16 / Mod 0.8.74 (`5aaba5b`) reconstructed a closed
