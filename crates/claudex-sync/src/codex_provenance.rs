@@ -1306,10 +1306,37 @@ struct Request {
     turn: String,
     item: Value,
     interrupted_successor: Option<String>,
+    reported_items: BTreeMap<String, String>,
 }
 impl Request {
     fn key(&self) -> String {
         key(&self.turn, self.item["id"].as_str().unwrap())
+    }
+    fn reports_work(&self, row: &Value, owner: &str) -> bool {
+        let p = &row["payload"];
+        if row["type"] == "event_msg"
+            && matches!(p["type"].as_str(), Some("item_started" | "item_completed"))
+        {
+            let item = &p["item"];
+            let Some(kind) = item["type"].as_str().filter(|s| !s.is_empty()) else {
+                return false;
+            };
+            let mut chars = kind.chars();
+            let kind = chars.next().unwrap().to_lowercase().to_string() + chars.as_str();
+            return p.get("thread_id").is_none_or(|id| id == owner)
+                && p.get("turn_id").is_none_or(|id| id == &self.turn)
+                && item["id"].as_str().is_some_and(|id| {
+                    self.reported_items
+                        .get(id)
+                        .is_some_and(|value| value == &kind)
+                });
+        }
+        // Response and tool rows are projected by the full native API. An
+        // input-only API turn must not hide raw work; a turn with reported work
+        // keeps it, while identity-bearing completions above must agree.
+        self.reported_items
+            .values()
+            .any(|kind| kind != "userMessage")
     }
 }
 #[derive(Clone, Debug)]
@@ -1710,15 +1737,15 @@ impl Provenance {
                             && p["item"]["type"] == "UserMessage"
                             && p["item"]["id"] != r.item["id"])
                 {
-                    s.unreported_work = true;
+                    s.unreported_work |= !r.reports_work(row, owner);
                 }
             }
             if row["type"] == "event_msg" && p["type"] == "task_started" {
                 for (r, s) in requests.iter().zip(&mut states) {
                     if Some(&r.turn) == active.as_ref() && !s.closed {
-                        // A killed native backend can persist the full input but
-                        // no abort event. Its stable API interruption and exact
-                        // completed successor establish a read-only boundary.
+                        // A native interruption can omit its abort event after
+                        // persisting input and work. Its stable closed API turn
+                        // and exact completed successor establish a read boundary.
                         ensure!(
                             s.completion
                                 && s.candidate.is_some()
@@ -1894,10 +1921,9 @@ impl Provenance {
                         interrupted_successor: if turn["status"] == "interrupted"
                             && turn["error"].is_null()
                             && turn["itemsView"] == "full"
-                            && turn["items"]
-                                .as_array()
-                                .is_some_and(|items| items.len() == 1)
-                        {
+                            && turn["items"].as_array().is_some_and(|items| {
+                                items.iter().all(|item| item["status"] != "inProgress")
+                            }) {
                             turns
                                 .get(index + 1)
                                 .filter(|next| {
@@ -1912,6 +1938,17 @@ impl Provenance {
                         } else {
                             None
                         },
+                        reported_items: turn["items"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter_map(|item| {
+                                Some((
+                                    item["id"].as_str()?.to_owned(),
+                                    item["type"].as_str()?.to_owned(),
+                                ))
+                            })
+                            .collect(),
                     });
                 }
                 count += 1;
@@ -2367,6 +2404,68 @@ mod tests {
                 9 => rows.insert(6,json!({"type":"response_item","payload":{"type":"local_shell_call","call_id":"uncertain-shell"}})),
                 10 => rows.insert(6,json!({"type":"event_msg","payload":{"type":"collab_agent_spawn_end","turn_id":TURN}})),
                 _ => rows.push(json!({"type":"event_msg","payload":{"type":"image_generation_begin","turn_id":TURN}})),
+            }
+            write(&f.source.path, &rows);
+            assert!(
+                f.source.hydrate(&mut turns, &[], None, 1_048_576).is_err(),
+                "mutation {mutation}"
+            );
+        }
+    }
+    #[test]
+    fn interrupted_image_work_keeps_full_api_items_without_a_raw_abort() {
+        let mut f = fixture();
+        f.turns[0]["status"] = json!("interrupted");
+        f.turns[0]["completedAt"] = Value::Null;
+        let work = [
+            json!({"type":"userMessage","id":"earlier-input","content":[{"type":"text","text":"Continue"}]}),
+            json!({"type":"reasoning","id":"thought","summary":["Historical thought"]}),
+            json!({"type":"commandExecution","id":"command","status":"completed","aggregatedOutput":"Saved output"}),
+            json!({"type":"fileChange","id":"patch","status":"completed"}),
+            json!({"type":"futureNativeWork","id":"future","extra":"kept whole"}),
+        ];
+        f.turns[0]["items"]
+            .as_array_mut()
+            .unwrap()
+            .splice(0..0, work.clone());
+        f.rows.pop();
+        f.rows
+            .push(json!({"type":"response_item","payload":{"type":"reasoning","summary":[]}}));
+        for item in &work {
+            let mut raw = item.clone();
+            let kind = raw["type"].as_str().unwrap();
+            let mut chars = kind.chars();
+            raw["type"] = json!(chars.next().unwrap().to_uppercase().to_string() + chars.as_str());
+            f.rows.push(json!({"type":"event_msg","payload":{"type":"item_completed","thread_id":THREAD,"turn_id":TURN,"item":raw}}));
+        }
+        f.rows
+            .push(json!({"type":"event_msg","payload":{"type":"task_started","turn_id":AFTER}}));
+        f.rows
+            .push(json!({"type":"event_msg","payload":{"type":"task_complete","turn_id":AFTER}}));
+        f.turns.push(json!({"id":AFTER,"status":"completed","itemsView":"full","items":[{"id":"resumed","type":"agentMessage","text":"Resumed"}]}));
+        write(&f.source.path, &f.rows);
+        let before = fs::read(&f.source.path).unwrap();
+        let mut turns = f.turns.clone();
+        f.source
+            .hydrate(&mut turns, &[], None, 1_048_576)
+            .unwrap()
+            .verify()
+            .unwrap();
+        assert_eq!(json!(turns), expected_image_turns(&f.turns));
+        assert_eq!(fs::read(&f.source.path).unwrap(), before);
+        for mutation in 0..9 {
+            let mut rows = f.rows.clone();
+            let mut turns = f.turns.clone();
+            match mutation {
+                0 => turns[0]["items"][2]["status"] = json!("inProgress"),
+                1 => turns[0]["error"] = json!({"message":"failed"}),
+                2 => turns[0]["status"] = json!("inProgress"),
+                3 => turns[1]["status"] = json!("interrupted"),
+                4 => turns[0]["items"][2]["id"] = json!("another-command"),
+                5 => turns[0]["items"][2]["type"] = json!("anotherKind"),
+                6 => rows[9]["payload"]["thread_id"] = json!(SEGMENT),
+                7 => turns[0]["status"] = json!("failed"),
+                _ => turns[1]["error"] = json!({"message":"failed successor"}),
             }
             write(&f.source.path, &rows);
             assert!(
@@ -3142,12 +3241,16 @@ mod tests {
                         }
                     }
                     (Err(first), Err(second)) => {
-                        // A moved history can contradict its current API cwd;
-                        // preserve and report that ownership refusal on both passes.
+                        // Moved cwd and cross-thread forks retain their documented
+                        // late-item ownership refusals, independently of images.
+                        let expected = |error: &anyhow::Error| {
+                            error.to_string().contains("source identity differs")
+                                || error.to_string()
+                                    == "Late native items cannot inherit another thread's forked lifecycle."
+                        };
                         ensure!(
-                            first.to_string().contains("source identity differs")
-                                && second.to_string().contains("source identity differs"),
-                            "Real late-item audit refused an unexpected proof condition."
+                            expected(&first) && first.to_string() == second.to_string(),
+                            "Real late-item audit refused {id}: {first}; repeated: {second}"
                         );
                         late_refused += 1;
                     }

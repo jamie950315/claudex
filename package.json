@@ -1,6 +1,6 @@
 {
   "name": "claudex-local-bridge",
-  "version": "2.0.14",
+  "version": "2.0.15",
   "private": true,
   "type": "module",
   "description": "Bounded conversation synchronization and opt-in cross-model work between Codex and Claude Code.",
