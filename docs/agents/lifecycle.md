@@ -9,6 +9,19 @@ Contributor rules moved out of AGENTS.md; they are binding. Scope: Enrollment an
   Keep stopped native identities excluded across startup and event discovery.
   Directory restoration requires explicit resume-tracking. Permission errors,
   existing aliases and history conflicts remain visible under their normal guards.
+  Apply this at the coordinator entry and when a typed cwd read fails mid-sync,
+  not only in the watcher cache path. If the directory vanishes during a prepared
+  new Codex snapshot, normal recovery may stop it only under the same never-written
+  proof as `abort`: no planned rollout or native identity, no reuse, promotion,
+  relocation or archive intent. Revoke archive actions, recheck absence, and save
+  pending cancellation plus stopped tracking atomically. Preserve every record,
+  checkpoint and asset. Applied/uncertain work still requires normal recovery.
+  A native `thread not loaded` error is not absence: for a fresh unverified
+  snapshot only, independently prove no rollout (including compressed/rollover),
+  no loaded/stored/archived identity and no committed ledger identity; recheck
+  file and ledger absence after the native inventory. Inventory/permission errors
+  retain pending. Watcher recovery removes only the stopped conversation's queues
+  and stale block, then continues other work without a native resend.
 
 ## Holds that recover on their own
 

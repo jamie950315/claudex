@@ -522,9 +522,7 @@ impl Runtime {
                     std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
                 ) =>
             {
-                anyhow::bail!(
-                    "CLAUDEX_TRACKED_CWD_UNAVAILABLE: saved working directory is unavailable."
-                )
+                return Err(crate::desktop::WorkingDirectoryUnavailable.into());
             }
             Err(error) => return Err(error.into()),
         };
@@ -2252,10 +2250,8 @@ impl Adapter for NativeAdapter {
         if self.side == Side::Claude {
             return Ok(r.path.try_exists()?);
         }
-        let response = self
-            .runtime
-            .client()
-            .await?
+        let client = self.runtime.client().await?;
+        let response = client
             .request(
                 "thread/read",
                 json!({"threadId":r.native_id,"includeTurns":false}),
@@ -2282,7 +2278,40 @@ impl Adapter for NativeAdapter {
             {
                 Ok(false)
             }
-            Err(e) => Err(e),
+            Err(e) => {
+                // Newer Codex returns not-loaded for an unpublished identity.
+                // That error alone also describes stored unloaded threads: only
+                // a fresh planned projection with independent absence proofs
+                // may be classified as never published.
+                let not_loaded = e
+                    .downcast_ref::<claudex_core::rpc::RpcError>()
+                    .is_some_and(|e| {
+                        !e.execution_uncertain
+                            && e.code == Some(json!(-32600))
+                            && e.message == format!("thread not loaded: {}", r.native_id)
+                    });
+                if not_loaded
+                    && r.managed
+                    && !r.verified
+                    && r.kind == "snapshot"
+                    && r.status == "current"
+                    && r.checkpoint == crate::desktop::Checkpoint::empty()
+                    && self.runtime.source_untracked(&r.native_id)?
+                    && crate::dependencies::rollout_absent(
+                        &self.runtime.options.codex_home,
+                        &r.native_id,
+                    )?
+                    && !crate::dependencies::inventory_contains(&client, &r.native_id, &[]).await?
+                    && crate::dependencies::rollout_absent(
+                        &self.runtime.options.codex_home,
+                        &r.native_id,
+                    )?
+                    && self.runtime.source_untracked(&r.native_id)?
+                {
+                    return Ok(false);
+                }
+                Err(e)
+            }
         }
     }
     async fn hide(&self, r: &Record) -> Result<Map<String, Value>> {
@@ -2530,9 +2559,29 @@ mod tests {
                         continue;
                     }
                     let mut state = state.lock().await;
+                    if request["method"] == "thread/read" && state["readError"].is_object() {
+                        ws.send(Message::Text(
+                            json!({"id":request["id"],"error":state["readError"]})
+                                .to_string()
+                                .into(),
+                        ))
+                        .await?;
+                        continue;
+                    }
                     let result = match request["method"].as_str() {
                         Some("initialize") => json!({}),
                         Some("thread/read") => json!({"thread":state["metadata"]}),
+                        Some("thread/loaded/list") => {
+                            json!({"data":state.get("loaded").cloned().unwrap_or(json!([])),"nextCursor":null})
+                        }
+                        Some("thread/list") => {
+                            if let Some(path) =
+                                state.as_object_mut().unwrap().remove("createRollout")
+                            {
+                                fs::write(path.as_str().unwrap(), "published")?;
+                            }
+                            json!({"data":state.get("stored").cloned().unwrap_or(json!([])),"nextCursor":null})
+                        }
                         Some("thread/turns/list") => {
                             if let Some(bytes) = state.as_object_mut().unwrap().remove("rewrite") {
                                 fs::write(
@@ -2608,6 +2657,56 @@ mod tests {
             self.server.await??;
             Ok(())
         }
+    }
+    #[tokio::test]
+    async fn unpublished_snapshot_not_loaded_requires_independent_absence() -> Result<()> {
+        let f = ClosedTailFixture::new().await?;
+        let id = Uuid::new_v4().to_string();
+        let sessions = storage::private_directory(f.runtime.options.codex_home.join("sessions"))?;
+        let path = sessions.join(format!("rollout-{id}.jsonl"));
+        let mut r = Record::source(Side::Codex, &path, &id);
+        r.managed = true;
+        r.kind = "snapshot".into();
+        r.status = "current".into();
+        storage::write_json(
+            f.runtime.options.root.join("desktop-state.json"),
+            &json!({"version":2,"records":[]}),
+        )?;
+        f.backend.lock().await["readError"] =
+            json!({"code":-32600,"message":format!("thread not loaded: {id}")});
+        assert!(!f.adapter().exists(&r).await?);
+        for visibility in ["loaded", "stored"] {
+            f.backend.lock().await[visibility] = if visibility == "loaded" {
+                json!([id])
+            } else {
+                json!([{"id":id}])
+            };
+            assert!(f.adapter().exists(&r).await.is_err(), "{visibility}");
+            f.backend.lock().await[visibility] = json!([]);
+        }
+        // A file appearing during the inventory invalidates the first absence.
+        f.backend.lock().await["createRollout"] = json!(path);
+        assert!(f.adapter().exists(&r).await.is_err());
+        fs::remove_file(&path)?;
+        let compressed = PathBuf::from(format!("{}.zst", path.display()));
+        fs::write(&compressed, "published")?;
+        assert!(f.adapter().exists(&r).await.is_err());
+        fs::remove_file(compressed)?;
+        r.verified = true;
+        assert!(f.adapter().exists(&r).await.is_err());
+        r.verified = false;
+        storage::write_json(
+            f.runtime.options.root.join("desktop-state.json"),
+            &json!({"version":2,"records":[{"side":"codex","nativeId":id}]}),
+        )?;
+        assert!(f.adapter().exists(&r).await.is_err());
+        storage::write_json(
+            f.runtime.options.root.join("desktop-state.json"),
+            &json!({"version":2,"records":[]}),
+        )?;
+        f.backend.lock().await["readError"]["code"] = json!(-32603);
+        assert!(f.adapter().exists(&r).await.is_err());
+        f.close().await
     }
     #[tokio::test]
     async fn edited_source_native_selection_uses_fresh_stable_idle_history_not_saved_checkpoint()

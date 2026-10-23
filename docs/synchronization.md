@@ -325,10 +325,15 @@ During normal synchronization, Claudex automatically stops tracking a conversati
 when its saved working directory is confirmed absent. The check also runs before
 reusing a verification cache entry. History, checkpoints and assets are preserved,
 and the saved native identities remain excluded from discovery after a restart.
-Restoring the directory does not automatically resume tracking. A pending handoff
-must be recovered before enrollment can change; a failed safety check remains
-visible. Permission errors, existing aliases and history conflicts retain their
-normal guards.
+Restoring the directory does not automatically resume tracking. This also covers
+removal during a native read or while preparing a new Codex snapshot. If that
+snapshot was never published, normal recovery proves its rollout and native
+identity absent, revokes archive actions, and atomically cancels the preparation
+and stops tracking. Other conversations continue. A native “thread not loaded”
+error alone is insufficient; loaded, stored and archived inventories and native
+files must independently establish absence. Applied or uncertain transactions
+remain pending for normal recovery. Permission errors, existing aliases and
+history conflicts retain their normal guards.
 
 For other manual enrollment changes, stop the owned watcher normally. In Desktop
 mode, `untrack` accepts the exact logical conversation ID shown by `status`:

@@ -681,7 +681,17 @@ async fn watch_desktop_control(
                 }
                 folder_dirty = true;
                 observe_needed = true;
-                if let Err(error) = bridge.recover().await { pending_error = Some(format!("{error:#}")); }
+                match bridge.recover().await {
+                    Ok(value) if value["tracking"] == "stopped" => {
+                        if let Some(id) = value["conversationId"].as_str() {
+                            blocked.remove(id);
+                            followups.remove(id);
+                            background.retain(|queued| queued != id);
+                        }
+                    }
+                    Ok(_) => {},
+                    Err(error) => pending_error = Some(format!("{error:#}")),
+                }
             }
             let mut receipts = inbox.list()?;
             let mut work = receipts.clone();

@@ -530,6 +530,16 @@ pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
     }
     Ok(state)
 }
+/// A native read could not resolve its saved working directory. Other history,
+/// permission and persistence failures must not be treated as folder removal.
+#[derive(Debug)]
+pub struct WorkingDirectoryUnavailable;
+impl std::fmt::Display for WorkingDirectoryUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CLAUDEX_TRACKED_CWD_UNAVAILABLE: saved working directory is unavailable.")
+    }
+}
+impl std::error::Error for WorkingDirectoryUnavailable {}
 pub struct DesktopBridge {
     pub root: PathBuf,
     pub adapters: BTreeMap<Side, Arc<dyn Adapter>>,
@@ -1087,6 +1097,18 @@ impl DesktopBridge {
         if missing_only {
             self.reconcile_originals(&mut state, id, false).await?;
         }
+        self.untrack_locked(&mut state, id, missing_only).await
+    }
+    async fn untrack_locked(
+        &self,
+        state: &mut State,
+        id: &str,
+        missing_only: bool,
+    ) -> Result<Value> {
+        ensure!(
+            state.pending.is_none(),
+            "Recover the pending Desktop handoff before changing tracking."
+        );
         let c = state
             .conversations
             .get(id)
@@ -1113,7 +1135,7 @@ impl DesktopBridge {
             json!({"status":"stopped","stoppedAt":now()}),
         );
         self.save(
-            &mut state,
+            state,
             Some(json!({"event":"tracking-stopped","conversationId":id})),
         )?;
         Ok(json!({"changed":true,"conversationId":id,"tracking":"stopped","historyPreserved":true}))
@@ -1178,6 +1200,27 @@ impl DesktopBridge {
             "Recover the pending Desktop handoff first."
         );
         self.reconcile_originals(&mut state, id, false).await?;
+        let stopped = self.untrack_locked(&mut state, id, true).await?;
+        if stopped["tracking"] == "stopped" {
+            return Ok(stopped);
+        }
+        let result = self.sync_active(&mut state, id).await;
+        if result
+            .as_ref()
+            .is_err_and(|e| e.is::<WorkingDirectoryUnavailable>())
+            && state.pending.is_none()
+        {
+            // A folder can disappear during a native read or allocation, not
+            // just before a cached skip. Relocation keeps its normal proof.
+            self.reconcile_originals(&mut state, id, false).await?;
+            let stopped = self.untrack_locked(&mut state, id, true).await?;
+            if stopped["tracking"] == "stopped" {
+                return Ok(stopped);
+            }
+        }
+        result
+    }
+    async fn sync_active(&self, state: &mut State, id: &str) -> Result<Value> {
         let mut c = state
             .conversations
             .get(id)
@@ -1187,7 +1230,7 @@ impl DesktopBridge {
             return Ok(json!({"changed":false,"tracking":"stopped","conversationId":id}));
         }
         let extensions = self
-            .originals(&state, Some(id), &BTreeSet::new(), None)
+            .originals(state, Some(id), &BTreeSet::new(), None)
             .await?;
         for (record_id, label_free) in extensions {
             let record = state
@@ -1197,25 +1240,25 @@ impl DesktopBridge {
                 .unwrap();
             record.extra.get_mut("dependencyAnchor").unwrap()["raw"]["labelFree"] = label_free;
             self.save(
-                &mut state,
+                state,
                 Some(json!({"event":"dependency-anchor-proof-extended","conversationId":id})),
             )?;
         }
-        let readings = match self.current_readings(&state, id, &c).await {
+        let readings = match self.current_readings(state, id, &c).await {
             Ok(readings) => readings,
             Err(error)
                 if error.to_string()
                     == "Source working directory changed; synchronization paused." =>
             {
-                self.reconcile_originals(&mut state, id, true).await?;
+                self.reconcile_originals(state, id, true).await?;
                 c = state.conversations[id].clone();
-                self.current_readings(&state, id, &c).await?
+                self.current_readings(state, id, &c).await?
             }
             Err(error) => return Err(error),
         };
-        if self.record_dialogue(&mut state, id, &readings)? {
+        if self.record_dialogue(state, id, &readings)? {
             self.save(
-                &mut state,
+                state,
                 Some(json!({"event":"checkpoint-dialogue-recorded","conversationId":id})),
             )?;
             c = state.conversations[id].clone();
@@ -1295,7 +1338,7 @@ impl DesktopBridge {
         let side = source.side.other();
         let context_reset = upkeep.is_some_and(|(s, kind)| *s == side && kind == "reset");
         let context_refresh = upkeep.is_some_and(|(s, kind)| *s == side && kind == "images");
-        let target = self.current(&state, id, side).cloned();
+        let target = self.current(state, id, side).cloned();
         if let Some(target) = &target {
             self.adapter(side)?.assert_idle(target).await?;
         }
@@ -1361,7 +1404,7 @@ impl DesktopBridge {
                 .as_ref()
                 .is_some_and(|r| r.managed && r.kind == "owner");
         if !append {
-            self.collect_locked(&mut state, Some(id)).await?;
+            self.collect_locked(state, Some(id)).await?;
         }
         ensure!(
             source.cwd == data.common.cwd()? && c.cwd == data.common.cwd()?,
@@ -1427,7 +1470,7 @@ impl DesktopBridge {
                 || record.extra.get("contextReset") == Some(&json!(true))
                 || record.extra.get("contextRefresh") == Some(&json!(true)))
         {
-            self.collect_locked(&mut state, Some(id)).await?;
+            self.collect_locked(state, Some(id)).await?;
         }
         record.id = if reuse {
             target.as_ref().unwrap().id.clone()
@@ -1485,10 +1528,10 @@ impl DesktopBridge {
             .into(),
         );
         self.save(
-            &mut state,
+            state,
             Some(json!({"event":"prepared","conversationId":id,"side":side})),
         )?;
-        self.finish(&mut state).await
+        self.finish(state).await
     }
     pub async fn recover(&self) -> Result<Value> {
         let _lock = self.lock()?;
@@ -1499,6 +1542,52 @@ impl DesktopBridge {
         self.finish(&mut state).await
     }
     async fn finish(&self, state: &mut State) -> Result<Value> {
+        if let Some(stopped) = self.stop_unapplied_missing_cwd(state).await? {
+            return Ok(stopped);
+        }
+        let result = self.finish_active(state).await;
+        if result.is_err() {
+            if let Some(stopped) = self.stop_unapplied_missing_cwd(state).await? {
+                return Ok(stopped);
+            }
+        }
+        result
+    }
+    async fn stop_unapplied_missing_cwd(&self, state: &mut State) -> Result<Option<Value>> {
+        let Some(PendingOperation::Handoff(p)) = state.pending.as_ref() else {
+            return Ok(None);
+        };
+        let id = p.record.conversation_id.clone();
+        let cwd = state
+            .conversations
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("Pending conversation is missing."))?
+            .cwd
+            .clone();
+        let adapter = self.adapter(Side::Claude)?;
+        if !adapter.working_directory_absent(&cwd).await? || !self.can_abandon_unapplied(p).await? {
+            return Ok(None);
+        }
+        adapter.revoke_archive_actions().await?;
+        if !adapter.working_directory_absent(&cwd).await? || !self.can_abandon_unapplied(p).await? {
+            return Ok(None);
+        }
+        // One durable transition: a restart cannot rediscover or replay the
+        // canceled projection between dropping pending and stopping enrollment.
+        state.pending = None;
+        state.conversations.get_mut(&id).unwrap().extra.insert(
+            "tracking".into(),
+            json!({"status":"stopped","stoppedAt":now()}),
+        );
+        self.save(
+            state,
+            Some(json!({"event":"unapplied-missing-cwd-stopped","conversationId":id})),
+        )?;
+        Ok(Some(
+            json!({"changed":true,"abandoned":true,"conversationId":id,"tracking":"stopped","historyPreserved":true}),
+        ))
+    }
+    async fn finish_active(&self, state: &mut State) -> Result<Value> {
         let mut p = match state
             .pending
             .clone()
@@ -1931,20 +2020,19 @@ impl DesktopBridge {
             json!({"changed":true,"conversationId":original.conversation_id,"nativeId":original.native_id,"preservedDescendants":preserved}),
         )
     }
-    pub async fn abandon_unapplied(&self) -> Result<Value> {
-        let _lock = self.lock()?;
-        let mut state = self.status()?;
-        let Some(PendingOperation::Handoff(p)) = state.pending.as_ref() else {
-            return Ok(json!({"abandoned":false}));
-        };
+    async fn can_abandon_unapplied(&self, p: &Pending) -> Result<bool> {
         if p.phase != Phase::Prepared
             || p.reuse
             || p.record.side != Side::Codex
             || p.record.kind != "snapshot"
-            || p.extra.contains_key("kind")
+            || !p.record.managed
+            || p.record.verified
+            || p.record.status != "current"
+            || p.record.checkpoint != Checkpoint::empty()
+            || !p.extra.is_empty()
             || p.archive_original_id.is_some()
         {
-            return Ok(json!({"abandoned":false}));
+            return Ok(false);
         }
         let file_absent = match crate::native::physical_rollout(&p.record.path) {
             Ok(_) => false,
@@ -1957,6 +2045,19 @@ impl DesktopBridge {
                 Ok(false)
             )
         {
+            return Ok(false);
+        }
+        Ok(
+            matches!(crate::native::physical_rollout(&p.record.path), Err(e) if storage::is_not_found(&e)),
+        )
+    }
+    pub async fn abandon_unapplied(&self) -> Result<Value> {
+        let _lock = self.lock()?;
+        let mut state = self.status()?;
+        let Some(PendingOperation::Handoff(p)) = state.pending.as_ref() else {
+            return Ok(json!({"abandoned":false}));
+        };
+        if !self.can_abandon_unapplied(p).await? {
             return Ok(json!({"abandoned":false}));
         }
         let id = p.record.conversation_id.clone();
@@ -2735,6 +2836,11 @@ mod tests {
         hidden: Vec<String>,
         removed: Vec<String>,
         missing_cwd: bool,
+        missing_on_plan: bool,
+        missing_on_inspect: bool,
+        missing_after_apply: bool,
+        restore_on_revoke: bool,
+        revoke_count: usize,
         archive_writes: usize,
         archive_tree_done: bool,
         fail_after_archive: bool,
@@ -2779,6 +2885,12 @@ mod tests {
         }
         async fn inspect(&self, r: &Record) -> Result<Reading> {
             let mut state = self.native.lock().unwrap();
+            if state.missing_on_inspect {
+                state.missing_cwd = true;
+            }
+            if state.missing_cwd {
+                return Err(WorkingDirectoryUnavailable.into());
+            }
             if state.fail_inspect.as_deref() == Some(&r.native_id) {
                 state.fail_inspect = None;
                 bail!("Synthetic resolved inspection failed.");
@@ -2823,6 +2935,12 @@ mod tests {
                 }))
         }
         async fn plan(&self, input: &PlanInput) -> Result<Record> {
+            {
+                let mut state = self.native.lock().unwrap();
+                if state.missing_on_plan {
+                    state.missing_cwd = true;
+                }
+            }
             if self.side == Side::Claude {
                 if let Some(r) = input
                     .target
@@ -2918,6 +3036,9 @@ mod tests {
                     "unexpected destination",
                 );
             }
+            if state.missing_after_apply {
+                state.missing_cwd = true;
+            }
             if std::mem::take(&mut state.fail_after_apply) {
                 bail!("Synthetic transport ended after native application.")
             }
@@ -2983,6 +3104,14 @@ mod tests {
         }
         async fn working_directory_absent(&self, _cwd: &str) -> Result<bool> {
             Ok(self.native.lock().unwrap().missing_cwd)
+        }
+        async fn revoke_archive_actions(&self) -> Result<()> {
+            let mut state = self.native.lock().unwrap();
+            state.revoke_count += 1;
+            if state.restore_on_revoke {
+                state.missing_cwd = false;
+            }
+            Ok(())
         }
         async fn assert_archive_replacement(
             &self,
@@ -3888,6 +4017,185 @@ mod tests {
                 .contains("Both stopped sides changed")
         );
         assert!(!bridge.status().unwrap().conversations[&id].tracked());
+    }
+    #[tokio::test]
+    async fn missing_cwd_during_plan_stops_only_unpublished_projection_across_restart() -> Result<()>
+    {
+        let (_tmp, bridge, native, mut source) = fixture();
+        source.side = Side::Claude;
+        let id = bridge.track(source.clone(), None).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let before = bridge.status()?;
+        native.lock().unwrap().missing_on_plan = true;
+        let stopped = bridge.sync(&id).await?;
+        assert_eq!(stopped["tracking"], "stopped");
+        assert_eq!(stopped["abandoned"], true);
+        let saved = bridge.status()?;
+        assert!(saved.pending.is_none());
+        assert!(!saved.conversations[&id].tracked());
+        assert_eq!(
+            saved.conversations[&id].canonical,
+            before.conversations[&id].canonical
+        );
+        assert_eq!(
+            serde_json::to_value(&saved.records)?,
+            serde_json::to_value(&before.records)?
+        );
+        assert_eq!(native.lock().unwrap().applications, 0);
+        assert!(native.lock().unwrap().revoke_count > 0);
+        let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+        native.lock().unwrap().missing_cwd = false;
+        native.lock().unwrap().missing_on_plan = false;
+        assert_eq!(restarted.sync(&id).await?["tracking"], "stopped");
+        assert_eq!(restarted.track(source, None).await?["tracking"], "stopped");
+        assert_eq!(native.lock().unwrap().applications, 0);
+        let next = Record::source(
+            Side::Codex,
+            Path::new("/other-original"),
+            &Uuid::new_v4().to_string(),
+        );
+        native
+            .lock()
+            .unwrap()
+            .histories
+            .insert(next.native_id.clone(), history());
+        let next_id = restarted.track(next, None).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(restarted.sync(&next_id).await?["changed"], true);
+        assert_eq!(native.lock().unwrap().applications, 1);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn missing_cwd_pending_recovery_is_atomic_and_preserves_uncertain_work() -> Result<()> {
+        for outcome in [
+            "unpublished",
+            "applied",
+            "reuse",
+            "promoted",
+            "archive",
+            "file",
+            "restored",
+        ] {
+            let (_tmp, bridge, native, mut source) = fixture();
+            source.side = Side::Claude;
+            let id = bridge.track(source.clone(), None).await?["conversationId"]
+                .as_str()
+                .unwrap()
+                .to_owned();
+            let mut state = bridge.status()?;
+            let common = native.lock().unwrap().histories[&source.native_id].clone();
+            let mut record = Record::source(
+                Side::Codex,
+                &bridge.root.join("unpublished.jsonl"),
+                &Uuid::new_v4().to_string(),
+            );
+            record.id = Uuid::new_v4().to_string();
+            record.conversation_id = id.clone();
+            record.cwd = state.conversations[&id].cwd.clone();
+            record.managed = true;
+            record.kind = "snapshot".into();
+            record.status = "current".into();
+            let mut pending = Pending {
+                phase: Phase::Prepared,
+                operation_id: Uuid::new_v4().to_string(),
+                record,
+                source_id: state.records[0].id.clone(),
+                target_id: None,
+                archive_original_id: None,
+                reuse: false,
+                checkpoint: Checkpoint::of(&common)?,
+                common,
+                previous: Checkpoint::empty(),
+                extra: Map::new(),
+            };
+            match outcome {
+                "applied" => {
+                    native
+                        .lock()
+                        .unwrap()
+                        .histories
+                        .insert(pending.record.native_id.clone(), pending.common.clone());
+                }
+                "reuse" => pending.reuse = true,
+                "promoted" => pending.phase = Phase::Promoted,
+                "archive" => pending.archive_original_id = Some(source.id.clone()),
+                "file" => std::fs::write(&pending.record.path, "potential native write")?,
+                "restored" => native.lock().unwrap().restore_on_revoke = true,
+                _ => {}
+            }
+            state.pending = Some(pending.into());
+            bridge.save(&mut state, None)?;
+            native.lock().unwrap().missing_cwd = true;
+            let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+            let result = restarted.recover().await;
+            let after = restarted.status()?;
+            if outcome == "unpublished" {
+                assert_eq!(result?["tracking"], "stopped");
+                assert!(after.pending.is_none());
+                assert!(!after.conversations[&id].tracked());
+            } else if matches!(outcome, "restored" | "promoted") {
+                assert!(result.is_ok(), "{outcome}");
+                assert_ne!(result?["abandoned"], true);
+                assert!(after.conversations[&id].tracked());
+            } else {
+                assert!(result.is_err(), "{outcome}");
+                assert!(after.pending.is_some(), "{outcome}");
+                assert!(after.conversations[&id].tracked(), "{outcome}");
+                assert_eq!(
+                    serde_json::to_value(after.pending)?,
+                    serde_json::to_value(state.pending)?
+                );
+            }
+            assert_eq!(
+                native.lock().unwrap().applications,
+                usize::from(outcome == "restored")
+            );
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn cwd_removed_after_native_write_preserves_pending_and_never_resends() -> Result<()> {
+        let (_tmp, bridge, native, mut source) = fixture();
+        source.side = Side::Claude;
+        let id = bridge.track(source, None).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        {
+            let mut state = native.lock().unwrap();
+            state.fail_after_apply = true;
+            state.missing_after_apply = true;
+        }
+        assert!(bridge.sync(&id).await.is_err());
+        let pending = serde_json::to_value(bridge.status()?.pending)?;
+        assert!(!pending.is_null());
+        let restarted = DesktopBridge::new(bridge.root.clone(), bridge.adapters.clone());
+        assert!(restarted.recover().await.is_err());
+        assert_eq!(serde_json::to_value(restarted.status()?.pending)?, pending);
+        assert!(restarted.status()?.conversations[&id].tracked());
+        assert_eq!(native.lock().unwrap().applications, 1);
+        native.lock().unwrap().missing_cwd = false;
+        assert_eq!(restarted.recover().await?["changed"], true);
+        assert!(restarted.status()?.pending.is_none());
+        assert_eq!(native.lock().unwrap().applications, 1);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn direct_sync_stops_cwd_removed_during_read_before_allocating() -> Result<()> {
+        let (_tmp, bridge, native, source) = fixture();
+        let id = bridge.track(source, None).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        native.lock().unwrap().missing_on_inspect = true;
+        assert_eq!(bridge.sync(&id).await?["tracking"], "stopped");
+        assert_eq!(native.lock().unwrap().applications, 0);
+        assert!(bridge.status()?.pending.is_none());
+        Ok(())
     }
     #[test]
     fn javascript_prepared_record_and_partial_retention_are_readable() {
