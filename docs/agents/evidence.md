@@ -6,6 +6,32 @@ current installation state. Read this only when a task asks what was verified.
 Never extend a result to another version, route or runtime, and never replay
 or reset the preserved failed or uncertain records mentioned here.
 
+## Interrupted Codex image-turn read boundary (2026-10-23)
+
+Development-signed App 2.0.15 / Mod 0.8.73 (`4545004`) read an interrupted
+image turn containing user steering, reasoning, commands and assistant activity
+despite its missing raw closing event. Two complete API passes agreed on the
+interruption and completed successor; all API items were preserved, five images
+were recovered and the prior 501-message checkpoint matched. Normal installed
+synchronization then verified identical 721-message checkpoints on both sides,
+with no pending transaction. The startup sweep checked 552/552 conversations
+with no tracked-conversation blocks. Native apps were not restarted, model
+requests were not made and no input was replayed.
+
+The sync crate passed 192 tests, the rest of the workspace 216, the final
+provenance checks 16 and the Mod host checks 45. A separate read-only full-API
+image audit accepted six stable histories with seven image items; one active
+source was unavailable. Two documented late-item ownership refusals remained
+stable across both passes. The audit harness was updated to recognize its
+existing cross-thread-fork refusal, without changing that runtime guard.
+
+One independently discovered voice-only source remains unimported: its full API
+has two completed, error-free user-only handoff turns, while assistant replies
+exist only in realtime transcript segments. This separate format limitation
+remains visible; the synchronized image conversation is not blocked by it.
+Bundled and installed Mod 0.8.73 were verified; existing loaded sessions were
+preserved rather than restarted to obtain a fresh observer.
+
 ## Persisted Claude refusal import (2026-10-20)
 
 Installed development-signed App 2.0.6 / Mod 0.8.64 (`c68d493`) recognized

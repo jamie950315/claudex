@@ -41,6 +41,12 @@ A Claude conversation continued from Codex starts in the permission mode set by
 you start yourself would; a project's committed settings cannot raise it. The mode
 is read when Claudex starts that conversation's Claude process.
 
+Codex voice-only chats are not imported when their full history API exposes only
+user handoff items and their assistant replies remain in separate realtime
+transcript segments. A completed native status alone cannot supply the missing
+reply. These sources remain visible in diagnostics; existing synchronized
+conversations continue normally.
+
 ## Desktop integration
 
 Desktop mode's validated Claude baseline is CLI `2.1.281` with normal subscription

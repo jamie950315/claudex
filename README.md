@@ -71,6 +71,8 @@ access). **Quit Claudex** stops its services safely; closing the window does not
 - Incomplete or opaque histories, conflicting edits on both sides and active
   native writers pause synchronization instead of discarding anything. Failed
   or uncertain writes are never replayed automatically.
+- Codex voice-only chats whose replies exist only in realtime transcripts cannot
+  currently be imported; their full history API exposes no assistant reply.
 - Vendor app updates can require Claudex to revalidate its integrations; the
   checklist reports this.
 
