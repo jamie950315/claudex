@@ -283,8 +283,12 @@ Local session to create another. Keep the same manifest entry after claim for
 its final exact check, without allowing a second claim. Refused/unknown calls
 remain consumed across renderer unload and process restart.
 
-Use normal no-input `prewarmFolderless({cwd:"",useWorktree:false})`, never
-`prewarmLocal` spares or an empty message. Its returned Local ID and scratch cwd
+Use normal no-input `prewarmFolderless({cwd:"",message:"",useWorktree:false})`.
+The public IPC schema requires a string message; native prewarm overrides it to
+undefined, so this placeholder is not model input. Persist all three options in
+the prewarm claim proof. Manifest version 2 is mandatory; old v1 renderers cannot
+consume a corrected or certified action. Never use `prewarmLocal` spares or an
+empty ordinary `start` message. The prewarm's returned Local ID and scratch cwd
 are authority for one `getSupportedCommands({sessionId})` query. Require a unique
 live `claudex-bootstrap` entry before and after start claim. Start the same
 prewarm in its returned scratch cwd with only the fixed bootstrap command, no

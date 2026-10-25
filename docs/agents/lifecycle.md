@@ -266,3 +266,12 @@ registry, canonical project, relocated transcript and full packet ACK are proven
 Write the migration before replacing app-owned owner metadata, then save the
 resolved pending through ordinary verification/promotion. This is not a general
 pending reroute or permission to move an already verified/reusable owner.
+
+The stopped-service `local-sync recover-prewarm --desktop-app <Claude.app>`
+maintenance command certifies only the shipped v1 missing-message prewrite IPC
+rejection, using the exact renderer/native-artifact and still-running-process
+proofs in desktop-owner.md. Run it before replacing/restarting that native
+process. It retains the original unknown journal and creates a separately bound
+v2 journal; it never clears pending, resets a consumed claim or calls native APIs.
+Normal startup consumes only the corrected v2 manifest and retains every existing
+bootstrap, relocation and packet-ACK gate.

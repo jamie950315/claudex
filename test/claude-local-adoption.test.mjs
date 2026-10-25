@@ -6,7 +6,7 @@ import { createClaudeLocalStartRuntime } from '../crates/claudex-app/host/render
 const OP='11111111-1111-4111-8111-111111111111', CLI='22222222-2222-4222-8222-222222222222';
 const UI='local_33333333-3333-4333-8333-333333333333', CLAIM='55555555-5555-4555-8555-555555555555';
 const flush=async()=>{for(let n=0;n<30;n++)await new Promise(r=>setImmediate(r));};
-function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,draft=false,connected=true}={}) {
+function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,draft=false,connected=true,version=2}={}) {
   const calls=[],statuses=[],claimed=new Set();
   const mapping={sessionId:UI,nativeId:CLI,cwd:'/fixture/scratch',title:'Fixture',lastActivityAt:1,registryPath:`/fixture/registry/${UI}.json`};
   const entry={stage,opId:OP,cwd:'/fixture/project',title:'Fixture',prewarm:{sessionId:UI,cwd:mapping.cwd},
@@ -25,14 +25,15 @@ function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,dra
       if(claimed.has(a.stage))return{structuredContent:{ready:false}};claimed.add(a.stage);
       return{structuredContent:{ready:true,opId:OP,stage:a.stage,claimId:CLAIM}};
     }return{structuredContent:{recorded:true}};}};
-  const options={readManifest:async()=>({contents:JSON.stringify({version:1,entries:[entry]})}),native,getClient:()=>client,
+  const options={readManifest:async()=>({contents:JSON.stringify({version,entries:[entry]})}),native,getClient:()=>client,
     hasDraft:()=>draft,now:()=>1,setTimer:()=>1,clearTimer(){},onStatus:s=>statuses.push(s)};
   return{entry,state,native,calls,statuses,client,create:()=>createClaudeLocalStartRuntime(options)};
 }
 async function run(f){const r=f.create();r.start();await flush();r.stop();}
 test('folderless prewarm has a durable claim and no input, SDK seed, provider or trust override',async()=>{
   const f=fixture();await run(f);
-  const call=f.calls.find(x=>x[0]==='prewarm');assert.deepEqual(call[1],{cwd:'',useWorktree:false});
+  const call=f.calls.find(x=>x[0]==='prewarm');assert.deepEqual(call[1],{cwd:'',message:'',useWorktree:false});
+  assert.deepEqual(f.calls.find(x=>x[0]==='claudex_local_start_claim')[1].proof,{options:call[1]});
   assert.ok(f.calls.findIndex(x=>x[0]==='claudex_local_start_claim')<f.calls.indexOf(call));
   assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'returned');
   assert.ok(f.statuses.includes('prewarm-returned'));assert.equal(f.calls.filter(x=>['start','move'].includes(x[0])).length,0);
@@ -94,4 +95,20 @@ test('native-start constructor or start failure leaves the existing owner bootst
     vm.runInNewContext(`${script};__cldxOwnerWake.signal('synthetic','selection','bridge');`,context);
     assert.equal(context.started,1);assert.equal(context.signals,1);
   }
+});
+
+test('v1 manifests cannot authorize the corrected runtime',async()=>{
+  const f=fixture({version:1});await run(f);assert.equal(f.calls.length,0);
+});
+test('required message schema rejects legacy options before implementation',async()=>{
+  let implementations=0;
+  const f=fixture();
+  f.native.prewarmFolderless=async options=>{
+    // Pure reproduction of the reviewed unconditional IPC argument guard.
+    if(!options||typeof options!=='object'||typeof options.cwd!=='string'||typeof options.message!=='string')throw Error('Argument info failed validation');
+    implementations++;return f.entry.prewarm;
+  };
+  await assert.rejects(f.native.prewarmFolderless({cwd:'',useWorktree:false}));
+  assert.equal(implementations,0);await run(f);assert.equal(implementations,1);
+  assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'returned');
 });

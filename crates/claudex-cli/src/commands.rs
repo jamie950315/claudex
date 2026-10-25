@@ -592,12 +592,43 @@ async fn local_sync_stdio(raw: &[String]) -> Result<()> {
         std::env::var("CLAUDEX_COLLABORATION_WORKER").as_deref() != Ok("1"),
         "Managed worker controller access is disabled."
     );
-    let a = Args::parse(raw, &["root"], &[])?;
+    let a = Args::parse(raw, &["root", "desktop-app"], &[])?;
     anyhow::ensure!(
         a.positionals.len() == 1,
-        "Expected local-sync receive|applied|bootstrap."
+        "Expected local-sync receive|applied|bootstrap|recover-prewarm."
     );
     let root = a.root()?;
+    if a.positionals[0] == "recover-prewarm" {
+        let app = crate::args::absolute(Path::new(
+            a.value("desktop-app")
+                .ok_or_else(|| anyhow::anyhow!("Prewarm recovery requires --desktop-app."))?,
+        ))?;
+        claudex_app::providers::verify(
+            &app,
+            &claudex_app::providers::CLAUDE,
+            &claudex_app::platform::SystemRunner,
+        )
+        .await?;
+        let homes = crate::native_clients::Homes::read(&root, &home()?)?;
+        let result =
+            claudex_sync::local_start::recover_prewarm(&root, &homes.desktop_registry, |at| {
+                claudex_app::local_prewarm_proof::certify(
+                    &root,
+                    &app,
+                    &home()?.join("Library/Logs/Claude/claude.ai-web.log"),
+                    at,
+                )
+            })?;
+        println!(
+            "{}",
+            serde_json::to_string(&json!({"ok":true,"result":result}))?
+        );
+        return Ok(());
+    }
+    anyhow::ensure!(
+        a.value("desktop-app").is_none(),
+        "--desktop-app is only for recover-prewarm."
+    );
     let mut input = Vec::new();
     tokio::io::stdin()
         .take(8193)

@@ -175,7 +175,7 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
   };
   async function manifest() {
     const value = decode(await readManifest(), 256 * 1024);
-    if (value?.version !== 1 || !Array.isArray(value.entries) || value.entries.length > 1)
+    if (value?.version !== 2 || !Array.isArray(value.entries) || value.entries.length > 1)
       throw new Error('Native Local manifest invalid');
     for (const e of value.entries) {
       if (!['prewarm', 'start', 'move'].includes(e.stage) || !syncUuid(e.opId) || !syncPath(e.cwd)
@@ -254,7 +254,7 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
       for (const e of await manifest()) {
         const key = `${e.opId}:${e.stage}`;
         if (attempted.has(key) || !await current(e, ticket)) continue;
-        let proof = {};
+        let proof = { options: { cwd: '', message: '', useWorktree: false } };
         if (e.stage === 'start') {
           if (!await catalogue(e)) continue;
           proof = { sessionId: e.prewarm.sessionId, cwd: e.prewarm.cwd, command: e.command, unique: true };
@@ -274,7 +274,7 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
           outcome = 'unknown';
           try {
             if (e.stage === 'prewarm') {
-              const value = await native.prewarmFolderless({ cwd: '', useWorktree: false });
+              const value = await native.prewarmFolderless(proof.options);
               if (value?.sessionId?.startsWith('local_') && syncUuid(value.sessionId.slice(6)) && syncPath(value.cwd)) {
                 outcome = 'returned'; result = { sessionId: value.sessionId, cwd: value.cwd };
               } else if (typeof value?.refusedReason === 'string') outcome = 'rejected';

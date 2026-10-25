@@ -31,12 +31,15 @@ explicit `remote-control` selects the original path. A saved `remoteId` keeps
 Remote Control and is never converted by changing the default. Local preserves
 native configured authentication and model routing, including official OAuth
 when configured. New owners never launch an SDK seed. Native Desktop's no-input
-`prewarmFolderless` returns a hidden Local ID and scratch cwd. Read that exact
-live query's `getSupportedCommands({sessionId})` catalogue and require one
+`prewarmFolderless({cwd:"",message:"",useWorktree:false})` returns a hidden Local ID
+and scratch cwd. The empty public IPC message satisfies its required string
+schema; native prewarm replaces it with undefined before starting the query.
+Read that exact live query's `getSupportedCommands({sessionId})` catalogue and require one
 `claudex-bootstrap` before claiming `start` with the same Local ID, scratch cwd
 and configuration. The fixed non-immediate bootstrap command only records the
 actual CLI ID/cwd through the configured companion; it appends no packet and
-never calls the model. Do not use an empty message, a spare prewarm, the CLI
+never calls the model. Ordinary `start` must receive that nonempty fixed command;
+never use an empty start message, a spare prewarm, the CLI
 resume picker, `--desktop`, a deep link or another Local session's MCP client.
 SDK entrypoints are excluded from Desktop's ordinary resume discovery.
 
@@ -48,7 +51,26 @@ final renderer authority check; claim replay still returns not ready. A receipt
 withdraws or advances it. Unknown outcomes never grant another invocation after
 restart. Bootstrap and normal registry readback may independently prove an
 unknown start; exact registry and relocated transcript may prove an unknown move.
-A lost prewarm answer without its returned identity remains blocked.
+A lost prewarm answer without its returned identity remains blocked, except a
+stopped-service certification of the shipped v1 missing-message IPC rejection.
+`local-sync recover-prewarm --desktop-app <Claude.app> --root <root>` requires a
+completed stop, the coordinator/local-start locks, exact pending/owner/original
+proofs, no old Desktop mapping or consumed legacy action, and no later native
+creation stage. It validates the signed vendor/local-resigned bundle, the still-
+running process predating the claim, unchanged pre-process ASAR/cache identities,
+the complete installed v1 renderer contract, the native log's matching loaded
+asset/claim/unknown timestamps, and exact native argument-validation wiring
+proving rejection before implementation. If that process restarted or
+artifacts changed, certification refuses. Never generalize this to an arbitrary
+unknown, failed response, or missing native identity.
+
+Certification leaves the original unknown journal byte-for-byte and identity-
+exact, creating `<operation>.prewarm-v2.json` with the retained claim, source and
+process proof. Every read checks the original journal identity. New claims record
+the complete corrected native prewarm options. Manifest version 2 fences the old
+v1 renderer; certify before installing/restarting the corrected renderer, then
+resume through the ordinary coordinator. A certified replacement is itself
+single-use; unknown outcomes in it still block. No native files are changed.
 
 After bootstrap, require the exact native Local-to-CLI registry mapping. Move
 only that idle session through normal `changeCwd(..., false)`: preserve native

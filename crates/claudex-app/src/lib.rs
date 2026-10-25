@@ -230,3 +230,5 @@ mod command_tests {
         }
     }
 }
+
+pub mod local_prewarm_proof;

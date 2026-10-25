@@ -41,9 +41,21 @@ fn dir(root: &Path) -> Result<PathBuf> {
     );
     Ok(d)
 }
-fn path(root: &Path, op: &str) -> Result<PathBuf> {
+fn original_path(root: &Path, op: &str) -> Result<PathBuf> {
     Uuid::parse_str(op)?;
     Ok(dir(root)?.join(format!("{op}.json")))
+}
+fn path(root: &Path, op: &str) -> Result<PathBuf> {
+    let original = original_path(root, op)?;
+    let replacement = original.with_extension("prewarm-v2.json");
+    if replacement.try_exists()? {
+        Ok(replacement)
+    } else {
+        Ok(original)
+    }
+}
+fn prewarm_proof() -> Value {
+    json!({"options":{"cwd":"","message":"","useWorktree":false}})
 }
 fn id(p: &Value, k: &str) -> Result<String> {
     let v = p[k]
@@ -72,9 +84,19 @@ fn local(p: &Value) -> Result<()> {
 fn journal(root: &Path, op: &str) -> Result<Value> {
     let j = read(&path(root, op)?)?;
     ensure!(
-        j["version"] == 1 && j["opId"] == op && j["originalPending"]["operationId"] == op,
+        matches!(j["version"].as_u64(), Some(1 | 2))
+            && j["opId"] == op
+            && j["originalPending"]["operationId"] == op,
         "Invalid native Local journal."
     );
+    if j["version"] == 2 {
+        let original = original_path(root, op)?;
+        ensure!(
+            json!(storage::read_stable_with_limit(&original, LIMIT)?.identity)
+                == j["supersedes"]["identity"],
+            "Retained prewarm rejection journal changed."
+        );
+    }
     id(&j, "opId")?;
     id(&j["originalOwner"], "sessionId")?;
     id(&j["originalOwner"], "conversationId")?;
@@ -157,8 +179,11 @@ fn original_native_clear(root: &Path, registry: &Path, j: &Value) -> Result<()> 
     Ok(())
 }
 fn authority(root: &Path, j: &Value) -> Result<()> {
+    authority_mode(root, j, false)
+}
+fn authority_mode(root: &Path, j: &Value, stopped: bool) -> Result<()> {
     ensure!(
-        !hooks::app_stopped(root)?,
+        hooks::app_stopped(root)? == stopped,
         "Claudex application is stopped."
     );
     let ledger = read(&root.join("desktop-state.json"))?;
@@ -227,8 +252,88 @@ fn publish(root: &Path, j: &Value) -> Result<()> {
         "prewarm":j["prewarm"]["result"],"bootstrap":j["bootstrap"],"mapping":j["mapping"],"command":COMMAND,"expiresAt":j["expiresAt"]})]).unwrap_or_default();
     storage::write_json(
         root.join("local-start-manifest.json"),
-        &json!({"version":1,"entries":entries}),
+        &json!({"version":2,"entries":entries}),
     )
+}
+/// Certify only the shipped v1 missing-message prewrite rejection. The caller
+/// must verify the still-running native artifact and retained v1 renderer; this
+/// does not replay an uncertain action or modify its original journal.
+/// The ordinary coordinator lock and stopped state fence every other writer.
+pub fn recover_prewarm(
+    root: &Path,
+    registry: &Path,
+    certify: impl FnOnce(i64) -> Result<Value>,
+) -> Result<Value> {
+    let _coordinator = FileLock::acquire(root.join("desktop-operation.lock"), true)?;
+    let _guard = FileLock::acquire(dir(root)?.join(".lock"), true)?;
+    ensure!(
+        hooks::app_stopped(root)?,
+        "Stop and drain Claudex before prewarm recovery."
+    );
+    let stopped = read(&root.join("app-stop.json"))?;
+    ensure!(
+        stopped["stopped"] == true && stopped["resuming"] != true,
+        "Prewarm recovery requires a completed stop, not a resume."
+    );
+    let ledger = read(&root.join("desktop-state.json"))?;
+    let op = id(&ledger["pending"], "operationId")?;
+    let original = original_path(root, &op)?;
+    let replacement = original.with_extension("prewarm-v2.json");
+    if replacement.try_exists()? {
+        let j = journal(root, &op)?;
+        authority_mode(root, &j, true)?;
+        original_native_clear(root, registry, &j)?;
+        return Ok(json!({"recovered":true,"alreadyCertified":true,"opId":op}));
+    }
+    let saved = storage::read_stable_with_limit(&original, LIMIT)?;
+    let mut j = journal(root, &op)?;
+    authority_mode(root, &j, true)?;
+    original_native_clear(root, registry, &j)?;
+    ensure!(
+        j["version"] == 1
+            && j["prewarm"]["proof"] == json!({})
+            && j["prewarm"]["outcome"] == "unknown"
+            && j["prewarm"]["result"].is_null()
+            && [
+                "start",
+                "bootstrap",
+                "move",
+                "mapping",
+                "resolved",
+                "newOwner",
+                "targetProof"
+            ]
+            .iter()
+            .all(|k| j[*k].is_null()),
+        "Only an untouched v1 missing-message prewarm rejection can be certified."
+    );
+    id(&j["prewarm"], "id")?;
+    let at = j["prewarm"]["at"]
+        .as_i64()
+        .ok_or_else(|| anyhow::anyhow!("Prewarm claim timestamp missing."))?;
+    let proof = certify(at)?;
+    ensure!(
+        proof["reason"] == "v1-missing-message-ipc-prewrite-rejection"
+            && proof["options"] == json!({"cwd":"","useWorktree":false}),
+        "Prewarm rejection certification is incomplete."
+    );
+    // Recheck exact originals/authority after potentially slow artifact inspection.
+    ensure!(
+        saved.identity == storage::read_stable_with_limit(&original, LIMIT)?.identity,
+        "Original prewarm journal changed during certification."
+    );
+    authority_mode(root, &j, true)?;
+    original_native_clear(root, registry, &j)?;
+    j["supersedes"] = json!({"identity":saved.identity,"claim":j["prewarm"],"certification":proof});
+    j["version"] = json!(2);
+    j["prewarm"] = Value::Null;
+    j["status"] = json!("prewarm-prewrite-rejection-certified");
+    j["expiresAt"] = json!(storage::now_ms() + 600000);
+    storage::write_json(&replacement, &j)?;
+    // Version 2 cannot be consumed by the still-loaded v1 renderer. Startup
+    // republishes the new intent after the corrected renderer is installed.
+    publish(root, &j)?;
+    Ok(json!({"recovered":true,"alreadyCertified":false,"opId":op}))
 }
 /// Called by the locked coordinator after closing any old SDK writer. Fresh
 /// owners have no seed. Completed legacy seeds remain in the retained journal.
@@ -382,7 +487,10 @@ pub fn claim(root: &Path, registry: &Path, p: &Value) -> Result<Value> {
         return Ok(json!({"ready":false}));
     }
     match stage {
-        "prewarm" => ensure!(p["proof"] == json!({}), "Invalid native prewarm proof."),
+        "prewarm" => ensure!(
+            p["proof"] == prewarm_proof(),
+            "Invalid native prewarm proof."
+        ),
         "start" => {
             ensure!(
                 j["prewarm"]["outcome"] == "returned"
@@ -688,6 +796,110 @@ mod tests {
             local: format!("local_{}", Uuid::new_v4()),
         })
     }
+    fn legacy_unknown(f: &Fixture) -> Result<PathBuf> {
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let file = original_path(&f.root, &f.pending.operation_id)?;
+        let mut j = read(&file)?;
+        j["prewarm"] = json!({"id":Uuid::new_v4(),"at":storage::now_ms()-10000,
+            "proof":{},"outcome":"unknown","result":null});
+        j["status"] = json!("prewarm-unknown");
+        storage::write_json(&file, &j)?;
+        storage::write_json(
+            f.root.join("app-stop.json"),
+            &json!({"version":1,"stopped":true}),
+        )?;
+        Ok(file)
+    }
+    fn certification(_: i64) -> Result<Value> {
+        Ok(json!({"reason":"v1-missing-message-ipc-prewrite-rejection",
+            "options":{"cwd":"","useWorktree":false},"synthetic":true}))
+    }
+    #[test]
+    fn certified_prewrite_rejection_retains_original_and_issues_a_separate_corrected_claim()
+    -> Result<()> {
+        let f = fixture(true)?;
+        let original = legacy_unknown(&f)?;
+        let saved = storage::read_stable(&original)?;
+        let first = recover_prewarm(&f.root, &f.registry, certification)?;
+        assert_eq!(first["alreadyCertified"], false);
+        let retained = storage::read_stable(&original)?;
+        assert_eq!(saved.bytes, retained.bytes);
+        assert_eq!(saved.identity, retained.identity);
+        assert_eq!(
+            read(&f.root.join("local-start-manifest.json"))?["version"],
+            2
+        );
+        assert_eq!(
+            recover_prewarm(&f.root, &f.registry, |_| panic!(
+                "certification must be idempotent"
+            ))?["alreadyCertified"],
+            true
+        );
+        storage::write_json(
+            f.root.join("app-stop.json"),
+            &json!({"version":1,"stopped":false}),
+        )?;
+        let c = begin(&f, "prewarm")?;
+        assert_eq!(
+            journal(&f.root, &f.pending.operation_id)?["prewarm"]["proof"],
+            prewarm_proof()
+        );
+        result(&f, &c, "unknown", Value::Null)?;
+        assert!(recover_prewarm(&f.root, &f.registry, certification).is_err());
+        assert_eq!(read(&original)?["prewarm"]["outcome"], "unknown");
+        storage::write_json(&original, &read(&original)?)?;
+        assert!(journal(&f.root, &f.pending.operation_id).is_err());
+        Ok(())
+    }
+    #[test]
+    fn certification_failure_or_changed_authority_never_creates_a_replacement() -> Result<()> {
+        for change in ["source", "pending", "owner", "later", "options", "running"] {
+            let f = fixture(true)?;
+            let original = legacy_unknown(&f)?;
+            match change {
+                "pending" => {
+                    let mut v = read(&f.root.join("desktop-state.json"))?;
+                    v["pending"]["sourceId"] = json!(Uuid::new_v4());
+                    storage::write_json(f.root.join("desktop-state.json"), &v)?;
+                }
+                "owner" => {
+                    let j = read(&original)?;
+                    let p = owner_path(&f.root, &j);
+                    let mut v = read(&p)?;
+                    v["displayTitle"] = json!("Changed");
+                    storage::write_json(p, &v)?;
+                }
+                "later" | "options" => {
+                    let mut j = read(&original)?;
+                    if change == "later" {
+                        j["start"] = json!({"outcome":"unknown"});
+                    } else {
+                        j["prewarm"]["proof"] = prewarm_proof();
+                    }
+                    storage::write_json(&original, &j)?;
+                }
+                "running" => storage::write_json(
+                    f.root.join("app-stop.json"),
+                    &json!({"version":1,"stopped":false}),
+                )?,
+                _ => {}
+            }
+            let saved = storage::read_stable(&original)?;
+            assert!(
+                recover_prewarm(&f.root, &f.registry, |at| {
+                    if change == "source" {
+                        anyhow::bail!("Source/process proof changed");
+                    }
+                    certification(at)
+                })
+                .is_err(),
+                "{change}"
+            );
+            assert!(!original.with_extension("prewarm-v2.json").try_exists()?);
+            assert_eq!(saved.identity, storage::read_stable(&original)?.identity);
+        }
+        Ok(())
+    }
     fn entry(f: &Fixture) -> Result<Value> {
         Ok(read(&f.root.join("local-start-manifest.json"))?["entries"][0].clone())
     }
@@ -695,7 +907,7 @@ mod tests {
         let e = entry(f)?;
         assert_eq!(e["stage"], stage);
         let proof = match stage {
-            "prewarm" => json!({}),
+            "prewarm" => prewarm_proof(),
             "start" => json!({"sessionId":f.local,"cwd":f.scratch,"command":COMMAND,"unique":true}),
             "move" => {
                 json!({"sessionId":f.local,"cliSessionId":f.cli,"cwd":f.scratch,"lastActivityAt":1})
