@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.20**, with **Claude Mod 0.8.78** bundled.
+Current build: **Claudex.app 2.0.21**, with **Claude Mod 0.8.79** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -60,13 +60,12 @@ or the account charged for replies to make a transport available. Explicit Remot
 Control selects the official-account route, not an automatic replacement for a proxy.
 
 New owners default to the Local Mod transport, retaining the configured route,
-including either a proxy or official account. Adoption uses Desktop's normal
-CLI-session resume interface, not the CLI `--desktop` command, whose first-party
-OAuth requirement does not support custom routes. The current enabled Mod and
-frontend integration must be loaded in the Local session, after any required
-normal restart. Unconfirmed operations remain pending. Existing Remote Control
-owners retain their saved transport and identity; changing the default does not
-migrate them.
+including either a proxy or official account. Native Desktop creates the Local
+session; Claudex verifies its project identity and preserves native project-trust
+checks. The current enabled Mod and frontend integration must be loaded, after
+any required normal restart. Missing native capabilities or unconfirmed
+operations remain pending. Existing Remote Control owners retain their saved
+transport and identity; changing the default does not migrate them.
 
 Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
 including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. An existing official
@@ -80,7 +79,7 @@ current subscription evidence.
 
 Your regular CLI proxy configuration stays available through its normal entry
 point. Histories produced by your own models remain subject to the same native
-history, adoption and loaded-integration checks as official-route histories.
+history, project and loaded-integration checks as official-route histories.
 Continue the synchronized branch in its current entry; adding work to a
 superseded original still causes a history conflict.
 
