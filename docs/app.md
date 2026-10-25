@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.19**, with **Claude Mod 0.8.77** bundled.
+Current build: **Claudex.app 2.0.20**, with **Claude Mod 0.8.78** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -59,11 +59,14 @@ endpoint, model and authentication route. Claudex must not switch those settings
 or the account charged for replies to make a transport available. Explicit Remote
 Control selects the official-account route, not an automatic replacement for a proxy.
 
-New owners default to the Local Mod transport, which uses the native configured
-route, including either a proxy or official account. It requires the current
-enabled Mod loaded in the Local session and the frontend integration loaded
-after any required normal restart. Existing Remote Control owners retain their
-saved transport and identity; changing the default does not migrate them.
+New owners default to the Local Mod transport, retaining the configured route,
+including either a proxy or official account. Adoption uses Desktop's normal
+CLI-session resume interface, not the CLI `--desktop` command, whose first-party
+OAuth requirement does not support custom routes. The current enabled Mod and
+frontend integration must be loaded in the Local session, after any required
+normal restart. Unconfirmed operations remain pending. Existing Remote Control
+owners retain their saved transport and identity; changing the default does not
+migrate them.
 
 Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
 including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. An existing official
@@ -76,10 +79,10 @@ available allowance or model access. Cached account labels such as `pro` are not
 current subscription evidence.
 
 Your regular CLI proxy configuration stays available through its normal entry
-point. Histories produced by your own models can be synchronized to Codex under
-the normal history checks; this does not establish a working Remote Control
-continuation on a custom endpoint. Continue the synchronized branch in its
-current entry; adding work to a superseded original still causes a history conflict.
+point. Histories produced by your own models remain subject to the same native
+history, adoption and loaded-integration checks as official-route histories.
+Continue the synchronized branch in its current entry; adding work to a
+superseded original still causes a history conflict.
 
 Conversation synchronization wakes on native completion hooks/events, not a recurring
 two-second history scan. Startup/reconnection reconciliation and a status-only

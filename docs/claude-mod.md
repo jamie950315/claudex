@@ -1,20 +1,20 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.77
+## Current companion: 0.8.78
 
-Claudex.app 2.0.19 installs, updates and checks its bundled Mod automatically;
+Claudex.app 2.0.20 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
-Version 0.8.77 packages the Claudex 2.0.19 runtime. Local synchronization uses
+Version 0.8.78 packages the Claudex 2.0.20 runtime. Local synchronization uses
 the loaded Mod's fixed no-query command and the native configured provider,
 model and authentication route. It does not switch accounts or usage routes.
-The Local frontend integration must be loaded before delivery; missing command
-registration waits rather than submitting a model prompt. Applied receipts and
-exact persisted history are verified before promotion, including ordered image
-bytes; native image resizing or re-encoding can block that proof. Existing
-Remote Control owners retain their saved transport. Claude Code 2.1.302 still
-refuses Remote Control through custom API endpoints. An official sign-in alone
-does not establish an active subscription or available allowance.
+Adoption uses Desktop's normal CLI-session resume interface rather than CLI
+`--desktop`, whose first-party OAuth requirement does not support custom routes.
+The current Mod and frontend integration must be loaded before delivery;
+unconfirmed operations stay pending without replay. Exact persisted history,
+including ordered image bytes, is required before promotion; native resizing or
+re-encoding can block that proof. Existing Remote Control owners retain their
+saved transport. See [Local transport requirements and recovery](synchronization.md#native-local-mod-transport).
 
 Version 0.8.75 packages the Claudex 2.0.17 runtime. Working-directory removal
 during synchronization or an unpublished Codex handoff now stops only that
@@ -550,7 +550,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.77-review"
+STAGE="$PARENT/claudex-0.8.78-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -571,7 +571,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.77-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.78-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"
