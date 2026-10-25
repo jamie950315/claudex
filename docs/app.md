@@ -51,6 +51,21 @@ with no group/other write access. Setup verifies the strict deep signature and
 app identity. Private state, login files and plugin caches remain owned by the
 current user.
 
+### Custom Claude model endpoints
+
+An existing official Claude sign-in can coexist with a proxy or custom model
+endpoint in Claude Code settings. The account checklist checks the official
+sign-in independently, without changing those settings.
+
+Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
+including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. This prevents the
+current Claude-side synchronization connection; signing in again or retrying
+setup does not remove the restriction. Claudex preserves the pending operation,
+histories and model routing. It does not silently switch proxy requests to
+official subscription usage. A native CLI or Local conversation using the proxy
+can still be used through its original entry point; this does not establish a
+working Remote Control continuation after a Claudex handoff.
+
 Conversation synchronization wakes on native completion hooks/events, not a recurring
 two-second history scan. Startup/reconnection reconciliation and a status-only
 heartbeat remain; the heartbeat does not inspect conversations.

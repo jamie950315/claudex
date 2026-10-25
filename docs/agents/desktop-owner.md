@@ -25,6 +25,16 @@ No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
 path. Store the owner handle before start() so startup failures
 during user work retain the live owner instead of interrupting it.
 
+Only a literal native control `subtype:error` is an explicit failure; an unknown
+response outcome preserves the registering intent and never permits another
+registration. Recognize the native custom-endpoint refusal with a fixed,
+content-free diagnostic rather than copying arbitrary native error text.
+Claude Code 2.1.302 refuses Remote Control on custom API endpoints even with
+`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Do not clear proxy credentials or
+override the base URL to clear this error: that also reroutes subsequent model
+requests and changes the user's quota/provider. Official account readiness and
+the configured inference route are distinct observations.
+
 The CLI started through its SDK protocol ignores `permissions.defaultMode` from settings
 (observed with CLI 2.1.283: user and flag tiers both start in `default`) and has
 no local prompt surface, so tools that would ask are denied in a Desktop turn.

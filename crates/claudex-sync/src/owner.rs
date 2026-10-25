@@ -30,13 +30,38 @@ pub const CLAUDE_CLI_VERSION: &str = "2.1.281";
 /// recovery, so it may grow up to the packet bound. Every reader shares it.
 pub(crate) const OWNER_STATE_LIMIT: usize = packet::MAX_PACKET_BYTES;
 #[derive(Debug)]
-pub struct ControlRequestFailed;
+pub struct ControlRequestFailed {
+    custom_endpoint: bool,
+}
 impl std::fmt::Display for ControlRequestFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Native control request failed explicitly.")
+        f.write_str(if self.custom_endpoint {
+            "Claude Remote Control requires api.anthropic.com, but this session uses a proxy endpoint. The saved synchronization operation is preserved."
+        } else {
+            "Native control request failed explicitly."
+        })
     }
 }
 impl std::error::Error for ControlRequestFailed {}
+
+fn control_result(response: &Value) -> Result<Value> {
+    match response["subtype"].as_str() {
+        Some("success") => Ok(response["response"].clone()),
+        Some("error") => Err(ControlRequestFailed {
+            // Report this native refusal without copying arbitrary error text,
+            // which may contain private URLs or account information.
+            custom_endpoint: response["error"].as_str().is_some_and(|error| {
+                error.starts_with(
+                    "Remote Control is only available when using Claude via api.anthropic.com.",
+                )
+            }),
+        }
+        .into()),
+        _ => {
+            bail!("Native control response outcome unknown; saved intent preserved, never resend.")
+        }
+    }
+}
 
 /// Match the native SDK's no-callback behavior. Remote tool routing and user
 /// dialogs belong to the capable serving client, not the history bridge.
@@ -682,12 +707,7 @@ impl CliSession {
                     let response = &event["response"];
                     if let Some(id) = response["request_id"].as_str() {
                         if let Some(sender) = controls.lock().await.remove(id) {
-                            let result = if response["subtype"] == "success" {
-                                Ok(response["response"].clone())
-                            } else {
-                                Err(ControlRequestFailed.into())
-                            };
-                            let _ = sender.send(result);
+                            let _ = sender.send(control_result(response));
                         }
                     }
                     continue;
@@ -1520,6 +1540,32 @@ pub fn append_uuid(session: &str, operation: &str) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn control_errors_explain_proxy_refusals_without_exposing_native_details() {
+        let error = control_result(&json!({"subtype":"error","error":"Remote Control is only available when using Claude via api.anthropic.com. private diagnostic"})).unwrap_err();
+        assert!(error.downcast_ref::<ControlRequestFailed>().is_some());
+        assert!(error.to_string().contains("proxy endpoint"));
+        assert!(!error.to_string().contains("private diagnostic"));
+        let error = control_result(
+            &json!({"subtype":"error","error":"https://private.example/?token=secret"}),
+        )
+        .unwrap_err();
+        assert!(error.downcast_ref::<ControlRequestFailed>().is_some());
+        assert_eq!(
+            error.to_string(),
+            "Native control request failed explicitly."
+        );
+        for subtype in [Value::Null, json!("unknown")] {
+            let error = control_result(&json!({"subtype":subtype})).unwrap_err();
+            assert!(error.downcast_ref::<ControlRequestFailed>().is_none());
+            assert!(error.to_string().contains("outcome unknown"));
+        }
+        assert_eq!(
+            control_result(&json!({"subtype":"success","response":{"ok":true}})).unwrap(),
+            json!({"ok":true})
+        );
+    }
+
     #[test]
     fn cold_clear_identity_adoption_requires_correlated_init_and_zero_query_receipt() {
         let old = Uuid::new_v4().to_string();
