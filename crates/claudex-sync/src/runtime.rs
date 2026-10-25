@@ -3552,7 +3552,11 @@ async fn local_adoption(
     r: &Record,
     p: &Pending,
 ) -> Result<()> {
-    owner.handoff_local(&runtime.options.claude_binary).await?;
+    owner.prepare_local_adoption().await?;
+    ensure!(
+        crate::local_adoption::prepare(&runtime.options.root, &runtime.desktop_registry()?, r, p)?,
+        "Awaiting native Desktop resume-picker adoption; exact seed is preserved and will not be resent."
+    );
     let op = crate::local_sync::prepare(
         &runtime.options.root,
         &runtime.desktop_registry()?,

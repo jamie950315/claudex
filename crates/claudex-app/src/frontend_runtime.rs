@@ -96,14 +96,18 @@ pub fn owner(root: &Path, anchor: &frontend_owner::Anchor, asset: &str) -> Resul
     let template = r#"
 import{@EXPORT@ as __cldxOwnerWakeClient}from@CLIENT@;
 const __cldxOwnerWake=(()=>{try{@RUNTIME@
-const local=globalThis["claude.web"]?.LocalSessions;const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(@ROOT@,"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return{signal(...a){try{const p=wake.signal(...a);if(p&&typeof p.catch==="function")p.catch(()=>{})}catch{}}}}catch{try{console.warn("[Claudex owner wake] disabled")}catch{}return{signal(){}}}})();
+@LOCAL_SYNC@
+const local=globalThis["claude.web"]?.LocalSessions;
+try{const adoption=createClaudeLocalAdoptionRuntime({native:local,getClient:__cldxOwnerWakeClient,readManifest:()=>local.readFileAtCwd(@ROOT@,"local-adoption-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onStatus:e=>console.warn("[Claudex local adoption] "+e)});adoption.start();window.addEventListener("beforeunload",()=>{try{adoption.stop()}catch{}},{once:true});}catch{try{console.warn("[Claudex local adoption] disabled")}catch{}}
+const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(@ROOT@,"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return{signal(...a){try{const p=wake.signal(...a);if(p&&typeof p.catch==="function")p.catch(()=>{})}catch{}}}}catch{try{console.warn("[Claudex owner wake] disabled")}catch{}return{signal(){}}}})();
 "#;
     let result = template
         .replace("@EXPORT@", &anchor.client.exported)
         .replace("@CLIENT@", &serde_json::to_string(&anchor.client.path)?)
         .replace("@ROOT@", &path(root)?)
         .replace("@ASSET@", &serde_json::to_string(asset)?)
-        .replace("@RUNTIME@", &embedded(OWNER)?);
+        .replace("@RUNTIME@", &embedded(OWNER)?)
+        .replace("@LOCAL_SYNC@", &embedded(LOCAL_SYNC)?);
     syntax(&result)?;
     Ok(result)
 }

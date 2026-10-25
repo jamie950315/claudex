@@ -254,6 +254,10 @@ impl Integration for NativeIntegration {
                 "mod_target_verify",
                 "desktop_wake_verify",
                 "desktop_owner_wake",
+                "local_activation_claim",
+                "local_activation_receipt",
+                "local_adoption_claim",
+                "local_adoption_receipt",
                 "local_sync_claim",
                 "local_sync_receipt",
                 "native_chat_wake",
@@ -269,6 +273,36 @@ impl Integration for NativeIntegration {
     }
     async fn dispatch(&self, method: &str, peer: Provider, params: Value) -> Result<Value> {
         match method {
+            "local_activation_claim" | "local_activation_receipt" => {
+                ensure!(
+                    peer == Provider::Claude && !self.closed.load(Ordering::SeqCst),
+                    "Native activation requires the active Claude peer."
+                );
+                if method == "local_activation_claim" {
+                    claudex_sync::local_adoption::activation_claim(
+                        &self.root,
+                        &self.homes.desktop_registry,
+                        &params,
+                    )
+                } else {
+                    claudex_sync::local_adoption::activation_receipt(&self.root, &params)
+                }
+            }
+            "local_adoption_claim" | "local_adoption_receipt" => {
+                ensure!(
+                    peer == Provider::Claude && !self.closed.load(Ordering::Acquire),
+                    "Native Local adoption endpoint unavailable."
+                );
+                if method == "local_adoption_claim" {
+                    claudex_sync::local_adoption::claim(
+                        &self.root,
+                        &self.homes.desktop_registry,
+                        &params,
+                    )
+                } else {
+                    claudex_sync::local_adoption::receipt(&self.root, &params)
+                }
+            }
             "local_sync_claim" | "local_sync_receipt" => {
                 ensure!(
                     peer == Provider::Claude && !self.closed.load(Ordering::Acquire),
@@ -546,6 +580,114 @@ mod tests {
                 b.controller_token(),
                 "local_sync_receipt",
                 receipt
+            )
+            .await?["recorded"],
+            true
+        );
+        // The unowned seed uses the attached Claude peer, not a borrowed Local
+        // session. The actual broker socket preserves its one-use journal.
+        let session2 = uuid::Uuid::new_v4().to_string();
+        let source_op = uuid::Uuid::new_v4().to_string();
+        let resume_op =
+            claudex_sync::owner::append_uuid(&session2, &format!("native-resume:{source_op}"));
+        let seed_id = claudex_sync::owner::append_uuid(&session2, &source_op);
+        let content = json!([{"type":"text","text":"Synthetic resume seed"}]);
+        let transcript = root.join("seed.jsonl");
+        claudex_core::storage::atomic_write(
+            &transcript,
+            format!(
+                "{}\n",
+                serde_json::to_string(
+                    &json!({"uuid":seed_id,"type":"user","sessionId":session2,"queueTranscriptOnly":true,"message":{"role":"user","content":content}})
+                )?
+            ),
+        )?;
+        claudex_core::storage::write_json(
+            root.join("owners").join(format!(
+                "{}.json",
+                claudex_sync::history::digest_bytes(conversation.as_bytes())
+            )),
+            &json!({"sessionId":session2,"conversationId":conversation,"cwd":cwd,"transport":"local-mod","localPhase":"handoff-intent","remoteId":null,"pending":null,"reset":null,"lastAppend":{"operationId":source_op,"uuid":seed_id,"contentHash":claudex_core::storage::hash_json(&content)?,"content":content}}),
+        )?;
+        claudex_core::storage::write_json(
+            root.join("desktop-state.json"),
+            &json!({"version":2,"pending":{"operationId":source_op,"record":{"nativeId":session2,"conversationId":conversation,"cwd":cwd,"path":transcript}}}),
+        )?;
+        let adoption = claudex_core::storage::private_directory(root.join("local-adoption"))?;
+        claudex_core::storage::write_json(
+            adoption.join(format!("{resume_op}.json")),
+            &json!({"version":1,"entry":{"opId":resume_op,"sourceOperationId":source_op,"conversationId":conversation,"cliSessionId":session2,"cwd":cwd,"seedUuid":seed_id,"seedContentDigest":claudex_core::storage::hash_json(&content)?,"expiresAt":claudex_core::storage::now_ms()+600000},"seedIdentity":claudex_core::storage::snapshot(&transcript)?.file_identity,"seedOwnerHash":claudex_core::storage::hash_json(&content)?,"claim":null,"activation":null}),
+        )?;
+        let p = json!({"opId":resume_op,"handle":uuid::Uuid::new_v4().to_string(),"cwd":cwd,"seedUuid":seed_id,"seedContentDigest":claudex_core::storage::hash_json(&content)?,"resumable":true});
+        assert_eq!(
+            transport::validate_tool("claudex_local_adoption_claim", &p, true)?,
+            "local_adoption_claim"
+        );
+        assert!(transport::validate_tool("claudex_local_adoption_claim", &p, false).is_err());
+        let claim = transport::call(
+            &b.root,
+            Provider::Claude,
+            b.controller_token(),
+            "local_adoption_claim",
+            p.clone(),
+        )
+        .await?;
+        assert_eq!(claim["ready"], true);
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_adoption_claim",
+                p
+            )
+            .await?["ready"],
+            false
+        );
+        assert_eq!(transport::call(&b.root,Provider::Claude,b.controller_token(),"local_adoption_receipt",json!({"opId":resume_op,"claimId":claim["claimId"],"outcome":"unknown","localSessionId":null,"reason":null})).await?["recorded"],true);
+        let local2 = format!("local_{session2}");
+        let registry2 = root.join("registry").join(format!("{local2}.json"));
+        claudex_core::storage::write_json(
+            &registry2,
+            &json!({"sessionId":local2,"cliSessionId":session2,"cwd":cwd,"title":"Resume fixture","isArchived":false,"lastActivityAt":1}),
+        )?;
+        let activation = json!({"opId":resume_op,"sourceOperationId":source_op,"conversationId":conversation,"cliSessionId":session2,"seedUuid":seed_id,"seedContentDigest":claudex_core::storage::hash_json(&content)?,"action":"activate","localSessionId":local2,"cwd":cwd,"title":"Resume fixture","registryPath":registry2,"lastActivityAt":1,"expiresAt":claudex_core::storage::now_ms()+600000});
+        claudex_core::storage::write_json(
+            root.join("local-adoption-manifest.json"),
+            &json!({"version":1,"entries":[activation]}),
+        )?;
+        let p = json!({"opId":resume_op,"localSessionId":local2,"lastActivityAt":1});
+        assert_eq!(
+            transport::validate_tool("claudex_local_activation_claim", &p, true)?,
+            "local_activation_claim"
+        );
+        let claim = transport::call(
+            &b.root,
+            Provider::Claude,
+            b.controller_token(),
+            "local_activation_claim",
+            p.clone(),
+        )
+        .await?;
+        assert_eq!(claim["ready"], true);
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_activation_claim",
+                p
+            )
+            .await?["ready"],
+            false
+        );
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_activation_receipt",
+                json!({"opId":resume_op,"claimId":claim["claimId"],"outcome":"unknown"})
             )
             .await?["recorded"],
             true

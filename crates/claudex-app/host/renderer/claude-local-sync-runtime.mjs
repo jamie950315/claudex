@@ -158,3 +158,157 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
     poll,
   };
 }
+
+/** Native resume-picker adoption. No deep links, CLI opener or model prompts.
+ * An attached user-config stdio client journals each native action beforehand.
+ */
+export function createClaudeLocalAdoptionRuntime({ readManifest, native, getClient,
+  hasDraft = () => true, now = () => Date.now(), setTimer = setTimeout,
+  clearTimer = clearTimeout, intervalMs = 2000, onStatus = () => {},
+  digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
+    new TextEncoder().encode(JSON.stringify(value)))), b => b.toString(16).padStart(2, '0')).join('') } = {}) {
+  let running = false, generation = 0, inFlight = false, timer, lastStatus;
+  const attempted = new Set();
+  const report = code => { if (lastStatus !== code) { lastStatus = code; try { onStatus(code); } catch {} } };
+  const decode = (result, limit) => {
+    if (!result || typeof result.contents !== 'string' || result.isTail || result.contents.length > limit)
+      throw new Error('Native adoption metadata unavailable');
+    return JSON.parse(result.contents);
+  };
+  async function manifest() {
+    const value = decode(await readManifest(), 256 * 1024);
+    if (value?.version !== 1 || !Array.isArray(value.entries) || value.entries.length > 1)
+      throw new Error('Native adoption manifest invalid');
+    for (const e of value.entries) {
+      if (!['resume', 'activate'].includes(e.action) || !syncUuid(e.opId) || !syncUuid(e.sourceOperationId)
+        || !syncUuid(e.conversationId) || !syncUuid(e.cliSessionId) || !syncUuid(e.seedUuid)
+        || !syncPath(e.cwd) || !/^[a-f0-9]{64}$/.test(e.seedContentDigest ?? '') || !Number.isSafeInteger(e.expiresAt))
+        throw new Error('Native adoption identity invalid');
+      if (e.action === 'activate' && (!syncUuid(e.localSessionId?.slice(6)) || !e.localSessionId.startsWith('local_')
+        || !syncText(e.title) || !Number.isSafeInteger(e.lastActivityAt) || !syncPath(e.registryPath)
+        || !e.registryPath.endsWith(`/${e.localSessionId}.json`))) throw new Error('Native activation identity invalid');
+    }
+    return value.entries;
+  }
+  function client() {
+    const c = getClient?.('claudex-desktop-wake'), t = c?.transport;
+    if (!t || t._closed !== false || t.pid !== null || t.stderr !== null
+      || typeof t._port?.postMessage !== 'function' || typeof t._port?.close !== 'function'
+      || typeof c.callTool !== 'function' || c.getServerVersion?.()?.name !== 'claudex'
+      || !c.getServerCapabilities?.()?.tools) throw new Error('Attached Claudex stdio client unavailable');
+    return c;
+  }
+  async function call(name, args) {
+    const result = await client().callTool({ name, arguments: args });
+    if (result?.isError) throw new Error('Native adoption authority refused');
+    if (result?.structuredContent) return result.structuredContent;
+    const texts = result?.content?.filter(x => x.type === 'text');
+    if (texts?.length !== 1 || typeof texts[0].text !== 'string' || texts[0].text.length > 32768)
+      throw new Error('Native adoption receipt unavailable');
+    return JSON.parse(texts[0].text);
+  }
+  async function current(e, ticket) {
+    return running && ticket === generation && e.expiresAt > now() && !hasDraft(e.localSessionId)
+      && (await manifest()).some(v => JSON.stringify(v) === JSON.stringify(e))
+      && running && ticket === generation && !hasDraft(e.localSessionId);
+  }
+  async function candidate(e) {
+    const rows = await native.listResumableCliSessions(1000);
+    if (!Array.isArray(rows) || rows.length > 1000) throw new Error('Native resume inventory invalid');
+    const matches = [];
+    for (const row of rows.filter(r => r?.cwd === e.cwd && syncUuid(r.handle)
+      && r.liveness === 'not_running' && !r.folderMissing && !r.bridgeSessionId)) {
+      const transcript = await native.readCliTranscript(row.handle, 0, 5000);
+      if (!Array.isArray(transcript?.messages) || transcript.transcriptTruncated
+        || !Number.isSafeInteger(transcript.totalMessages) || transcript.totalMessages !== transcript.messages.length) continue;
+      const seed = transcript.messages.filter(m => m?.uuid === e.seedUuid);
+      if (seed.length !== 1 || seed[0].type !== 'user' || seed[0].message?.role !== 'user'
+        || seed[0].queueTranscriptOnly !== true || await digest(seed[0].message.content) !== e.seedContentDigest) continue;
+      if (transcript.messages.some(m => ['user', 'assistant'].includes(m?.type) && m.uuid !== e.seedUuid)) continue;
+      const preview = await native.previewCliResume(row.handle);
+      if (preview?.resumable === true) matches.push(row);
+    }
+    if (matches.length !== 1) return null;
+    return matches[0];
+  }
+  function idle(s, e) {
+    if (!s || s.sessionId !== e.localSessionId || s.cwd !== e.cwd || s.title !== e.title
+      || s.lastActivityAt !== e.lastActivityAt || ['isArchived', 'isRunning', 'turnRunning'].some(k => s[k] !== false)) return false;
+    if (['cliBootPending', 'starting', 'heldInput', 'sendsHeldAfterError', 'hasBackgroundActivity', 'hasBackgroundWork',
+      'remoteTarget', 'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
+      'lanyard', 'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt', 'pendingLanyardConsent',
+      'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'awaitingBrief', 'transcriptUnavailable',
+      'pendingLoopWakeup', 'pendingScheduleWakeupIds'].some(k => s[k])) return false;
+    return ['pendingToolPermissions', 'loops', 'spawningTaskIds'].every(k => s[k] === undefined || Array.isArray(s[k]) && s[k].length === 0);
+  }
+  async function activationReady(e) {
+    const cut = e.registryPath.lastIndexOf('/');
+    const mapped = decode(await native.readFileAtCwd(e.registryPath.slice(0, cut), e.registryPath.slice(cut + 1)), 8 * 1024 * 1024);
+    if (mapped.sessionId !== e.localSessionId || mapped.cliSessionId !== e.cliSessionId || mapped.cwd !== e.cwd
+      || mapped.title !== e.title || mapped.lastActivityAt !== e.lastActivityAt || mapped.isArchived !== false) return false;
+    if (!idle(await native.getSession(e.localSessionId), e) || hasDraft(e.localSessionId)) return false;
+    const busy = await native.getBusyShellPtyKeys(e.localSessionId, false);
+    return busy?.probed === true && Array.isArray(busy.busy) && !busy.busy.length
+      && Array.isArray(busy.unknown) && !busy.unknown.length && idle(await native.getSession(e.localSessionId), e);
+  }
+  async function resume(e, ticket) {
+    const row = await candidate(e);
+    if (!row || !await current(e, ticket)) { report('waiting-native-resume-preview'); return; }
+    attempted.add(`${e.opId}:resume`);
+    const claim = await call('claudex_local_adoption_claim', { opId: e.opId, handle: row.handle, cwd: e.cwd,
+      seedUuid: e.seedUuid, seedContentDigest: e.seedContentDigest, resumable: true });
+    if (claim?.ready !== true) { report('resume-claim-not-ready'); return; }
+    if (claim.opId !== e.opId || claim.handle !== row.handle || claim.cliSessionId !== e.cliSessionId || !syncUuid(claim.claimId))
+      throw new Error('Native resume claim changed');
+    let outcome = 'rejected', localSessionId = null, reason = 'authority-changed';
+    if (await current(e, ticket) && (await candidate(e))?.handle === row.handle && await current(e, ticket)) {
+      outcome = 'unknown'; reason = null;
+      try {
+        const result = await native.resumeCliSession(row.handle);
+        if (result?.ok === true && result.sessionId === `local_${e.cliSessionId}`) {
+          outcome = 'resumed'; localSessionId = result.sessionId; report('resumed-awaiting-native-mapping');
+        } else if (result?.ok === false && ['running', 'liveness_unknown', 'workspace_untrusted', 'folder_missing', 'failed'].includes(result.reason)) {
+          outcome = 'rejected'; reason = result.reason; report('native-resume-refused');
+        } else report('native-resume-unknown');
+      } catch { report('native-resume-unknown'); }
+    }
+    await call('claudex_local_adoption_receipt', { opId: e.opId, claimId: claim.claimId, outcome, localSessionId, reason });
+  }
+  async function activate(e, ticket) {
+    const commands = await native.getSupportedCommands({ sessionId: e.localSessionId });
+    if (Array.isArray(commands) && commands.filter(c => c?.name === 'claudex-sync').length === 1) {
+      report('native-mod-command-ready'); return;
+    }
+    if (!await activationReady(e) || !await current(e, ticket)) { report('waiting-native-activation-idle'); return; }
+    attempted.add(`${e.opId}:activate`);
+    const claim = await call('claudex_local_activation_claim', { opId: e.opId, localSessionId: e.localSessionId, lastActivityAt: e.lastActivityAt });
+    if (claim?.ready !== true) { report('activation-claim-not-ready'); return; }
+    if (claim.opId !== e.opId || claim.localSessionId !== e.localSessionId || claim.lastActivityAt !== e.lastActivityAt || !syncUuid(claim.claimId))
+      throw new Error('Native activation claim changed');
+    let outcome = 'rejected';
+    if (await activationReady(e) && await current(e, ticket)) {
+      outcome = 'unknown';
+      try { await native.warmSession(e.localSessionId); outcome = 'returned'; report('native-activated-awaiting-mod'); }
+      catch { report('native-activation-unknown'); }
+    }
+    await call('claudex_local_activation_receipt', { opId: e.opId, claimId: claim.claimId, outcome });
+  }
+  async function poll() {
+    if (!running || inFlight) return;
+    inFlight = true; const ticket = generation;
+    try {
+      const entries = await manifest();
+      for (const e of entries) {
+        if (!await current(e, ticket) || attempted.has(`${e.opId}:${e.action}`)) continue;
+        client();
+        const methods = e.action === 'resume' ? ['listResumableCliSessions', 'readCliTranscript', 'previewCliResume', 'resumeCliSession']
+          : ['readFileAtCwd', 'getSession', 'getBusyShellPtyKeys', 'getSupportedCommands', 'warmSession'];
+        if (methods.some(k => typeof native?.[k] !== 'function')) { report('native-adoption-api-unavailable'); continue; }
+        if (e.action === 'resume') await resume(e, ticket); else await activate(e, ticket);
+      }
+    } catch { report('native-adoption-unavailable'); }
+    finally { inFlight = false; if (running) timer = setTimer(poll, intervalMs); }
+  }
+  return { start() { if (!running) { running = true; generation++; report('started'); void poll(); } },
+    stop() { running = false; generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; }, poll };
+}

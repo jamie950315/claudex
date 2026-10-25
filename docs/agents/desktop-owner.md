@@ -30,11 +30,33 @@ Local owners use `claudeDesktopTransport: "local-mod"`, the default when absent;
 explicit `remote-control` selects the original path. A saved `remoteId` keeps
 Remote Control and is never converted by changing the default. Local preserves
 native configured authentication and model routing, including official OAuth
-when configured. Seed once through the native SDK, then use native `--desktop`
-adoption; after adoption the SDK must never take over the Local writer. Keep
+when configured. Seed once through the native SDK, close that writer, then use
+Desktop's normal CLI resume-picker APIs. `--desktop` has a first-party account
+entitlement gate and is not a universal Local adoption route; do not replay it,
+open its resume deep link as a substitute, or change configured authentication.
+After adoption the SDK must never take over the Local writer. Keep
 `transport` and the `localPhase` seed/seeded/handoff-intent/handoff-sent/adopted
 state machine durable. Adoption has a separate operation identity and never
 replays seed content or images.
+`local-adoption-manifest.json` and private `local-adoption/<operation>.json`
+journals are separate from Local command delivery. Bind the saved pending
+transaction, owner, exact seed UUID/content and nanosecond file identity before
+publishing. Read native `listResumableCliSessions`, `readCliTranscript` and
+`previewCliResume`; resolve a unique stopped opaque native handle by exact cwd
+and seed, never by title or a guessed CLI ID. A durable one-use claim through
+the already attached user-config stdio client precedes `resumeCliSession`.
+Recheck native preview, manifest and composer after claim. An unknown resume
+remains consumed across restart; only the normal exact registry mapping can
+recover it, without another invocation. A mapping is not the adoption ACK.
+
+Native resume adoption creates a cold Local row. A separate durable one-use
+activation claim binds that mapping's exact ID/cwd/title/activity and unchanged
+seed. The renderer requires no held input, draft, pending/active/background work
+or busy/unknown shell, then rechecks before native `warmSession`. This normal
+no-input activation must not call `confirmImportedSessionResume`, send a prompt,
+replay kept input or bypass native trust/policy. An unknown warm is not repeated;
+a returned warm still requires the live Mod catalogue and actual Mod ACK below.
+
 The loaded Mod's fixed non-immediate `claudex-sync` command handles Local appends.
 Require its unique exact native catalogue entry before and after claim, matching
 native session/registry/cwd/title, idle activity and no draft. Consume the durable
@@ -42,7 +64,7 @@ claim before exposing packet text; always handle command failures locally withou
 model execution. A send/dispatch receipt is not an ACK. Promotion requires the
 applied receipt and exact native command graph, UUID, ordered content and image
 bytes. A transformed image refuses promotion, retaining the journal; unknown
-opener, claim, receive or apply outcomes are never resent. Keep the normal
+resume, activation, claim, receive or apply outcomes are never resent. Keep the normal
 frontend journals/restart boundary and every existing native lifecycle guard.
 
 Only a literal native control `subtype:error` is an explicit failure; an unknown

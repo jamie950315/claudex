@@ -274,6 +274,23 @@ or logging `started` does not prove the running renderer loaded them. Preserve
 the existing adapter selection, native code and failure containment. There is no
 new vendor anchor or permission to borrow an unrelated native client.
 
+The owner-wake bootstrap embeds the independent Local adoption poller, using
+only its structurally proved, attached user-config stdio lookup. Its transport
+and server checks are the same as owner wake; no native Local session is borrowed
+before adoption. Poll `local-adoption-manifest.json`; native list/read/preview
+proves one stopped opaque resume handle by exact cwd, seed UUID and SHA-256 of
+JSON-serialized native content. This digest is an integrity proof, not a content
+log. Require complete native preview and a unique seed-only dialogue. Claim once
+before native resume, recheck manifest/composer/preview, then persist the returned,
+refused or unknown outcome. Neither resume nor a native registry row is the Mod
+adoption ACK. A separate at-most-once activation claim authorizes native
+`warmSession` only for the exact cold Local mapping, unchanged activity, no draft,
+held input, pending work, background work or busy/unknown shells. Recheck before
+activation; unknown calls remain consumed after unload/restart. Never send model
+input, use `confirmImportedSessionResume`, substitute a deep link or retry a
+native call. Native trust, policy and configured routing remain authoritative.
+The existing Local consumer still requires the live command and exact ACK below.
+
 The Local consumer polls only its bounded operation manifest and native identity,
 idle/activity, draft, registry and busy-shell metadata. Before claiming, require
 exact Local/CLI session, cwd, title and registry identity, plus exactly one native

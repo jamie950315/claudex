@@ -1292,6 +1292,9 @@ impl Owner {
         );
         if self.find_append(&pending)? {
             self.state["lastAppend"] = json!({"operationId":pending["operationId"],"uuid":pending["uuid"],"contentHash":pending["contentHash"],"content":pending["content"],"recovered":true});
+            if self.state["transport"] == "local-mod" && self.state["localPhase"] == "seed" {
+                self.state["localPhase"] = json!("seeded");
+            }
             self.state["pending"] = Value::Null;
             self.activity_suppressed
                 .store(self.maintenance, Ordering::Release);
@@ -1564,6 +1567,9 @@ impl Owner {
             "No-query receipt lacks exact persisted native append."
         );
         self.state["lastAppend"] = json!({"operationId":operation_id,"uuid":pending["uuid"],"contentHash":content_hash,"content":content,"recovered":false});
+        if self.state["transport"] == "local-mod" && self.state["localPhase"] == "seed" {
+            self.state["localPhase"] = json!("seeded");
+        }
         self.state["pending"] = Value::Null;
         self.save()?;
         self.activity_suppressed
@@ -1597,16 +1603,17 @@ impl Owner {
         }
         Ok(())
     }
-    /// The native --desktop command owns adoption. The write-ahead intent means
-    /// an unknown exit is never retried. Native registry + actual Mod command
-    /// acknowledgement, not this opener's exit, establish successful adoption.
-    pub async fn handoff_local(&mut self, binary: &Path) -> Result<()> {
+    /// Release the SDK writer after exact seed readback. Native Desktop's
+    /// resume picker owns adoption; no CLI opener or model request is sent.
+    /// Legacy opener intents survive and can only advance through a separately
+    /// claimed native resume and exact registry/Mod acknowledgement.
+    pub async fn prepare_local_adoption(&mut self) -> Result<()> {
         ensure!(
             self.state["transport"] == "local-mod"
                 && self.state["pending"].is_null()
                 && self.state["reset"].is_null()
                 && !self.state["lastAppend"].is_null(),
-            "Local handoff requires an exact completed seed."
+            "Local adoption requires an exact completed seed."
         );
         let seed = self.state["lastAppend"].clone();
         ensure!(
@@ -1614,55 +1621,11 @@ impl Owner {
             "Local adoption seed lacks exact persisted native proof."
         );
         self.close().await?;
-        if matches!(
-            self.state["localPhase"].as_str(),
-            Some("handoff-intent" | "handoff-sent" | "adopted")
-        ) {
-            return Ok(());
+        if matches!(self.state["localPhase"].as_str(), Some("seed" | "seeded")) {
+            self.state["localPhase"] = json!("handoff-intent");
+            self.save()?;
         }
-        let executable = checked_executable(
-            binary,
-            &self.cwd,
-            claudex_core::version::VersionPolicy::read(&self.root)?,
-        )
-        .await?;
-        self.state["localPhase"] = json!("handoff-intent");
-        self.save()?;
-        // script supplies the TTY required by native --desktop. No prompt,
-        // SDK flags, settings overrides, model or authentication are injected.
-        let mut command = Command::new("/usr/bin/script");
-        command
-            .arg("-q")
-            .arg("/dev/null")
-            .arg(executable)
-            .arg("--desktop")
-            .arg("--resume")
-            .arg(self.state["sessionId"].as_str().unwrap())
-            .current_dir(&self.cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .env_remove("CLAUDE_CODE_ENTRYPOINT")
-            .env_remove("NODE_OPTIONS");
-        let default = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .map(|p| p.join(".claude"));
-        if default
-            .as_ref()
-            .is_some_and(|p| fs::canonicalize(p).ok() == fs::canonicalize(&self.claude_home).ok())
-        {
-            command.env_remove("CLAUDE_CONFIG_DIR");
-        } else {
-            command.env("CLAUDE_CONFIG_DIR", &self.claude_home);
-        }
-        let status=tokio::time::timeout(Duration::from_secs(30),command.status()).await.map_err(|_|anyhow::anyhow!("Native Desktop adoption outcome unknown; handoff intent preserved and never resent."))??;
-        ensure!(
-            status.success(),
-            "Native Desktop handoff did not acknowledge completion; preserve its intent, never resend."
-        );
-        self.state["localPhase"] = json!("handoff-sent");
-        self.save()
+        Ok(())
     }
     pub async fn close(&mut self) -> Result<()> {
         if let Some(session) = &self.session {
@@ -1809,28 +1772,21 @@ exit 0
         owner.use_local().await?;
         let lease = PathBuf::from(format!("{}.lock", owner.state_path.display()));
         assert!(!lease.try_exists()?);
-        owner.handoff_local(&binary).await?;
-        assert_eq!(owner.state["localPhase"], "handoff-sent");
-        assert_eq!(
-            fs::read_to_string(root.join("arguments"))?,
-            format!("--desktop\n--resume\n{}\n", native.as_str().unwrap())
-        );
-        owner.handoff_local(&binary).await?;
-        assert_eq!(
-            fs::read_to_string(root.join("arguments"))?.lines().count(),
-            3
-        );
+        owner.state["localPhase"] = json!("seed");
+        owner.save()?;
+        owner.prepare_local_adoption().await?;
+        assert_eq!(owner.state["localPhase"], "handoff-intent");
+        assert!(!root.join("arguments").try_exists()?);
+        owner.prepare_local_adoption().await?;
+        assert!(!root.join("arguments").try_exists()?);
         assert!(owner.start(&binary, None).await.is_err());
         drop(owner);
         let mut reopened = Owner::open(&root, &cwd, &home, "local-fixture", "Title")?;
         assert_eq!(reopened.state["sessionId"], native);
         assert!(!lease.try_exists()?);
         assert!(reopened.start(&binary, None).await.is_err());
-        reopened.handoff_local(&binary).await?;
-        assert_eq!(
-            fs::read_to_string(root.join("arguments"))?.lines().count(),
-            3
-        );
+        reopened.prepare_local_adoption().await?;
+        assert!(!root.join("arguments").try_exists()?);
         Ok(())
     }
     #[test]

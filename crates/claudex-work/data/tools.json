@@ -1209,6 +1209,145 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "claudex_local_adoption_claim",
+      "description": "Native resume-picker adoption claim. Never replay the SDK seed or an uncertain native resume.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "handle": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seedUuid": {
+            "type": "string",
+            "minLength": 1
+          },
+          "seedContentDigest": {
+            "type": "string",
+            "minLength": 1
+          },
+          "resumable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "opId",
+          "handle",
+          "cwd",
+          "seedUuid",
+          "seedContentDigest",
+          "resumable"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_local_adoption_receipt",
+      "description": "Native resume-picker adoption receipt. Never replay the SDK seed or an uncertain native resume.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "claimId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "resumed",
+              "unknown",
+              "rejected"
+            ]
+          },
+          "localSessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "opId",
+          "claimId",
+          "outcome",
+          "localSessionId",
+          "reason"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_local_activation_claim",
+      "description": "One-use native no-input Local activation claim. No model input is submitted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string"
+          },
+          "localSessionId": {
+            "type": "string"
+          },
+          "lastActivityAt": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "opId",
+          "localSessionId",
+          "lastActivityAt"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_local_activation_receipt",
+      "description": "One-use native no-input Local activation receipt. No model input is submitted.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string"
+          },
+          "claimId": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "returned",
+              "unknown",
+              "rejected"
+            ]
+          }
+        },
+        "required": [
+          "opId",
+          "claimId",
+          "outcome"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }

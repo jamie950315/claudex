@@ -1211,12 +1211,24 @@ only the fixed no-query command, never an ordinary model prompt. The Mod consume
 the claim before returning packet text and uses the native append API without
 model execution. Long history does not pass through shell-command output.
 
-The first native SDK seed is handed to Desktop through native `--desktop`
-adoption; afterward the SDK must not take over that Local writer. Adoption has
-its own operation identity and does not resend the seed or its images. Owner
-state records `transport: "local-mod"` and `localPhase` as `seed`, `seeded`,
-`handoff-intent`, `handoff-sent` or `adopted`. Unknown opener, claim, receive or
-apply outcomes remain pending and are never resent.
+The first native SDK seed is handed to Desktop through its normal CLI resume
+picker, preserving the existing transcript and configured account/provider.
+The renderer matches a unique native list handle using cwd and the exact saved
+seed, reads the native resume preview, and consumes a durable one-use claim
+before native resume. It never guesses a handle, replays `--desktop` or opens
+its deep link directly. Native trust, liveness and ownership checks remain in
+force. Afterward the SDK must not take over that Local writer.
+
+A cold adopted Local session receives a separately claimed, no-input native
+activation only while its exact registry/session identity is idle, with no
+draft, held input or background work. Its live Mod command must then acknowledge
+the adoption without resending seed text or images. Native mapping and returned
+resume/activation calls are intermediate evidence, not completion.
+Owner state retains `transport: "local-mod"` and `localPhase` as `seed`, `seeded`,
+`handoff-intent`, `handoff-sent` or `adopted`. Unknown resume, activation, claim,
+receive or apply outcomes remain pending and are never resent. Existing
+`handoff-intent` recovery reuses the saved exact seed without clearing pending
+state or changing authentication.
 
 A returned send or dispatch receipt is not a native ACK. Promotion requires the
 applied receipt and exact persisted native command, UUID, content and ordered
