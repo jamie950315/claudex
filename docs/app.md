@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.18**, with **Claude Mod 0.8.76** bundled.
+Current build: **Claudex.app 2.0.19**, with **Claude Mod 0.8.77** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -51,26 +51,35 @@ with no group/other write access. Setup verifies the strict deep signature and
 app identity. Private state, login files and plugin caches remain owned by the
 current user.
 
-### Official Claude continuations and custom model histories
+### Claude accounts and model routing
 
-When you continue a synchronized conversation in Claude, the Claudex-managed
-continuation uses your existing official Claude subscription account and official
-Claude models. Synchronizing history sends no model query; later Claude replies
-use your subscription allowance.
+Synchronization and model routing are separate. Synchronizing history sends no
+model query. Local Claude replies use the native session's configured provider,
+endpoint, model and authentication route. Claudex must not switch those settings
+or the account charged for replies to make a transport available. Explicit Remote
+Control selects the official-account route, not an automatic replacement for a proxy.
+
+New owners default to the Local Mod transport, which uses the native configured
+route, including either a proxy or official account. It requires the current
+enabled Mod loaded in the Local session and the frontend integration loaded
+after any required normal restart. Existing Remote Control owners retain their
+saved transport and identity; changing the default does not migrate them.
 
 Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
-including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Claudex therefore applies
-an official-account settings overlay only to its managed synchronization process.
-It keeps the native credential namespace and the configured permissions, hooks
-and plugins, without copying credentials or editing user settings. The account
-checklist checks the official sign-in independently of ordinary proxy settings.
+including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. An existing official
+sign-in does not remove that restriction from the configured custom route.
+The account checklist follows the configured synchronization transport. Local
+checks Claude Code's configured authentication without requiring an official
+sign-in or subscription. Explicit Remote Control checks official sign-in
+independently of proxy settings. Neither check proves an active subscription,
+available allowance or model access. Cached account labels such as `pro` are not
+current subscription evidence.
 
 Your regular CLI proxy configuration stays available through its normal entry
 point. Histories produced by your own models can be synchronized to Codex under
-the normal history checks. If you then return to the managed Claude continuation,
-new replies use official models and allowance, not the source proxy. Continue
-the synchronized branch in its current entry; adding work to a superseded
-original still causes a history conflict.
+the normal history checks; this does not establish a working Remote Control
+continuation on a custom endpoint. Continue the synchronized branch in its
+current entry; adding work to a superseded original still causes a history conflict.
 
 Conversation synchronization wakes on native completion hooks/events, not a recurring
 two-second history scan. Startup/reconnection reconciliation and a status-only
@@ -280,7 +289,9 @@ recipient's ACK are different states. ACK means receipt, not completion of the
 requested action.
 
 The Desktop watcher automatically follows the latest fetched frontend entry and
-its cached import graph for folders, chat wake and owner wake. It resolves unique
+its cached import graph for folders, chat wake, Local synchronization and owner
+wake. Local synchronization has its own operation manifest and no-query command;
+collaboration message delivery remains separate. The watcher resolves unique
 structural bindings, checks transformed module syntax and keeps an immutable
 original plus recovery journal for each cache filename. Earlier originals and
 receipts remain. Missing/ambiguous anchors or foreign cache changes skip that

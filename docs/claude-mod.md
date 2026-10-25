@@ -1,16 +1,20 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.76
+## Current companion: 0.8.77
 
-Claudex.app 2.0.18 installs, updates and checks its bundled Mod automatically;
+Claudex.app 2.0.19 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
-Version 0.8.76 packages the Claudex 2.0.18 runtime. Managed Claude synchronization
-continuations use the existing official subscription account through a
-process-only native settings overlay. Ordinary CLI proxy settings stay unchanged;
-source histories produced by custom models remain importable under the normal
-history checks. New replies in the managed Claude continuation use official
-models and subscription allowance.
+Version 0.8.77 packages the Claudex 2.0.19 runtime. Local synchronization uses
+the loaded Mod's fixed no-query command and the native configured provider,
+model and authentication route. It does not switch accounts or usage routes.
+The Local frontend integration must be loaded before delivery; missing command
+registration waits rather than submitting a model prompt. Applied receipts and
+exact persisted history are verified before promotion, including ordered image
+bytes; native image resizing or re-encoding can block that proof. Existing
+Remote Control owners retain their saved transport. Claude Code 2.1.302 still
+refuses Remote Control through custom API endpoints. An official sign-in alone
+does not establish an active subscription or available allowance.
 
 Version 0.8.75 packages the Claudex 2.0.17 runtime. Working-directory removal
 during synchronization or an unpublished Codex handoff now stops only that
@@ -546,7 +550,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.76-review"
+STAGE="$PARENT/claudex-0.8.77-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -567,7 +571,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.76-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.77-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

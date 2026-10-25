@@ -150,11 +150,18 @@ namespaces, never copy credentials, and do not auto-start model work during setu
 Private state and status reads use non-blocking, no-follow file descriptors and
 reject non-regular files before reading. Read-only AppSetup inspection refuses
 setup, account, service and model-setting mutations before any native operation.
-The Claude account row checks official subscription OAuth through native
-`--setting-sources "" auth status --json`, in the unchanged default credential
-namespace. Settings-provided proxy tokens must not hide an existing official
-login or qualify as one. This account-only probe does not change inference
-routing, native settings, hooks or plugins in ordinary sessions.
+The Claude readiness row follows `claudeDesktopTransport` through the shared
+runtime selector: absent means `local-mod`, while explicit `remote-control`
+requires the official account probe. Local uses native `auth status --json`
+with the normal setting sources and accepts configured authentication without
+requiring official sign-in or a subscription. Its action checks setup again;
+never direct a configured-route failure into an automatic official login.
+Preserve `providers::authentication` as the independent official-account probe
+using `--setting-sources "" auth status --json` in the unchanged default credential
+namespace. Proxy tokens must not qualify as an official login. Auth status and
+cached labels such as `subscriptionType: "pro"` do not establish an active
+subscription, available allowance or successful model access. Neither probe
+changes inference routing, native settings, hooks, plugins or credentials.
 Service control verifies the loaded launchd job's definition path, program and
 exact arguments against the owned installation before reporting readiness or
 starting, stopping or removing it; a matching on-disk plist alone is insufficient.

@@ -223,6 +223,9 @@ impl AppRuntime for NativeApp {
     async fn authentication(&self, provider: &str, binary: Option<&Path>) -> Authentication {
         providers::authentication(provider, binary, &self.discovery, self.runner.as_ref()).await
     }
+    async fn configured_authentication(&self, binary: Option<&Path>) -> Authentication {
+        providers::configured_authentication(binary, &self.discovery, self.runner.as_ref()).await
+    }
     async fn mod_status(
         &self,
         providers: &Providers,

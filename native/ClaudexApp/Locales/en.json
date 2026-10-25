@@ -406,5 +406,10 @@
   "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.": "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.",
   "Check the recipient session's native inbound-message policy.": "Check the recipient session's native inbound-message policy.",
   "Verify that the recipient has loaded the supported chat-wake adapter.": "Verify that the recipient has loaded the supported chat-wake adapter.",
-  "Check the exact task recipient and native SendMessage capability.": "Check the exact task recipient and native SendMessage capability."
+  "Check the exact task recipient and native SendMessage capability.": "Check the exact task recipient and native SendMessage capability.",
+  "Claude authentication": "Claude authentication",
+  "Native configured authentication is available. Model access and allowance are not verified.": "Native configured authentication is available. Model access and allowance are not verified.",
+  "Install the native tool before checking configured authentication.": "Install the native tool before checking configured authentication.",
+  "Native configured authentication status could not be verified. Check your Claude Code settings.": "Native configured authentication status could not be verified. Check your Claude Code settings.",
+  "Configure authentication in Claude Code for your selected provider.": "Configure authentication in Claude Code for your selected provider."
 }

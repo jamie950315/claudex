@@ -53,8 +53,9 @@ insert older transcript segments into their saved prefix.
 
 ## Desktop integration
 
-Desktop mode's validated Claude baseline is CLI `2.1.281` with normal subscription
-OAuth and SDK `0.3.281`; warn policy permits other runtime versions to be attempted.
+The historical Remote Control Desktop baseline is CLI `2.1.281` with normal
+subscription OAuth and SDK `0.3.281`; warn policy permits other runtime versions
+to be attempted.
 It is integrated with the coordinator and background watcher.
 Explicitly user-authorized acceptance has verified two real model-authored
 Desktop roundtrips, continuation from a compacted source, stable Claude identity,
@@ -1193,35 +1194,68 @@ appends to adopted transcripts, even though the isolated synthetic probe works.
 Do not promote the fixture append helper into a runtime writer based on an
 archived flag, an absent PID, or a successful reload alone.
 
+### Native Local Mod transport
+
+`claudeDesktopTransport` in the synchronization configuration selects
+`local-mod` (the default when absent) or explicit `remote-control`. New Local
+owners preserve the native configured provider, endpoint, model, authentication
+and usage route; official authentication can also be used through Local. An owner
+with a saved Remote Control ID keeps that transport and identity regardless of
+the default. Invalid transport values fail explicitly.
+
+Local synchronization needs an enabled current Mod loaded in the native Local
+session and the loaded frontend integration. The renderer verifies the exact
+session, native idle/activity metadata, draft absence and the unique live
+`claudex-sync` command before and after claiming a durable operation. It submits
+only the fixed no-query command, never an ordinary model prompt. The Mod consumes
+the claim before returning packet text and uses the native append API without
+model execution. Long history does not pass through shell-command output.
+
+The first native SDK seed is handed to Desktop through native `--desktop`
+adoption; afterward the SDK must not take over that Local writer. Adoption has
+its own operation identity and does not resend the seed or its images. Owner
+state records `transport: "local-mod"` and `localPhase` as `seed`, `seeded`,
+`handoff-intent`, `handoff-sent` or `adopted`. Unknown opener, claim, receive or
+apply outcomes remain pending and are never resent.
+
+A returned send or dispatch receipt is not a native ACK. Promotion requires the
+applied receipt and exact persisted native command, UUID, content and ordered
+image proofs. Each image's JSON envelope (base64 and MIME type) must be smaller
+than 4 MiB for the native file reader; the complete packet retains its existing
+64 MiB limit. Native resizing or re-encoding that changes image bytes refuses
+promotion while preserving the operation journal; image acceptance depends on
+that exact persisted proof. Existing source, ownership and superseded-original
+guards remain unchanged.
+
 ### Native SDK owner path
 
-`crates/claudex-sync/src/owner.rs` provides Desktop synchronization: a persistent
-native Claude process using its SDK protocol is the only transcript writer.
+`crates/claudex-sync/src/owner.rs` provides Remote Control synchronization: a
+persistent native Claude process using its SDK protocol is the only transcript writer.
 Claude Desktop connects through native Remote Control. Synchronization submits
 `shouldQuery: false` messages; normal user requests from Desktop remain native user turns. The
 component implements that native protocol directly in Rust. Its strict validated
 CLI baseline is `2.1.281`, originally accepted with SDK `0.3.281`; the Rust owner
 does not load the Node SDK. `warn` permits other runtimes to attempt the existing
-protocol without claiming compatibility. It requires normal subscription OAuth
-and does not copy credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
-even to the default path selects a different native credential namespace, so
-the owner omits that variable for the standard home.
+protocol without claiming compatibility. This Remote Control path requires
+normal subscription OAuth and does not copy credentials from Desktop. Setting
+`CLAUDE_CONFIG_DIR` even to the default path selects a different native credential
+namespace, so the owner omits that variable for the standard home.
 
-Managed Claude continuations use the official subscription account and official
-Claude models. A process-only native settings overlay removes proxy authentication,
-endpoint and model-routing overrides from that owner while preserving the native
-credential namespace, permission settings, hooks and plugins. It does not edit
-ordinary CLI settings or copy account credentials; native managed policy remains
-authoritative. Claude Code 2.1.302 refuses custom endpoints for Remote Control
-even with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`.
-The owner starts with native `--model default`, selecting the subscription's
-default Claude model rather than a proxy alias or a hard-coded model release.
+Local synchronization preserves the native configured provider, endpoint, model,
+authentication and usage route. Explicit `remote-control` selects the official
+account profile for that process, without editing ordinary CLI settings or
+copying credentials. Native permissions, hooks, plugins and managed policy remain
+authoritative. A transport refusal does not authorize switching to that profile
+or forcing an official model. Claude Code 2.1.302 refuses
+custom endpoints for Remote Control even with
+`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Native auth status and cached account
+labels do not establish an active subscription, available allowance or model access.
 
-The model that authored a source history does not select the continuation's
-provider. Histories from custom-model CLI sessions remain readable and importable
-under the same history guards, but new replies after returning from Codex to the
-managed Claude entry use official models and subscription allowance. Ordinary
-proxy sessions retain their settings and entry points. The existing
+The model that authored a source history does not prove the continuation's
+provider or transport availability. Histories from custom-model CLI sessions
+remain readable and importable under the same history guards; that alone does
+not establish a working Remote Control continuation on a custom endpoint.
+Ordinary proxy sessions retain their settings and entry points. The existing
 superseded-original guard still applies: do not add new work to the old source
 after its synchronized continuation has taken over.
 

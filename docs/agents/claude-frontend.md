@@ -263,6 +263,39 @@ native command, install a same-name prompt skill, or change submission/dispatch
 to make the item appear.
 Use reserved identifiers and the normal original/journal and reload boundaries.
 
+## Local no-query synchronization bootstrap
+
+The proved, statically loaded chat-wake resource also embeds
+`claude-local-sync-runtime.mjs`. Its bootstrap, lifecycle and
+`local-sync-manifest.json` are independent of collaboration wake messages and
+the owner-wake inbox. It uses the same normal cache installer, immutable originals,
+combined-resource journals and restart boundaries as chat wake; installing bytes
+or logging `started` does not prove the running renderer loaded them. Preserve
+the existing adapter selection, native code and failure containment. There is no
+new vendor anchor or permission to borrow an unrelated native client.
+
+The Local consumer polls only its bounded operation manifest and native identity,
+idle/activity, draft, registry and busy-shell metadata. Before claiming, require
+exact Local/CLI session, cwd, title and registry identity, plus exactly one native
+`getSupportedCommands({sessionId: localId})` catalogue entry whose name is
+`claudex-sync`. Recheck that proof and activity after claim, and recheck the exact
+manifest entry before dispatch. A cold, absent, duplicated or revoked command
+never becomes an ordinary model prompt. Do not advertise this command through
+the sessionless catalogue adapter or substitute a prompt skill.
+
+Dispatch only the fixed `/claudex-sync <operation UUID> <claim UUID>` envelope
+with its deterministic input UUID and ordered native image input. The loaded
+Mod's non-immediate handler consumes both success and failure without calling
+`next()`; it verifies the current durable claim and performs only the authorized
+native no-query append. Long packet text comes through the authenticated helper,
+not a shell command or command arguments. Claim once, consume once and retain
+uncertain outcomes across renderer unload/restart; never retry a native send or
+repeat a consumed helper response. A claim is dispatch authority, and a returned
+send/receipt is transport evidence, not a native ACK or completed synchronization.
+Only the coordinator's applied receipt plus exact persisted native transcript
+proof permits promotion. Native image resizing or re-encoding that changes the
+intended bytes refuses promotion and preserves the journal.
+
 `crates/claudex-app/src/frontend_maintenance.rs` is owned by the normal Desktop watcher under
 watch.lock. It performs one startup cache pass, then debounces cache-directory
 notifications and serially re-discovers/reapplies all enabled adapters. Exact
@@ -399,7 +432,7 @@ module is distinct from a started subscription, a finished native read and a
 verified archive outcome.
 
 The frontend engine is Rust: `crates/claudex-app/src/frontend_*.rs` owns graph
-proofs, selection, transformation, installation and maintenance. The six files
+proofs, selection, transformation, installation and maintenance. The seven files
 under `crates/claudex-app/host/renderer/` are injected browser-host runtimes,
 not another engine. JavaScript developer tools download/copy assets, run the
 Rust checker and independently inspect its output with Acorn and `node --check`.

@@ -7,7 +7,8 @@ including archive and deep-link unarchive without another registry entry. This
 does not establish a writer lease: archive persists before child exit is awaited,
 and unarchive can race an external append. Keep the Desktop-owned write guard.
 
-The Rust `Owner` in `crates/claudex-sync/src/owner.rs` is the sole native writer;
+For Remote Control, the Rust `Owner` in `crates/claudex-sync/src/owner.rs` is the
+sole native writer;
 it drives Claude's native SDK protocol directly, and Desktop views it through
 Remote Control. Actual native/desktop tests verify shouldQuery:false,
 zero-inference receipts, same remote ID after restart, exact UUID/content
@@ -25,23 +26,44 @@ No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
 path. Store the owner handle before start() so startup failures
 during user work retain the live owner instead of interrupting it.
 
+Local owners use `claudeDesktopTransport: "local-mod"`, the default when absent;
+explicit `remote-control` selects the original path. A saved `remoteId` keeps
+Remote Control and is never converted by changing the default. Local preserves
+native configured authentication and model routing, including official OAuth
+when configured. Seed once through the native SDK, then use native `--desktop`
+adoption; after adoption the SDK must never take over the Local writer. Keep
+`transport` and the `localPhase` seed/seeded/handoff-intent/handoff-sent/adopted
+state machine durable. Adoption has a separate operation identity and never
+replays seed content or images.
+The loaded Mod's fixed non-immediate `claudex-sync` command handles Local appends.
+Require its unique exact native catalogue entry before and after claim, matching
+native session/registry/cwd/title, idle activity and no draft. Consume the durable
+claim before exposing packet text; always handle command failures locally without
+model execution. A send/dispatch receipt is not an ACK. Promotion requires the
+applied receipt and exact native command graph, UUID, ordered content and image
+bytes. A transformed image refuses promotion, retaining the journal; unknown
+opener, claim, receive or apply outcomes are never resent. Keep the normal
+frontend journals/restart boundary and every existing native lifecycle guard.
+
 Only a literal native control `subtype:error` is an explicit failure; an unknown
 response outcome preserves the registering intent and never permits another
 registration. Recognize the native custom-endpoint refusal with a fixed,
 content-free diagnostic rather than copying arbitrary native error text.
 Claude Code 2.1.302 refuses Remote Control on custom API endpoints even with
-`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. By user decision, managed Claude
-synchronization continuations use existing official subscription OAuth and
-official Claude models. Apply that profile only through a process-local native
-settings overlay; preserve the credential namespace, permissions, hooks and
-plugins, with native managed policy still authoritative. Do not change ordinary
-CLI settings or proxy sessions, copy credentials, or reroute collaboration
-workers as a side effect. Source histories authored with proxy models remain
-readable under their normal history proofs; new managed continuation replies use
-official allowance. Official account readiness and the source inference route
-remain distinct observations. Never clear a pending operation to change routing.
-Use native `--model default` for the subscription default, not a proxy model
-alias or a hard-coded Claude release.
+`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Preserve the native configured
+provider, endpoint, model, authentication and usage route for Local. Never remove
+proxy overrides or force `--model default` as an automatic response to a transport
+refusal. Explicit `remote-control` selects the official-account profile; it must
+not be a fallback for Local failures. Preserve the credential namespace,
+permissions, hooks and plugins, with
+native managed policy still authoritative. Do not change ordinary CLI settings,
+copy credentials, or reroute collaboration workers as a side effect. Source
+histories authored with proxy models remain readable under their normal history
+proofs; that does not prove transport availability for their continuation.
+Official account login, current subscription entitlement, model access and the
+configured inference route are distinct observations. Cached account labels do
+not prove an active subscription or available allowance. Never clear a pending
+operation to change routing.
 
 The CLI started through its SDK protocol ignores `permissions.defaultMode` from settings
 (observed with CLI 2.1.283: user and flag tiers both start in `default`) and has
