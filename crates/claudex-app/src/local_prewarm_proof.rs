@@ -198,7 +198,8 @@ fn renderer(
             cache_path.is_absolute() && fs::canonicalize(&cache_path)? == cache_path,
             "Renderer cache path is aliased."
         );
-        let cache_file = safe_file(&cache_path, crate::cache::MAX_CACHE_BYTES)?;
+        let cache_file =
+            crate::cache_install::snapshot(&cache_path, crate::cache::MAX_CACHE_BYTES)?;
         let cache = crate::cache::inspect(&cache_file.bytes, None)?;
         let url = url::Url::parse(&cache.url)?;
         if url.path_segments().and_then(|mut s| s.next_back()) != Some(loaded_asset) {
@@ -210,7 +211,7 @@ fn renderer(
         );
         once(&cache.source, LEGACY)?;
         ensure!(
-            value["patchedHash"] == cache.source_hash,
+            value["patchedHash"] == cache_file.hash,
             "Installed renderer integrity changed."
         );
         before(&cache_file.identity, started)?;
@@ -391,6 +392,7 @@ mod tests {
         let cache = root.join("native-cache");
         let payload = crate::cache::tests::fixture(LEGACY);
         let inspected = crate::cache::inspect(&payload, None)?;
+        assert_ne!(crate::cache::hash(&payload), inspected.source_hash);
         storage::atomic_write(&cache, &payload)?;
         for (name, path) in [
             ("evicted", root.join("missing-cache")),
@@ -401,7 +403,7 @@ mod tests {
             storage::write_json(
                 journal.join("manifest.json"),
                 &json!({"version":1,
-                "phase":"installed","action":"install","cachePath":path,"patchedHash":inspected.source_hash}),
+                "phase":"installed","action":"install","cachePath":path,"patchedHash":crate::cache::hash(&payload)}),
             )?;
         }
         let started = storage::now_ms() + 1000;
@@ -410,12 +412,19 @@ mod tests {
             json!(cache)
         );
         assert!(renderer(&root, started, "other.js").is_err());
+        let loaded_manifest = directory.join("loaded/ui-folder-compat/manifest.json");
+        let mut manifest = storage::read_json(&loaded_manifest)?;
+        manifest["patchedHash"] = json!(inspected.source_hash);
+        storage::write_json(&loaded_manifest, &manifest)?;
+        assert!(renderer(&root, started, "index-test.js").is_err());
+        manifest["patchedHash"] = json!(crate::cache::hash(&payload));
+        storage::write_json(&loaded_manifest, &manifest)?;
         let duplicate = storage::private_directory(directory.join("duplicate"))?;
         let journal = storage::private_directory(duplicate.join("ui-folder-compat"))?;
         storage::write_json(
             journal.join("manifest.json"),
             &json!({"version":1,
-            "phase":"installed","action":"install","cachePath":cache,"patchedHash":inspected.source_hash}),
+            "phase":"installed","action":"install","cachePath":cache,"patchedHash":crate::cache::hash(&payload)}),
         )?;
         assert!(renderer(&root, started, "index-test.js").is_err());
         Ok(())
