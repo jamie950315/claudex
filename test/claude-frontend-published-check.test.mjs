@@ -98,6 +98,24 @@ test('mutation commands require an explicit isolated sandbox, not just a native 
   assert.deepEqual(await readdir(root), []);
 });
 
+test('inventory retains validated journal originals after native cache eviction', async t => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'claudex-evicted-frontend-')));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const { home, root } = await sandboxDirectories(base), checker = await rustChecker();
+  const resources = await writeFrontend(home, frontendBuild('evicted'));
+  await invokeChecker(checker, { root, home, sandbox: base, operation: 'install', output: join(base, 'installed') });
+  // This is a test-owned cache, not the user's live native cache.
+  await rm(resources.chatWake.path);
+  const result = await invokeChecker(checker, { root, home, operation: 'inventory', output: join(base, 'inventory') });
+  const journal = result.journals.find(row => row.url === resources.chatWake.url);
+  assert.equal(journal.cacheFilename, resources.chatWake.filename);
+  assert.equal(typeof journal.cacheFilename, 'string');
+  const recovered = result.modules.find(row => row.url === resources.chatWake.url);
+  assert.equal(recovered.name, resources.chatWake.filename);
+  assert.deepEqual(await readFile(recovered.bytesPath), resources.chatWake.bytes);
+  assert.equal(result.liveSourcesUnchanged, true);
+});
+
 test('a refused selected graph skips maintenance transition without waiting for ready', async t => {
   const base = await realpath(await mkdtemp(join(tmpdir(), 'claudex-refused-frontend-')));
   t.after(() => rm(base, { recursive: true, force: true }));

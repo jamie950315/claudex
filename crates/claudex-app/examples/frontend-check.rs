@@ -255,7 +255,12 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         if let Some(old) = originals.insert(entry.url.clone(), original.bytes.clone()) {
             ensure!(old == original.bytes, "Conflicting journal originals");
         }
-        journals.push(json!({"adapter":adapter.name(),"asset":entry.url.rsplit('/').next(),"url":entry.url,"cacheFilename":m.cache_path.file_name(),"status":"validated","manifest":m}));
+        let filename = m
+            .cache_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("Journal cache filename is not UTF-8")?;
+        journals.push(json!({"adapter":adapter.name(),"asset":entry.url.rsplit('/').next(),"url":entry.url,"cacheFilename":filename,"status":"validated","manifest":m}));
         observed.insert(path.join("manifest.json"), receipt);
         observed.insert(path.join("original.cache"), original);
         Ok(())
@@ -307,7 +312,10 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
     }
     for (url, bytes) in originals {
         modules.entry(url.clone()).or_insert_with(|| {
-            let name = journals.iter().find(|j| j["url"] == url).unwrap()["cacheFilename"]
+            let name = journals
+                .iter()
+                .find(|j| j["url"] == url)
+                .expect("Original has a validated journal")["cacheFilename"]
                 .as_str()
                 .unwrap()
                 .to_owned();
@@ -343,7 +351,7 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         )?;
         ensure!(
             actual.identity == saved.identity && actual.bytes == saved.bytes,
-            "Live source changed during inventory"
+            "Live source changed during inventory: {}", path.display()
         );
     }
     Ok(json!({"modules":rows,"journals":journals,"liveSourcesUnchanged":true}))

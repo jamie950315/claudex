@@ -9,6 +9,7 @@ const FOLDER: &str = include_str!("../host/renderer/claude-folder-runtime.mjs");
 const HANDOFF: &str = include_str!("../host/renderer/claude-desktop-handoff-runtime.mjs");
 const LOCAL_ANCHOR: &str = include_str!("../host/renderer/claude-folder-anchor.mjs");
 const CHAT: &str = include_str!("../host/renderer/claude-chat-wake-runtime.mjs");
+const LOCAL_SYNC: &str = include_str!("../host/renderer/claude-local-sync-runtime.mjs");
 const OWNER: &str = include_str!("../host/renderer/claude-owner-wake-runtime.mjs");
 fn embedded(source: &str) -> Result<String> {
     let ast = syntax(source)?;
@@ -77,6 +78,8 @@ pub fn chat(root: &Path, registry: &Path, native_binding: &str, asset: &str) -> 
     native(native_binding)?;
     let template = r#"
 ;(()=>{try{@RUNTIME@
+@LOCAL_SYNC@
+const localSync=createClaudeLocalSyncRuntime({native:@NATIVE@,root:@ROOT@,registryRoot:@REGISTRY@,readManifest:()=>@NATIVE@.readFileAtCwd(@ROOT@,"local-sync-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onStatus:e=>console.warn("[Claudex local synchronization] "+e)});localSync.start();window.addEventListener("beforeunload",()=>localSync.stop(),{once:true});
 const wake=createClaudeChatWakeRuntime({native:@NATIVE@,registryRoot:@REGISTRY@,readManifest:()=>@NATIVE@.readFileAtCwd(@ROOT@,"collaboration/chat-mailbox/wake-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake] "+e)});console.warn("[Claudex chat wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});}catch{try{console.warn("[Claudex chat wake] disabled")}catch{}}})();
 "#;
     let result = template
@@ -84,7 +87,8 @@ const wake=createClaudeChatWakeRuntime({native:@NATIVE@,registryRoot:@REGISTRY@,
         .replace("@REGISTRY@", &path(registry)?)
         .replace("@ROOT@", &path(root)?)
         .replace("@ASSET@", &serde_json::to_string(asset)?)
-        .replace("@RUNTIME@", &embedded(CHAT)?);
+        .replace("@RUNTIME@", &embedded(CHAT)?)
+        .replace("@LOCAL_SYNC@", &embedded(LOCAL_SYNC)?);
     syntax(&result)?;
     Ok(result)
 }
