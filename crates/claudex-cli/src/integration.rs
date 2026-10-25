@@ -254,6 +254,8 @@ impl Integration for NativeIntegration {
                 "mod_target_verify",
                 "desktop_wake_verify",
                 "desktop_owner_wake",
+                "local_sync_claim",
+                "local_sync_receipt",
                 "native_chat_wake",
                 "notification_preflight",
             ]
@@ -265,8 +267,23 @@ impl Integration for NativeIntegration {
     async fn origin_verify(&self, params: &Value) -> Result<Value> {
         crate::native_clients::verify_origin(&self.root, &self.homes, params).await
     }
-    async fn dispatch(&self, method: &str, _peer: Provider, params: Value) -> Result<Value> {
+    async fn dispatch(&self, method: &str, peer: Provider, params: Value) -> Result<Value> {
         match method {
+            "local_sync_claim" | "local_sync_receipt" => {
+                ensure!(
+                    peer == Provider::Claude && !self.closed.load(Ordering::Acquire),
+                    "Native Local synchronization endpoint unavailable."
+                );
+                if method == "local_sync_claim" {
+                    claudex_sync::local_sync::claim(
+                        &self.root,
+                        &self.homes.desktop_registry,
+                        &params,
+                    )
+                } else {
+                    claudex_sync::local_sync::receipt(&self.root, &params)
+                }
+            }
             "desktop_owner_wake" => self.owner_wake.publish(&params).await,
             "native_chat_discovery" => Ok(json!({"chats":self.discover(&params).await?})),
             "chat_titles" => {
@@ -413,6 +430,128 @@ mod tests {
         assert_eq!(environment.settings().await?.default_warm_limit, "for=2h");
         std::fs::hard_link(work.join("work.json"), work.join("alias"))?;
         assert!(environment.settings().await.is_err());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn local_sync_claim_and_receipt_cross_actual_unix_rpc_once() -> Result<()> {
+        use claudex_work::{
+            Broker, Config, Invocation, NativeFailure, NativeResult, NativeRunner, transport,
+        };
+        struct NoQuery;
+        #[async_trait]
+        impl NativeRunner for NoQuery {
+            async fn run(
+                &self,
+                _: Invocation,
+                _: tokio::sync::mpsc::Sender<Value>,
+            ) -> std::result::Result<NativeResult, NativeFailure> {
+                panic!("Local synchronization must not invoke a model")
+            }
+        }
+        let temp = tempfile::tempdir_in("/tmp")?;
+        let root = temp.path().canonicalize()?;
+        claudex_core::storage::private_directory(&root)?;
+        let codex = claudex_core::storage::private_directory(root.join("codex"))?;
+        let claude = claudex_core::storage::private_directory(root.join("claude"))?;
+        let registry = claudex_core::storage::private_directory(root.join("registry"))?;
+        let cwd = claudex_core::storage::private_directory(root.join("project"))?;
+        let session = uuid::Uuid::new_v4().to_string();
+        let op = uuid::Uuid::new_v4().to_string();
+        let conversation = uuid::Uuid::new_v4().to_string();
+        let local = format!("local_{}", uuid::Uuid::new_v4());
+        let registry_file = registry.join(format!("{local}.json"));
+        claudex_core::storage::write_json(
+            &registry_file,
+            &json!({"sessionId":local,"cliSessionId":session,"cwd":cwd,"title":"Fixture","isArchived":false,"lastActivityAt":0}),
+        )?;
+        claudex_core::storage::private_directory(root.join("owners"))?;
+        claudex_core::storage::write_json(
+            root.join("owners").join(format!(
+                "{}.json",
+                claudex_sync::history::digest_bytes(conversation.as_bytes())
+            )),
+            &json!({"sessionId":session,"conversationId":conversation,"cwd":cwd,"transport":"local-mod","localPhase":"handoff-sent","remoteId":null,"pending":null,"reset":null}),
+        )?;
+        claudex_core::storage::write_json(
+            root.join("desktop-state.json"),
+            &json!({"version":2,"pending":{"operationId":op,"record":{"nativeId":session,"conversationId":conversation}}}),
+        )?;
+        let dir = claudex_core::storage::private_directory(root.join("local-sync").join(&op))?;
+        let entry = json!({"opId":op,"conversationId":conversation,"localSessionId":local,"cliSessionId":session,"cwd":cwd,"title":"Fixture","command":"claudex-sync","args":op,"inputUuid":claudex_sync::owner::append_uuid(&session,&op),"expiresAt":claudex_core::storage::now_ms()+600000,"registryPath":registry_file,"images":[]});
+        claudex_core::storage::write_json(
+            dir.join("operation.json"),
+            &json!({"version":1,"opId":op,"sourceOperationId":op,"conversationId":conversation,"cliSessionId":session,"cwd":cwd,"kind":"adopt","entry":entry,"content":[],"claim":null,"received":false,"applied":null}),
+        )?;
+        let integration = Arc::new(NativeIntegration::new(
+            root.clone(),
+            Homes {
+                codex,
+                claude,
+                desktop_registry: registry,
+            },
+        ));
+        let b = Broker::open_with_integration(
+            root.join("collaboration"),
+            Config::default(),
+            Arc::new(NoQuery),
+            integration,
+        )
+        .await?;
+        let server = transport::serve(b.clone()).await?;
+        let params = json!({"opId":op,"localSessionId":local,"cliSessionId":session,"cwd":cwd});
+        assert_eq!(
+            transport::validate_tool("claudex_local_sync_claim", &params, true)?,
+            "local_sync_claim"
+        );
+        assert!(transport::validate_tool("claudex_local_sync_claim", &params, false).is_err());
+        assert!(
+            transport::call(
+                &b.root,
+                Provider::Codex,
+                b.controller_token(),
+                "local_sync_claim",
+                params.clone()
+            )
+            .await
+            .is_err()
+        );
+        let claim = transport::call(
+            &b.root,
+            Provider::Claude,
+            b.controller_token(),
+            "local_sync_claim",
+            params.clone(),
+        )
+        .await?;
+        assert_eq!(claim["ready"], true);
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_sync_claim",
+                params.clone()
+            )
+            .await?["ready"],
+            false
+        );
+        let mut receipt = params;
+        receipt["claimId"] = claim["claimId"].clone();
+        receipt["outcome"] = json!("unknown");
+        receipt["detail"] = json!("native-send-unknown");
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_sync_receipt",
+                receipt
+            )
+            .await?["recorded"],
+            true
+        );
+        b.close().await?;
+        server.close().await?;
         Ok(())
     }
 }

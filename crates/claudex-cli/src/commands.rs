@@ -82,6 +82,11 @@ pub async fn run(raw: &[String]) -> Result<()> {
         if raw[index] == "sync-hook" {
             return crate::sync_hook::run(raw).await;
         }
+        if raw[index] == "local-sync" {
+            let mut domain = raw.to_vec();
+            domain.remove(index);
+            return local_sync_stdio(&domain).await;
+        }
         if raw[index] == "mod-bridge" {
             let mut domain = raw.to_vec();
             domain.remove(index);
@@ -578,4 +583,44 @@ async fn doctor(config: &Value) -> Result<Value> {
         "versionPolicy":policy,"synchronizationAllowedByVersionPolicy":policy.allows_codex(&codex)&&policy.permits(claude_version,verified_claude.then_some(claude_version)),
         "note":if policy==VersionPolicy::Warn {"Version changes alone do not produce warnings. Protocol, ownership and history failures remain explicit."}else{"Other native versions require compatibility validation."}}),
     )
+}
+
+/// The large native context packet has a dedicated bounded local helper, not
+/// the 1 MiB collaboration or control-pane protocol.
+async fn local_sync_stdio(raw: &[String]) -> Result<()> {
+    anyhow::ensure!(
+        std::env::var("CLAUDEX_COLLABORATION_WORKER").as_deref() != Ok("1"),
+        "Managed worker controller access is disabled."
+    );
+    let a = Args::parse(raw, &["root"], &[])?;
+    anyhow::ensure!(
+        a.positionals.len() == 1,
+        "Expected local-sync receive|applied."
+    );
+    let root = a.root()?;
+    let mut input = Vec::new();
+    tokio::io::stdin()
+        .take(8193)
+        .read_to_end(&mut input)
+        .await?;
+    anyhow::ensure!(
+        input.len() <= 8192,
+        "Local synchronization input exceeds bound."
+    );
+    let params: Value = serde_json::from_slice(&input)?;
+    let result = match a.positionals[0].as_str() {
+        "receive" => {
+            let homes = crate::native_clients::Homes::read(&root, &home()?)?;
+            claudex_sync::local_sync::receive(&root, &homes.desktop_registry, &params)?
+        }
+        "applied" => claudex_sync::local_sync::applied(&root, &params)?,
+        _ => bail!("Expected local-sync receive|applied."),
+    };
+    let output = serde_json::to_string(&json!({"ok":true,"result":result}))?;
+    anyhow::ensure!(
+        output.len() <= claudex_sync::packet::MAX_PACKET_BYTES + 1024,
+        "Local synchronization output exceeds bound; never replay consumed input."
+    );
+    println!("{output}");
+    Ok(())
 }

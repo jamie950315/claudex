@@ -807,7 +807,7 @@
     },
     {
       "name": "claudex_wait",
-      "description": "Wait without starting a model: 5 minutes by default, up to 30 minutes with explicit timeoutMs. Returns early on a task revision or terminal outcome; activity heartbeats do not wake it. Client disconnect or timeout does not cancel work. Supply taskId/afterRevision for the compatible single-task response, OR 1–16 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.",
+      "description": "Wait without starting a model: 5 minutes by default, up to 30 minutes with explicit timeoutMs. Returns early on a task revision or terminal outcome; activity heartbeats do not wake it. Client disconnect or timeout does not cancel work. Supply taskId/afterRevision for the compatible single-task response, OR 1\u201316 distinct targets for {tasks,timedOut,changed,terminal}. Multi-wait defaults summary and returns all ready targets, or all snapshots at timeout; only returned child outcomes are acknowledged. Caught-up terminal summary outcomes are omitted unless unseen by the parent. Revisions describe work changes, not activity heartbeats.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1118,6 +1118,93 @@
           "sessionId",
           "claimId",
           "status",
+          "detail"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_local_sync_claim",
+      "description": "Native Local no-query synchronization claim. Never replay claimed or uncertain input. Dispatch is not application acknowledgement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "localSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cliSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "opId",
+          "localSessionId",
+          "cliSessionId",
+          "cwd"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_local_sync_receipt",
+      "description": "Native Local no-query synchronization receipt. Never replay claimed or uncertain input. Dispatch is not application acknowledgement.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "localSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cliSessionId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cwd": {
+            "type": "string",
+            "minLength": 1
+          },
+          "claimId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "submitted",
+              "unknown",
+              "rejected"
+            ]
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "native-send-returned",
+              "native-send-unknown",
+              "authority-changed"
+            ]
+          }
+        },
+        "required": [
+          "opId",
+          "localSessionId",
+          "cliSessionId",
+          "cwd",
+          "claimId",
+          "outcome",
           "detail"
         ],
         "additionalProperties": false

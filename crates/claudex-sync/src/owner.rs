@@ -1039,14 +1039,42 @@ impl Owner {
         storage::require_private_directory(&directory)?;
         let state_path =
             directory.join(format!("{}.json", digest_bytes(conversation_id.as_bytes())));
-        let lease = OwnerLease::acquire(&PathBuf::from(format!("{}.lock", state_path.display())))?;
-        let mut state=owned_state(&state_path)?.unwrap_or_else(||json!({"version":1,"conversationId":conversation_id,"cwd":cwd,"claudeHome":claude_home,"sessionId":Uuid::new_v4().to_string(),"remoteId":null,"registration":null,"pending":null,"lastAppend":null,"displayTitle":title}));
+        let saved = owned_state(&state_path)?;
+        let local = saved
+            .as_ref()
+            .is_some_and(|s| s["transport"] == "local-mod" && s["localPhase"] != "seed");
+        let lease = if local {
+            // Reap only an exactly proven dead SDK lease left by a crash
+            // between publishing Local ownership and closing the old owner.
+            // Never retain a transcript-writer lease for native Desktop.
+            let path = PathBuf::from(format!("{}.lock", state_path.display()));
+            match fs::symlink_metadata(&path) {
+                Ok(_) => OwnerLease::acquire(&path)?.release()?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
+                Err(e) => return Err(e.into()),
+            }
+            None
+        } else {
+            Some(OwnerLease::acquire(&PathBuf::from(format!(
+                "{}.lock",
+                state_path.display()
+            )))?)
+        };
+        let mut state=saved.unwrap_or_else(||json!({"version":1,"conversationId":conversation_id,"cwd":cwd,"claudeHome":claude_home,"sessionId":Uuid::new_v4().to_string(),"remoteId":null,"registration":null,"pending":null,"lastAppend":null,"displayTitle":title}));
         ensure!(
             state["version"] == 1
                 && state["conversationId"] == conversation_id
                 && state["cwd"] == json!(cwd)
                 && state["claudeHome"] == json!(claude_home),
             "Owner state identity mismatch."
+        );
+        ensure!(
+            state["transport"] != "local-mod"
+                || matches!(
+                    state["localPhase"].as_str(),
+                    Some("seed" | "seeded" | "handoff-intent" | "handoff-sent" | "adopted")
+                ),
+            "Unknown native Local owner phase; existing writer state preserved."
         );
         let id = state["sessionId"]
             .as_str()
@@ -1077,7 +1105,7 @@ impl Owner {
             connected: false,
             event_sink: None,
             activity_suppressed: Arc::new(AtomicBool::new(suppressed)),
-            lease: Some(lease),
+            lease,
             maintenance,
             cold_verified: false,
             clear_supported: false,
@@ -1296,6 +1324,10 @@ impl Owner {
         official_account: bool,
     ) -> Result<()> {
         ensure!(self.session.is_none(), "Owner already started.");
+        ensure!(
+            self.state["transport"] != "local-mod" || self.state["localPhase"] == "seed",
+            "Native Desktop owns this Local history; SDK writer restart is forbidden."
+        );
         if self.lease.is_none() {
             self.lease = Some(OwnerLease::acquire(&PathBuf::from(format!(
                 "{}.lock",
@@ -1536,12 +1568,101 @@ impl Owner {
         self.save()?;
         self.activity_suppressed
             .store(self.maintenance, Ordering::Release);
-        if !self.maintenance {
+        if !self.maintenance && self.state["transport"] != "local-mod" {
             self.connect().await?;
         }
         Ok(
             json!({"duplicate":false,"uuid":pending["uuid"],"cumulativeCost":receipt["total_cost_usd"]}),
         )
+    }
+    /// Set the transport before any native launch. A persisted seed is never
+    /// resent when moving the sole writer to native Desktop.
+    pub async fn use_local(&mut self) -> Result<()> {
+        ensure!(
+            self.state["remoteId"].is_null() && self.state["registration"] != "registering",
+            "Existing or uncertain Remote Control owner cannot change transport."
+        );
+        if self.state["transport"] == "local-mod" {
+            return Ok(());
+        }
+        self.state["transport"] = json!("local-mod");
+        self.state["localPhase"] = json!(if self.state["lastAppend"].is_null() {
+            "seed"
+        } else {
+            "seeded"
+        });
+        self.save()?;
+        if self.state["localPhase"] == "seeded" {
+            self.close().await?;
+        }
+        Ok(())
+    }
+    /// The native --desktop command owns adoption. The write-ahead intent means
+    /// an unknown exit is never retried. Native registry + actual Mod command
+    /// acknowledgement, not this opener's exit, establish successful adoption.
+    pub async fn handoff_local(&mut self, binary: &Path) -> Result<()> {
+        ensure!(
+            self.state["transport"] == "local-mod"
+                && self.state["pending"].is_null()
+                && self.state["reset"].is_null()
+                && !self.state["lastAppend"].is_null(),
+            "Local handoff requires an exact completed seed."
+        );
+        let seed = self.state["lastAppend"].clone();
+        ensure!(
+            self.find_append(&seed)?,
+            "Local adoption seed lacks exact persisted native proof."
+        );
+        self.close().await?;
+        if matches!(
+            self.state["localPhase"].as_str(),
+            Some("handoff-intent" | "handoff-sent" | "adopted")
+        ) {
+            return Ok(());
+        }
+        let executable = checked_executable(
+            binary,
+            &self.cwd,
+            claudex_core::version::VersionPolicy::read(&self.root)?,
+        )
+        .await?;
+        self.state["localPhase"] = json!("handoff-intent");
+        self.save()?;
+        // script supplies the TTY required by native --desktop. No prompt,
+        // SDK flags, settings overrides, model or authentication are injected.
+        let mut command = Command::new("/usr/bin/script");
+        command
+            .arg("-q")
+            .arg("/dev/null")
+            .arg(executable)
+            .arg("--desktop")
+            .arg("--resume")
+            .arg(self.state["sessionId"].as_str().unwrap())
+            .current_dir(&self.cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .env_remove("CLAUDE_CODE_ENTRYPOINT")
+            .env_remove("NODE_OPTIONS");
+        let default = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|p| p.join(".claude"));
+        if default
+            .as_ref()
+            .is_some_and(|p| fs::canonicalize(p).ok() == fs::canonicalize(&self.claude_home).ok())
+        {
+            command.env_remove("CLAUDE_CONFIG_DIR");
+        } else {
+            command.env("CLAUDE_CONFIG_DIR", &self.claude_home);
+        }
+        let status=tokio::time::timeout(Duration::from_secs(30),command.status()).await.map_err(|_|anyhow::anyhow!("Native Desktop adoption outcome unknown; handoff intent preserved and never resent."))??;
+        ensure!(
+            status.success(),
+            "Native Desktop handoff did not acknowledge completion; preserve its intent, never resend."
+        );
+        self.state["localPhase"] = json!("handoff-sent");
+        self.save()
     }
     pub async fn close(&mut self) -> Result<()> {
         if let Some(session) = &self.session {
@@ -1654,6 +1775,64 @@ pub fn append_uuid(session: &str, operation: &str) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[tokio::test]
+    async fn local_adoption_releases_sdk_lease_and_never_restarts_or_replays_handoff() -> Result<()>
+    {
+        let temp = tempfile::tempdir_in("/tmp")?;
+        let root = temp.path().canonicalize()?;
+        storage::private_directory(&root)?;
+        let cwd = storage::private_directory(root.join("project"))?;
+        let home = storage::private_directory(root.join("claude"))?;
+        let binary = root.join("native-fixture");
+        fs::write(
+            &binary,
+            r#"#!/bin/sh
+if [ "$1" = '--version' ]; then printf '2.1.281 (Claude Code)\n'; exit 0; fi
+printf '%s\n' "$@" >> "${0%/*}/arguments"
+exit 0
+"#,
+        )?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
+        let mut owner = Owner::open(&root, &cwd, &home, "local-fixture", "Title")?;
+        let native = owner.state["sessionId"].clone();
+        let content = json!([{"type":"text","text":"Already applied seed"}]);
+        let seed_uuid = append_uuid(native.as_str().unwrap(), "already-applied-seed");
+        storage::publish_exclusive(
+            &owner.transcript_path,
+            format!(
+                "{}\n",
+                json!({"type":"user","uuid":seed_uuid,"sessionId":native,"cwd":cwd,"queueTranscriptOnly":true,"message":{"role":"user","content":content}})
+            ),
+        )?;
+        owner.state["lastAppend"] = json!({"operationId":"already-applied-seed","uuid":seed_uuid,"contentHash":storage::hash_json(&content)?,"content":content});
+        owner.save()?;
+        owner.use_local().await?;
+        let lease = PathBuf::from(format!("{}.lock", owner.state_path.display()));
+        assert!(!lease.try_exists()?);
+        owner.handoff_local(&binary).await?;
+        assert_eq!(owner.state["localPhase"], "handoff-sent");
+        assert_eq!(
+            fs::read_to_string(root.join("arguments"))?,
+            format!("--desktop\n--resume\n{}\n", native.as_str().unwrap())
+        );
+        owner.handoff_local(&binary).await?;
+        assert_eq!(
+            fs::read_to_string(root.join("arguments"))?.lines().count(),
+            3
+        );
+        assert!(owner.start(&binary, None).await.is_err());
+        drop(owner);
+        let mut reopened = Owner::open(&root, &cwd, &home, "local-fixture", "Title")?;
+        assert_eq!(reopened.state["sessionId"], native);
+        assert!(!lease.try_exists()?);
+        assert!(reopened.start(&binary, None).await.is_err());
+        reopened.handoff_local(&binary).await?;
+        assert_eq!(
+            fs::read_to_string(root.join("arguments"))?.lines().count(),
+            3
+        );
+        Ok(())
+    }
     #[test]
     fn subscription_profile_is_process_local_and_keeps_normal_and_cold_settings_separate()
     -> Result<()> {

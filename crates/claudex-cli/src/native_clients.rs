@@ -35,10 +35,20 @@ impl Homes {
             codex.is_absolute() && claude.is_absolute(),
             "Native homes must be absolute."
         );
+        let desktop_registry = value["desktopHome"]
+            .as_str()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                home.join("Library/Application Support/Claude/claude-code-sessions")
+            });
+        ensure!(
+            desktop_registry.is_absolute(),
+            "Native Desktop registry must be absolute."
+        );
         Ok(Self {
             codex,
             claude,
-            desktop_registry: home.join("Library/Application Support/Claude/claude-code-sessions"),
+            desktop_registry,
         })
     }
 }

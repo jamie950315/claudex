@@ -35,6 +35,8 @@ pub fn methods() -> Vec<&'static str> {
         "chat_send",
         "chat_status",
         "desktop_wake_claim",
+        "local_sync_claim",
+        "local_sync_receipt",
         "desktop_wake_receipt",
         "desktop_owner_wake",
         "native_wake",

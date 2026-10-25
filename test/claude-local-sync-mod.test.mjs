@@ -1,0 +1,63 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { register } from '../plugins/claudex/hooks/register.mjs';
+const OP = '11111111-1111-4111-8111-111111111111';
+const CLAIM = '22222222-2222-4222-8222-222222222222';
+const SESSION = '33333333-3333-4333-8333-333333333333';
+const TEXT = '44444444-4444-4444-8444-444444444444';
+function fixture({ kind = 'append', worker = false, fail = null, size = 70000 } = {}) {
+  const hooks = [], calls = [], appends = [];
+  register((...args) => hooks.push(args), { stateRoot: '/fixture/state' });
+  let session = SESSION;
+  const content = [{ type: 'text', text: `START${'x'.repeat(size)}END` }, { type: 'text', text: 'tail' }];
+  const $ = {
+    env: { get: async () => worker ? '1' : undefined }, plugin: { root: '/fixture/plugin', name: 'claudex' },
+    session: { id: async () => session, cwd: async () => '/fixture/project', append: async input => { appends.push(input); if (fail === 'append') throw new Error('uncertain'); return { uuid: TEXT }; } },
+    process: { run: async (argv, options) => {
+      calls.push({ argv, request: JSON.parse(options.stdin) });
+      if (fail === argv[2]) throw new Error('unavailable');
+      if (fail === 'lifecycle') session = OP;
+      return { exitCode: 0, stdout: JSON.stringify({ ok: true, result: argv[2] === 'receive' ? { ready: true, kind, content: kind === 'append' ? content : [] } : { recorded: true } }) };
+    } },
+  };
+  $.process.spawn = async function* ({ argv, input }) {
+    const reply = await $.process.run(argv, { stdin: input });
+    for (let index = 0; index < reply.stdout.length; index += 65536) yield { stream: 'stdout', text: reply.stdout.slice(index, index + 65536) };
+    return { code: reply.exitCode, signal: null };
+  };
+  const command = hooks.find(([name, filter]) => name === 'command.run' && filter.command === 'claudex-sync')[2];
+  return { command: args => command($, { args }), $, calls, appends, content };
+}
+test('Local Mod appends complete text once and acknowledges the minted native UUID', async () => {
+  const f = fixture(); assert.deepEqual(await f.command(`${OP} ${CLAIM}`), { text: `CLAUDEX_SYNC_APPLIED ${OP}` });
+  assert.deepEqual(f.appends, [{ message: { type: 'user', content: f.content } }]);
+  assert.deepEqual(f.calls.map(c => c.argv), [
+    ['/fixture/plugin/runtime/bin/claudex', 'local-sync', 'receive', '--root', '/fixture/state'],
+    ['/fixture/plugin/runtime/bin/claudex', 'local-sync', 'applied', '--root', '/fixture/state'],
+  ]);
+  assert.equal(f.calls[1].request.textUuid, TEXT);
+  assert.equal(f.calls[0].request.pluginName, 'claudex');
+});
+test('Local adoption acknowledges native context without replaying any seed text', async () => {
+  const f = fixture({ kind: 'adopt' }); assert.equal((await f.command(`${OP} ${CLAIM}`)).text, `CLAUDEX_SYNC_APPLIED ${OP}`);
+  assert.equal(f.appends.length, 0); assert.equal(f.calls[1].request.textUuid, null);
+});
+test('uncertain receive, append or receipt is consumed locally and never retried', async () => {
+  for (const fail of ['receive', 'append', 'applied', 'lifecycle']) {
+    const f = fixture({ fail }); assert.match((await f.command(`${OP} ${CLAIM}`)).text, /^CLAUDEX_SYNC_BLOCKED:/);
+    assert.equal(f.calls.filter(c => c.argv[2] === 'receive').length, 1);
+    assert.ok(f.appends.length <= 1);
+    if (fail === 'receive' || fail === 'lifecycle') assert.equal(f.appends.length, 0);
+  }
+});
+test('workers and malformed envelopes cannot borrow the local synchronization helper', async () => {
+  const worker = fixture({ worker: true }); assert.match((await worker.command(`${OP} ${CLAIM}`)).text, /^CLAUDEX_SYNC_BLOCKED:/); assert.equal(worker.calls.length, 0);
+  const f = fixture(); for (const value of ['', OP, `${OP} ${CLAIM} extra`, `text ${CLAIM}`]) assert.match((await f.command(value)).text, /^CLAUDEX_SYNC_BLOCKED:/);
+  assert.equal(f.calls.length, 0);
+});
+
+test('streaming receive retains text beyond native process.run 4 MiB stdout bound', async () => {
+  const f = fixture({ size: 5 * 1024 * 1024 });
+  assert.equal((await f.command(`${OP} ${CLAIM}`)).text, `CLAUDEX_SYNC_APPLIED ${OP}`);
+  assert.equal(f.appends[0].message.content[0].text, f.content[0].text);
+});

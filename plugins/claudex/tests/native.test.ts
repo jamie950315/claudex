@@ -576,3 +576,51 @@ test('receipt capacity is visible without expanding technical records', async ($
   expect(await ui.find({ type: 'Text', text: /Capacity exhausted/ })).toBeDefined()
   expect(await ui.find({ key: 'details-journals' })).toBeDefined()
 })
+
+test('Local synchronization appends full text without a model turn and records the native UUID', async ($, on) => {
+  const op = '22222222-2222-4222-8222-222222222222', claim = '33333333-3333-4333-8333-333333333333'
+  const content = [{ type: 'text', text: `START${'x'.repeat(70000)}END` }]
+  const seen: any[] = [], appended: any[] = []
+  stubs(on, false, (request, event) => {
+    if (event.argv[1] !== 'local-sync') return {}
+    seen.push({ action: event.argv[2], request })
+    return event.argv[2] === 'receive' ? { ready: true, kind: 'append', content } : { recorded: true }
+  })
+  on('process.spawn', async function* (_: any, event: any) {
+    const request = JSON.parse(event.input)
+    seen.push({ action: event.argv[2], request })
+    const stdout = JSON.stringify({ ok: true, result: { ready: true, kind: 'append', content } })
+    yield { stream: 'stdout', text: stdout.slice(0, 1000) }
+    yield { stream: 'stdout', text: stdout.slice(1000) }
+    return { value: { code: 0, signal: null } }
+  })
+  on('session.append', async (_: any, event: any, next: any) => { appended.push(event); return next(event) })
+  const result = await $.command.run({ command: 'claudex-sync', args: `${op} ${claim}` })
+  expect(result.text).toBe(`CLAUDEX_SYNC_APPLIED ${op}`)
+  expect(appended.length).toBe(1)
+  expect(appended[0].message.content).toEqual(content)
+  expect(/^[0-9a-f-]{36}$/i.test(seen[1].request.textUuid)).toBe(true)
+})
+
+test('Local adoption never appends seed history and invalid commands stay local', async ($, on) => {
+  const op = '22222222-2222-4222-8222-222222222222', claim = '33333333-3333-4333-8333-333333333333'
+  const seen: any[] = []
+  stubs(on, false, (request, event) => {
+    if (event.argv[1] !== 'local-sync') return {}
+    seen.push(request)
+    return event.argv[2] === 'receive' ? { ready: true, kind: 'adopt', content: [] } : { recorded: true }
+  })
+  on('process.spawn', async function* (_: any, event: any) {
+    seen.push(JSON.parse(event.input))
+    yield { stream: 'stdout', text: JSON.stringify({ ok: true, result: { ready: true, kind: 'adopt', content: [] } }) }
+    return { value: { code: 0, signal: null } }
+  })
+  on('session.append', () => { throw new Error('Adoption must not replay seed history') })
+  const adopted = await $.command.run({ command: 'claudex-sync', args: `${op} ${claim}` })
+  expect(adopted.text).toBe(`CLAUDEX_SYNC_APPLIED ${op}`)
+  expect(seen[1].textUuid).toBe(null)
+  const count = seen.length
+  const invalid = await $.command.run({ command: 'claudex-sync', args: 'invalid' })
+  expect(invalid.text.startsWith('CLAUDEX_SYNC_BLOCKED:')).toBe(true)
+  expect(seen.length).toBe(count)
+})

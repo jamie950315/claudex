@@ -435,6 +435,10 @@ impl Runtime {
                 let handle = entry.clone();
                 let mut entry = entry.lock().await;
                 entry.used = Instant::now();
+                ensure!(
+                    !maintenance || entry.owner.state["transport"] != "local-mod",
+                    "Native Local context maintenance must be performed by its current Desktop owner; SDK takeover is forbidden."
+                );
                 if entry.owner.maintenance != maintenance {
                     ensure!(
                         !maintenance,
@@ -457,6 +461,12 @@ impl Runtime {
                     drop(owners);
                     continue;
                 }
+                if !maintenance
+                    && entry.owner.state["remoteId"].is_null()
+                    && crate::local_sync::configured_transport(&self.options.root)? == "local-mod"
+                {
+                    entry.owner.use_local().await?;
+                }
                 if entry.owner.restart_required {
                     entry.owner.close().await?;
                     entry.owner.restart_required = false;
@@ -469,7 +479,10 @@ impl Runtime {
                 if let Some(error) = &entry.startup_error {
                     bail!("{error}");
                 }
-                if entry.owner.session.is_none() {
+                if entry.owner.session.is_none()
+                    && (entry.owner.state["transport"] != "local-mod"
+                        || entry.owner.state["localPhase"] == "seed")
+                {
                     let permission = if maintenance {
                         None
                     } else {
@@ -478,11 +491,18 @@ impl Runtime {
                             Path::new(cwd),
                         )?
                     };
-                    if let Err(error) = entry
-                        .owner
-                        .start_official(&self.options.claude_binary, permission.as_deref())
-                        .await
-                    {
+                    let started = if entry.owner.state["transport"] == "local-mod" {
+                        entry
+                            .owner
+                            .start(&self.options.claude_binary, permission.as_deref())
+                            .await
+                    } else {
+                        entry
+                            .owner
+                            .start_official(&self.options.claude_binary, permission.as_deref())
+                            .await
+                    };
+                    if let Err(error) = started {
                         entry.startup_error = Some(format!("{error:#}"));
                         return Err(error);
                     }
@@ -1085,6 +1105,8 @@ impl Runtime {
                 r.path == codecs::claude_path(&self.options.claude_home, &r.cwd, &r.native_id)?,
                 "Saved Claude owner transcript path changed."
             );
+            data.rows = crate::local_sync::normalize(&self.options.root, &r.native_id, &data.rows)?;
+            data.text = codecs::serialize_rows(&data.rows)?;
             if let Some(bindings) = owner.get("imageBindings") {
                 data.rows = crate::image_assets::restore(&self.options.root, &data.rows, bindings)?;
                 data.text = codecs::serialize_rows(&data.rows)?;
@@ -1962,7 +1984,9 @@ impl Adapter for NativeAdapter {
             );
             if let Some(entry) = entry.filter(|_| !saved.1) {
                 let entry = entry.lock().await;
-                entry.owner.assert_idle().await?;
+                if saved.0["transport"] != "local-mod" {
+                    entry.owner.assert_idle().await?;
+                }
             } else if !saved.1 {
                 let path = self.runtime.options.root.join("owners").join(format!(
                     "{}.json.lock",
@@ -2139,12 +2163,44 @@ impl Adapter for NativeAdapter {
                 entry.owner.state["sessionId"] == r.native_id,
                 "Native owner identity changed."
             );
+            if local_seed_operation(&entry.owner.state, &p.operation_id) {
+                let content = self.runtime.content(r, p)?;
+                let intent = json!({"uuid":crate::owner::append_uuid(&r.native_id,&p.operation_id),"content":content,"contentHash":storage::hash_json(&json!(content))?});
+                ensure!(
+                    entry.owner.find_append(&intent)?,
+                    "Previously applied Local seed is missing; never resend."
+                );
+                local_adoption(&self.runtime, &mut entry.owner, r, p).await?;
+                return Ok(true);
+            }
+            if entry.owner.state["transport"] == "local-mod"
+                && entry.owner.state["localPhase"] == "adopted"
+            {
+                let content = self.runtime.content(r, p)?;
+                let op = crate::local_sync::prepare(
+                    &self.runtime.options.root,
+                    &self.runtime.desktop_registry()?,
+                    r,
+                    p,
+                    &content,
+                    false,
+                )?;
+                let rows = storage::snapshot(&r.path)?.rows;
+                let applied =
+                    crate::local_sync::is_applied(&self.runtime.options.root, &op, &rows)?;
+                if applied {
+                    crate::local_sync::settle(&self.runtime.options.root, &op, &rows)?;
+                }
+                return Ok(applied);
+            }
             let content = self.runtime.content(r, p)?;
             let intent = json!({"uuid":crate::owner::append_uuid(&r.native_id,&p.operation_id),"content":content,"contentHash":storage::hash_json(&json!(content))?});
             let applied = entry.owner.find_append(&intent)?;
             if applied {
                 entry.owner.reconcile_pending()?;
-                if entry.owner.state["remoteId"].is_null() {
+                if entry.owner.state["transport"] == "local-mod" {
+                    local_adoption(&self.runtime, &mut entry.owner, r, p).await?;
+                } else if entry.owner.state["remoteId"].is_null() {
                     entry.owner.connect().await?;
                 }
             }
@@ -2198,12 +2254,32 @@ impl Adapter for NativeAdapter {
                 .runtime
                 .owner(&r.conversation_id, &r.cwd, self.runtime.title(r))
                 .await?;
-            entry
-                .lock()
-                .await
-                .owner
-                .append(&p.operation_id, &content)
-                .await?;
+            let mut entry = entry.lock().await;
+            if entry.owner.state["transport"] == "local-mod"
+                && entry.owner.state["localPhase"] == "adopted"
+            {
+                let op = crate::local_sync::prepare(
+                    &self.runtime.options.root,
+                    &self.runtime.desktop_registry()?,
+                    r,
+                    p,
+                    &content,
+                    false,
+                )?;
+                ensure!(
+                    crate::local_sync::is_applied(
+                        &self.runtime.options.root,
+                        &op,
+                        &storage::snapshot(&r.path)?.rows
+                    )?,
+                    "Awaiting native Local synchronization acknowledgement; existing claim is never replayed."
+                );
+            } else {
+                entry.owner.append(&p.operation_id, &content).await?;
+                if entry.owner.state["transport"] == "local-mod" {
+                    local_adoption(&self.runtime, &mut entry.owner, r, p).await?;
+                }
+            }
             return Ok(());
         }
         let content = self.runtime.content(r, p)?;
@@ -2242,7 +2318,14 @@ impl Adapter for NativeAdapter {
                 entry.owner.state["sessionId"] == r.native_id,
                 "Normal owner startup changed the promoted native identity."
             );
-            entry.owner.connect().await?;
+            if entry.owner.state["transport"] == "local-mod" {
+                ensure!(
+                    entry.owner.state["localPhase"] == "adopted",
+                    "Native Local adoption is not acknowledged."
+                );
+            } else {
+                entry.owner.connect().await?;
+            }
         }
         Ok(())
     }
@@ -2497,6 +2580,17 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn acknowledged_local_adoption_still_recovers_the_original_seed_without_republishing() {
+        let state = json!({"transport":"local-mod","localPhase":"adopted","lastAppend":{"operationId":"seed"}});
+        assert!(local_seed_operation(&state, "seed"));
+        assert!(!local_seed_operation(&state, "next"));
+        assert!(!local_seed_operation(
+            &json!({"remoteId":"cse_example","lastAppend":{"operationId":"seed"}}),
+            "seed"
+        ));
+    }
+
     struct ClosedTailFixture {
         _temp: tempfile::TempDir,
         runtime: Arc<Runtime>,
@@ -3450,4 +3544,42 @@ mod tests {
         assert!(runtime.inspect(&record).await.is_err());
         Ok(())
     }
+}
+
+async fn local_adoption(
+    runtime: &Runtime,
+    owner: &mut Owner,
+    r: &Record,
+    p: &Pending,
+) -> Result<()> {
+    owner.handoff_local(&runtime.options.claude_binary).await?;
+    let op = crate::local_sync::prepare(
+        &runtime.options.root,
+        &runtime.desktop_registry()?,
+        r,
+        p,
+        &[],
+        true,
+    )?;
+    ensure!(
+        crate::local_sync::is_applied(
+            &runtime.options.root,
+            &op,
+            &storage::snapshot(&r.path)?.rows
+        )?,
+        "Awaiting actual native Mod adoption acknowledgement; seed remains applied and will not be resent."
+    );
+    crate::local_sync::settle(
+        &runtime.options.root,
+        &op,
+        &storage::snapshot(&r.path)?.rows,
+    )?;
+    owner.state["localPhase"] = json!("adopted");
+    owner.save()
+}
+
+// Adoption can be acknowledged before the coordinator's promotion is durable.
+// A crash in that interval must recover the seed, not publish it as a new input.
+fn local_seed_operation(state: &Value, operation: &str) -> bool {
+    state["transport"] == "local-mod" && state["lastAppend"]["operationId"] == operation
 }
