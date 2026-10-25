@@ -150,6 +150,11 @@ namespaces, never copy credentials, and do not auto-start model work during setu
 Private state and status reads use non-blocking, no-follow file descriptors and
 reject non-regular files before reading. Read-only AppSetup inspection refuses
 setup, account, service and model-setting mutations before any native operation.
+The Claude account row checks official subscription OAuth through native
+`--setting-sources "" auth status --json`, in the unchanged default credential
+namespace. Settings-provided proxy tokens must not hide an existing official
+login or qualify as one. This account-only probe does not change inference
+routing, native settings, hooks or plugins in ordinary sessions.
 Service control verifies the loaded launchd job's definition path, program and
 exact arguments against the owned installation before reporting readiness or
 starting, stopping or removing it; a matching on-disk plist alone is insufficient.
