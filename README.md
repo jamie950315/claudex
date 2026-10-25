@@ -4,7 +4,7 @@ Let Codex and Claude Code work together on your Mac: ask one to delegate a task
 to the other, hand a task over, message an existing chat, and continue a
 conversation in the other app.
 
-Current build: **Claudex.app 2.0.17**, bundling **Claude Mod 0.8.75**.
+Current build: **Claudex.app 2.0.18**, bundling **Claude Mod 0.8.76**.
 Latest published release: **2.0.17** · [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.17)
 · [Release notes](docs/releases/2.0.17.md)
 
@@ -68,6 +68,10 @@ access). **Quit Claudex** stops its services safely; closing the window does not
 - Synchronization covers Claude Desktop's Code/Remote Control paths, not
   ordinary Chat or Cowork conversations. Remote Control carries the selected
   conversation through your Claude account; it is not a local-only transport.
+- Claude synchronization continuations use official Claude models and subscription
+  allowance. Histories authored with custom models can still be imported, but new
+  Claude replies in the synchronized continuation do not use the source's proxy.
+  Ordinary CLI proxy settings remain unchanged.
 - Incomplete or opaque histories, conflicting edits on both sides and active
   native writers pause synchronization instead of discarding anything. Failed
   or uncertain writes are never replayed automatically.

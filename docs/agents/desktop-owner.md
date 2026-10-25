@@ -30,10 +30,18 @@ response outcome preserves the registering intent and never permits another
 registration. Recognize the native custom-endpoint refusal with a fixed,
 content-free diagnostic rather than copying arbitrary native error text.
 Claude Code 2.1.302 refuses Remote Control on custom API endpoints even with
-`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Do not clear proxy credentials or
-override the base URL to clear this error: that also reroutes subsequent model
-requests and changes the user's quota/provider. Official account readiness and
-the configured inference route are distinct observations.
+`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. By user decision, managed Claude
+synchronization continuations use existing official subscription OAuth and
+official Claude models. Apply that profile only through a process-local native
+settings overlay; preserve the credential namespace, permissions, hooks and
+plugins, with native managed policy still authoritative. Do not change ordinary
+CLI settings or proxy sessions, copy credentials, or reroute collaboration
+workers as a side effect. Source histories authored with proxy models remain
+readable under their normal history proofs; new managed continuation replies use
+official allowance. Official account readiness and the source inference route
+remain distinct observations. Never clear a pending operation to change routing.
+Use native `--model default` for the subscription default, not a proxy model
+alias or a hard-coded Claude release.
 
 The CLI started through its SDK protocol ignores `permissions.defaultMode` from settings
 (observed with CLI 2.1.283: user and flag tiers both start in `default`) and has

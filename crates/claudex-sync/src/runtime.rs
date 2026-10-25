@@ -480,7 +480,7 @@ impl Runtime {
                     };
                     if let Err(error) = entry
                         .owner
-                        .start(&self.options.claude_binary, permission.as_deref())
+                        .start_official(&self.options.claude_binary, permission.as_deref())
                         .await
                     {
                         entry.startup_error = Some(format!("{error:#}"));

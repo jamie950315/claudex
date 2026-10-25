@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.17**, with **Claude Mod 0.8.75** bundled.
+Current build: **Claudex.app 2.0.18**, with **Claude Mod 0.8.76** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -51,20 +51,26 @@ with no group/other write access. Setup verifies the strict deep signature and
 app identity. Private state, login files and plugin caches remain owned by the
 current user.
 
-### Custom Claude model endpoints
+### Official Claude continuations and custom model histories
 
-An existing official Claude sign-in can coexist with a proxy or custom model
-endpoint in Claude Code settings. The account checklist checks the official
-sign-in independently, without changing those settings.
+When you continue a synchronized conversation in Claude, the Claudex-managed
+continuation uses your existing official Claude subscription account and official
+Claude models. Synchronizing history sends no model query; later Claude replies
+use your subscription allowance.
 
 Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
-including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. This prevents the
-current Claude-side synchronization connection; signing in again or retrying
-setup does not remove the restriction. Claudex preserves the pending operation,
-histories and model routing. It does not silently switch proxy requests to
-official subscription usage. A native CLI or Local conversation using the proxy
-can still be used through its original entry point; this does not establish a
-working Remote Control continuation after a Claudex handoff.
+including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Claudex therefore applies
+an official-account settings overlay only to its managed synchronization process.
+It keeps the native credential namespace and the configured permissions, hooks
+and plugins, without copying credentials or editing user settings. The account
+checklist checks the official sign-in independently of ordinary proxy settings.
+
+Your regular CLI proxy configuration stays available through its normal entry
+point. Histories produced by your own models can be synchronized to Codex under
+the normal history checks. If you then return to the managed Claude continuation,
+new replies use official models and allowance, not the source proxy. Continue
+the synchronized branch in its current entry; adding work to a superseded
+original still causes a history conflict.
 
 Conversation synchronization wakes on native completion hooks/events, not a recurring
 two-second history scan. Startup/reconnection reconciliation and a status-only

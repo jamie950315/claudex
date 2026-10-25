@@ -571,6 +571,75 @@ fn consume_identity(state: &mut Value, event: &Value, original: &str) {
     state["nativeState"] = json!("unknown");
     state["identityUncertain"] = json!(true);
 }
+
+// Native account, provider and model selectors. These names are passed with
+// empty values to the native CLI, never populated from user settings.
+const SUBSCRIPTION_OVERRIDES: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
+    "ANTHROPIC_UNIX_SOCKET",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
+    "CLAUDE_CODE_USE_MANTLE",
+    "ANTHROPIC_MODEL",
+    "ANTHROPIC_DEFAULT_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+    "CLAUDE_CODE_SUBAGENT_MODEL",
+    "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL",
+    "CLAUDE_CODE_AUTO_MODE_MODEL",
+];
+
+fn configure_session_settings(
+    command: &mut Command,
+    maintenance: bool,
+    official_account: bool,
+) -> Result<()> {
+    let mut settings = if maintenance {
+        command.args([
+            "--setting-sources=",
+            "--strict-mcp-config",
+            "--mcp-config",
+            r#"{"mcpServers":{}}"#,
+            "--tools",
+            "",
+        ]);
+        json!({"remoteControlAtStartup":false,"crossSessionInbound":"refuse","disableAllHooks":true,"enabledPlugins":{}})
+    } else {
+        command.arg("--setting-sources=user,project,local");
+        json!({})
+    };
+    if official_account {
+        settings["env"] = json!({});
+        for key in SUBSCRIPTION_OVERRIDES {
+            // Remove inherited routing before startup as well as overriding
+            // settings.env later. Never read, copy or forward its value.
+            command.env_remove(key);
+            settings["env"][*key] = json!("");
+        }
+        settings["apiKeyHelper"] = json!("");
+        // Native "default" resolves from the subscription tier, ahead of a
+        // custom settings.model. Do not pin a vendor model release here.
+        command.args(["--model", "default"]);
+    }
+    if maintenance || official_account {
+        command.args(["--settings", &claudex_core::json::stringify(&settings)?]);
+    }
+    Ok(())
+}
+
 impl CliSession {
     pub async fn launch(
         binary: &Path,
@@ -585,6 +654,36 @@ impl CliSession {
         conversation_id: String,
         maintenance: bool,
     ) -> Result<Arc<Self>> {
+        Self::launch_with_account(
+            binary,
+            claude_home,
+            cwd,
+            id,
+            resume,
+            permission_mode,
+            lease,
+            event_sink,
+            activity_suppressed,
+            conversation_id,
+            maintenance,
+            false,
+        )
+        .await
+    }
+    async fn launch_with_account(
+        binary: &Path,
+        claude_home: &Path,
+        cwd: &Path,
+        id: &str,
+        resume: bool,
+        permission_mode: Option<&str>,
+        lease: &mut OwnerLease,
+        event_sink: Option<broadcast::Sender<Value>>,
+        activity_suppressed: Arc<AtomicBool>,
+        conversation_id: String,
+        maintenance: bool,
+        official_account: bool,
+    ) -> Result<Arc<Self>> {
         Uuid::parse_str(id)?;
         ensure!(
             fs::canonicalize(cwd)? == cwd,
@@ -598,11 +697,7 @@ impl CliSession {
             "--input-format",
             "stream-json",
         ]);
-        if maintenance {
-            command.args(["--setting-sources=","--strict-mcp-config","--mcp-config",r#"{"mcpServers":{}}"#,"--tools","","--settings",r#"{"remoteControlAtStartup":false,"crossSessionInbound":"refuse","disableAllHooks":true,"enabledPlugins":{}}"#]);
-        } else {
-            command.arg("--setting-sources=user,project,local");
-        }
+        configure_session_settings(&mut command, maintenance, official_account)?;
         command.arg(if resume {
             format!("--resume={id}")
         } else {
@@ -1182,6 +1277,24 @@ impl Owner {
         Ok(false)
     }
     pub async fn start(&mut self, binary: &Path, permission_mode: Option<&str>) -> Result<()> {
+        self.start_with_account(binary, permission_mode, false)
+            .await
+    }
+    /// Desktop continuations use subscription OAuth without changing native
+    /// settings or the routing of ordinary CLI and original Local sessions.
+    pub async fn start_official(
+        &mut self,
+        binary: &Path,
+        permission_mode: Option<&str>,
+    ) -> Result<()> {
+        self.start_with_account(binary, permission_mode, true).await
+    }
+    async fn start_with_account(
+        &mut self,
+        binary: &Path,
+        permission_mode: Option<&str>,
+        official_account: bool,
+    ) -> Result<()> {
         ensure!(self.session.is_none(), "Owner already started.");
         if self.lease.is_none() {
             self.lease = Some(OwnerLease::acquire(&PathBuf::from(format!(
@@ -1202,7 +1315,7 @@ impl Owner {
             )?);
         }
         let id = self.state["sessionId"].as_str().unwrap().to_owned();
-        let session = CliSession::launch(
+        let session = CliSession::launch_with_account(
             &binary,
             &self.claude_home,
             &self.cwd,
@@ -1214,6 +1327,7 @@ impl Owner {
             self.activity_suppressed.clone(),
             self.conversation_id.clone(),
             self.maintenance,
+            official_account,
         )
         .await?;
         self.session = Some(session.clone());
@@ -1540,6 +1654,107 @@ pub fn append_uuid(session: &str, operation: &str) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
+    #[test]
+    fn subscription_profile_is_process_local_and_keeps_normal_and_cold_settings_separate()
+    -> Result<()> {
+        for maintenance in [false, true] {
+            for official in [false, true] {
+                let mut command = Command::new("/private/claude");
+                for key in SUBSCRIPTION_OVERRIDES {
+                    command.env(key, "fixture-custom-route");
+                }
+                command.env("CLAUDE_CONFIG_DIR", "/private/native-home");
+                configure_session_settings(&mut command, maintenance, official)?;
+                let command = command.as_std();
+                let args: Vec<_> = command.get_args().map(|v| v.to_str().unwrap()).collect();
+                let overlay = args
+                    .iter()
+                    .position(|v| *v == "--settings")
+                    .map(|i| serde_json::from_str::<Value>(args[i + 1]))
+                    .transpose()?;
+                let env: HashMap<_, _> = command.get_envs().collect();
+                assert_eq!(
+                    env[std::ffi::OsStr::new("CLAUDE_CONFIG_DIR")].unwrap(),
+                    "/private/native-home"
+                );
+                for key in SUBSCRIPTION_OVERRIDES {
+                    if official {
+                        assert_eq!(env[std::ffi::OsStr::new(key)], None);
+                        assert_eq!(overlay.as_ref().unwrap()["env"][*key], "");
+                    } else {
+                        assert_eq!(
+                            env[std::ffi::OsStr::new(key)].unwrap(),
+                            "fixture-custom-route"
+                        );
+                    }
+                }
+                if official {
+                    assert!(args.windows(2).any(|v| v == ["--model", "default"]));
+                    assert_eq!(overlay.as_ref().unwrap()["apiKeyHelper"], "");
+                } else {
+                    assert!(!args.contains(&"--model"));
+                }
+                if maintenance {
+                    assert!(args.contains(&"--setting-sources="));
+                    assert_eq!(overlay.as_ref().unwrap()["disableAllHooks"], true);
+                    assert_eq!(overlay.as_ref().unwrap()["crossSessionInbound"], "refuse");
+                    assert_eq!(overlay.as_ref().unwrap()["enabledPlugins"], json!({}));
+                } else {
+                    assert!(args.contains(&"--setting-sources=user,project,local"));
+                    if let Some(overlay) = overlay {
+                        assert!(overlay.get("hooks").is_none());
+                        assert!(overlay.get("permissions").is_none());
+                        assert!(overlay.get("enabledPlugins").is_none());
+                        assert!(overlay.get("disableAllHooks").is_none());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn subscription_owner_launch_and_restart_keep_native_identity_and_original_settings()
+    -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = storage::private_directory(temporary.path())?;
+        let cwd = storage::private_directory(root.join("project"))?;
+        let home = storage::private_directory(root.join("claude"))?;
+        let settings = home.join("settings.json");
+        let original = r#"{"env":{"ANTHROPIC_BASE_URL":"https://proxy.example","ANTHROPIC_AUTH_TOKEN":"fixture","ANTHROPIC_DEFAULT_HAIKU_MODEL":"custom-model"},"model":"custom-model","permissions":{"defaultMode":"default"},"enabledPlugins":{"fixture":true}}"#;
+        storage::write_json(&settings, &serde_json::from_str::<Value>(original)?)?;
+        let original = storage::read_stable(&settings)?;
+        let binary = root.join("native-fixture");
+        fs::write(
+            &binary,
+            r#"#!/bin/sh
+if [ "$1" = '--version' ]; then printf '2.1.281 (Claude Code)\n'; exit 0; fi
+printf '%s\n' "$@" > "${0%/*}/arguments"
+while IFS= read -r frame; do
+    request_id=${frame#*\"request_id\":\"}
+    request_id=${request_id%%\"*}
+    printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"session_state":"idle","commands":[]}}}\n' "$request_id"
+done
+"#,
+        )?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
+        let mut owner = Owner::open(&root, &cwd, &home, "subscription", "Title")?;
+        let native_id = owner.state["sessionId"].clone();
+        for _ in 0..2 {
+            owner.start_official(&binary, Some("default")).await?;
+            assert_eq!(owner.state["sessionId"], native_id);
+            let args = fs::read_to_string(root.join("arguments"))?;
+            assert!(args.contains("--setting-sources=user,project,local\n"));
+            assert!(args.contains("--model\ndefault\n"));
+            assert!(args.contains(r#""apiKeyHelper":"""#));
+            assert!(!args.contains("fixture"));
+            owner.close().await?;
+        }
+        assert_eq!(storage::read_stable(&settings)?.bytes, original.bytes);
+        assert!(owner.state["pending"].is_null());
+        Ok(())
+    }
+
     #[test]
     fn control_errors_explain_proxy_refusals_without_exposing_native_details() {
         let error = control_result(&json!({"subtype":"error","error":"Remote Control is only available when using Claude via api.anthropic.com. private diagnostic"})).unwrap_err();

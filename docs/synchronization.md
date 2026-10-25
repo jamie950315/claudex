@@ -1207,6 +1207,24 @@ and does not copy credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
 even to the default path selects a different native credential namespace, so
 the owner omits that variable for the standard home.
 
+Managed Claude continuations use the official subscription account and official
+Claude models. A process-only native settings overlay removes proxy authentication,
+endpoint and model-routing overrides from that owner while preserving the native
+credential namespace, permission settings, hooks and plugins. It does not edit
+ordinary CLI settings or copy account credentials; native managed policy remains
+authoritative. Claude Code 2.1.302 refuses custom endpoints for Remote Control
+even with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`.
+The owner starts with native `--model default`, selecting the subscription's
+default Claude model rather than a proxy alias or a hard-coded model release.
+
+The model that authored a source history does not select the continuation's
+provider. Histories from custom-model CLI sessions remain readable and importable
+under the same history guards, but new replies after returning from Codex to the
+managed Claude entry use official models and subscription allowance. Ordinary
+proxy sessions retain their settings and entry points. The existing
+superseded-original guard still applies: do not add new work to the old source
+after its synchronized continuation has taken over.
+
 The component verifies no-query receipts against the exact persisted UUID and
 content, keeps one durable pending operation, deduplicates operation IDs, and
 reconnects the same Remote Control identity. Native Desktop verification shows
