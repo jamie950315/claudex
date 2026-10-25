@@ -161,7 +161,11 @@ fn process(app: &Path) -> Result<Process> {
     );
     Ok(matches.remove(0))
 }
-fn renderer(root: &Path, started: i64) -> Result<(Value, Vec<(PathBuf, FileIdentity)>)> {
+fn renderer(
+    root: &Path,
+    started: i64,
+    loaded_asset: &str,
+) -> Result<(Value, Vec<(PathBuf, FileIdentity)>)> {
     let directory = root.join("ui-owner-wake");
     let mut proofs = vec![];
     for (i, entry) in fs::read_dir(&directory)?.enumerate() {
@@ -183,15 +187,27 @@ fn renderer(root: &Path, started: i64) -> Result<(Value, Vec<(PathBuf, FileIdent
                 .as_str()
                 .context("Renderer cache path missing")?,
         );
+        // Native Chromium evicts old generations without deleting Claudex's
+        // retained install journals. A missing historical payload is not a
+        // candidate; the loaded asset still needs exactly one complete proof.
+        if matches!(fs::symlink_metadata(&cache_path), Err(e) if e.kind()==std::io::ErrorKind::NotFound)
+        {
+            continue;
+        }
         ensure!(
             cache_path.is_absolute() && fs::canonicalize(&cache_path)? == cache_path,
             "Renderer cache path is aliased."
         );
         let cache_file = safe_file(&cache_path, crate::cache::MAX_CACHE_BYTES)?;
         let cache = crate::cache::inspect(&cache_file.bytes, None)?;
-        if !cache.source.contains(LEGACY) {
+        let url = url::Url::parse(&cache.url)?;
+        if url.path_segments().and_then(|mut s| s.next_back()) != Some(loaded_asset) {
             continue;
         }
+        ensure!(
+            cache.source.contains(LEGACY),
+            "The loaded renderer is not the complete v1 prewarm contract."
+        );
         once(&cache.source, LEGACY)?;
         ensure!(
             value["patchedHash"] == cache.source_hash,
@@ -232,8 +248,8 @@ pub fn certify(root: &Path, app: &Path, log: &Path, claim_at: i64) -> Result<Val
     let asar = safe_file(&asar_path, 64 * 1024 * 1024)?;
     before(&asar.identity, first.started)?;
     let ipc = ipc_proof(&asar.bytes)?;
-    let (renderer, files) = renderer(root, first.started)?;
-    let loaded = loaded_renderer(log, &renderer, first.started, claim_at)?;
+    let loaded = loaded_renderer(log, first.started, claim_at)?;
+    let (renderer, files) = renderer(root, first.started, loaded["asset"].as_str().unwrap())?;
     ensure!(
         first == process(app)?,
         "Native process changed during prewarm certification."
@@ -253,14 +269,8 @@ pub fn certify(root: &Path, app: &Path, log: &Path, claim_at: i64) -> Result<Val
             "executable":first.executable},"ipc":ipc,"renderer":renderer,"loaded":loaded,
         "certifiedAt":storage::now_ms()}))
 }
-fn loaded_renderer(log: &Path, renderer: &Value, started: i64, claim_at: i64) -> Result<Value> {
+fn loaded_renderer(log: &Path, started: i64, claim_at: i64) -> Result<Value> {
     let snapshot = safe_file(log, 32 * 1024 * 1024)?;
-    let url = url::Url::parse(renderer["url"].as_str().context("Renderer URL missing")?)?;
-    let asset = url
-        .path_segments()
-        .and_then(|mut s| s.next_back())
-        .context("Renderer asset missing")?;
-    let expected = format!("[warn] [Claudex owner wake] loaded {asset}");
     let mut loaded = vec![];
     let mut claimed = vec![];
     let mut unknown = vec![];
@@ -281,11 +291,17 @@ fn loaded_renderer(log: &Path, renderer: &Value, started: i64, claim_at: i64) ->
             continue;
         }
         if message.starts_with("[warn] [Claudex owner wake] loaded ") && at <= claim_at {
+            let asset = message
+                .strip_prefix("[warn] [Claudex owner wake] loaded ")
+                .unwrap();
             ensure!(
-                message == expected,
-                "A different renderer was loaded before the consumed prewarm."
+                !asset.is_empty()
+                    && asset.ends_with(".js")
+                    && !asset.contains('/')
+                    && !asset.chars().any(char::is_whitespace),
+                "Invalid loaded renderer asset."
             );
-            loaded.push(at);
+            loaded.push((at, asset.to_owned()));
         }
         if at >= claim_at / 1000 * 1000 {
             if message == "[warn] [Claudex local start] prewarm-claimed" {
@@ -301,8 +317,8 @@ fn loaded_renderer(log: &Path, renderer: &Value, started: i64, claim_at: i64) ->
         "The native log does not uniquely bind the loaded renderer to the consumed prewarm."
     );
     Ok(
-        json!({"path":log,"identity":snapshot.identity,"asset":asset,
-        "loadedAt":loaded[0],"claimedAt":claimed[0],"unknownAt":unknown[0]}),
+        json!({"path":log,"identity":snapshot.identity,"asset":loaded[0].1,
+        "loadedAt":loaded[0].0,"claimedAt":claimed[0],"unknownAt":unknown[0]}),
     )
 }
 #[cfg(test)]
@@ -351,22 +367,57 @@ mod tests {
             "{date} [warn] [Claudex owner wake] loaded fixture.js\n{date} [warn] [Claudex local start] prewarm-claimed\n{date} [warn] [Claudex local start] prewarm-unknown\n"
         );
         storage::atomic_write(&path, &rows)?;
-        let renderer = json!({"url":"https://claude.ai/fixture.js"});
-        loaded_renderer(&path, &renderer, at - 1000, at + 100)?;
-        assert!(
-            loaded_renderer(
-                &path,
-                &json!({"url":"https://claude.ai/other.js"}),
-                at - 1000,
-                at + 100
-            )
-            .is_err()
+        assert_eq!(
+            loaded_renderer(&path, at - 1000, at + 100)?["asset"],
+            "fixture.js"
         );
+        storage::atomic_write(
+            &path,
+            format!("{rows}{date} [warn] [Claudex owner wake] loaded other.js\n"),
+        )?;
+        assert!(loaded_renderer(&path, at - 1000, at + 100).is_err());
         storage::atomic_write(
             &path,
             format!("{rows}{date} [warn] [Claudex local start] prewarm-claimed\n"),
         )?;
-        assert!(loaded_renderer(&path, &renderer, at - 1000, at + 100).is_err());
+        assert!(loaded_renderer(&path, at - 1000, at + 100).is_err());
+        Ok(())
+    }
+    #[test]
+    fn renderer_proof_ignores_evicted_history_but_requires_one_loaded_asset() -> Result<()> {
+        let temp = tempfile::tempdir_in("/tmp")?;
+        let root = temp.path().canonicalize()?;
+        let directory = storage::private_directory(root.join("ui-owner-wake"))?;
+        let cache = root.join("native-cache");
+        let payload = crate::cache::tests::fixture(LEGACY);
+        let inspected = crate::cache::inspect(&payload, None)?;
+        storage::atomic_write(&cache, &payload)?;
+        for (name, path) in [
+            ("evicted", root.join("missing-cache")),
+            ("loaded", cache.clone()),
+        ] {
+            let generation = storage::private_directory(directory.join(name))?;
+            let journal = storage::private_directory(generation.join("ui-folder-compat"))?;
+            storage::write_json(
+                journal.join("manifest.json"),
+                &json!({"version":1,
+                "phase":"installed","action":"install","cachePath":path,"patchedHash":inspected.source_hash}),
+            )?;
+        }
+        let started = storage::now_ms() + 1000;
+        assert_eq!(
+            renderer(&root, started, "index-test.js")?.0["cachePath"],
+            json!(cache)
+        );
+        assert!(renderer(&root, started, "other.js").is_err());
+        let duplicate = storage::private_directory(directory.join("duplicate"))?;
+        let journal = storage::private_directory(duplicate.join("ui-folder-compat"))?;
+        storage::write_json(
+            journal.join("manifest.json"),
+            &json!({"version":1,
+            "phase":"installed","action":"install","cachePath":cache,"patchedHash":inspected.source_hash}),
+        )?;
+        assert!(renderer(&root, started, "index-test.js").is_err());
         Ok(())
     }
 }
