@@ -90,6 +90,18 @@ a new target to evade its uncertain outcome.
 After native creation the SDK must never take over the Local writer. Keep the
 new `native-start` phase and accepted legacy phases durable.
 
+Desktop's deployment profile owns Local inference routing. In the inspected
+native build, first-party mode supplies the official BASE_URL and host launch
+environment wins over CLI settings.env. LocalSessions.start explicitly projects
+its allowed fields and has no provider/base URL/auth/deployment override;
+envScopeId does not override the deployment environment. Never certify a Local
+proxy route from CLI authentication/settings alone. Native third-party Gateway
+setup supports a custom endpoint, but switching the whole Desktop profile signs
+out Claude.ai and relaunches; switching back clears third-party interactive
+authentication/session secrets and relaunches. This needs explicit user approval,
+normal native policy and credential setup, not a transport fallback or an
+automatic setup repair. Preserve the ordinary CLI configuration separately.
+
 The loaded Mod's fixed non-immediate `claudex-sync` command handles Local appends.
 Require its unique exact native catalogue entry before and after claim, matching
 native session/registry/cwd/title, idle activity and no draft. Consume the durable

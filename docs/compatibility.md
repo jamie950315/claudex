@@ -68,6 +68,9 @@ New Desktop owners default to `local-mod`, preserving the native configured
 provider, model and authentication route. Native Desktop Local-session creation,
 project/trust checks and the current enabled Mod/frontend integration are
 required. Existing Remote Control owners keep their transport.
+The route comes from Desktop's deployment profile, not ordinary CLI proxy
+settings. A native Gateway profile change affects the whole Desktop and requires
+review of its sign-out/restart effects; see [model routing](app.md#claude-accounts-and-model-routing).
 See [Local transport requirements and recovery](synchronization.md#native-local-mod-transport).
 
 ### Claude Mod from the command line

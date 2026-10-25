@@ -1203,6 +1203,15 @@ and usage route; official authentication can also be used through Local. An owne
 with a saved Remote Control ID keeps that transport and identity regardless of
 the default. Invalid transport values fail explicitly.
 
+The configured route is Claude Desktop's deployment profile. Its first-party
+launch environment overrides ordinary CLI proxy settings, and native Local
+creation exposes no per-session provider override. A custom-model CLI history
+does not select a custom provider for its Desktop continuation. Use Desktop's
+native Gateway profile for an Anthropic-compatible endpoint; this is a global
+profile change with sign-out/restart effects, not a synchronization setting.
+See [accounts and model routing](app.md#claude-accounts-and-model-routing) before
+changing it. Claudex never switches profiles automatically.
+
 Local synchronization needs an enabled current Mod loaded in the native Local
 session and the loaded frontend integration. The renderer verifies the exact
 session, native idle/activity metadata, draft absence and the unique live

@@ -67,6 +67,22 @@ any required normal restart. Missing native capabilities or unconfirmed
 operations remain pending. Existing Remote Control owners retain their saved
 transport and identity; changing the default does not migrate them.
 
+Local follows **Claude Desktop's deployment profile**, not the ordinary CLI's
+proxy settings. Desktop's first-party profile supplies the official API endpoint
+and its launch environment takes precedence over CLI settings. A proxy URL in
+Claude Code settings therefore does not establish that a Local Desktop reply
+will use that proxy. Native session creation has no per-session provider override.
+
+Desktop's native third-party **Gateway** profile supports an Anthropic-compatible
+endpoint. Where native policy permits it, its setup is under **Developer →
+Configure Third-Party Inference…**; Developer Mode is enabled through **Help →
+Troubleshooting → Enable Developer Mode…**. Review the native warnings first.
+Switching to this profile signs out Claude.ai and restarts the whole Desktop,
+affecting other Desktop work. Switching back to first-party mode is supported,
+but clears third-party interactive authentication/session secrets and restarts;
+sign-in may be required again. Claudex never performs this profile switch or
+copies credentials automatically. Enter credentials only through native setup.
+
 Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
 including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. An existing official
 sign-in does not remove that restriction from the configured custom route.
