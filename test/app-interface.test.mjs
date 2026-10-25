@@ -124,7 +124,10 @@ test('graphical Quit waits for verified service shutdown and read-only exits byp
   assert.match(source, /allowTermination \|\| inspectOnly \|\| uiSmoke/);
   assert.match(source, /runner.stop\(statusOnly: statusOnly\)/);
   assert.match(source, /if result.stopped/);
-  assert.match(source, /checkStop\(statusOnly: true\)/);
+  // Read-only polls alternate with the idempotent stop so newly idle owners
+  // are drained instead of leaving Quit waiting forever.
+  assert.match(source, /self\.stopPolls \+= 1\s*let repeatStop = self\.stopPolls % 5 == 0/);
+  assert.match(source, /checkStop\(statusOnly: !repeatStop\)/);
   // A logout or restart waits for the drain instead of being cancelled.
   assert.match(source, /checkStop\(statusOnly: false\)\s*return \.terminateLater/);
   assert.match(source, /if result\.stopped \{\s*self\.allowTermination = true\s*NSApp\.reply\(toApplicationShouldTerminate: true\)/);
