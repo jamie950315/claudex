@@ -1072,7 +1072,14 @@ impl Owner {
             state["transport"] != "local-mod"
                 || matches!(
                     state["localPhase"].as_str(),
-                    Some("seed" | "seeded" | "handoff-intent" | "handoff-sent" | "adopted")
+                    Some(
+                        "native-start"
+                            | "seed"
+                            | "seeded"
+                            | "handoff-intent"
+                            | "handoff-sent"
+                            | "adopted"
+                    )
                 ),
             "Unknown native Local owner phase; existing writer state preserved."
         );
@@ -1593,14 +1600,12 @@ impl Owner {
         }
         self.state["transport"] = json!("local-mod");
         self.state["localPhase"] = json!(if self.state["lastAppend"].is_null() {
-            "seed"
+            "native-start"
         } else {
             "seeded"
         });
         self.save()?;
-        if self.state["localPhase"] == "seeded" {
-            self.close().await?;
-        }
+        self.close().await?;
         Ok(())
     }
     /// Release the SDK writer after exact seed readback. Native Desktop's

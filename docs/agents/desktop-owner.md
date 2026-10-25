@@ -30,32 +30,43 @@ Local owners use `claudeDesktopTransport: "local-mod"`, the default when absent;
 explicit `remote-control` selects the original path. A saved `remoteId` keeps
 Remote Control and is never converted by changing the default. Local preserves
 native configured authentication and model routing, including official OAuth
-when configured. Seed once through the native SDK, close that writer, then use
-Desktop's normal CLI resume-picker APIs. `--desktop` has a first-party account
-entitlement gate and is not a universal Local adoption route; do not replay it,
-open its resume deep link as a substitute, or change configured authentication.
-After adoption the SDK must never take over the Local writer. Keep
-`transport` and the `localPhase` seed/seeded/handoff-intent/handoff-sent/adopted
-state machine durable. Adoption has a separate operation identity and never
-replays seed content or images.
-`local-adoption-manifest.json` and private `local-adoption/<operation>.json`
-journals are separate from Local command delivery. Bind the saved pending
-transaction, owner, exact seed UUID/content and nanosecond file identity before
-publishing. Read native `listResumableCliSessions`, `readCliTranscript` and
-`previewCliResume`; resolve a unique stopped opaque native handle by exact cwd
-and seed, never by title or a guessed CLI ID. A durable one-use claim through
-the already attached user-config stdio client precedes `resumeCliSession`.
-Recheck native preview, manifest and composer after claim. An unknown resume
-remains consumed across restart; only the normal exact registry mapping can
-recover it, without another invocation. A mapping is not the adoption ACK.
+when configured. New owners never launch an SDK seed. Native Desktop's no-input
+`prewarmFolderless` returns a hidden Local ID and scratch cwd. Read that exact
+live query's `getSupportedCommands({sessionId})` catalogue and require one
+`claudex-bootstrap` before claiming `start` with the same Local ID, scratch cwd
+and configuration. The fixed non-immediate bootstrap command only records the
+actual CLI ID/cwd through the configured companion; it appends no packet and
+never calls the model. Do not use an empty message, a spare prewarm, the CLI
+resume picker, `--desktop`, a deep link or another Local session's MCP client.
+SDK entrypoints are excluded from Desktop's ordinary resume discovery.
 
-Native resume adoption creates a cold Local row. A separate durable one-use
-activation claim binds that mapping's exact ID/cwd/title/activity and unchanged
-seed. The renderer requires no held input, draft, pending/active/background work
-or busy/unknown shell, then rechecks before native `warmSession`. This normal
-no-input activation must not call `confirmImportedSessionResume`, send a prompt,
-replay kept input or bypass native trust/policy. An unknown warm is not repeated;
-a returned warm still requires the live Mod catalogue and actual Mod ACK below.
+`local-start/<pending operation>.json` retains the full original pending/owner
+and exact original seed file identity when present. Its separate `prewarm`,
+`start` and `move` claims are one-use, written before each native invocation.
+`local-start-manifest.json` keeps a claimed entry unchanged for the same action's
+final renderer authority check; claim replay still returns not ready. A receipt
+withdraws or advances it. Unknown outcomes never grant another invocation after
+restart. Bootstrap and normal registry readback may independently prove an
+unknown start; exact registry and relocated transcript may prove an unknown move.
+A lost prewarm answer without its returned identity remains blocked.
+
+After bootstrap, require the exact native Local-to-CLI registry mapping. Move
+only that idle session through normal `changeCwd(..., false)`: preserve native
+workspace trust and never manufacture trust acceptance. A needs-trust result
+retains its consumed claim, waiting for a person to complete the normal native
+move. No packet is published before the target canonical cwd, exact same native
+identity, native bootstrap command graph and relocated transcript are proven.
+The coordinator writes the retained migration journal before replacing its own
+owner metadata. Either old/new owner generation can recover that checkpoint.
+Only the exact retained migration plus actual packet ACK allows the coordinator
+to resolve the pending target; it never clears pending or rewrites native data.
+The original seed and old adoption/opener journals remain recovery evidence.
+Before preparation and every native action claim, recheck that the old CLI ID
+has no Desktop mapping. A consumed legacy resume/activation without an explicit
+pre-write rejection blocks replacement; recover that action rather than using
+a new target to evade its uncertain outcome.
+After native creation the SDK must never take over the Local writer. Keep the
+new `native-start` phase and accepted legacy phases durable.
 
 The loaded Mod's fixed non-immediate `claudex-sync` command handles Local appends.
 Require its unique exact native catalogue entry before and after claim, matching
@@ -64,7 +75,7 @@ claim before exposing packet text; always handle command failures locally withou
 model execution. A send/dispatch receipt is not an ACK. Promotion requires the
 applied receipt and exact native command graph, UUID, ordered content and image
 bytes. A transformed image refuses promotion, retaining the journal; unknown
-resume, activation, claim, receive or apply outcomes are never resent. Keep the normal
+prewarm, start, move, claim, receive or apply outcomes are never resent. Keep the normal
 frontend journals/restart boundary and every existing native lifecycle guard.
 
 Only a literal native control `subtype:error` is an explicit failure; an unknown

@@ -1,79 +1,85 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-import { createClaudeLocalAdoptionRuntime } from '../crates/claudex-app/host/renderer/claude-local-sync-runtime.mjs';
-const OP='11111111-1111-4111-8111-111111111111', SESSION='22222222-2222-4222-8222-222222222222';
-const SEED='33333333-3333-4333-8333-333333333333', HANDLE='44444444-4444-4444-8444-444444444444';
-const CLAIM='55555555-5555-4555-8555-555555555555';
-const digest=async v=>createHash('sha256').update(JSON.stringify(v)).digest('hex');
-const flush=async()=>{ for(let n=0;n<25;n++) await new Promise(r=>setImmediate(r)); };
-async function fixture({action='resume', fail, draft=false, held=false, connected=true, mismatch=false}={}){
-  const content=[{type:'text',text:'Synthetic seed only'}], calls=[], statuses=[];
-  const entry={action,opId:OP,sourceOperationId:OP,conversationId:OP,cliSessionId:SESSION,cwd:'/fixture/project',seedUuid:SEED,
-    seedContentDigest:await digest(content),expiresAt:10000};
-  if(action==='activate') Object.assign(entry,{localSessionId:`local_${SESSION}`,title:'Fixture',lastActivityAt:1,registryPath:`/fixture/registry/local_${SESSION}.json`});
-  const row={handle:HANDLE,cwd:entry.cwd,liveness:'not_running',lastActivityAt:1};
-  const state={sessionId:entry.localSessionId,cwd:entry.cwd,title:entry.title,lastActivityAt:1,isArchived:false,isRunning:false,turnRunning:false,heldInput:held?{}:undefined};
-  const claimed=new Set();
+import { createClaudeLocalStartRuntime } from '../crates/claudex-app/host/renderer/claude-local-sync-runtime.mjs';
+const OP='11111111-1111-4111-8111-111111111111', CLI='22222222-2222-4222-8222-222222222222';
+const UI='local_33333333-3333-4333-8333-333333333333', CLAIM='55555555-5555-4555-8555-555555555555';
+const flush=async()=>{for(let n=0;n<30;n++)await new Promise(r=>setImmediate(r));};
+function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,draft=false,connected=true}={}) {
+  const calls=[],statuses=[],claimed=new Set();
+  const mapping={sessionId:UI,nativeId:CLI,cwd:'/fixture/scratch',title:'Fixture',lastActivityAt:1,registryPath:`/fixture/registry/${UI}.json`};
+  const entry={stage,opId:OP,cwd:'/fixture/project',title:'Fixture',prewarm:{sessionId:UI,cwd:mapping.cwd},
+    bootstrap:{sessionId:CLI,cwd:mapping.cwd},mapping,command:'claudex-bootstrap',expiresAt:10000};
+  const state={sessionId:UI,cwd:mapping.cwd,title:'Fixture',lastActivityAt:1,isArchived:false,isRunning:false,turnRunning:false};
   const native={
-    listResumableCliSessions:async()=>{calls.push('list');return[row];},
-    readCliTranscript:async()=>({messages:[{uuid:SEED,type:'user',queueTranscriptOnly:true,message:{role:'user',content:mismatch?[{type:'text',text:'changed'}]:content}}],totalMessages:1,transcriptTruncated:false}),
-    previewCliResume:async()=>({resumable:true}),
-    resumeCliSession:async()=>{calls.push('resume');if(fail==='resume')throw Error('unknown');return{ok:true,sessionId:`local_${SESSION}`};},
-    readFileAtCwd:async()=>({contents:JSON.stringify({sessionId:entry.localSessionId,cliSessionId:SESSION,cwd:entry.cwd,title:entry.title,lastActivityAt:1,isArchived:false})}),
-    getSession:async()=>state,
-    getBusyShellPtyKeys:async()=>({probed:true,busy:[],unknown:[]}),
-    getSupportedCommands:async()=>[],
-    warmSession:async()=>{calls.push('warm');if(fail==='warm')throw Error('unknown');},
+    prewarmFolderless:async args=>{calls.push(['prewarm',args]);if(fail==='prewarm')throw Error('unknown');return entry.prewarm;},
+    getSupportedCommands:async args=>{calls.push(['catalogue',args]);return commands;},
+    start:async args=>{calls.push(['start',args]);if(fail==='start')throw Error('unknown');return{sessionId:UI};},
+    changeCwd:async(...args)=>{calls.push(['move',args]);if(fail==='move')throw Error('unknown');return fail==='trust'?{status:'needs_trust',directory:entry.cwd}:{status:'ok',cwd:entry.cwd,changed:true,transcriptRelocated:true};},
+    getSession:async()=>state,getBusyShellPtyKeys:async()=>({probed:true,busy:[],unknown:[]}),
+    readFileAtCwd:async()=>({contents:JSON.stringify({...mapping,cliSessionId:CLI,isArchived:false})}),
   };
   const client={transport:{_closed:!connected,pid:null,stderr:null,_port:{postMessage(){},close(){}}},getServerVersion:()=>({name:'claudex'}),getServerCapabilities:()=>({tools:{}}),
-    callTool:async({name,arguments:a})=>{calls.push([name,a]);if(name.endsWith('_claim')){
-      if(claimed.has(name))return{structuredContent:{ready:false}};
-      claimed.add(name);return{structuredContent:{ready:true,opId:OP,claimId:CLAIM,handle:HANDLE,cliSessionId:SESSION,localSessionId:entry.localSessionId,lastActivityAt:1}};
+    callTool:async({name,arguments:a})=>{calls.push([name,a]);if(name.endsWith('_claim')) {
+      if(claimed.has(a.stage))return{structuredContent:{ready:false}};claimed.add(a.stage);
+      return{structuredContent:{ready:true,opId:OP,stage:a.stage,claimId:CLAIM}};
     }return{structuredContent:{recorded:true}};}};
   const options={readManifest:async()=>({contents:JSON.stringify({version:1,entries:[entry]})}),native,getClient:()=>client,
-    hasDraft:()=>draft,now:()=>1,setTimer:()=>1,clearTimer(){},onStatus:s=>statuses.push(s),digest};
-  const create=()=>createClaudeLocalAdoptionRuntime(options);
-  return{calls,statuses,entry,state,native,create};
+    hasDraft:()=>draft,now:()=>1,setTimer:()=>1,clearTimer(){},onStatus:s=>statuses.push(s)};
+  return{entry,state,native,calls,statuses,client,create:()=>createClaudeLocalStartRuntime(options)};
 }
-test('native picker resumes exact seed once with durable claim and no seed send',async()=>{
-  const f=await fixture();const r=f.create();r.start();await flush();await r.poll();r.stop();
-  assert.equal(f.calls.filter(x=>x==='resume').length,1);
-  assert.ok(f.calls.findIndex(x=>Array.isArray(x)&&x[0]==='claudex_local_adoption_claim')<f.calls.indexOf('resume'));
-  const receipt=f.calls.find(x=>Array.isArray(x)&&x[0]==='claudex_local_adoption_receipt')[1];
-  assert.equal(receipt.outcome,'resumed');assert.equal(receipt.localSessionId,`local_${SESSION}`);
-  assert.ok(!JSON.stringify(f.calls).includes('Synthetic seed only'));
+async function run(f){const r=f.create();r.start();await flush();r.stop();}
+test('folderless prewarm has a durable claim and no input, SDK seed, provider or trust override',async()=>{
+  const f=fixture();await run(f);
+  const call=f.calls.find(x=>x[0]==='prewarm');assert.deepEqual(call[1],{cwd:'',useWorktree:false});
+  assert.ok(f.calls.findIndex(x=>x[0]==='claudex_local_start_claim')<f.calls.indexOf(call));
+  assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'returned');
+  assert.ok(f.statuses.includes('prewarm-returned'));assert.equal(f.calls.filter(x=>['start','move'].includes(x[0])).length,0);
 });
-test('unknown resume survives renderer restart without native replay',async()=>{
-  const f=await fixture({fail:'resume'});let r=f.create();r.start();await flush();r.stop();
-  r=f.create();r.start();await flush();r.stop();assert.equal(f.calls.filter(x=>x==='resume').length,1);
-  assert.equal(f.calls.find(x=>Array.isArray(x)&&x[0]==='claudex_local_adoption_receipt')[1].outcome,'unknown');
+test('start claims the exact prewarm only after unique live catalogue and sends only fixed bootstrap',async()=>{
+  const f=fixture({stage:'start'});await run(f);
+  const start=f.calls.find(x=>x[0]==='start')[1];
+  assert.deepEqual(start,{sessionId:UI,cwd:'/fixture/scratch',useWorktree:false,title:'Fixture',message:`/claudex-bootstrap ${OP} ${CLAIM}`});
+  assert.equal(f.calls.filter(x=>x[0]==='catalogue').length,2);
+  assert.ok(!JSON.stringify(f.calls).includes('history packet'));
 });
-test('seed mismatch, composer draft and borrowed/disconnected clients cannot claim',async()=>{
-  for(const option of [{mismatch:true},{draft:true},{connected:false}]){
-    const f=await fixture(option);const r=f.create();r.start();await flush();r.stop();
-    assert.equal(f.calls.filter(x=>Array.isArray(x)).length,0);assert.ok(!f.calls.includes('resume'));
+test('missing, duplicate and unavailable bootstrap catalogues never claim or send input',async()=>{
+  for(const commands of [[],[{name:'claudex-bootstrap'},{name:'claudex-bootstrap'}],null]){
+    const f=fixture({stage:'start',commands});await run(f);
+    assert.equal(f.calls.filter(x=>x[0]==='start'||x[0].endsWith('_claim')).length,0);
   }
 });
-test('cold adopted Local activates without prompt once, unknown warm never repeats',async()=>{
-  const f=await fixture({action:'activate',fail:'warm'});let r=f.create();r.start();await flush();r.stop();
-  r=f.create();r.start();await flush();r.stop();assert.equal(f.calls.filter(x=>x==='warm').length,1);
-  assert.equal(f.calls.find(x=>Array.isArray(x)&&x[0]==='claudex_local_activation_receipt')[1].outcome,'unknown');
-});
-test('held native input and active model work block no-query activation',async()=>{
-  for(const mutate of [f=>f.state.heldInput={},f=>f.state.turnRunning=true,f=>f.state.hasBackgroundWork=true]){
-    const f=await fixture({action:'activate'});mutate(f);const r=f.create();r.start();await flush();r.stop();
-    assert.ok(!f.calls.includes('warm'));assert.equal(f.calls.filter(x=>Array.isArray(x)).length,0);
+test('each unknown native action remains single-use across renderer restart',async()=>{
+  for(const stage of ['prewarm','start','move']){
+    const f=fixture({stage,fail:stage});await run(f);await run(f);
+    assert.equal(f.calls.filter(x=>x[0]===stage).length,1);
+    assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'unknown');
   }
 });
-test('an already loaded exact Mod command does not warm again',async()=>{
-  const f=await fixture({action:'activate'});f.native.getSupportedCommands=async()=>[{name:'claudex-sync'}];
-  const r=f.create();r.start();await flush();r.stop();assert.ok(f.statuses.includes('native-mod-command-ready'));assert.ok(!f.calls.includes('warm'));
+test('cwd move uses exact Local identity and trust=false; needs_trust never retries',async()=>{
+  const f=fixture({stage:'move',fail:'trust'});await run(f);await run(f);
+  assert.deepEqual(f.calls.find(x=>x[0]==='move')[1],[UI,'/fixture/project',false]);
+  assert.equal(f.calls.filter(x=>x[0]==='move').length,1);
+  assert.ok(f.statuses.includes('move-needs_trust'));
+});
+test('composer draft, disconnected or borrowed client and busy native state never dispatch',async()=>{
+  for(const options of [{draft:true},{connected:false}]){
+    const f=fixture(options);await run(f);assert.equal(f.calls.length,0);
+  }
+  for(const key of ['turnRunning','heldInput','hasBackgroundWork','pendingCwdTrustPrompt']){
+    const f=fixture({stage:'move'});f.state[key]=true;await run(f);
+    assert.equal(f.calls.filter(x=>x[0]==='move'||x[0].endsWith('_claim')).length,0);
+  }
+});
+test('catalogue removed after claim consumes rejected receipt without model fallback',async()=>{
+  const f=fixture({stage:'start'});let n=0;
+  f.native.getSupportedCommands=async()=>++n===1?[{name:'claudex-bootstrap'}]:[];
+  await run(f);assert.equal(f.calls.filter(x=>x[0]==='start').length,0);
+  assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'rejected');
 });
 
-test('adoption constructor or start failure leaves the existing owner bootstrap working',async()=>{
+test('native-start constructor or start failure leaves the existing owner bootstrap working',async()=>{
   const source=await readFile(new URL('../crates/claudex-app/src/frontend_runtime.rs',import.meta.url),'utf8');
   const owner=source.slice(source.indexOf('pub fn owner('));
   const start=owner.indexOf('const __cldxOwnerWake='), end=owner.indexOf('"#;',start);
@@ -81,8 +87,8 @@ test('adoption constructor or start failure leaves the existing owner bootstrap 
   const template=owner.slice(start,end);
   for(const fail of ['constructor','start']){
     const script=template.replace('@RUNTIME@',`function createClaudeOwnerWakeRuntime(){return{start(){globalThis.started++},stop(){},signal(){globalThis.signals++}}}`)
-      .replace('@LOCAL_SYNC@',fail==='constructor'?`function createClaudeLocalAdoptionRuntime(){throw Error('synthetic constructor')}`
-        :`function createClaudeLocalAdoptionRuntime(){return{start(){throw Error('synthetic start')},stop(){}}}`)
+      .replace('@LOCAL_SYNC@',fail==='constructor'?`function createClaudeLocalStartRuntime(){throw Error('synthetic constructor')}`
+        :`function createClaudeLocalStartRuntime(){return{start(){throw Error('synthetic start')},stop(){}}}`)
       .replaceAll('@ROOT@',JSON.stringify('/fixture/state')).replaceAll('@ASSET@',JSON.stringify('fixture.js'));
     const context={started:0,signals:0,__cldxOwnerWakeClient(){},console:{warn(){}},window:{addEventListener(){}}};
     vm.runInNewContext(`${script};__cldxOwnerWake.signal('synthetic','selection','bridge');`,context);

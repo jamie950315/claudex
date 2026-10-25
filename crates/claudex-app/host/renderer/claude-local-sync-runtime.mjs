@@ -159,34 +159,35 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
   };
 }
 
-/** Native resume-picker adoption. No deep links, CLI opener or model prompts.
- * An attached user-config stdio client journals each native action beforehand.
+/** Native folderless prewarm -> proven fixed Mod bootstrap -> normal cwd move.
+ * Every side effect consumes a durable claim; an unknown action is never retried.
  */
-export function createClaudeLocalAdoptionRuntime({ readManifest, native, getClient,
+export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
   hasDraft = () => true, now = () => Date.now(), setTimer = setTimeout,
-  clearTimer = clearTimeout, intervalMs = 2000, onStatus = () => {},
-  digest = async value => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',
-    new TextEncoder().encode(JSON.stringify(value)))), b => b.toString(16).padStart(2, '0')).join('') } = {}) {
-  let running = false, generation = 0, inFlight = false, timer, lastStatus;
+  clearTimer = clearTimeout, intervalMs = 2000, onStatus = () => {} } = {}) {
+  let running = false, generation = 0, inFlight = false, timer, lastStatus, apiReady = false;
   const attempted = new Set();
   const report = code => { if (lastStatus !== code) { lastStatus = code; try { onStatus(code); } catch {} } };
   const decode = (result, limit) => {
     if (!result || typeof result.contents !== 'string' || result.isTail || result.contents.length > limit)
-      throw new Error('Native adoption metadata unavailable');
+      throw new Error('Native Local metadata unavailable');
     return JSON.parse(result.contents);
   };
   async function manifest() {
     const value = decode(await readManifest(), 256 * 1024);
     if (value?.version !== 1 || !Array.isArray(value.entries) || value.entries.length > 1)
-      throw new Error('Native adoption manifest invalid');
+      throw new Error('Native Local manifest invalid');
     for (const e of value.entries) {
-      if (!['resume', 'activate'].includes(e.action) || !syncUuid(e.opId) || !syncUuid(e.sourceOperationId)
-        || !syncUuid(e.conversationId) || !syncUuid(e.cliSessionId) || !syncUuid(e.seedUuid)
-        || !syncPath(e.cwd) || !/^[a-f0-9]{64}$/.test(e.seedContentDigest ?? '') || !Number.isSafeInteger(e.expiresAt))
-        throw new Error('Native adoption identity invalid');
-      if (e.action === 'activate' && (!syncUuid(e.localSessionId?.slice(6)) || !e.localSessionId.startsWith('local_')
-        || !syncText(e.title) || !Number.isSafeInteger(e.lastActivityAt) || !syncPath(e.registryPath)
-        || !e.registryPath.endsWith(`/${e.localSessionId}.json`))) throw new Error('Native activation identity invalid');
+      if (!['prewarm', 'start', 'move'].includes(e.stage) || !syncUuid(e.opId) || !syncPath(e.cwd)
+        || !syncText(e.title) || e.command !== 'claudex-bootstrap' || !Number.isSafeInteger(e.expiresAt))
+        throw new Error('Native Local identity invalid');
+      if (e.stage !== 'prewarm' && (!syncPath(e.prewarm?.cwd) || !e.prewarm.sessionId?.startsWith('local_')
+        || !syncUuid(e.prewarm.sessionId.slice(6)))) throw new Error('Native prewarm receipt invalid');
+      if (e.stage === 'move' && (!syncUuid(e.bootstrap?.sessionId) || e.bootstrap.cwd !== e.prewarm.cwd
+        || !syncPath(e.mapping?.registryPath) || !e.mapping.registryPath.endsWith(`/${e.prewarm.sessionId}.json`)
+        || e.mapping.sessionId !== e.prewarm.sessionId || e.mapping.nativeId !== e.bootstrap.sessionId
+        || e.mapping.cwd !== e.prewarm.cwd || !Number.isSafeInteger(e.mapping.lastActivityAt)))
+        throw new Error('Native bootstrap mapping invalid');
     }
     return value.entries;
   }
@@ -200,115 +201,104 @@ export function createClaudeLocalAdoptionRuntime({ readManifest, native, getClie
   }
   async function call(name, args) {
     const result = await client().callTool({ name, arguments: args });
-    if (result?.isError) throw new Error('Native adoption authority refused');
+    if (result?.isError) throw new Error('Native Local authority refused');
     if (result?.structuredContent) return result.structuredContent;
     const texts = result?.content?.filter(x => x.type === 'text');
     if (texts?.length !== 1 || typeof texts[0].text !== 'string' || texts[0].text.length > 32768)
-      throw new Error('Native adoption receipt unavailable');
+      throw new Error('Native Local receipt unavailable');
     return JSON.parse(texts[0].text);
   }
   async function current(e, ticket) {
-    return running && ticket === generation && e.expiresAt > now() && !hasDraft(e.localSessionId)
+    return running && ticket === generation && e.expiresAt > now() && !hasDraft(e.prewarm?.sessionId)
       && (await manifest()).some(v => JSON.stringify(v) === JSON.stringify(e))
-      && running && ticket === generation && !hasDraft(e.localSessionId);
+      && running && ticket === generation && !hasDraft(e.prewarm?.sessionId);
   }
-  async function candidate(e) {
-    const rows = await native.listResumableCliSessions(1000);
-    if (!Array.isArray(rows) || rows.length > 1000) throw new Error('Native resume inventory invalid');
-    const matches = [];
-    for (const row of rows.filter(r => r?.cwd === e.cwd && syncUuid(r.handle)
-      && r.liveness === 'not_running' && !r.folderMissing && !r.bridgeSessionId)) {
-      const transcript = await native.readCliTranscript(row.handle, 0, 5000);
-      if (!Array.isArray(transcript?.messages) || transcript.transcriptTruncated
-        || !Number.isSafeInteger(transcript.totalMessages) || transcript.totalMessages !== transcript.messages.length) continue;
-      const seed = transcript.messages.filter(m => m?.uuid === e.seedUuid);
-      if (seed.length !== 1 || seed[0].type !== 'user' || seed[0].message?.role !== 'user'
-        || seed[0].queueTranscriptOnly !== true || await digest(seed[0].message.content) !== e.seedContentDigest) continue;
-      if (transcript.messages.some(m => ['user', 'assistant'].includes(m?.type) && m.uuid !== e.seedUuid)) continue;
-      const preview = await native.previewCliResume(row.handle);
-      if (preview?.resumable === true) matches.push(row);
+  async function catalogue(e) {
+    const commands = await native.getSupportedCommands({ sessionId: e.prewarm.sessionId });
+    if (!Array.isArray(commands)) { report('bootstrap-catalogue-unavailable'); return false; }
+    const count = commands.filter(c => c?.name === e.command).length;
+    report(count === 1 ? 'bootstrap-catalogue-ready' : count ? 'bootstrap-catalogue-duplicate' : 'bootstrap-catalogue-missing');
+    return count === 1;
+  }
+  async function moveProof(e) {
+    const p = e.mapping.registryPath, cut = p.lastIndexOf('/');
+    const m = decode(await native.readFileAtCwd(p.slice(0, cut), p.slice(cut + 1)), 8 * 1024 * 1024);
+    if (m.sessionId !== e.prewarm.sessionId || m.cliSessionId !== e.bootstrap.sessionId
+      || m.cwd !== e.prewarm.cwd || m.isArchived !== false || m.lastActivityAt !== e.mapping.lastActivityAt) {
+      report('cwd-registry-identity-changed'); return null;
     }
-    if (matches.length !== 1) return null;
-    return matches[0];
-  }
-  function idle(s, e) {
-    if (!s || s.sessionId !== e.localSessionId || s.cwd !== e.cwd || s.title !== e.title
-      || s.lastActivityAt !== e.lastActivityAt || ['isArchived', 'isRunning', 'turnRunning'].some(k => s[k] !== false)) return false;
-    if (['cliBootPending', 'starting', 'heldInput', 'sendsHeldAfterError', 'hasBackgroundActivity', 'hasBackgroundWork',
-      'remoteTarget', 'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
-      'lanyard', 'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt', 'pendingLanyardConsent',
-      'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'awaitingBrief', 'transcriptUnavailable',
-      'pendingLoopWakeup', 'pendingScheduleWakeupIds'].some(k => s[k])) return false;
-    return ['pendingToolPermissions', 'loops', 'spawningTaskIds'].every(k => s[k] === undefined || Array.isArray(s[k]) && s[k].length === 0);
-  }
-  async function activationReady(e) {
-    const cut = e.registryPath.lastIndexOf('/');
-    const mapped = decode(await native.readFileAtCwd(e.registryPath.slice(0, cut), e.registryPath.slice(cut + 1)), 8 * 1024 * 1024);
-    if (mapped.sessionId !== e.localSessionId || mapped.cliSessionId !== e.cliSessionId || mapped.cwd !== e.cwd
-      || mapped.title !== e.title || mapped.lastActivityAt !== e.lastActivityAt || mapped.isArchived !== false) return false;
-    if (!idle(await native.getSession(e.localSessionId), e) || hasDraft(e.localSessionId)) return false;
-    const busy = await native.getBusyShellPtyKeys(e.localSessionId, false);
-    return busy?.probed === true && Array.isArray(busy.busy) && !busy.busy.length
-      && Array.isArray(busy.unknown) && !busy.unknown.length && idle(await native.getSession(e.localSessionId), e);
-  }
-  async function resume(e, ticket) {
-    const row = await candidate(e);
-    if (!row || !await current(e, ticket)) { report('waiting-native-resume-preview'); return; }
-    attempted.add(`${e.opId}:resume`);
-    const claim = await call('claudex_local_adoption_claim', { opId: e.opId, handle: row.handle, cwd: e.cwd,
-      seedUuid: e.seedUuid, seedContentDigest: e.seedContentDigest, resumable: true });
-    if (claim?.ready !== true) { report('resume-claim-not-ready'); return; }
-    if (claim.opId !== e.opId || claim.handle !== row.handle || claim.cliSessionId !== e.cliSessionId || !syncUuid(claim.claimId))
-      throw new Error('Native resume claim changed');
-    let outcome = 'rejected', localSessionId = null, reason = 'authority-changed';
-    if (await current(e, ticket) && (await candidate(e))?.handle === row.handle && await current(e, ticket)) {
-      outcome = 'unknown'; reason = null;
-      try {
-        const result = await native.resumeCliSession(row.handle);
-        if (result?.ok === true && result.sessionId === `local_${e.cliSessionId}`) {
-          outcome = 'resumed'; localSessionId = result.sessionId; report('resumed-awaiting-native-mapping');
-        } else if (result?.ok === false && ['running', 'liveness_unknown', 'workspace_untrusted', 'folder_missing', 'failed'].includes(result.reason)) {
-          outcome = 'rejected'; reason = result.reason; report('native-resume-refused');
-        } else report('native-resume-unknown');
-      } catch { report('native-resume-unknown'); }
+    const s = await native.getSession(e.prewarm.sessionId);
+    if (!s || s.sessionId !== m.sessionId || s.cwd !== m.cwd || s.isArchived !== false
+      || s.isRunning !== false || s.turnRunning !== false || s.lastActivityAt !== m.lastActivityAt
+      || ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork', 'remoteTarget',
+        'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
+        'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt', 'pendingLanyardConsent',
+        'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'lanyard'].some(k => s[k])
+      || ['pendingToolPermissions', 'loops', 'spawningTaskIds'].some(k => s[k] !== undefined && (!Array.isArray(s[k]) || s[k].length))) {
+      report('cwd-waiting-native-idle'); return null;
     }
-    await call('claudex_local_adoption_receipt', { opId: e.opId, claimId: claim.claimId, outcome, localSessionId, reason });
-  }
-  async function activate(e, ticket) {
-    const commands = await native.getSupportedCommands({ sessionId: e.localSessionId });
-    if (Array.isArray(commands) && commands.filter(c => c?.name === 'claudex-sync').length === 1) {
-      report('native-mod-command-ready'); return;
+    const busy = await native.getBusyShellPtyKeys(s.sessionId, false);
+    if (busy?.probed !== true || !Array.isArray(busy.busy) || busy.busy.length || !Array.isArray(busy.unknown) || busy.unknown.length) {
+      report('cwd-waiting-native-shells'); return null;
     }
-    if (!await activationReady(e) || !await current(e, ticket)) { report('waiting-native-activation-idle'); return; }
-    attempted.add(`${e.opId}:activate`);
-    const claim = await call('claudex_local_activation_claim', { opId: e.opId, localSessionId: e.localSessionId, lastActivityAt: e.lastActivityAt });
-    if (claim?.ready !== true) { report('activation-claim-not-ready'); return; }
-    if (claim.opId !== e.opId || claim.localSessionId !== e.localSessionId || claim.lastActivityAt !== e.lastActivityAt || !syncUuid(claim.claimId))
-      throw new Error('Native activation claim changed');
-    let outcome = 'rejected';
-    if (await activationReady(e) && await current(e, ticket)) {
-      outcome = 'unknown';
-      try { await native.warmSession(e.localSessionId); outcome = 'returned'; report('native-activated-awaiting-mod'); }
-      catch { report('native-activation-unknown'); }
-    }
-    await call('claudex_local_activation_receipt', { opId: e.opId, claimId: claim.claimId, outcome });
+    report('cwd-native-identity-ready');
+    return { sessionId: m.sessionId, cliSessionId: m.cliSessionId, cwd: m.cwd, lastActivityAt: m.lastActivityAt };
   }
   async function poll() {
     if (!running || inFlight) return;
     inFlight = true; const ticket = generation;
     try {
-      const entries = await manifest();
-      for (const e of entries) {
-        if (!await current(e, ticket) || attempted.has(`${e.opId}:${e.action}`)) continue;
-        client();
-        const methods = e.action === 'resume' ? ['listResumableCliSessions', 'readCliTranscript', 'previewCliResume', 'resumeCliSession']
-          : ['readFileAtCwd', 'getSession', 'getBusyShellPtyKeys', 'getSupportedCommands', 'warmSession'];
-        if (methods.some(k => typeof native?.[k] !== 'function')) { report('native-adoption-api-unavailable'); continue; }
-        if (e.action === 'resume') await resume(e, ticket); else await activate(e, ticket);
+      if (['prewarmFolderless', 'start', 'getSupportedCommands', 'changeCwd', 'getSession', 'getBusyShellPtyKeys', 'readFileAtCwd']
+        .some(k => typeof native?.[k] !== 'function')) { report('native-start-api-unavailable'); return; }
+      if (!apiReady) { apiReady = true; report('native-start-api-ready'); }
+      for (const e of await manifest()) {
+        const key = `${e.opId}:${e.stage}`;
+        if (attempted.has(key) || !await current(e, ticket)) continue;
+        let proof = {};
+        if (e.stage === 'start') {
+          if (!await catalogue(e)) continue;
+          proof = { sessionId: e.prewarm.sessionId, cwd: e.prewarm.cwd, command: e.command, unique: true };
+        } else if (e.stage === 'move') { proof = await moveProof(e); if (!proof) continue; }
+        if (!await current(e, ticket)) continue;
+        client(); attempted.add(key);
+        const claim = await call('claudex_local_start_claim', { opId: e.opId, stage: e.stage, proof });
+        if (claim?.ready !== true) { report(`${e.stage}-claim-not-ready`); continue; }
+        if (claim.opId !== e.opId || claim.stage !== e.stage || !syncUuid(claim.claimId)) throw new Error('Native Local claim changed');
+        report(`${e.stage}-claimed`);
+        let outcome = 'rejected', result = null;
+        // Last lifecycle/catalogue/registry checks occur after the durable claim.
+        let permitted = await current(e, ticket);
+        if (permitted && e.stage === 'start') permitted = await catalogue(e);
+        if (permitted && e.stage === 'move') permitted = JSON.stringify(await moveProof(e)) === JSON.stringify(proof);
+        if (permitted) {
+          outcome = 'unknown';
+          try {
+            if (e.stage === 'prewarm') {
+              const value = await native.prewarmFolderless({ cwd: '', useWorktree: false });
+              if (value?.sessionId?.startsWith('local_') && syncUuid(value.sessionId.slice(6)) && syncPath(value.cwd)) {
+                outcome = 'returned'; result = { sessionId: value.sessionId, cwd: value.cwd };
+              } else if (typeof value?.refusedReason === 'string') outcome = 'rejected';
+            } else if (e.stage === 'start') {
+              const value = await native.start({ sessionId: e.prewarm.sessionId, cwd: e.prewarm.cwd, useWorktree: false,
+                title: e.title, message: `/${e.command} ${e.opId} ${claim.claimId}` });
+              if (value?.sessionId === e.prewarm.sessionId) { outcome = 'returned'; result = { sessionId: value.sessionId }; }
+            } else {
+              const value = await native.changeCwd(e.prewarm.sessionId, e.cwd, false);
+              if (value?.status === 'ok' && value.cwd === e.cwd) { outcome = 'returned'; result = { status: 'ok', cwd: value.cwd }; }
+              else if (value?.status === 'needs_trust') outcome = 'needs_trust';
+              else if (value?.status === 'rejected') outcome = 'rejected';
+            }
+          } catch { /* The durable claim remains consumed even if IPC loses its answer. */ }
+        }
+        report(`${e.stage}-${outcome}`);
+        await call('claudex_local_start_receipt', { opId: e.opId, stage: e.stage, claimId: claim.claimId, outcome, result });
+        break;
       }
-    } catch { report('native-adoption-unavailable'); }
+    } catch { report('native-start-metadata-or-authority-unavailable'); }
     finally { inFlight = false; if (running) timer = setTimer(poll, intervalMs); }
   }
-  return { start() { if (!running) { running = true; generation++; report('started'); void poll(); } },
-    stop() { running = false; generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; }, poll };
+  return {
+    start() { if (!running) { running = true; generation++; report('started'); void poll(); } },
+    stop() { running = false; generation++; if (timer !== undefined) clearTimer(timer); timer = undefined; }, poll,
+  };
 }

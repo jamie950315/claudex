@@ -1348,6 +1348,79 @@
         ],
         "additionalProperties": false
       }
+    },
+    {
+      "name": "claudex_local_start_claim",
+      "description": "Internal at-most-once native Local creation claim. No model input or packet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string",
+            "minLength": 36
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "prewarm",
+              "start",
+              "move"
+            ]
+          },
+          "proof": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "opId",
+          "stage",
+          "proof"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "claudex_local_start_receipt",
+      "description": "Internal at-most-once native Local creation receipt. No model input or packet.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "opId": {
+            "type": "string",
+            "minLength": 36
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "prewarm",
+              "start",
+              "move"
+            ]
+          },
+          "claimId": {
+            "type": "string",
+            "minLength": 36
+          },
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "returned",
+              "unknown",
+              "rejected",
+              "needs_trust"
+            ]
+          },
+          "result": {}
+        },
+        "required": [
+          "opId",
+          "stage",
+          "claimId",
+          "outcome",
+          "result"
+        ],
+        "additionalProperties": false
+      }
     }
   ]
 }

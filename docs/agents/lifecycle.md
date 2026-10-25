@@ -254,3 +254,15 @@ claim production readiness for opaque/dependent compaction, external asset depen
 unverified project relocations, or unsigned reasoning replay. Verified project
 moves use the explicit relocation protocols above. Visible reasoning is labeled
 text; encrypted reasoning and native permissions do not migrate.
+
+## Native Local target resolution
+
+A prepared first Claude handoff may resolve its provisional/legacy SDK target
+only through the exact `local-start` migration journal. Retain the complete old
+pending and owner, and verify any old seed's nanosecond identity. Never clear the
+pending, replay an uncertain SDK/native action or mutate native data. The normal
+locked coordinator resolves only after the replacement native Local's bootstrap,
+registry, canonical project, relocated transcript and full packet ACK are proven.
+Write the migration before replacing app-owned owner metadata, then save the
+resolved pending through ordinary verification/promotion. This is not a general
+pending reroute or permission to move an already verified/reusable owner.

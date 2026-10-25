@@ -22,6 +22,7 @@ pub mod hook_health;
 pub mod hooks;
 pub mod image_assets;
 pub mod local_adoption;
+pub mod local_start;
 pub mod local_handoff;
 pub mod local_sync;
 pub mod maintenance_policy;

@@ -199,7 +199,13 @@ fn authority(root: &Path, registry: &Path, j: &Value) -> Result<Value> {
     ensure!(
         ledger["version"] == 2
             && ledger["pending"]["operationId"] == j["sourceOperationId"]
-            && ledger["pending"]["record"]["nativeId"] == j["cliSessionId"]
+            && (ledger["pending"]["record"]["nativeId"] == j["cliSessionId"]
+                || crate::local_start::matches_pending(
+                    root,
+                    registry,
+                    &ledger["pending"],
+                    &j["cliSessionId"]
+                )?)
             && ledger["pending"]["record"]["conversationId"] == j["conversationId"],
         "Local synchronization is not the current durable transaction."
     );
@@ -224,6 +230,19 @@ fn authority(root: &Path, registry: &Path, j: &Value) -> Result<Value> {
             && !PathBuf::from(format!("{}.lock", op.display())).try_exists()?,
         "Local native writer ownership is not established."
     );
+    if o["nativeStartOperation"] == j["sourceOperationId"]
+        && ledger["pending"]["record"]["nativeId"] == j["cliSessionId"]
+    {
+        ensure!(
+            crate::local_start::matches_pending(
+                root,
+                registry,
+                &ledger["pending"],
+                &j["cliSessionId"]
+            )?,
+            "Native Local migration no longer owns this pending target."
+        );
+    }
     let mappings =
         desktop_mapping::mappings(registry, &[j["cliSessionId"].as_str().unwrap().into()])?;
     let m = mappings
@@ -525,6 +544,14 @@ fn one<'a>(rows: &'a [Value], uuid: &Value) -> Result<&'a Value> {
     Ok(found[0])
 }
 fn verified(j: &Value, rows: &[Value]) -> Result<Vec<String>> {
+    verified_command(j, rows, "claudex-sync", "CLAUDEX_SYNC_APPLIED")
+}
+pub(crate) fn verified_command(
+    j: &Value,
+    rows: &[Value],
+    name: &str,
+    marker: &str,
+) -> Result<Vec<String>> {
     ensure!(
         !j["applied"].is_null(),
         "Awaiting native Local command acknowledgement; never replay."
@@ -536,7 +563,7 @@ fn verified(j: &Value, rows: &[Value]) -> Result<Vec<String>> {
         j["claim"]["id"].as_str().unwrap()
     );
     let command_text = format!(
-        "<command-name>/claudex-sync</command-name>\n            <command-message>claudex-sync</command-message>\n            <command-args>{args}</command-args>"
+        "<command-name>/{name}</command-name>\n            <command-message>{name}</command-message>\n            <command-args>{args}</command-args>"
     );
     let mut expected: Vec<_> = j["content"]
         .as_array()
@@ -578,10 +605,10 @@ fn verified(j: &Value, rows: &[Value]) -> Result<Vec<String>> {
     let out = stdout[0];
     id(out, "uuid")?;
     ensure!(
-        out["commandRun"] == json!({"command":"claudex-sync","args":args,"plugin":j["pluginName"]})
+        out["commandRun"] == json!({"command":name,"args":args,"plugin":j["pluginName"]})
             && out["content"]
                 == format!(
-                    "<local-command-stdout>{}: CLAUDEX_SYNC_APPLIED {}</local-command-stdout>",
+                    "<local-command-stdout>{}: {marker} {}</local-command-stdout>",
                     j["pluginName"].as_str().unwrap(),
                     j["opId"].as_str().unwrap()
                 ),

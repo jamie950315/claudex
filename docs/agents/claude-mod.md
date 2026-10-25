@@ -142,3 +142,16 @@ Unverifiable/stale action locks remain protected. Unsafe/malformed storage fails
 closed. Expose typed counts and capacity states through doctor/app diagnostics;
 JOURNAL_CAPACITY_EXHAUSTED refuses a new record and never authorizes dispatch
 or replay. A receipt-storage failure after dispatch remains uncertain.
+
+## Native Local bootstrap
+
+The non-immediate `claudex-bootstrap` command registers during native
+`session.start`, alongside `claudex-sync`. It always consumes success/failure
+locally and never calls `next`, the model, or `session.append`. Validate the two
+UUID envelope, own actual session ID/cwd and lifecycle before the fixed staged
+`local-sync bootstrap` helper. The durable start claim must already exist and
+name the returned native scratch cwd. Return only the fixed readiness marker;
+the coordinator still requires its exact native command graph and registry,
+project relocation and later packet ACK. A helper response or command return is
+not synchronization completion. Do not create a same-name prompt skill or
+advertise this command through the sessionless catalogue.

@@ -274,22 +274,37 @@ or logging `started` does not prove the running renderer loaded them. Preserve
 the existing adapter selection, native code and failure containment. There is no
 new vendor anchor or permission to borrow an unrelated native client.
 
-The owner-wake bootstrap embeds the independent Local adoption poller, using
-only its structurally proved, attached user-config stdio lookup. Its transport
-and server checks are the same as owner wake; no native Local session is borrowed
-before adoption. Poll `local-adoption-manifest.json`; native list/read/preview
-proves one stopped opaque resume handle by exact cwd, seed UUID and SHA-256 of
-JSON-serialized native content. This digest is an integrity proof, not a content
-log. Require complete native preview and a unique seed-only dialogue. Claim once
-before native resume, recheck manifest/composer/preview, then persist the returned,
-refused or unknown outcome. Neither resume nor a native registry row is the Mod
-adoption ACK. A separate at-most-once activation claim authorizes native
-`warmSession` only for the exact cold Local mapping, unchanged activity, no draft,
-held input, pending work, background work or busy/unknown shells. Recheck before
-activation; unknown calls remain consumed after unload/restart. Never send model
-input, use `confirmImportedSessionResume`, substitute a deep link or retry a
-native call. Native trust, policy and configured routing remain authoritative.
-The existing Local consumer still requires the live command and exact ACK below.
+The owner-wake bootstrap independently starts the native Local creation poller
+with the same structurally proven attached user-config stdio lookup. Keep its
+try/catch independent so an unavailable creation API cannot disable owner wake.
+Poll only `local-start-manifest.json`. Each prewarm/start/changeCwd invocation
+requires a durable one-use claim through that exact client. Do not borrow a
+Local session to create another. Keep the same manifest entry after claim for
+its final exact check, without allowing a second claim. Refused/unknown calls
+remain consumed across renderer unload and process restart.
+
+Use normal no-input `prewarmFolderless({cwd:"",useWorktree:false})`, never
+`prewarmLocal` spares or an empty message. Its returned Local ID and scratch cwd
+are authority for one `getSupportedCommands({sessionId})` query. Require a unique
+live `claudex-bootstrap` entry before and after start claim. Start the same
+prewarm in its returned scratch cwd with only the fixed bootstrap command, no
+packet or model input. Do not pass the target cwd to claim a scratch prewarm:
+native claim keeps the existing query's cwd. Require actual bootstrap receipt,
+exact native registry mapping and idle/shell/draft checks before a separately
+claimed normal `changeCwd(localId,target,false)`. Keep native trust/policy and
+configured provider/account/model authoritative. No packet is exposed until the
+coordinator proves target cwd/identity and complete transcript relocation.
+
+Content-free `[Claudex local start]` diagnostics distinguish API availability,
+prewarm/start/move claimed and returned/unknown/rejected/needs_trust outcomes,
+bootstrap catalogue ready/missing/duplicate/unavailable, registry mismatch and
+native idle/shell waits. Private local-start journals contain the exact native
+receipts and original/migrated target evidence. Its content-free `status` reaches
+`target-migrated` only after native target proofs and `packet-acknowledged` only
+after exact persisted command/append verification; neither grants authority.
+Diagnostics never log input,
+paths, IDs or arbitrary native errors. Mapping and migration are intermediate;
+the existing Local consumer still requires the live command and exact ACK below.
 
 The Local consumer polls only its bounded operation manifest and native identity,
 idle/activity, draft, registry and busy-shell metadata. Before claiming, require

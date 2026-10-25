@@ -127,6 +127,7 @@ export function register(on, options = {}) {
     const ticket = ++lifecycle;
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') !== '1') {
       await localization.load(api($, options));
+      await $.command.register({ name: 'claudex-bootstrap', description: 'Confirm native Claudex ownership without model execution or history input.', immediate: false });
       await $.command.register({ name: 'claudex-sync', description: 'Apply an exact Claudex history packet without model execution.', immediate: false });
       await $.command.register({ name: 'claudex', description: localization.t('Open the Claudex control pane. /claudex receipt UUID inspects an action.'), immediate: true });
       await controller.bind(api($, options));
@@ -215,6 +216,24 @@ export function register(on, options = {}) {
   // Return locally without next(): never execute its model prompt as a command.
   // Non-immediate local commands preserve the native ordered image input.
   // Always consume this command, including failures: never call next().
+  on('command.run', { command: 'claudex-bootstrap' }, async ($, e) => {
+    const ticket = lifecycle;
+    try {
+      if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker access is disabled.');
+      const words = (e.args ?? '').trim().split(/\s+/u);
+      if (words.length !== 2 || !words.every(word => UUID.test(word)) || !validPath(options.stateRoot) || !validPath($.plugin.root)) throw new Error('Invalid native bootstrap envelope.');
+      const context = { sessionId: await $.session.id(), cwd: await $.session.cwd() };
+      if (ticket !== lifecycle) throw new Error('Native bootstrap lifecycle changed.');
+      const reply = await $.process.run([`${$.plugin.root}/runtime/bin/claudex`, 'local-sync', 'bootstrap', '--root', options.stateRoot], {
+        stdin: JSON.stringify({ opId: words[0], claimId: words[1], ...context, pluginName: $.plugin.name }), timeoutMs: 20000,
+      });
+      if (reply.exitCode !== 0 || reply.isStdoutTruncated === true || typeof reply.stdout !== 'string' || reply.stdout.length > 8192) throw new Error('Native bootstrap receipt unavailable.');
+      const decoded = JSON.parse(reply.stdout);
+      if (decoded.ok !== true || decoded.result?.recorded !== true || ticket !== lifecycle
+        || await $.session.id() !== context.sessionId || await $.session.cwd() !== context.cwd) throw new Error('Native bootstrap context changed.');
+      return { text: `CLAUDEX_LOCAL_READY ${words[0]}` };
+    } catch { return { text: 'CLAUDEX_LOCAL_BLOCKED: Preserve the receipt; do not resend this command.' }; }
+  });
   on('command.run', { command: 'claudex-sync' }, async ($, e) => {
     const ticket = lifecycle;
     try {

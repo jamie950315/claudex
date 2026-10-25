@@ -5,7 +5,7 @@ const OP = '11111111-1111-4111-8111-111111111111';
 const CLAIM = '22222222-2222-4222-8222-222222222222';
 const SESSION = '33333333-3333-4333-8333-333333333333';
 const TEXT = '44444444-4444-4444-8444-444444444444';
-function fixture({ kind = 'append', worker = false, fail = null, size = 70000 } = {}) {
+function fixture({ kind = 'append', worker = false, fail = null, size = 70000, name = 'claudex-sync' } = {}) {
   const hooks = [], calls = [], appends = [];
   register((...args) => hooks.push(args), { stateRoot: '/fixture/state' });
   let session = SESSION;
@@ -25,7 +25,7 @@ function fixture({ kind = 'append', worker = false, fail = null, size = 70000 } 
     for (let index = 0; index < reply.stdout.length; index += 65536) yield { stream: 'stdout', text: reply.stdout.slice(index, index + 65536) };
     return { code: reply.exitCode, signal: null };
   };
-  const command = hooks.find(([name, filter]) => name === 'command.run' && filter.command === 'claudex-sync')[2];
+  const command = hooks.find(([event, filter]) => event === 'command.run' && filter.command === name)[2];
   return { command: args => command($, { args }), $, calls, appends, content };
 }
 test('Local Mod appends complete text once and acknowledges the minted native UUID', async () => {
@@ -60,4 +60,22 @@ test('streaming receive retains text beyond native process.run 4 MiB stdout boun
   const f = fixture({ size: 5 * 1024 * 1024 });
   assert.equal((await f.command(`${OP} ${CLAIM}`)).text, `CLAUDEX_SYNC_APPLIED ${OP}`);
   assert.equal(f.appends[0].message.content[0].text, f.content[0].text);
+});
+
+test('native bootstrap records only actual context without appending text or invoking a model', async () => {
+  const f = fixture({ name: 'claudex-bootstrap' });
+  assert.deepEqual(await f.command(`${OP} ${CLAIM}`), { text: `CLAUDEX_LOCAL_READY ${OP}` });
+  assert.equal(f.appends.length, 0); assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.calls[0], { argv: ['/fixture/plugin/runtime/bin/claudex', 'local-sync', 'bootstrap', '--root', '/fixture/state'],
+    request: { opId: OP, claimId: CLAIM, sessionId: SESSION, cwd: '/fixture/project', pluginName: 'claudex' } });
+});
+test('native bootstrap failures and malformed inputs are always consumed locally', async () => {
+  for (const option of [{ fail: 'bootstrap' }, { fail: 'lifecycle' }, { worker: true }]) {
+    const f=fixture({ ...option, name:'claudex-bootstrap' });
+    assert.match((await f.command(`${OP} ${CLAIM}`)).text,/^CLAUDEX_LOCAL_BLOCKED:/);
+    assert.equal(f.appends.length,0);
+  }
+  const f=fixture({ name:'claudex-bootstrap' });
+  for(const args of ['',OP,`${OP} ${CLAIM} extra`])assert.match((await f.command(args)).text,/^CLAUDEX_LOCAL_BLOCKED:/);
+  assert.equal(f.calls.length,0);
 });

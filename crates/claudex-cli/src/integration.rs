@@ -254,6 +254,8 @@ impl Integration for NativeIntegration {
                 "mod_target_verify",
                 "desktop_wake_verify",
                 "desktop_owner_wake",
+                "local_start_claim",
+                "local_start_receipt",
                 "local_activation_claim",
                 "local_activation_receipt",
                 "local_adoption_claim",
@@ -273,6 +275,21 @@ impl Integration for NativeIntegration {
     }
     async fn dispatch(&self, method: &str, peer: Provider, params: Value) -> Result<Value> {
         match method {
+            "local_start_claim" | "local_start_receipt" => {
+                ensure!(
+                    peer == Provider::Claude && !self.closed.load(Ordering::Acquire),
+                    "Native Local creation requires the active Claude peer."
+                );
+                if method == "local_start_claim" {
+                    claudex_sync::local_start::claim(
+                        &self.root,
+                        &self.homes.desktop_registry,
+                        &params,
+                    )
+                } else {
+                    claudex_sync::local_start::receipt(&self.root, &params)
+                }
+            }
             "local_activation_claim" | "local_activation_receipt" => {
                 ensure!(
                     peer == Provider::Claude && !self.closed.load(Ordering::SeqCst),
@@ -691,6 +708,120 @@ mod tests {
             )
             .await?["recorded"],
             true
+        );
+        // Fresh native Local creation uses the same actual socket, never a
+        // model invocation or another Local session's client.
+        let fresh_op = uuid::Uuid::new_v4().to_string();
+        let fresh_session = uuid::Uuid::new_v4().to_string();
+        let fresh_owner = json!({"version":1,"sessionId":fresh_session,"conversationId":conversation,"claudeHome":root.join("claude"),"cwd":cwd,"transport":"local-mod","localPhase":"native-start","pending":null,"remoteId":null,"reset":null,"lastAppend":null,"displayTitle":"Fixture"});
+        let mut fresh_record = claudex_sync::desktop::Record::source(
+            claudex_sync::bridge::Side::Claude,
+            &root.join("absent.jsonl"),
+            &fresh_session,
+        );
+        fresh_record.conversation_id = conversation.clone();
+        fresh_record.cwd = cwd.to_string_lossy().into();
+        fresh_record.managed = true;
+        fresh_record.kind = "owner".into();
+        let fresh_pending = claudex_sync::desktop::Pending {
+            phase: claudex_sync::desktop::Phase::Prepared,
+            operation_id: fresh_op.clone(),
+            record: fresh_record.clone(),
+            source_id: uuid::Uuid::new_v4().to_string(),
+            target_id: None,
+            archive_original_id: None,
+            reuse: false,
+            common: claudex_sync::history::Common {
+                meta: Default::default(),
+                messages: vec![],
+                extra: Default::default(),
+            },
+            checkpoint: Default::default(),
+            previous: Default::default(),
+            extra: Default::default(),
+        };
+        claudex_core::storage::write_json(
+            root.join("owners").join(format!(
+                "{}.json",
+                claudex_sync::history::digest_bytes(conversation.as_bytes())
+            )),
+            &fresh_owner,
+        )?;
+        claudex_core::storage::write_json(
+            root.join("desktop-state.json"),
+            &json!({"version":2,"pending":fresh_pending}),
+        )?;
+        assert!(
+            claudex_sync::local_start::prepare(
+                &root,
+                &root.join("registry"),
+                &fresh_owner,
+                &fresh_record,
+                &fresh_pending
+            )?
+            .is_none()
+        );
+        let before = claudex_core::storage::read_json(root.join("local-start-manifest.json"))?;
+        let p = json!({"opId":fresh_op,"stage":"prewarm","proof":{}});
+        assert_eq!(
+            transport::validate_tool("claudex_local_start_claim", &p, true)?,
+            "local_start_claim"
+        );
+        assert!(transport::validate_tool("claudex_local_start_claim", &p, false).is_err());
+        assert!(
+            transport::call(
+                &b.root,
+                Provider::Codex,
+                b.controller_token(),
+                "local_start_claim",
+                p.clone()
+            )
+            .await
+            .is_err()
+        );
+        let c = transport::call(
+            &b.root,
+            Provider::Claude,
+            b.controller_token(),
+            "local_start_claim",
+            p.clone(),
+        )
+        .await?;
+        assert_eq!(c["ready"], true);
+        assert_eq!(
+            before,
+            claudex_core::storage::read_json(root.join("local-start-manifest.json"))?
+        );
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_start_claim",
+                p
+            )
+            .await?["ready"],
+            false
+        );
+        let receipt = json!({"opId":fresh_op,"stage":"prewarm","claimId":c["claimId"],"outcome":"unknown","result":null});
+        assert_eq!(
+            transport::validate_tool("claudex_local_start_receipt", &receipt, true)?,
+            "local_start_receipt"
+        );
+        assert_eq!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_start_receipt",
+                receipt
+            )
+            .await?["recorded"],
+            true
+        );
+        assert_eq!(
+            claudex_core::storage::read_json(root.join("local-start-manifest.json"))?["entries"],
+            json!([])
         );
         b.close().await?;
         server.close().await?;

@@ -595,7 +595,7 @@ async fn local_sync_stdio(raw: &[String]) -> Result<()> {
     let a = Args::parse(raw, &["root"], &[])?;
     anyhow::ensure!(
         a.positionals.len() == 1,
-        "Expected local-sync receive|applied."
+        "Expected local-sync receive|applied|bootstrap."
     );
     let root = a.root()?;
     let mut input = Vec::new();
@@ -614,7 +614,8 @@ async fn local_sync_stdio(raw: &[String]) -> Result<()> {
             claudex_sync::local_sync::receive(&root, &homes.desktop_registry, &params)?
         }
         "applied" => claudex_sync::local_sync::applied(&root, &params)?,
-        _ => bail!("Expected local-sync receive|applied."),
+        "bootstrap" => claudex_sync::local_start::bootstrap(&root, &params)?,
+        _ => bail!("Expected local-sync receive|applied|bootstrap."),
     };
     let output = serde_json::to_string(&json!({"ok":true,"result":result}))?;
     anyhow::ensure!(

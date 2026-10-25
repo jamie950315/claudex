@@ -18,7 +18,7 @@ const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 3, bodyColumns: 100,
     scroll: { offset: 0, bodyRows: 3 }, view: {} },
 } as const
-function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en', settings?: (event: any) => any, store: Record<string, unknown> = {}) {
+function stubs(on: any, worker = false, bridge?: (request: any, event: any) => any, language = 'en', settings?: (event: any) => any, store: Record<string, unknown> = {}, registration?: (name: string) => void) {
   const saved: Record<string, unknown> = { ttlPreference: null, ttlLastChoice: null }
   const environment: Record<string, string | undefined> = worker ? { CLAUDEX_COLLABORATION_WORKER: '1' } : {}
   on('env.get', (_: any, e: any) => ({ value: environment[e.name] }))
@@ -35,7 +35,7 @@ function stubs(on: any, worker = false, bridge?: (request: any, event: any) => a
   on('session.usage', () => ({ value: { context: { percent: 42 }, rateLimits: [] } }))
   on('settings.read', (_: any, event: any) => ({ value: settings ? settings(event) : { crossSessionInbound: 'hold' } }))
   on('tool.list', () => ({ value: [] }))
-  on('command.register', () => ({ value: undefined }))
+  on('command.register', (_: any, event: any) => { registration?.(event.name); return { value: undefined } })
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('session.start', () => ({ cwd: '/fixture' }))
   on('classic.SessionStart', () => ({}))
@@ -623,4 +623,42 @@ test('Local adoption never appends seed history and invalid commands stay local'
   const invalid = await $.command.run({ command: 'claudex-sync', args: 'invalid' })
   expect(invalid.text.startsWith('CLAUDEX_SYNC_BLOCKED:')).toBe(true)
   expect(seen.length).toBe(count)
+})
+
+
+test('native bootstrap registers on startup and records context without a packet or model turn', async ($, on) => {
+  const op = '22222222-2222-4222-8222-222222222222', claim = '33333333-3333-4333-8333-333333333333'
+  const registered: string[] = [], seen: any[] = []
+  stubs(on, false, (request, event) => {
+    if (event.argv[1] !== 'local-sync') return {}
+    seen.push({ action: event.argv[2], request })
+    return { recorded: true }
+  }, 'en', undefined, {}, name => registered.push(name))
+  on('session.append', () => { throw new Error('Bootstrap cannot append a packet') })
+  await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
+  expect(registered.filter(name => name === 'claudex-bootstrap').length).toBe(1)
+  const result = await $.command.run({ command: 'claudex-bootstrap', args: `${op} ${claim}` })
+  expect(result.text).toBe(`CLAUDEX_LOCAL_READY ${op}`)
+  expect(seen.length).toBe(1)
+  expect(seen[0].action).toBe('bootstrap')
+  expect(seen[0].request.opId).toBe(op)
+  expect(seen[0].request.claimId).toBe(claim)
+  expect(seen[0].request.sessionId).toBe(ID)
+  expect(seen[0].request.cwd).toBe('/fixture')
+})
+
+test('native bootstrap refuses malformed envelopes and helper failures locally', async ($, on) => {
+  const op = '22222222-2222-4222-8222-222222222222', claim = '33333333-3333-4333-8333-333333333333'
+  let helperCalls = 0
+  stubs(on, false, (_request, event) => {
+    if (event.argv[1] === 'local-sync') { helperCalls++; throw new Error('Preserved uncertainty') }
+    return {}
+  })
+  on('session.append', () => { throw new Error('Bootstrap cannot append a packet') })
+  const malformed = await $.command.run({ command: 'claudex-bootstrap', args: 'invalid' })
+  expect(malformed.text.startsWith('CLAUDEX_LOCAL_BLOCKED:')).toBe(true)
+  expect(helperCalls).toBe(0)
+  const failed = await $.command.run({ command: 'claudex-bootstrap', args: `${op} ${claim}` })
+  expect(failed.text.startsWith('CLAUDEX_LOCAL_BLOCKED:')).toBe(true)
+  expect(helperCalls).toBe(1)
 })

@@ -1643,10 +1643,15 @@ impl DesktopBridge {
             let resolved = adapter.resolve_applied(&p.record, &p).await?;
             ensure!(
                 resolved.native_id == p.record.native_id
+                    || p.record.side == Side::Claude
+                        && !p.reuse
+                        && crate::local_start::verify_resolution(
+                            &self.root, &p.record, &resolved, &p
+                        )?
                     || p.reuse
                         && p.record.side == Side::Claude
                         && p.record.extra.get("contextReset") == Some(&json!(true)),
-                "Only a verified native context reset may adopt a different reusable identity."
+                "Only a journal-proven native Local creation or context reset may change a target identity."
             );
             if serde_json::to_value(&resolved)? != serde_json::to_value(&p.record)? {
                 p.record = resolved;

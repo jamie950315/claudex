@@ -1211,24 +1211,24 @@ only the fixed no-query command, never an ordinary model prompt. The Mod consume
 the claim before returning packet text and uses the native append API without
 model execution. Long history does not pass through shell-command output.
 
-The first native SDK seed is handed to Desktop through its normal CLI resume
-picker, preserving the existing transcript and configured account/provider.
-The renderer matches a unique native list handle using cwd and the exact saved
-seed, reads the native resume preview, and consumes a durable one-use claim
-before native resume. It never guesses a handle, replays `--desktop` or opens
-its deep link directly. Native trust, liveness and ownership checks remain in
-force. Afterward the SDK must not take over that Local writer.
+New Local handoffs use Desktop's normal no-input folderless prewarm, not an
+SDK seed or CLI resume import. The exact hidden Local query must advertise the
+fixed Mod bootstrap command before Claudex claims that same prewarm. Bootstrap
+records actual native ownership without appending history or running a model.
+Claudex then uses normal native folder movement with trust acceptance disabled;
+a native trust request remains visible and waits for the normal user action.
+The full history packet is withheld until the exact Local/CLI identity, target
+project and relocated transcript are proven.
 
-A cold adopted Local session receives a separately claimed, no-input native
-activation only while its exact registry/session identity is idle, with no
-draft, held input or background work. Its live Mod command must then acknowledge
-the adoption without resending seed text or images. Native mapping and returned
-resume/activation calls are intermediate evidence, not completion.
-Owner state retains `transport: "local-mod"` and `localPhase` as `seed`, `seeded`,
-`handoff-intent`, `handoff-sent` or `adopted`. Unknown resume, activation, claim,
-receive or apply outcomes remain pending and are never resent. Existing
-`handoff-intent` recovery reuses the saved exact seed without clearing pending
-state or changing authentication.
+Every native prewarm, start and folder move has a durable one-use claim and
+receipt in `local-start`. Unknown actions remain consumed across restart.
+Exact independent native ownership/relocation proofs may reconcile an unknown
+start or move without resending it. A prewarm whose identity was never returned
+cannot be recreated automatically. A completed legacy SDK seed remains unchanged
+with its old owner and pending evidence in the migration journal; it is never
+replayed or passed to an import API that excludes SDK sessions. Only the normal
+coordinator resolves the replacement target after the packet's actual native
+ACK. Pending work is never cleared to regain availability or change routing.
 
 A returned send or dispatch receipt is not a native ACK. Promotion requires the
 applied receipt and exact persisted native command, UUID, content and ordered
