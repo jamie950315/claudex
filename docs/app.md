@@ -67,11 +67,12 @@ any required normal restart. Missing native capabilities or unconfirmed
 operations remain pending. Existing Remote Control owners retain their saved
 transport and identity; changing the default does not migrate them.
 
-Local follows **Claude Desktop's deployment profile**, not the ordinary CLI's
-proxy settings. Desktop's first-party profile supplies the official API endpoint
-and its launch environment takes precedence over CLI settings. A proxy URL in
-Claude Code settings therefore does not establish that a Local Desktop reply
-will use that proxy. Native session creation has no per-session provider override.
+With stock, unmodified Desktop and CLI launchers, Local follows **Claude Desktop's
+deployment profile**. The first-party launch environment supplies the official
+API endpoint and takes precedence over CLI settings. Installed launcher
+customizations can change that environment; check the effective launch path and
+configuration before identifying the route. CLI settings alone do not establish
+the effective route. Native session creation has no per-session provider override.
 
 Desktop's native third-party **Gateway** profile supports an Anthropic-compatible
 endpoint. Where native policy permits it, its setup is under **Developer →
