@@ -82,3 +82,9 @@ while preserving its artifacts. A foreign update, missing original or uncertain
 placement refuses recovery and leaves the pending journal intact. Do not delete
 the journal, replace a preserved bundle, or manually edit native history to
 force it through; retain the reported paths for diagnosis.
+
+If status reports `prepared`, the signed candidate has not been exchanged.
+Run the explicit `install` command again to publish that same verified candidate;
+it does not copy or sign another app. A `publishing` or `restoring` status must
+first go through `recover`, which determines the exact outcome without another
+exchange.

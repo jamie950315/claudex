@@ -313,8 +313,12 @@ flush the candidate before recording swap authority.
 Each generation keeps its private journal and complete preserved bundle. Record
 the authoritative Mod version as its renderer recipe; a different recipe requires
 explicit restore then install, never automatic re-signing or current readiness.
+Bundle journal reads and exact-private atomic updates share their 32 MiB bound;
+the generic private-state writer's smaller bound does not apply to this inventory.
 `renamex_np(RENAME_SWAP)` exchanges the complete app and candidate after durable
 intent. Recovery classifies exact object placement; it never replays a swap.
+An explicit install may publish the same current-recipe Prepared candidate after
+rechecking both complete inventories and all fences, before its first swap intent.
 Only the exchanged root directory's expected ctime change is accounted for during
 that pending classification; all child identities, inodes, modes, links and other
 nanosecond fields stay exact. Foreign changes or uncertain placement preserve both

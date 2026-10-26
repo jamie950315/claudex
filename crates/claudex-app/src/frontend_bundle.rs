@@ -255,17 +255,26 @@ fn load(root: &Path) -> Result<Option<(Journal, storage::StableFile)>> {
 }
 fn save(journal: &Journal, expected: &mut storage::StableFile) -> Result<()> {
     let path = journal_path(&journal.root, &journal.generation)?;
-    let current = storage::read_stable_with_limit(&path, LIMIT)?;
+    let current = storage::read_stable_with_limit(&path, LIMIT)
+        .with_context(|| format!("Read renderer bundle journal {}", path.display()))?;
+    ensure!(
+        current.identity.uid == storage::uid().to_string()
+            && current.identity.nlink == "1"
+            && current.identity.mode.parse::<u32>()? & 0o077 == 0,
+        "Renderer bundle journal must be owned, private and single-linked: {}",
+        path.display()
+    );
     ensure!(
         current.identity == expected.identity && current.bytes == expected.bytes,
         "Renderer bundle journal changed; no native operation was repeated."
     );
-    let value = serde_json::to_value(journal)?;
+    let bytes = serde_json::to_vec(journal)?;
     ensure!(
-        serde_json::to_vec(&value)?.len() <= LIMIT,
+        bytes.len() <= LIMIT,
         "Renderer bundle journal exceeds its bound."
     );
-    platform::write_json(&path, &value)?;
+    storage::atomic_write(&path, &bytes)
+        .with_context(|| format!("Save renderer bundle journal {}", path.display()))?;
     *expected = storage::read_stable_with_limit(&path, LIMIT)?;
     Ok(())
 }
@@ -752,6 +761,10 @@ pub async fn run(options: &platform::Options, root: &Path, runner: &dyn Runner) 
             installed(root, &home)?;
             return Ok(result(&journal));
         }
+        if journal.phase == Phase::Prepared {
+            publish_prepared(&mut journal, &mut snapshot, runner, &fence).await?;
+            return Ok(result(&journal));
+        }
         ensure!(
             matches!(journal.phase, Phase::Restored | Phase::Abandoned),
             "Previous bundle installation is unfinished. Run renderer-bundle recover first."
@@ -964,21 +977,39 @@ async fn install(
     journal.patched = Some(patched);
     journal.phase = Phase::Prepared;
     save(&journal, &mut expected)?;
-    fence.closed(app, runner).await?;
-    verify_tree(app, &journal.original, false)?;
-    verify_tree(&slot, journal.patched.as_ref().unwrap(), false)?;
+    publish_prepared(&mut journal, &mut expected, runner, fence).await?;
+    Ok(result(&journal))
+}
+
+async fn publish_prepared(
+    journal: &mut Journal,
+    expected: &mut storage::StableFile,
+    runner: &dyn Runner,
+    fence: &Fence,
+) -> Result<()> {
+    ensure!(
+        journal.phase == Phase::Prepared && journal.recipe == recipe(),
+        "Only a current, proven-unswapped prepared bundle may be published."
+    );
+    let patched = journal
+        .patched
+        .as_ref()
+        .context("Prepared bundle proof is absent.")?;
+    fence.closed(&journal.app, runner).await?;
+    verify_tree(&journal.app, &journal.original, false)?;
+    verify_tree(&journal.slot, patched, false)?;
     journal.phase = Phase::Publishing;
-    save(&journal, &mut expected)?;
-    fence.closed(app, runner).await?;
-    verify_tree(app, &journal.original, false)?;
-    verify_tree(&slot, journal.patched.as_ref().unwrap(), false)?;
-    exchange(app, &slot)?;
-    recover(&mut journal, &mut expected)?;
+    save(journal, expected)?;
+    fence.closed(&journal.app, runner).await?;
+    verify_tree(&journal.app, &journal.original, false)?;
+    verify_tree(&journal.slot, journal.patched.as_ref().unwrap(), false)?;
+    exchange(&journal.app, &journal.slot)?;
+    recover(journal, expected)?;
     ensure!(
         journal.phase == Phase::Installed,
         "Bundle publication was not confirmed."
     );
-    Ok(result(&journal))
+    Ok(())
 }
 
 fn signed_changes(before: &Tree, after: &Tree) -> Result<()> {
@@ -1118,6 +1149,75 @@ mod tests {
             args.extend(["--allow-bundle-modification".into(), "yes".into()]);
         }
         platform::Options::parse(&args).unwrap()
+    }
+
+    #[test]
+    fn large_prepared_journal_keeps_its_own_bound_and_exact_private_write_fence() -> Result<()> {
+        let f = Fixture::new()?;
+        let (mut journal, mut expected) = f.journal(Phase::Prepared)?;
+        journal.summary["fixture"] = json!("x".repeat(2 * 1024 * 1024));
+        save(&journal, &mut expected)?;
+        assert!(expected.bytes.len() > 2 * 1024 * 1024);
+        journal.phase = Phase::Publishing;
+        save(&journal, &mut expected)?;
+        let path = journal_path(&f.root, &journal.generation)?;
+        assert_eq!(load(&f.root)?.unwrap().0.phase, Phase::Publishing);
+        platform::safe_bytes(&path, LIMIT, true, false)?;
+        let unchanged_identity = expected.identity.clone();
+        let unchanged_bytes = expected.bytes.clone();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644))?;
+        assert!(save(&journal, &mut expected).is_err());
+        assert_eq!(expected.identity, unchanged_identity);
+        assert_eq!(fs::read(&path)?, unchanged_bytes);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "macos")]
+    async fn explicit_install_publishes_prepared_once_but_never_replays_a_swap_intent() -> Result<()>
+    {
+        let f = Fixture::new()?;
+        let (journal, _) = f.journal(Phase::Prepared)?;
+        let result = run(
+            &options("install", &f, true),
+            &f.root,
+            &Processes { output: "" },
+        )
+        .await?;
+        assert_eq!(result["phase"], "installed");
+        assert_eq!(result["generation"], journal.generation);
+        assert_eq!(
+            fs::read(journal.slot.join("retained"))?,
+            b"complete original"
+        );
+        let installed = inventory(&f.app, false)?;
+        run(
+            &options("install", &f, true),
+            &f.root,
+            &Processes { output: "" },
+        )
+        .await?;
+        verify_tree(&f.app, &installed, false)?;
+
+        let f = Fixture::new()?;
+        let (journal, _) = f.journal(Phase::Publishing)?;
+        let original = inventory(&f.app, false)?;
+        let before = fs::read(journal_path(&f.root, &journal.generation)?)?;
+        assert!(
+            run(
+                &options("install", &f, true),
+                &f.root,
+                &Processes { output: "" }
+            )
+            .await
+            .is_err()
+        );
+        verify_tree(&f.app, &original, false)?;
+        assert_eq!(
+            fs::read(journal_path(&f.root, &journal.generation)?)?,
+            before
+        );
+        Ok(())
     }
 
     #[test]
