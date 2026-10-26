@@ -326,6 +326,16 @@ their fixed phase, including the final session recheck. Report no native values,
 errors, paths, IDs or input; an unchanged reason logs only once. These diagnostics
 add no native calls or retries and do not relax pre-claim or post-claim guards.
 
+An input-free native warm leaves `cliBootPending:true` until the first turn's
+`system/init`, even after the SDK's control initialization and Mod registration
+finish. Local sync therefore defers only that exact boolean to the unique live
+`claudex-sync` catalogue proof above; cold queries disable hooks and cannot
+register that command. The native session/activity recheck after the catalogue
+and each complete inspection before and after claim remain mandatory. Missing,
+duplicate, failed or revoked commands still refuse, as do every other activity,
+identity, draft and shell guard. Malformed truthy boot markers still refuse.
+The Local start/move guards do not use this substitute initialization proof.
+
 Dispatch only the fixed `/claudex-sync <operation UUID> <claim UUID>` envelope
 with its deterministic input UUID and ordered native image input. The loaded
 Mod's non-immediate handler consumes both success and failure without calling

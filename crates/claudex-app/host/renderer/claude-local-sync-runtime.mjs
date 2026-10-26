@@ -53,7 +53,12 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
     if (session.isRunning !== false) return 'waiting-native-running-state';
     if (session.turnRunning !== false) return 'waiting-native-turn-state';
     if (!Number.isSafeInteger(session.lastActivityAt)) return 'native-last-activity-unverified';
-    const pending = ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork',
+    // Native warmSession leaves this marker true until the first system/init
+    // turn frame, even after control initialization and Mod registration.
+    // Defer only that exact boolean to the live command proof in inspect();
+    // these activity checks alone never make the session dispatch-ready.
+    if (session.cliBootPending && session.cliBootPending !== true) return 'waiting-native-cliBootPending';
+    const pending = ['starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork',
       'remoteTarget', 'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId',
       'agentDispatched', 'lanyard', 'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt',
       'pendingLanyardConsent', 'pendingViolinBowPrompt', 'pendingRewind', 'isStopping'].find(key => session[key]);
@@ -91,6 +96,10 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
     if (!Array.isArray(commands)) return refused('native-command-catalogue-unavailable');
     const commandCount = commands.filter(command => command?.name === entry.command).length;
     if (commandCount !== 1) return refused(commandCount ? 'native-command-duplicate' : 'native-command-missing');
+    // The exact registered command proves the live CLI's control initialize
+    // completed. A cold catalogue disables hooks and cannot register it. This
+    // proof is required on every inspect, including both sides of the claim;
+    // cliBootPending alone is never accepted as initialization evidence.
     let current;
     try { current = await native.getSession(entry.localSessionId); }
     catch { return refused('waiting-native-session-recheck'); }

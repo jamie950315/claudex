@@ -17,7 +17,7 @@ function fixture(change = {}) {
     lastActivityAt: 100, isArchived: false, isRunning: false, turnRunning: false, ...change.session };
   const registry = { ...session, cliSessionId, ...change.registry };
   let reads = 0, manifestReads = 0, claimed = false;
-  const sends = [], claims = [], receipts = [], statuses = [];
+  const sends = [], claims = [], receipts = [], statuses = [], catalogues = [];
   const response = value => ({ structuredContent: value });
   const native = {
     readFileAtCwd: async (cwd, filename) => {
@@ -32,6 +32,7 @@ function fixture(change = {}) {
     },
     getSupportedCommands: async options => {
       assert.deepEqual(options, { sessionId: localSessionId });
+      catalogues.push({ claimed });
       if (change.commandError) throw new Error('Private command catalogue error');
       return (claimed ? change.commandsAfterClaim : change.commands) ?? [{ name: 'claudex-sync', description: 'Apply exact history' }];
     },
@@ -50,7 +51,7 @@ function fixture(change = {}) {
     now: () => 1000, setTimer: () => 1, clearTimer() {}, hasDraft: () => change.draft ?? false,
     onStatus: status => statuses.push(status), readManifest: async () => ({ contents: JSON.stringify({ version: 1,
       entries: change.entries ? change.entries(entry, ++manifestReads, claimed) : [entry] }) }) });
-  return { runtime, sends, claims, receipts, statuses };
+  return { runtime, sends, claims, receipts, statuses, catalogues };
 }
 async function run(f) { f.runtime.start(); await flush(); await f.runtime.poll(); f.runtime.stop(); }
 
@@ -67,6 +68,29 @@ test('local sync sends only the exact registered command and ordered native imag
 test('text-only local sync passes no native image argument', async () => {
   const f = fixture({ entry: { images: [] } }); await run(f);
   assert.equal(f.sends[0][2], undefined);
+});
+
+test('a native warm boot marker requires live control initialization before and after claiming', async () => {
+  const f = fixture({ session: { cliBootPending: true } }); await run(f);
+  assert.equal(f.claims.length, 1); assert.equal(f.sends.length, 1);
+  assert.deepEqual(f.catalogues, [{ claimed: false }, { claimed: false }, { claimed: true }]);
+  assert.equal(f.receipts[0].outcome, 'submitted');
+});
+
+for (const [name, change] of Object.entries({
+  missing: { commands: [] }, duplicate: { commands: [{ name: 'claudex-sync' }, { name: 'claudex-sync' }] },
+  unavailable: { commandError: true }, backgroundWork: { session: { hasBackgroundWork: true } },
+  malformedBootMarker: { session: { cliBootPending: 'true' } },
+})) test(`native warm boot cannot bypass ${name}`, async () => {
+  const f = fixture({ ...change, session: { cliBootPending: true, ...change.session } }); await run(f);
+  assert.equal(f.claims.length, 0); assert.equal(f.sends.length, 0);
+});
+
+test('a live command revoked after a warm-boot claim never becomes model input', async () => {
+  const f = fixture({ session: { cliBootPending: true }, commandsAfterClaim: [] }); await run(f);
+  assert.equal(f.claims.length, 1); assert.equal(f.sends.length, 0);
+  assert.equal(f.receipts[0].outcome, 'rejected');
+  assert.ok(f.statuses.includes('native-command-missing'));
 });
 
 for (const [name, change] of Object.entries({
