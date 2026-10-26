@@ -190,6 +190,56 @@ fn verify_installed_tree(app: &Path, expected: &Tree) -> Result<Tree> {
     verify_tree(app, &current, false)
 }
 
+/// A restored original has exhibited ctime-only drift on the exact resources
+/// changed in its locally signed counterpart. Authenticate those saved bytes;
+/// unrelated children and every other identity field remain exact.
+fn verify_restored_original(app: &Path, original: &Tree, patched: &Tree) -> Result<Tree> {
+    let mut current = inventory(app, false)?;
+    ensure!(
+        current.len() == original.len(),
+        "Restored bundle inventory changed."
+    );
+    for (path, node) in &mut current {
+        let before = original
+            .get(path)
+            .context("Restored bundle resource set changed.")?;
+        let mut identity = before.identity.clone();
+        if node.identity.ctime_ns != identity.ctime_ns {
+            identity.ctime_ns = node.identity.ctime_ns.clone();
+            ensure!(
+                node.identity == identity && node.link == before.link,
+                "Restored bundle object changed; all artifacts were preserved."
+            );
+            if !path.as_os_str().is_empty() {
+                let counterpart = patched
+                    .get(path)
+                    .context("Patched resource proof is absent.")?;
+                ensure!(
+                    before.link.is_none()
+                        && counterpart.link.is_none()
+                        && before.digest.is_some()
+                        && counterpart.digest.is_some()
+                        && before.digest != counterpart.digest,
+                    "Unchanged bundle resource metadata changed; all artifacts were preserved."
+                );
+                let bytes =
+                    storage::read_stable_with_limit(app.join(path), 2 * 1024 * 1024 * 1024)?;
+                ensure!(
+                    bytes.identity == node.identity
+                        && Some(storage::hash_bytes(&bytes.bytes)) == before.digest,
+                    "Restored bundle resource bytes changed; all artifacts were preserved."
+                );
+            }
+        }
+        ensure!(
+            node.identity == identity && node.link == before.link,
+            "Restored bundle changed; all artifacts were preserved."
+        );
+        node.digest = before.digest.clone();
+    }
+    verify_tree(app, &current, false)
+}
+
 fn copy_matches(original: &Tree, copy: &Tree) -> Result<()> {
     ensure!(
         original.len() == copy.len(),
@@ -765,7 +815,7 @@ pub async fn run(options: &platform::Options, root: &Path, runner: &dyn Runner) 
             "Bundle journal does not belong to this app and home."
         );
         if action == "recover" {
-            recover(&mut journal, &mut snapshot)?;
+            recover_offline(&mut journal, &mut snapshot, runner, &fence).await?;
             fence.closed(&app, runner).await?;
             return Ok(result(&journal));
         }
@@ -789,7 +839,7 @@ pub async fn run(options: &platform::Options, root: &Path, runner: &dyn Runner) 
                     save(&journal, &mut snapshot)?;
                 }
             }
-            recover(&mut journal, &mut snapshot)?;
+            recover_offline(&mut journal, &mut snapshot, runner, &fence).await?;
             if journal.phase == Phase::Prepared {
                 verify_tree(&app, &journal.original, false)?;
                 journal.phase = Phase::Abandoned;
@@ -811,7 +861,7 @@ pub async fn run(options: &platform::Options, root: &Path, runner: &dyn Runner) 
                 verify_tree(&app, journal.patched.as_ref().unwrap(), false)?;
                 verify_tree(&journal.slot, &journal.original, false)?;
                 exchange(&app, &journal.slot)?;
-                recover(&mut journal, &mut snapshot)?;
+                recover_offline(&mut journal, &mut snapshot, runner, &fence).await?;
             }
             return Ok(result(&journal));
         }
@@ -834,6 +884,43 @@ pub async fn run(options: &platform::Options, root: &Path, runner: &dyn Runner) 
         );
     }
     install(root, &home, &app, runner, &fence).await
+}
+
+async fn recover_offline(
+    journal: &mut Journal,
+    snapshot: &mut storage::StableFile,
+    runner: &dyn Runner,
+    fence: &Fence,
+) -> Result<()> {
+    if journal.phase != Phase::Restoring
+        || verify_tree(&journal.app, &journal.original, true).is_ok()
+        || journal
+            .patched
+            .as_ref()
+            .is_some_and(|patched| verify_tree(&journal.app, patched, true).is_ok())
+    {
+        return recover(journal, snapshot);
+    }
+    // This additional proof is only for a completed restore, never publication,
+    // installed recognition or an unswapped intent. No exchange is issued here.
+    let original = verify_restored_original(
+        &journal.app,
+        &journal.original,
+        journal
+            .patched
+            .as_ref()
+            .context("Patched proof is absent.")?,
+    )?;
+    let patched = verify_tree(&journal.slot, journal.patched.as_ref().unwrap(), true)?;
+    providers::verify(&journal.app, &providers::CLAUDE, runner).await?;
+    providers::verify(&journal.slot, &providers::CLAUDE, runner).await?;
+    fence.closed(&journal.app, runner).await?;
+    verify_tree(&journal.app, &original, false)?;
+    verify_tree(&journal.slot, &patched, false)?;
+    journal.original = original;
+    journal.patched = Some(patched);
+    journal.phase = Phase::Restored;
+    save(journal, snapshot)
 }
 
 fn recover(journal: &mut Journal, snapshot: &mut storage::StableFile) -> Result<()> {
@@ -1262,6 +1349,146 @@ mod tests {
         verify_installed_tree(&f.app, &expected)?;
         fs::set_permissions(f.app.join("retained"), fs::Permissions::from_mode(0o600))?;
         assert!(verify_installed_tree(&f.app, &expected).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn restored_metadata_revalidation_authenticates_only_saved_changed_resources() -> Result<()> {
+        let f = Fixture::new()?;
+        fs::set_permissions(f.app.join("retained"), fs::Permissions::from_mode(0o644))?;
+        let (journal, _) = f.journal(Phase::Restoring)?;
+        let path = f.app.join("retained");
+        fs::set_permissions(&path, fs::metadata(&path)?.permissions())?;
+        assert!(verify_tree(&f.app, &journal.original, true).is_err());
+        assert!(verify_installed_tree(&f.app, &journal.original).is_err());
+        let current =
+            verify_restored_original(&f.app, &journal.original, journal.patched.as_ref().unwrap())?;
+        verify_tree(&f.app, &current, false)?;
+        for mutation in ["unchanged", "bytes", "inode", "mode", "link", "mtime"] {
+            let f = Fixture::new()?;
+            fs::set_permissions(f.app.join("retained"), fs::Permissions::from_mode(0o644))?;
+            let (mut journal, _) = f.journal(Phase::Restoring)?;
+            if mutation == "unchanged" {
+                journal
+                    .patched
+                    .as_mut()
+                    .unwrap()
+                    .get_mut(Path::new("retained"))
+                    .unwrap()
+                    .digest = journal.original[Path::new("retained")].digest.clone();
+            }
+            let path = f.app.join("retained");
+            let modified = fs::metadata(&path)?.modified()?;
+            match mutation {
+                "unchanged" => fs::set_permissions(&path, fs::metadata(&path)?.permissions())?,
+                "bytes" => {
+                    fs::write(&path, b"foreign! original")?;
+                    fs::File::open(&path)?
+                        .set_times(fs::FileTimes::new().set_modified(modified))?;
+                }
+                "inode" => {
+                    let replacement = f.base.join("replacement");
+                    fs::copy(&path, &replacement)?;
+                    fs::File::open(&replacement)?
+                        .set_times(fs::FileTimes::new().set_modified(modified))?;
+                    fs::rename(replacement, &path)?;
+                }
+                "mode" => fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?,
+                "link" => fs::hard_link(&path, f.base.join("alias"))?,
+                "mtime" => fs::File::open(&path)?.set_times(
+                    fs::FileTimes::new().set_modified(modified + Duration::from_secs(1)),
+                )?,
+                _ => unreachable!(),
+            }
+            assert!(
+                verify_restored_original(
+                    &f.app,
+                    &journal.original,
+                    journal.patched.as_ref().unwrap(),
+                )
+                .is_err(),
+                "{mutation}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn offline_restore_metadata_recovery_requires_both_signatures_and_stable_trees()
+    -> Result<()> {
+        struct Signatures {
+            calls: std::sync::atomic::AtomicUsize,
+            refuse: bool,
+            change: bool,
+            resource: PathBuf,
+        }
+        #[async_trait]
+        impl Runner for Signatures {
+            async fn run(&self, spec: CommandSpec) -> Result<platform::CommandOutput> {
+                if spec.program == Path::new("/bin/ps") {
+                    return Ok(platform::CommandOutput::default());
+                }
+                ensure!(spec.program == Path::new("/usr/bin/codesign"));
+                let call = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if spec.args[0] == "--verify" {
+                    ensure!(&spec.args[..3] == ["--verify", "--deep", "--strict"]);
+                } else {
+                    ensure!(&spec.args[..2] == ["-d", "--verbose=2"]);
+                }
+                if call == 3 && self.change {
+                    fs::set_permissions(
+                        &self.resource,
+                        fs::metadata(&self.resource)?.permissions(),
+                    )?;
+                }
+                Ok(platform::CommandOutput {
+                    code: if call == 2 && self.refuse { 1 } else { 0 },
+                    stderr: "Identifier=com.anthropic.claudefordesktop\nSignature=adhoc\nTeamIdentifier=not set\n".into(),
+                    ..Default::default()
+                })
+            }
+        }
+        for (refuse, change) in [(false, false), (true, false), (false, true)] {
+            let f = Fixture::new()?;
+            let (mut journal, mut snapshot) = f.journal(Phase::Restoring)?;
+            for bundle in [&f.app, &journal.slot] {
+                platform::create_private(&bundle.join("Contents/MacOS"))?;
+                platform::create_private(&bundle.join("Contents/_CodeSignature"))?;
+                platform::publish(&bundle.join("Contents/Info.plist"), b"fixture", 0o644)?;
+                platform::publish(
+                    &bundle.join("Contents/_CodeSignature/CodeResources"),
+                    b"seal",
+                    0o644,
+                )?;
+            }
+            journal.original = inventory(&f.app, true)?;
+            journal.patched = Some(inventory(&journal.slot, true)?);
+            save(&journal, &mut snapshot)?;
+            let resource = f.app.join("retained");
+            fs::set_permissions(&resource, fs::metadata(&resource)?.permissions())?;
+            let original = inventory(&f.app, false)?;
+            let patched = inventory(&journal.slot, false)?;
+            let saved = snapshot.bytes.clone();
+            let runner = Signatures {
+                calls: std::sync::atomic::AtomicUsize::new(0),
+                refuse,
+                change,
+                resource,
+            };
+            let outcome = run(&options("recover", &f, true), &f.root, &runner).await;
+            if refuse || change {
+                assert!(outcome.is_err());
+                assert_eq!(
+                    fs::read(journal_path(&f.root, &journal.generation)?)?,
+                    saved
+                );
+            } else {
+                assert_eq!(outcome?["phase"], "restored");
+                verify_tree(&f.app, &original, false)?;
+                verify_tree(&journal.slot, &patched, false)?;
+                assert_eq!(runner.calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+            }
+        }
         Ok(())
     }
     #[async_trait]

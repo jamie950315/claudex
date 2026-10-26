@@ -326,10 +326,19 @@ the generic private-state writer's smaller bound does not apply to this inventor
 intent. Recovery classifies exact object placement; it never replays a swap.
 An explicit install may publish the same current-recipe Prepared candidate after
 rechecking both complete inventories and all fences, before its first swap intent.
-Only the exchanged root directory's expected ctime change is accounted for during
-that pending classification; all child identities, inodes, modes, links and other
-nanosecond fields stay exact. Foreign changes or uncertain placement preserve both
-bundles and the pending journal. An interrupted unpublished build may be marked
+Ordinary pending classification accounts only for the exchanged root directory's
+expected ctime change; all child identities remain exact. A completed restore has
+also exhibited ctime-only drift on the original resources whose saved bytes differ
+from the locally signed counterpart; the OS mechanism is not established. Only
+explicit stopped/closed offline restore or recovery may re-establish those exact
+original objects: both inventories must save distinct authenticated digests for
+the single-linked regular resource, its expected-direction bytes must match, and
+every non-ctime identity field must remain exact. Require strict deep publisher
+verification of both bundles, the unchanged lifecycle fences, and an exact stable
+recheck of both complete trees before saving the restored outcome. This never
+applies to publication, an unswapped intent, unchanged resources or ordinary
+installed recognition, and never issues another exchange. Foreign changes or
+uncertain placement preserve both bundles and the pending journal. An interrupted unpublished build may be marked
 abandoned only after its full original still matches; its artifacts are retained.
 Restored generations remain too. A replacement app cannot borrow an older journal.
 macOS can attach MACL metadata after exchange, changing ctime on the app root and
