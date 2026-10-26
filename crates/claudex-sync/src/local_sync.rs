@@ -546,6 +546,11 @@ fn one<'a>(rows: &'a [Value], uuid: &Value) -> Result<&'a Value> {
 fn verified(j: &Value, rows: &[Value]) -> Result<Vec<String>> {
     verified_command(j, rows, "claudex-sync", "CLAUDEX_SYNC_APPLIED")
 }
+pub(crate) fn command_text(name: &str, args: &str) -> String {
+    format!(
+        "<command-name>/{name}</command-name>\n            <command-message>{name}</command-message>\n            <command-args>{args}</command-args>"
+    )
+}
 pub(crate) fn verified_command(
     j: &Value,
     rows: &[Value],
@@ -562,9 +567,28 @@ pub(crate) fn verified_command(
         j["opId"].as_str().unwrap(),
         j["claim"]["id"].as_str().unwrap()
     );
-    let command_text = format!(
-        "<command-name>/{name}</command-name>\n            <command-message>{name}</command-message>\n            <command-args>{args}</command-args>"
+    let stdout: Vec<_> = rows
+        .iter()
+        .filter(|r| {
+            r["parentUuid"] == command["uuid"]
+                && r["type"] == "system"
+                && r["subtype"] == "local_command"
+        })
+        .collect();
+    ensure!(
+        stdout.len() == 1,
+        "Local command completion missing or duplicated."
     );
+    let out = stdout[0];
+    id(out, "uuid")?;
+    // Native hook-handled commands may withhold arguments in both persisted
+    // presentation rows. The durable handler receipt still binds the exact
+    // claim; require one consistent native envelope, never arbitrary arguments.
+    let displayed_args = out["commandRun"]["args"]
+        .as_str()
+        .filter(|s| s.is_empty() || *s == args)
+        .ok_or_else(|| anyhow::anyhow!("Native Local command arguments differ from receipt."))?;
+    let command_text = command_text(name, displayed_args);
     let mut expected: Vec<_> = j["content"]
         .as_array()
         .unwrap()
@@ -590,22 +614,9 @@ pub(crate) fn verified_command(
             && caveat["message"]["content"] == json!(CAVEAT),
         "Native Local command caveat differs from native proof."
     );
-    let stdout: Vec<_> = rows
-        .iter()
-        .filter(|r| {
-            r["parentUuid"] == command["uuid"]
-                && r["type"] == "system"
-                && r["subtype"] == "local_command"
-        })
-        .collect();
     ensure!(
-        stdout.len() == 1,
-        "Local command completion missing or duplicated."
-    );
-    let out = stdout[0];
-    id(out, "uuid")?;
-    ensure!(
-        out["commandRun"] == json!({"command":name,"args":args,"plugin":j["pluginName"]})
+        out["commandRun"] == json!({"command":name,"args":displayed_args,"plugin":j["pluginName"]})
+            && out["sessionId"] == j["cliSessionId"]
             && out["content"]
                 == format!(
                     "<local-command-stdout>{}: {marker} {}</local-command-stdout>",
@@ -947,6 +958,86 @@ mod tests {
         assert!(!is_applied(&f.root, f.j["opId"].as_str().unwrap(), &[])?);
         f.complete()?;
         assert!(normalize(&f.root, f.j["cliSessionId"].as_str().unwrap(), &f.rows)?.is_empty());
+        Ok(())
+    }
+    #[test]
+    fn withheld_native_arguments_keep_exact_receipt_graph_and_packet_proofs() -> Result<()> {
+        for adopt in [false, true] {
+            let mut f = fixture(adopt)?;
+            f.receive()?;
+            f.complete()?;
+            let command = if adopt { 1 } else { 2 };
+            let stdout = command + 1;
+            let ct = command_text("claudex-sync", "");
+            if adopt {
+                f.rows[command]["message"]["content"] = json!(ct);
+            } else {
+                *f.rows[command]["message"]["content"]
+                    .as_array_mut()
+                    .unwrap()
+                    .last_mut()
+                    .unwrap() = json!({"type":"text","text":ct});
+            }
+            f.rows[stdout]["commandRun"]["args"] = json!("");
+            let op = f.j["opId"].as_str().unwrap();
+            assert!(is_applied(&f.root, op, &f.rows)?);
+            let normalized = normalize(&f.root, f.j["cliSessionId"].as_str().unwrap(), &f.rows)?;
+            if adopt {
+                assert!(normalized.is_empty());
+            } else {
+                let decoded = owned_history::completed_claude(
+                    &codecs::serialize_rows(&normalized)?,
+                    &f.root,
+                    f.j["conversationId"].as_str().unwrap(),
+                    f.j["cliSessionId"].as_str().unwrap(),
+                    Some(&f.key),
+                )?;
+                assert_eq!(decoded.common.messages, f.common.messages);
+            }
+            // The persisted display may omit arguments, never alter any proof
+            // or replace the handler's durable, exact claim acknowledgement.
+            for change in [
+                "args",
+                "marker",
+                "plugin",
+                "session",
+                "uuid",
+                "parent",
+                "duplicate",
+                "receipt",
+            ] {
+                let mut rows = f.rows.clone();
+                match change {
+                    "args" => {
+                        rows[stdout]["commandRun"]["args"] =
+                            json!(format!("{op} {}", f.j["claim"]["id"].as_str().unwrap()))
+                    }
+                    "marker" => {
+                        rows[stdout]["content"] = json!(format!(
+                            "<local-command-stdout>claudex: CLAUDEX_SYNC_APPLIED {}</local-command-stdout>",
+                            Uuid::new_v4()
+                        ))
+                    }
+                    "plugin" => rows[stdout]["commandRun"]["plugin"] = json!("other"),
+                    "session" => rows[stdout]["sessionId"] = json!(Uuid::new_v4()),
+                    "uuid" => rows[command]["uuid"] = json!(Uuid::new_v4()),
+                    "parent" => rows[command]["parentUuid"] = json!(Uuid::new_v4()),
+                    "duplicate" => rows.push(rows[stdout].clone()),
+                    "receipt" => {
+                        let mut j = journal(&f.root, op)?;
+                        j["applied"] = Value::Null;
+                        assert!(verified(&j, &rows).is_err());
+                        continue;
+                    }
+                    _ => unreachable!(),
+                }
+                assert!(is_applied(&f.root, op, &rows).is_err(), "{change}");
+            }
+            if !adopt {
+                f.rows[command]["message"]["content"][0]["source"]["data"] = json!("Y2hhbmdlZA==");
+                assert!(is_applied(&f.root, op, &f.rows).is_err());
+            }
+        }
         Ok(())
     }
     #[test]

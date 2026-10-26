@@ -90,12 +90,16 @@ a new target to evade its uncertain outcome.
 After native creation the SDK must never take over the Local writer. Keep the
 new `native-start` phase and accepted legacy phases durable.
 
-Desktop's deployment profile owns Local inference routing. In the inspected
-native build, first-party mode supplies the official BASE_URL and host launch
-environment wins over CLI settings.env. LocalSessions.start explicitly projects
+For the inspected stock, unmodified native launcher, Desktop's deployment
+profile supplies Local inference routing: first-party mode supplies the official
+BASE_URL and host launch environment wins over CLI settings.env. An installed
+launcher wrapper may alter that environment before the real CLI starts; inspect
+the actual launch path before claiming an effective route or changing profiles.
+LocalSessions.start explicitly projects
 its allowed fields and has no provider/base URL/auth/deployment override;
 envScopeId does not override the deployment environment. Never certify a Local
-proxy route from CLI authentication/settings alone. Native third-party Gateway
+proxy route from CLI authentication/settings or a stock launch path alone.
+Native third-party Gateway
 setup supports a custom endpoint, but switching the whole Desktop profile signs
 out Claude.ai and relaunches; switching back clears third-party interactive
 authentication/session secrets and relaunches. This needs explicit user approval,
@@ -111,6 +115,22 @@ applied receipt and exact native command graph, UUID, ordered content and image
 bytes. A transformed image refuses promotion, retaining the journal; unknown
 prewarm, start, move, claim, receive or apply outcomes are never resent. Keep the normal
 frontend journals/restart boundary and every existing native lifecycle guard.
+
+Native hook-handled commands can withhold arguments in the persisted display:
+both `command-args` and `commandRun.args` are then exactly empty. Bootstrap and
+sync verification accept only matching original `operationId claimId` or matching
+empty display arguments. The durable bootstrap/applied receipt must still bind
+the original exact claim, and the command name, operation marker, plugin, native
+session/cwd, unique UUID/parent graph and ordered image bytes stay exact. Missing
+receipts, mixed or different arguments and duplicate commands remain refused.
+This changes transcript readback only, never dispatch or one-use claims.
+
+The claimed normal cwd move can also write a transcript-only project-context
+user row after the bootstrap completion. Exclude only its exact native cwd
+reminder (with optional stale-environment sentence and appended native project
+context), matching target cwd/session, direct bootstrap parent, unique UUID and
+all four meta/transcript-only/skip flags. Preserve original bytes, including
+CLAUDE.md context; unrelated user/meta content still prevents first migration.
 
 Only a literal native control `subtype:error` is an explicit failure; an unknown
 response outcome preserves the registering intent and never permits another

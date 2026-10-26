@@ -670,15 +670,15 @@ fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
         j["opId"].as_str().unwrap(),
         j["start"]["id"].as_str().unwrap()
     );
-    let text = format!(
-        "<command-name>/{COMMAND}</command-name>\n            <command-message>{COMMAND}</command-message>\n            <command-args>{args}</command-args>"
-    );
+    let texts = [args.as_str(), ""]
+        .map(|args| json!([{"type":"text","text":crate::local_sync::command_text(COMMAND, args)}]));
     let candidates: Vec<_> = rows
         .iter()
         .filter(|r| {
             r["type"] == "user"
-                && owner::normalize_content(&r["message"]["content"]).ok()
-                    == Some(json!([{"type":"text","text":text}]))
+                && owner::normalize_content(&r["message"]["content"])
+                    .ok()
+                    .is_some_and(|content| texts.contains(&content))
         })
         .collect();
     ensure!(
@@ -686,7 +686,45 @@ fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
         "Native Local bootstrap command missing or duplicated."
     );
     let proof = json!({"opId":j["opId"],"claim":{"id":j["start"]["id"]},"entry":{"inputUuid":candidates[0]["uuid"]},"content":[],"cwd":j["bootstrap"]["cwd"],"cliSessionId":j["bootstrap"]["sessionId"],"pluginName":j["bootstrap"]["pluginName"],"kind":"adopt","applied":{"textUuid":null}});
-    let remove = crate::local_sync::verified_command(&proof, rows, COMMAND, "CLAUDEX_LOCAL_READY")?;
+    let mut remove =
+        crate::local_sync::verified_command(&proof, rows, COMMAND, "CLAUDEX_LOCAL_READY")?;
+    // changeCwd records its new project environment as a transcript-only user
+    // context, not an independently authored prompt. Bind that one native row
+    // to the claimed move and bootstrap completion before excluding it from
+    // portable dialogue. The original transcript, including CLAUDE.md, stays whole.
+    if !j["move"].is_null() {
+        let cwd = j["originalPending"]["record"]["cwd"].as_str().unwrap();
+        let contexts: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r["type"] == "user"
+                    && r["message"]["role"] == "user"
+                    && r["isMeta"] == true
+                    && r["queueTranscriptOnly"] == true
+                    && r["queueSkipSlashCommands"] == true
+                    && r["queueSkipAttachments"] == true
+                    && r["sessionId"] == j["bootstrap"]["sessionId"]
+                    && r["cwd"] == cwd
+                    && r["parentUuid"] == remove[2]
+                    && r["message"]["content"].as_str().is_some_and(|s| {
+                        [false, true].into_iter().any(|stale| {
+                            let note = move_context(cwd, stale);
+                            s == note
+                                || s.strip_prefix(&note).is_some_and(|s| s.starts_with("\n\n"))
+                        })
+                    })
+            })
+            .collect();
+        ensure!(contexts.len() <= 1, "Native Local move context duplicated.");
+        if let Some(context) = contexts.first() {
+            let uuid = id(context, "uuid")?;
+            ensure!(
+                rows.iter().filter(|r| r["uuid"] == uuid).count() == 1,
+                "Native Local move context identity duplicated."
+            );
+            remove.push(uuid);
+        }
+    }
     Ok(rows
         .iter()
         .filter(|r| {
@@ -696,6 +734,16 @@ fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
         })
         .cloned()
         .collect())
+}
+fn move_context(cwd: &str, stale: bool) -> String {
+    let stale = if stale {
+        "The environment block at the start of this conversation still names the previous directory — that information is stale. "
+    } else {
+        ""
+    };
+    format!(
+        "<system-reminder>\nThe session's working directory has changed to {cwd} (by the user). {stale}All tool calls and relative paths now resolve from {cwd}. Project settings (permission rules, hooks), project MCP servers, and project skills now come from {cwd}; its CLAUDE.md, if any, follows below. Environment variables set by the previous directory's settings stay in effect for this process — they cannot be unset — and the new directory's settings env is applied on top of them.\n</system-reminder>"
+    )
 }
 pub fn normalize(root: &Path, state: &Value, rows: &[Value]) -> Result<Vec<Value>> {
     let Some(op) = state["nativeStartOperation"].as_str() else {
@@ -951,6 +999,11 @@ mod tests {
             json!({"type":"system","uuid":stdout,"parentUuid":cmd,"subtype":"local_command","sessionId":f.cli,"commandRun":{"command":COMMAND,"args":args,"plugin":"claudex@inline"},"content":format!("<local-command-stdout>claudex@inline: CLAUDEX_LOCAL_READY {}</local-command-stdout>",f.pending.operation_id)}),
         ]
     }
+    fn moved_context(f: &Fixture, parent: &Value) -> Value {
+        json!({"type":"user","uuid":Uuid::new_v4(),"parentUuid":parent,"sessionId":f.cli,"cwd":f.record.cwd,
+            "isMeta":true,"queueTranscriptOnly":true,"queueSkipSlashCommands":true,"queueSkipAttachments":true,
+            "message":{"role":"user","content":move_context(&f.record.cwd, true)}})
+    }
     fn boot(f: &Fixture) -> Result<(Value, Vec<Value>)> {
         boot_outcome(f, "returned")
     }
@@ -1064,6 +1117,112 @@ mod tests {
         storage::private_directory(target.parent().unwrap())?;
         storage::atomic_write(&target, codecs::serialize_rows(&rows)?)?;
         assert!(prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?.is_some());
+        Ok(())
+    }
+    #[test]
+    fn native_move_after_trust_verifies_withheld_bootstrap_arguments_without_replay() -> Result<()>
+    {
+        let f = fixture(true)?;
+        let original = storage::read_stable(&f.record.path)?;
+        let (c, mut rows) = boot(&f)?;
+        result(&f, &c, "needs_trust", Value::Null)?;
+        rows[1]["message"]["content"] = json!(crate::local_sync::command_text(COMMAND, ""));
+        rows[2]["commandRun"]["args"] = json!("");
+        rows.push(moved_context(&f, &rows[2]["uuid"]));
+        let retained = journal(&f.root, &f.pending.operation_id)?;
+        registry(&f, Path::new(&f.record.cwd))?;
+        let target = codecs::claude_path(&f.home, &f.record.cwd, &f.cli)?;
+        storage::private_directory(target.parent().unwrap())?;
+        storage::atomic_write(&target, codecs::serialize_rows(&rows)?)?;
+        let native = storage::read_stable(&target)?;
+        let r = prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?.unwrap();
+        let migrated = journal(&f.root, &f.pending.operation_id)?;
+        for key in [
+            "originalPending",
+            "originalOwner",
+            "prewarm",
+            "start",
+            "bootstrap",
+            "move",
+        ] {
+            assert_eq!(retained[key], migrated[key], "{key}");
+        }
+        assert_eq!(migrated["status"], "target-migrated");
+        assert_eq!(migrated["move"]["outcome"], "needs_trust");
+        assert_eq!(r.native_id, f.cli);
+        assert!(verify_resolution(&f.root, &f.record, &r, &f.pending)?);
+        assert!(normalize_journal(&migrated, &rows)?.is_empty());
+        for stale in [false, true] {
+            for suffix in [
+                "",
+                "\n\n<system-reminder>\nSynthetic project CLAUDE.md context.\n</system-reminder>",
+            ] {
+                let mut variant = rows.clone();
+                variant[3]["message"]["content"] =
+                    json!(format!("{}{suffix}", move_context(&f.record.cwd, stale)));
+                assert!(normalize_journal(&migrated, &variant)?.is_empty());
+            }
+        }
+        assert_eq!(
+            original.identity,
+            storage::read_stable(&f.record.path)?.identity
+        );
+        assert_eq!(native.identity, storage::read_stable(&target)?.identity);
+        for stage in ["prewarm", "start", "move"] {
+            assert_eq!(
+                claim(
+                    &f.root,
+                    &f.registry,
+                    &json!({"opId":f.pending.operation_id,"stage":stage,"proof":{}})
+                )?["ready"],
+                false
+            );
+        }
+        // Redaction never permits mismatched envelopes or competing commands.
+        let mut mismatch = rows.clone();
+        mismatch[2]["commandRun"]["args"] = json!(format!(
+            "{} {}",
+            f.pending.operation_id,
+            retained["start"]["id"].as_str().unwrap()
+        ));
+        assert!(normalize_journal(&migrated, &mismatch).is_err());
+        let duplicate = rows[1].clone();
+        rows.push(duplicate);
+        assert!(normalize_journal(&migrated, &rows).is_err());
+        Ok(())
+    }
+    #[test]
+    fn unproven_move_context_or_independent_input_never_migrates() -> Result<()> {
+        for change in ["cwd", "parent", "flags", "text", "duplicate", "authored"] {
+            let f = fixture(false)?;
+            let (c, mut rows) = boot(&f)?;
+            result(&f, &c, "needs_trust", Value::Null)?;
+            let mut context = moved_context(&f, &rows[2]["uuid"]);
+            match change {
+                "cwd" => context["cwd"] = json!(f.scratch),
+                "parent" => context["parentUuid"] = json!(Uuid::new_v4()),
+                "flags" => context["queueTranscriptOnly"] = json!(false),
+                "text" => {
+                    context["message"]["content"] =
+                        json!("<system-reminder>Independent input.</system-reminder>")
+                }
+                "duplicate" => rows.push(context.clone()),
+                "authored" => context["isMeta"] = json!(false),
+                _ => unreachable!(),
+            }
+            rows.push(context);
+            registry(&f, Path::new(&f.record.cwd))?;
+            let target = codecs::claude_path(&f.home, &f.record.cwd, &f.cli)?;
+            storage::private_directory(target.parent().unwrap())?;
+            storage::atomic_write(&target, codecs::serialize_rows(&rows)?)?;
+            assert!(
+                prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending).is_err(),
+                "{change}"
+            );
+            let j = journal(&f.root, &f.pending.operation_id)?;
+            assert!(j["resolved"].is_null());
+            assert_eq!(j["move"]["outcome"], "needs_trust");
+        }
         Ok(())
     }
     #[test]
