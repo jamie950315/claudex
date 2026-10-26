@@ -23,6 +23,15 @@ Contributor rules moved out of AGENTS.md; they are binding. Scope: Enrollment an
   retain pending. Watcher recovery removes only the stopped conversation's queues
   and stale block, then continues other work without a native resend.
 
+## Explicit synchronization pause
+
+A durable synchronization-only pause blocks native history operations and Remote
+Control owner activation, including direct CLI recover/sync/archive entry points.
+Status and explicit quarantine inspection remain available; do not use a pause as
+transaction cancellation. The watcher stays running for independent integration
+maintenance and origin-hook diagnostics. Only explicit app sync-resume releases
+this pause; a global application reopen does not.
+
 ## Holds that recover on their own
 
 These relaxations are user decisions; keep them when touching the same code.

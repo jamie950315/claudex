@@ -24,6 +24,25 @@ scoped to the versions and runtimes tested.
 - [Restart verification](#restart-verification-and-unchanged-history)
 - [Native project relocation](#native-project-relocation)
 
+## Pause synchronization without stopping other features
+
+The app's **Pause synchronization** control suspends history copying, recovery,
+Remote Control owner wake, folder mapping and predecessor archival. Cross-model
+collaboration, commands and opt-in cache warming remain independent. The same
+watcher continues Desktop integration maintenance. Pending transactions and history
+receipts remain saved until explicit resume; pausing never resolves or replays them.
+
+CLI equivalents:
+
+```sh
+claudex app sync-pause
+claudex app sync-resume
+```
+
+The pause survives application restart, login and setup. Resume restores ordinary
+guarded recovery and startup reconciliation; an eligible official Claude account
+is still required for Remote Control. Quit remains a separate stop of all services.
+
 ## Runtime compatibility
 
 Requires macOS and the native Rust Claudex executable. The app bundle includes

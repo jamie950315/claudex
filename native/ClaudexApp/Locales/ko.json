@@ -406,5 +406,11 @@
   "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.": "Claudex Mod의 수신 설정에서 nativeWake와 selfWake를 명시적으로 활성화하세요.",
   "Check the recipient session's native inbound-message policy.": "수신자 세션의 네이티브 수신 메시지 정책을 확인하세요.",
   "Verify that the recipient has loaded the supported chat-wake adapter.": "수신자가 지원되는 chat-wake 어댑터를 로드했는지 확인하세요.",
-  "Check the exact task recipient and native SendMessage capability.": "해당 작업의 정확한 수신자와 네이티브 SendMessage 기능을 확인하세요."
+  "Check the exact task recipient and native SendMessage capability.": "해당 작업의 정확한 수신자와 네이티브 SendMessage 기능을 확인하세요.",
+  "Pause synchronization": "동기화 일시 중지",
+  "Resume synchronization": "동기화 재개",
+  "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available.": "동기화가 일시 중지되었습니다. 모델 간 호출, 명령, 선택한 캐시 보온은 계속 사용할 수 있습니다.",
+  "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available. Remote Control handoffs and recovery are suspended.": "동기화가 일시 중지되었습니다. 모델 간 호출, 명령, 선택한 캐시 보온은 사용할 수 있습니다. Remote Control 인계와 복구는 중지됩니다.",
+  "Folder mapping is paused with synchronization. Desktop command and cache maintenance continue.": "폴더 매핑이 동기화와 함께 일시 중지되었습니다. Desktop 명령과 캐시 유지 관리는 계속됩니다.",
+  "Predecessor archival is paused with synchronization. Original histories and pending handoffs are preserved.": "이전 대화 보관이 동기화와 함께 일시 중지되었습니다. 원본 기록과 보류 중인 인계는 유지됩니다."
 }

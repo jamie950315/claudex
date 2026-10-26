@@ -312,6 +312,7 @@ pub fn inspect(root: &Path, state: &State, id: &str, allow_pending: bool) -> Res
 /// Presentation-only projection. The caller holds the coordinator lock; no
 /// transcript is opened and no native process is started for this publication.
 pub fn publish_folders(root: &Path, state: &State) -> Result<Value> {
+    ensure!(!hooks::synchronization_paused(root)?, "Conversation synchronization is paused.");
     ensure!(
         state.version == 2 && canonical_cwd(&root.to_string_lossy()),
         "A canonical private root and Desktop ledger are required."
@@ -496,8 +497,8 @@ impl Publisher {
     pub async fn publish(&self, params: &Value) -> Result<Value> {
         let id = validate_request(params)?;
         let mut recent = self.recent.lock().await;
-        if hooks::app_stopped(&self.root)? {
-            return Ok(json!({"accepted":false,"reason":"application stopped"}));
+        if hooks::synchronization_held(&self.root)? {
+            return Ok(json!({"accepted":false,"reason":"synchronization held"}));
         }
         recent.retain(|_, time| time.elapsed() < Duration::from_secs(30));
         if recent
@@ -513,8 +514,8 @@ impl Publisher {
             Inspection::Ignored(reason) => return Ok(json!({"accepted":false,"reason":reason})),
         };
         target.recheck()?;
-        if hooks::app_stopped(&self.root)? {
-            return Ok(json!({"accepted":false,"reason":"application stopped"}));
+        if hooks::synchronization_held(&self.root)? {
+            return Ok(json!({"accepted":false,"reason":"synchronization held"}));
         }
         let inbox = Inbox::new(&self.root)?;
         inbox.initialize()?;

@@ -608,6 +608,7 @@ impl DesktopBridge {
             .find(|r| r.conversation_id == id && r.side == side && r.status == "current")
     }
     pub async fn inspect(&self, record: &Record) -> Result<Reading> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         crate::quarantine::admit_record(&self.status()?, record)?;
         let adapter = self.adapter(record.side)?;
         let mut data = if record.extra.contains_key("preservedClosedTail") {
@@ -917,6 +918,7 @@ impl DesktopBridge {
         Ok(extensions)
     }
     pub async fn track(&self, mut source: Record, title: Option<&str>) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -1002,6 +1004,7 @@ impl DesktopBridge {
         mut target: Record,
         title: &str,
     ) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         Uuid::parse_str(id)?;
         Uuid::parse_str(&source.native_id)?;
         Uuid::parse_str(&target.native_id)?;
@@ -1100,6 +1103,7 @@ impl DesktopBridge {
         Ok(json!({"conversationId":id,"existing":false}))
     }
     pub async fn untrack(&self, id: &str, missing_only: bool) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -1162,6 +1166,7 @@ impl DesktopBridge {
         Ok(json!({"changed":true,"conversationId":id,"tracking":"stopped","historyPreserved":true}))
     }
     pub async fn resume_tracking(&self, id: &str) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -1218,6 +1223,7 @@ impl DesktopBridge {
         Ok(json!({"changed":true,"tracking":"active","conversationId":id}))
     }
     pub async fn sync(&self, id: &str) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -1568,6 +1574,7 @@ impl DesktopBridge {
         self.finish(state).await
     }
     pub async fn recover(&self) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         if state.pending.is_none() {
@@ -1860,6 +1867,7 @@ impl DesktopBridge {
         Ok(result)
     }
     pub async fn archive_original(&self, conversation_id: &str, native_id: &str) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -2086,6 +2094,7 @@ impl DesktopBridge {
         )
     }
     pub async fn abandon_unapplied(&self) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         let Some(PendingOperation::Handoff(p)) = state.pending.as_ref() else {
@@ -2111,6 +2120,7 @@ impl DesktopBridge {
         operation_id: &str,
         expected: Option<Checkpoint>,
     ) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         for value in [id, native_id, operation_id] {
             ensure!(
                 Uuid::parse_str(value)?.to_string() == value,
@@ -2407,6 +2417,7 @@ impl DesktopBridge {
         retention::plan(&records, now(), &self.policy)
     }
     pub async fn collect(&self) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -2422,6 +2433,7 @@ impl DesktopBridge {
         record_id: &str,
         expected: Checkpoint,
     ) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.root)?, "Conversation synchronization is paused.");
         for value in [id, native_id, record_id] {
             Uuid::parse_str(value)?;
         }

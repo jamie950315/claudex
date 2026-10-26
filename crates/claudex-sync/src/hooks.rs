@@ -652,6 +652,26 @@ pub fn app_stopped(root: &Path) -> Result<bool> {
     );
     Ok(value["stopped"] == true || value["resuming"] == true)
 }
+/// Persistent user choice, independent of the global application shutdown hold.
+pub fn synchronization_paused(root: &Path) -> Result<bool> {
+    let data = match storage::read_stable(root.join("synchronization-state.json")) {
+        Ok(data) => data,
+        Err(e) if storage::is_not_found(&e) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    ensure!(data.bytes.len() <= 4096
+        && data.identity.uid == storage::uid().to_string()
+        && data.identity.nlink == "1"
+        && data.identity.mode.parse::<u32>()? & 0o077 == 0,
+        "Unverified synchronization pause state.");
+    let value: Value = serde_json::from_slice(&data.bytes)?;
+    ensure!(value["version"] == 1 && value["paused"].is_boolean(),
+        "Invalid synchronization pause state.");
+    Ok(value["paused"] == true)
+}
+pub fn synchronization_held(root: &Path) -> Result<bool> {
+    Ok(app_stopped(root)? || synchronization_paused(root)?)
+}
 pub async fn hook_event_with_kind(
     root: &Path,
     provider: &str,
@@ -667,7 +687,7 @@ pub async fn hook_event_with_kind(
     {
         return Ok(None);
     }
-    if app_stopped(root)? {
+    if synchronization_held(root)? {
         return Ok(None);
     }
     let kind = match input["hook_event_name"].as_str() {

@@ -667,7 +667,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         guard !busy && !stopping else { return }
         switch command {
         case .setup, .login, .modSetup, .modEnable: setupFlowActive = true; checkingOnly = false
-        case .inspect, .startup: checkingOnly = true
+        case .inspect, .startup, .synchronization: checkingOnly = true
         }
         updateRefreshTimer()
         let previousReport = lastVerifiedReport
@@ -708,7 +708,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         else {
             switch phase {
             case .ready: title = "Ready to connect"; symbol = "checkmark.circle.fill"; color = .systemGreen
-            case .waiting: title = report?.attentionComponents.contains { $0.id == "claude-mod-activation" } == true
+            case .waiting: title = report?.synchronizationPaused == true ? "Synchronization paused" : report?.attentionComponents.contains { $0.id == "claude-mod-activation" } == true
                 ? "Waiting for Claude Mod" : "Waiting automatically"; symbol = "clock"; color = .secondaryLabelColor
             case .settingUp: title = "Setup in progress"; symbol = "clock"; color = .controlAccentColor
             case .needsAction: title = "Action needed"; symbol = "person.crop.circle.badge.exclamationmark"; color = .systemOrange
@@ -737,7 +737,7 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
             for view in container.arrangedSubviews { container.removeArrangedSubview(view); view.removeFromSuperview() }
         }
         if let report {
-            for component in report.connectionSummaries {
+            for component in report.connectionSummaries + report.components.filter({ $0.id == "synchronization" }) {
                 let row = componentRow(component)
                 connections.addArrangedSubview(row)
                 row.widthAnchor.constraint(equalTo: connections.widthAnchor).isActive = true
@@ -954,6 +954,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .resolveUncertain: return "Resolve…"
         case .modSetup: return "Install / update"
         case .modEnable: return "Enable Claude Mod"
+        case .syncPause: return "Pause synchronization"
+        case .syncResume: return "Resume synchronization"
         }
     }
 
@@ -968,6 +970,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case .resolveUncertain: return 7
         case .modSetup: return 8
         case .modEnable: return 9
+        case .syncPause: return 10
+        case .syncResume: return 11
         }
     }
 
@@ -983,6 +987,8 @@ final class ClaudexApp: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMen
         case 7: confirmResolveUncertain()
         case 8: installMod(nil)
         case 9: if !uiSmoke && !modelBusy { run(.modEnable) }
+        case 10: run(.synchronization(paused: true))
+        case 11: run(.synchronization(paused: false))
         default: break
         }
     }

@@ -2,6 +2,18 @@
 
 Contributor rules moved out of AGENTS.md; they are binding. Scope: Hooks, the durable event inbox, watchers, initial verification scheduling, and the Codex/Claude adapter rules (late command completions, empty turns, native command envelopes).
 
+## Synchronization-only pause
+
+The private, stable synchronization-state.json pause is independent of app-stop.
+Check it before recovery, ledger/history discovery, enrollment, collection,
+owner wake, folder maps or handoff publication. Preserve pending transactions
+and queued history receipts; no uncertain write is retried while paused.
+The same watcher lease and WatchLifecycle continue renderer/launcher maintenance.
+Configuration hints may refresh independent origin-hook trust without history reads;
+paused status heartbeats never perform that refresh. Resume starts ordinary startup
+reconciliation and guarded recovery. The combined native hook still runs mailbox
+and origin coordination, but suppresses its synchronization hint while paused.
+
 ## Adapters
 
 Desktop synchronization is completion-event driven, not a recurring two-second

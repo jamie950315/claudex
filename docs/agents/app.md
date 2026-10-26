@@ -138,6 +138,12 @@ remain visible in the app. Closing the window still only hides it. Persist the
 private app-stop.json hold before stopping; hooks must not record events while
 held. Reopening resumes only exact installed owned services, using a recoverable
 resuming marker for partial starts, and clears the hold after successful starts.
+The separate private synchronization-state.json stores an explicit synchronization-only
+pause. App sync-pause saves that fence before draining the watcher; sync-resume
+drains it before clearing the fence. Restart the installed watcher in maintenance-only
+mode, never stop collaboration for this choice. Startup, setup and login preserve
+it; only explicit sync-resume clears it. Keep the visible synchronization control
+separate from Quit and show intentional pause without an automatic-retry promise.
 Do not delete native data, credentials, or login definitions. Inspect/smoke and
 duplicate-instance exits must never stop services. CLI-only status display Quit
 retains its display-only behavior.

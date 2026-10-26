@@ -24,6 +24,7 @@ pub const HELP: &str = "Claudex native application setup
   claudex app startup                Resume the installed application
   claudex app login --provider codex|claude
   claudex app mod-setup [--receiver enabled|disabled] [--enable]
+  claudex app sync-pause|sync-resume  Pause/resume synchronization only
   claudex app stop|stop-status        Drain owned services or inspect shutdown
   claudex app models                 Read model and permission preferences
     [--codex-model MODEL --claude-model MODEL]
@@ -534,6 +535,8 @@ pub async fn run(args: &[String]) -> Result<()> {
                 "warm-stop",
                 "stop",
                 "stop-status",
+                "sync-pause",
+                "sync-resume",
                 "resolve-uncertain",
             ]
             .contains(&options.action())

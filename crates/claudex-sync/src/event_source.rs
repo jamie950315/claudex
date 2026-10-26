@@ -440,7 +440,7 @@ impl Source {
         )?;
         state.subscribe(
             "configuration",
-            vec![root.join("config.json")],
+            vec![root.join("config.json"), root.join("synchronization-state.json")],
             event(Kind::Configuration),
         )?;
         for (key, home, names) in [

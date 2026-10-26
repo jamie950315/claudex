@@ -124,7 +124,8 @@ test('graphical Quit waits for verified service shutdown and read-only exits byp
   assert.match(source, /allowTermination \|\| inspectOnly \|\| uiSmoke/);
   assert.match(source, /runner.stop\(statusOnly: statusOnly\)/);
   assert.match(source, /if result.stopped/);
-  assert.match(source, /checkStop\(statusOnly: true\)/);
+  assert.match(source, /let repeatStop = self\.stopPolls % 5 == 0/);
+  assert.match(source, /checkStop\(statusOnly: !repeatStop\)/);
   // A logout or restart waits for the drain instead of being cancelled.
   assert.match(source, /checkStop\(statusOnly: false\)\s*return \.terminateLater/);
   assert.match(source, /if result\.stopped \{\s*self\.allowTermination = true\s*NSApp\.reply\(toApplicationShouldTerminate: true\)/);
@@ -164,4 +165,15 @@ test('graphical app owns one status item and integrates the bounded health contr
   assert.doesNotMatch(source, /preferredChecklistHeight|issueScroll|checklistScroll/);
   assert.match(source, /pageScroll\.bottomAnchor\.constraint\(equalTo: content.bottomAnchor\)/);
   assert.match(source, /Show advanced diagnostics/);
+});
+
+
+test('synchronization-only pause has its own visible control and does not masquerade as global Quit', async () => {
+  const source = await readFile(new URL('../native/ClaudexApp/main.swift', import.meta.url), 'utf8');
+  const model = await readFile(new URL('../native/ClaudexApp/SetupModel.swift', import.meta.url), 'utf8');
+  assert.match(model, /case syncPause = "sync-pause"/);
+  assert.match(model, /case syncResume = "sync-resume"/);
+  assert.match(source, /report\.connectionSummaries \+ report\.components\.filter/);
+  assert.match(source, /case 10: run\(\.synchronization\(paused: true\)\)/);
+  assert.match(source, /case 11: run\(\.synchronization\(paused: false\)\)/);
 });

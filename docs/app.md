@@ -106,6 +106,21 @@ The provider desktop apps must already be present before this step. Installation
 verifies the public npm registry's package integrity without running npm or
 installation scripts, copying account keys or using a global Node.js installation.
 
+## Pause only synchronization
+
+Choose **Pause synchronization** in the main window when Remote Control is
+unavailable or you want to stop copying conversation history. Cross-model work,
+Claude Mod commands and opt-in cache warming keep their existing settings.
+The watcher continues Desktop command/cache maintenance, but history copying,
+pending-handoff recovery, Remote Control owner wake, folder-map updates and
+predecessor archival wait. Original histories and unfinished transactions stay saved.
+
+This choice survives Quit, reopen, login and setup. Choose **Resume synchronization**
+when you want normal guarded recovery and history checks to continue. It does not
+change your official account, third-party model routing or catalog. Warming is
+never enabled by pausing or resuming synchronization. **Quit Claudex** still drains
+all Claudex services.
+
 ## Official account for managed synchronization
 
 Managed Claude Remote Control conversations use your official Claude account and

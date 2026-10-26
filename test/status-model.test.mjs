@@ -20,6 +20,9 @@ func health(_ watcher: [String: Any]? = ready, _ service: [String: Any]? = nil) 
   classifyHealth(watcher: watcher, service: service, now: now, alive: alive)
 }
 check(health().state == "ready")
+var userPaused = ready; userPaused["mode"] = "desktop"; userPaused["synchronizationPaused"] = true
+check(health(userPaused).title == "Synchronization paused" && !health(userPaused).attention && health(userPaused).operational)
+check(!health(userPaused).detail.contains("Checked "))
 var initial = ready; initial["mode"] = "desktop"
 initial["checkedConversationCount"] = 3; initial["checkingConversationCount"] = 12
 initial["currentOperation"] = ["conversationId": "known-thread", "title": "Translation task", "startedAt": now - 65000] as [String: Any]

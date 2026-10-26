@@ -201,6 +201,10 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
             )?,
         );
     }
+    if command != "watch" {
+        ensure!(!hooks::synchronization_paused(&root)?,
+            "Conversation synchronization is paused. Use claudex app sync-resume to resume it.");
+    }
     if config["mode"] == "desktop" {
         let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
         let mut bridge = runtime.bridge();
@@ -660,14 +664,31 @@ async fn watch_desktop_control(
         loop {
             source.check()?;
             if *shutdown.borrow() { break; }
-            if hooks::app_stopped(&bridge.root)? {
+            if hooks::synchronization_held(&bridge.root)? {
                 held=true;
                 if handoff_enabled && !actions_revoked_since_publish {
                     runtime.revoke_handoff_actions()?;
                     actions_revoked_since_publish = true;
                     handoff_revoked = true;
                 }
-                let mut status=watch_status(&blocked,None,&unsupported,true,lifecycle.as_ref(),None,initial_sweep_completed_at);status["folderProjection"]=json!({"state":"waiting","deferred":"application-hold"});status["localHandoff"]=json!({"state":"waiting","actions":0,"deferred":"application-hold"});diagnostics(&bridge.root,&status)?;
+                let app_hold = hooks::app_stopped(&bridge.root)?;
+                let deferred = if app_hold { "application-hold" } else { "synchronization-paused" };
+                // Origin/mailbox trust is independent of history synchronization.
+                // Refresh only on actual configuration hints, never a heartbeat.
+                let controls = inbox.list()?.into_iter().filter(|r|
+                    matches!(r.event.kind, Kind::Configuration | Kind::Reconnect)).collect::<Vec<_>>();
+                if !app_hold && (hooks_refresh || !controls.is_empty()) {
+                    hook_status = runtime.synchronization_hooks().await.unwrap_or(Value::Null);
+                    hooks_refresh = false;
+                    inbox.acknowledge(&controls).await?;
+                }
+                let mut status=watch_status(&BTreeMap::new(),None,&json!({}),app_hold,lifecycle.as_ref(),None,None);
+                status["synchronizationPaused"] = json!(!app_hold);
+                status["synchronization"] = json!(if app_hold { "waiting" } else { "paused" });
+                status["hookStatus"] = hook_status.clone();
+                status["folderProjection"]=json!({"state":"waiting","deferred":deferred});
+                status["localHandoff"]=json!({"state":"waiting","actions":0,"deferred":deferred});
+                diagnostics(&bridge.root,&status)?;
                 // A held status must not be republished once work resumes.
                 last_status = None;
                 last_progress_at = None;
@@ -780,7 +801,7 @@ async fn watch_desktop_control(
                     folder_dirty = true;
                     let mut consumed = vec![];
                     for receipt in &work {
-                        if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
+                        if *shutdown.borrow() || hooks::synchronization_held(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
                         let state = bridge.status()?;
                         let ids = event_conversations(&state, receipt);
                         handoff_scope.extend(ids.iter().cloned());
@@ -855,13 +876,13 @@ async fn watch_desktop_control(
                     source.observe(&work, &bridge.status()?, &inbox)?;
                     inbox.acknowledge(&consumed).await?;
                 }
-                if transport_wait.is_none() && bridge.status()?.pending.is_none() && !hooks::app_stopped(&bridge.root)? {
+                if transport_wait.is_none() && bridge.status()?.pending.is_none() && !hooks::synchronization_held(&bridge.root)? {
                     let due = followups.iter().filter(|(_, (_, when))| *when <= tokio::time::Instant::now())
                         .map(|(id, (step, _))| (id.clone(), *step)).collect::<Vec<_>>();
                     for (id, step) in due {
                         handoff_scope.insert(id.clone());
                         folder_dirty = true;
-                        if *shutdown.borrow() || hooks::app_stopped(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
+                        if *shutdown.borrow() || hooks::synchronization_held(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
                         if handoff_enabled && !actions_revoked_since_publish {
                             runtime.revoke_handoff_actions()?;
                             actions_revoked_since_publish = true;
@@ -888,7 +909,7 @@ async fn watch_desktop_control(
                     }
                     // Only one cold history per pass; native completions get
                     // first service before the next potentially expensive read.
-                    if transport_wait.is_none() && !*shutdown.borrow() && !hooks::app_stopped(&bridge.root)? && inbox.list()?.is_empty() && bridge.status()?.pending.is_none() {
+                    if transport_wait.is_none() && !*shutdown.borrow() && !hooks::synchronization_held(&bridge.root)? && inbox.list()?.is_empty() && bridge.status()?.pending.is_none() {
                         if startup {
                             if handoff_enabled && !actions_revoked_since_publish {
                                 runtime.revoke_handoff_actions()?;
@@ -982,7 +1003,7 @@ async fn watch_desktop_control(
                     }
                 }
             }
-            if hooks::app_stopped(&bridge.root)? {continue;}
+            if hooks::synchronization_held(&bridge.root)? {continue;}
             runtime.close_idle_owners(false).await?;
             let sweep_in_progress = startup || !candidates.is_empty() || !background.is_empty();
             if !sweep_in_progress && initial_sweep_completed_at.is_none() && pending_error.is_none() {
@@ -1174,6 +1195,11 @@ async fn watch_legacy(bridge: Bridge, config: &Value) -> Result<()> {
     loop {
         if *shutdown.borrow() {
             break;
+        }
+        if hooks::synchronization_held(&bridge.root)? {
+            startup = true;
+            listener.wait_hint(Duration::from_secs(30), &mut shutdown).await?;
+            continue;
         }
         if bridge.status()?.pending.is_some() {
             bridge.recover().await?;
@@ -1631,6 +1657,56 @@ mod lifecycle_tests {
         shutdown.send(true)?;
         tokio::time::timeout(Duration::from_secs(5), running).await???;
         tokio::time::timeout(Duration::from_secs(5), backend).await???;
+        Ok(())
+    }
+    #[tokio::test]
+    async fn direct_synchronization_commands_refuse_pause_before_native_runtime_admission() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
+        let root = storage::private_directory(temp.path())?;
+        storage::write_json(root.join("config.json"), &json!({"version":1,"mode":"desktop","codexHome":"/missing","claudeHome":"/missing"}))?;
+        storage::write_json(root.join("synchronization-state.json"), &json!({"version":1,"paused":true}))?;
+        for command in ["recover","sync","archive-original","gc","resume-tracking"] {
+            let error = run(&[command.into(),"--root".into(),root.display().to_string()]).await.unwrap_err();
+            assert!(error.to_string().contains("synchronization is paused"));
+        }
+        assert!(!root.join("packet-key").exists());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn synchronization_pause_survives_watcher_restart_without_reading_pending_or_dispatching() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude,"desktopLocalHandoff":{"enabled":true}});
+        storage::write_json(root.join("synchronization-state.json"), &json!({"version":1,"paused":true}))?;
+        crate::runtime::packet_key(&root)?;
+        let pending = b"pending sentinel: any ledger read would fail";
+        storage::atomic_write(root.join("desktop-state.json"), pending)?;
+        let lifecycle = Arc::new(HeldLifecycle {root:root.clone(),stopped:AtomicBool::new(false)});
+        for _ in 0..2 {
+            let runtime = Runtime::new(RuntimeOptions::from_config(&root,&config)?)?;
+            assert!(runtime.bridge().recover().await.unwrap_err().to_string().contains("paused"));
+            assert!(runtime.wake_owner("11111111-1111-4111-8111-111111111111", "remote").await?["ignored"].is_string());
+            assert!(runtime.publish_handoffs(&root,None).await.is_err());
+            let (shutdown, receiver) = tokio::sync::watch::channel(false);
+            let running = tokio::spawn({let config=config.clone(); let lifecycle=lifecycle.clone(); async move {
+                watch_desktop_control(runtime.clone(),runtime.bridge(),&config,Some(lifecycle),Some(receiver)).await
+            }});
+            let status=until_status(&root,|v|v["synchronizationPaused"]==true && v["running"]==true).await?;
+            assert_eq!(status["applicationHold"],false);
+            assert_eq!(status["synchronization"],"paused");
+            assert_eq!(status["rendererAdapters"]["state"],"ready");
+            assert_eq!(status["localHandoff"]["actions"],0);
+            assert!(status["pendingError"].is_null());
+            shutdown.send(true)?;
+            tokio::time::timeout(Duration::from_secs(5),running).await???;
+            assert_eq!(fs::read(root.join("desktop-state.json"))?,pending);
+            assert!(lifecycle.stopped.load(Ordering::SeqCst));
+            assert!(hooks::synchronization_paused(&root)?);
+        }
         Ok(())
     }
     #[tokio::test]

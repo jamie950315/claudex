@@ -33,6 +33,8 @@ enum ComponentAction: String, Decodable {
     case resolveUncertain = "resolve-uncertain"
     case modSetup = "mod-setup"
     case modEnable = "mod-enable"
+    case syncPause = "sync-pause"
+    case syncResume = "sync-resume"
 }
 
 struct SetupComponent: Decodable {
@@ -73,6 +75,8 @@ struct SetupReport: Decodable {
                 && old[component.id].map { $0 == .missing || $0 == .loginRequired } == true
         }
     }
+
+    var synchronizationPaused: Bool { components.contains { $0.id == "synchronization" && $0.action == .syncResume } }
 
     var attentionComponents: [SetupComponent] {
         components.filter { [.blocked, .missing, .loginRequired].contains($0.state)
@@ -234,6 +238,7 @@ enum SetupCommand {
     case login(String)
     case modSetup(receiver: Bool? = nil)
     case modEnable
+    case synchronization(paused: Bool)
 
     var arguments: [String] {
         switch self {
@@ -243,6 +248,7 @@ enum SetupCommand {
         case .login(let provider): return ["login", "--provider", provider]
         case .modSetup(let receiver): return ["mod-setup"] + (receiver.map { ["--receiver", $0 ? "enabled" : "disabled"] } ?? [])
         case .modEnable: return ["mod-setup", "--enable"]
+        case .synchronization(let paused): return [paused ? "sync-pause" : "sync-resume"]
         }
     }
 }

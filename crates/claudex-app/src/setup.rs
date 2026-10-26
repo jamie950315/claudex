@@ -341,6 +341,7 @@ impl AppSetup<'_> {
         let completion=broker.as_ref().and_then(|b|b.get("completionDelivery")).cloned().unwrap_or(json!({"diagnosticOnly":true,"deliveryGuaranteed":false,"selectedRoute":{"claude":null,"codex":"native-owner"},"originHooks":{"state":"unknown","codex":{"state":"unknown"},"claude":{"state":"unknown"}},"recipientReadiness":{"claude":{"state":"unknown","reason":"broker-unobserved"},"codex":{"state":"unknown","reason":"broker-unobserved"}},"nextStep":"Completion delivery capability is unavailable. Start or update the collaboration broker, then refresh status."}));
         let ready = completion_ready(&completion);
         rows.push(row("completion-delivery","Completion delivery",if ready{State::Ready}else{State::Waiting},if ready{"Origin hooks and the selected recipient routes report ready. Each message still requires native receipt."}else{completion["nextStep"].as_str().unwrap_or("Check the exact task notification status for origin hook trust, the selected route and recipient readiness.")},Some("diagnostics")));
+        let paused = claudex_sync::hooks::synchronization_paused(&self.root)?;
         let config = self.read("config.json")?.unwrap_or(Value::Null);
         let folder_setup = self
             .read("app-folder-setup-status.json")?
@@ -384,7 +385,12 @@ impl AppSetup<'_> {
             && watcher["synchronization"] == "ready"
             && !truthy(&watcher["waiting"])
             && !held;
-        rows.push(row("synchronization","Conversation synchronization",if config.is_null(){State::Missing}else if !compatible||held{State::Blocked}else if config["mode"]=="desktop"&&config["allProjects"]==true&&sync{State::Ready}else{State::Waiting},if !compatible{"This native runtime is outside the synchronization policy. Collaboration can still be set up independently."}else if held{watcher["blocked"]["reason"].as_str().unwrap_or("The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.")}else if sync{"The watcher reports ready and is running for all projects."}else{"Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work."},Some(if held{"diagnostics"}else{"retry"})));
+        if paused {
+            rows.push(row("synchronization", "Conversation synchronization", State::Waiting,
+                "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available. Remote Control handoffs and recovery are suspended.", Some("sync-resume")));
+        } else {
+        rows.push(row("synchronization","Conversation synchronization",if config.is_null(){State::Missing}else if !compatible||held{State::Blocked}else if config["mode"]=="desktop"&&config["allProjects"]==true&&sync{State::Ready}else{State::Waiting},if !compatible{"This native runtime is outside the synchronization policy. Collaboration can still be set up independently."}else if held{watcher["blocked"]["reason"].as_str().unwrap_or("The running watcher has paused synchronization for history or ownership checks. Existing work is preserved; no input is resent.")}else if sync{"The watcher reports ready and is running for all projects."}else{"Waiting for a current ready watcher and shared Desktop backend. Do not restart active native work."},Some("sync-pause")));
+        }
         let checking = live
             && watcher["rendererAdapters"]["state"]
                 .as_str()
@@ -398,11 +404,11 @@ impl AppSetup<'_> {
                     .as_i64()
                     .zip(folder_setup["updatedAt"].as_i64())
                     .is_some_and(|(a, b)| a >= b));
-        let folder_error = watcher["folderProjection"]["state"] == "error"
-            || attempt && folder_setup["state"] == "refused";
-        rows.push(row("folders","Native project folders",if folder_error{State::Blocked}else if checking||attempt{State::Waiting}else if config["folderProjection"]["enabled"]==true&&live&&watcher["folderProjection"]["state"]=="ready"{State::Ready}else{State::Waiting},if folder_error{"Folder installation or mapping was refused. Review diagnostics; saved preferences and originals are preserved."}else if checking{"Desktop integration is waiting for Claudex to resume and finish checking. No action is required."}else{"The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required."},Some(if folder_error||checking||attempt{"diagnostics"}else{"retry"})));
-        let handoff_error = watcher["localHandoff"]["state"] == "error";
-        rows.push(row("handoffs","Native predecessor archival",if handoff_error{State::Blocked}else if config["desktopLocalHandoff"]["enabled"]==true&&live&&watcher["localHandoff"]["state"]=="ready"{State::Ready}else{State::Waiting},if handoff_error{"The native handoff coordinator reports an unresolved guard. Original histories are preserved."}else{"Each archival requires verified history and native lifecycle checks. Original conversations remain preserved."},Some(if handoff_error{"diagnostics"}else{"retry"})));
+        let folder_error = !paused && (watcher["folderProjection"]["state"] == "error"
+            || attempt && folder_setup["state"] == "refused");
+        rows.push(row("folders","Native project folders",if paused{State::Waiting}else if folder_error{State::Blocked}else if checking||attempt{State::Waiting}else if config["folderProjection"]["enabled"]==true&&live&&watcher["folderProjection"]["state"]=="ready"{State::Ready}else{State::Waiting},if paused{"Folder mapping is paused with synchronization. Desktop command and cache maintenance continue."}else if folder_error{"Folder installation or mapping was refused. Review diagnostics; saved preferences and originals are preserved."}else if checking{"Desktop integration is waiting for Claudex to resume and finish checking. No action is required."}else{"The folder adapter is configured. Running-watcher verification and a normal idle Claude restart may still be required."},Some(if paused||folder_error||checking||attempt{"diagnostics"}else{"retry"})));
+        let handoff_error = !paused && watcher["localHandoff"]["state"] == "error";
+        rows.push(row("handoffs","Native predecessor archival",if paused{State::Waiting}else if handoff_error{State::Blocked}else if config["desktopLocalHandoff"]["enabled"]==true&&live&&watcher["localHandoff"]["state"]=="ready"{State::Ready}else{State::Waiting},if paused{"Predecessor archival is paused with synchronization. Original histories and pending handoffs are preserved."}else if handoff_error{"The native handoff coordinator reports an unresolved guard. Original histories are preserved."}else{"Each archival requires verified history and native lifecycle checks. Original conversations remain preserved."},Some(if paused||handoff_error{"diagnostics"}else{"retry"})));
         for r in &mut rows {
             if let Some(note) = notes.get(&r.id) {
                 r.state = State::Blocked;
@@ -430,6 +436,8 @@ impl AppSetup<'_> {
             components: rows,
             message: if phase == "ready" {
                 "Claudex is configured for all projects."
+            } else if paused {
+                "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available."
             } else if phase == "waiting" {
                 "Some integrations are waiting. Review the reported reasons and next steps."
             } else {
@@ -541,6 +549,42 @@ impl AppSetup<'_> {
             "Services could not stop safely; the application hold and ownership evidence were preserved."
         );
         self.stop_status().await
+    }
+    /// Change only history synchronization. The watcher remains the sole
+    /// renderer-maintenance owner; collaboration and warming keep their settings.
+    pub async fn synchronization(&self, paused: bool) -> Result<Report> {
+        self.writable()?;
+        platform::create_private(&self.root)?;
+        {
+            let _lock = FileLock::acquire(&self.root.join("app-setup.lock"), true)?;
+            claudex_sync::hooks::synchronization_paused(&self.root)?;
+            if paused {
+                self.save("synchronization-state.json", &json!({
+                    "version":1,"paused":true,"updatedAt":chrono::Utc::now().timestamp_millis()
+                }))?;
+            }
+            // Persist before draining so a crash/restart cannot resume history
+            // work. A busy native owner keeps its normal safe-shutdown refusal.
+            self.runtime.service("synchronization", "stop").await?;
+            let ownership = self.runtime.ownership().await?;
+            ensure!(ownership["allowed"] == true,
+                "Synchronization is paused; native work is still draining. Keep it paused until shutdown is verified.");
+            if paused {
+                let _operation = FileLock::acquire(&self.root.join("desktop-operation.lock"), true)?;
+                claudex_sync::local_handoff::revoke(&self.root, true)?;
+            }
+            if !paused {
+                self.save("synchronization-state.json", &json!({
+                    "version":1,"paused":false,"updatedAt":chrono::Utc::now().timestamp_millis()
+                }))?;
+            }
+            if self.read("service-install.json")?.is_some()
+                && !platform::stop_state(&self.root)?.is_some_and(|s| s["stopped"] == true || s["resuming"] == true)
+            {
+                self.runtime.service("synchronization", "start").await?;
+            }
+        }
+        self.inspect().await
     }
     pub async fn resume(&self) -> Result<()> {
         self.writable()?;
@@ -735,6 +779,8 @@ pub async fn dispatch(args: &[String], runtime: &dyn AppRuntime) -> Result<Value
         "" | "inspect" => serde_json::to_value(app.inspect().await?)?,
         "setup" => serde_json::to_value(app.setup().await?)?,
         "startup" => serde_json::to_value(app.startup().await?)?,
+        "sync-pause" => serde_json::to_value(app.synchronization(true).await?)?,
+        "sync-resume" => serde_json::to_value(app.synchronization(false).await?)?,
         "stop" => app.stop().await?,
         "stop-status" => app.stop_status().await?,
         "mod-setup" => {
@@ -895,7 +941,7 @@ mod tests {
         }
         async fn service(&self, provider: &str, action: &str) -> Result<Value> {
             if action == "stop" {
-                assert!(platform::stopped(&self.root)?);
+                assert!(platform::stopped(&self.root)? || claudex_sync::hooks::synchronization_paused(&self.root)?);
                 self.calls
                     .lock()
                     .unwrap()
@@ -904,7 +950,8 @@ mod tests {
                     bail!("busy owner")
                 }
             }
-            Ok(json!({"loaded":false,"stopped":true,"installed":false}))
+            if action == "start" { self.calls.lock().unwrap().push(format!("{provider}:{action}")); }
+            Ok(json!({"loaded":false,"stopped":true,"installed":true}))
         }
         async fn ownership(&self) -> Result<Value> {
             Ok(json!({"allowed":true,"blockers":[]}))
@@ -959,6 +1006,8 @@ mod tests {
         };
         assert!(app.setup().await.is_err());
         assert!(app.stop().await.is_err());
+        assert!(app.synchronization(true).await.is_err());
+        assert!(app.synchronization(false).await.is_err());
         assert!(
             app.request("models", json!({"defaultPermission":"workspace-write"}))
                 .await
@@ -966,6 +1015,42 @@ mod tests {
         );
         assert!(runtime.calls.lock().unwrap().is_empty());
         assert!(!t.path().join("app-stop.json").exists());
+    }
+    #[tokio::test]
+    async fn synchronization_pause_survives_global_resume_without_stopping_broker_or_warming() -> Result<()> {
+        let t = tempfile::tempdir()?;
+        std::fs::set_permissions(t.path(), std::fs::Permissions::from_mode(0o700))?;
+        let root = std::fs::canonicalize(t.path())?;
+        let runtime = Runtime {root:root.clone(),calls:Mutex::default(),fail_sync:false};
+        let app = AppSetup {root:root.clone(),read_only:false,runtime:&runtime};
+        storage_fixture(&root)?;
+        let anchors = json!([{"sessionId":"preserved-original"}]);
+        platform::write_json(&root.join("desktop-handoff.json"), &json!({"version":1,"kind":"claude-local-archive","actions":[{"id":"stale-action"}],"anchors":anchors}))?;
+        let pending = b"preserved pending evidence";
+        std::fs::write(root.join("desktop-state.json"), pending)?;
+        let report = app.synchronization(true).await?;
+        assert_eq!(report.components.iter().find(|r|r.id=="synchronization").unwrap().action.as_deref(),Some("sync-resume"));
+        let calls = runtime.calls.lock().unwrap().clone();
+        assert!(calls.contains(&"synchronization:stop".into()));
+        assert!(calls.contains(&"synchronization:start".into()));
+        assert!(!calls.iter().any(|c|c=="collaboration:stop"));
+        assert!(!root.join("app-stop.json").exists());
+        let handoffs = platform::optional_json(&root.join("desktop-handoff.json"), 1024*1024, true)?.unwrap();
+        assert_eq!(handoffs["actions"],json!([]));
+        assert_eq!(handoffs["anchors"],anchors);
+        assert!(claudex_sync::hooks::synchronization_paused(&root)?);
+        app.stop().await?;
+        app.resume().await?;
+        assert!(!platform::stopped(&root)?);
+        assert!(claudex_sync::hooks::synchronization_paused(&root)?);
+        assert!(runtime.calls.lock().unwrap().contains(&"collaboration:start".into()));
+        assert_eq!(std::fs::read(root.join("desktop-state.json"))?, pending);
+        app.synchronization(false).await?;
+        assert!(!claudex_sync::hooks::synchronization_paused(&root)?);
+        Ok(())
+    }
+    fn storage_fixture(root: &std::path::Path) -> Result<()> {
+        platform::write_json(&root.join("service-install.json"), &json!({}))
     }
     #[test]
     fn completion_global_readiness_requires_hooks_and_claude_receiver_not_codex_task() {

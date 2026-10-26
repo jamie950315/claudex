@@ -398,6 +398,7 @@ impl Runtime {
         title: &str,
         maintenance: bool,
     ) -> Result<Arc<Mutex<OwnerEntry>>> {
+        ensure!(!crate::hooks::synchronization_paused(&self.options.root)?, "Conversation synchronization is paused.");
         ensure!(
             !self
                 .bridge_state()?
@@ -478,6 +479,7 @@ impl Runtime {
                     bail!("{error}");
                 }
                 if entry.owner.session.is_none() {
+                    ensure!(!crate::hooks::synchronization_paused(&self.options.root)?, "Conversation synchronization is paused.");
                     let permission = if maintenance {
                         None
                     } else {
@@ -1629,8 +1631,8 @@ impl Runtime {
     pub async fn wake_owner(&self, native_id: &str, remote_id: &str) -> Result<Value> {
         Uuid::parse_str(native_id)?;
         let _lock = FileLock::acquire(&self.options.root.join("desktop-operation.lock"), true)?;
-        if crate::hooks::app_stopped(&self.options.root)? {
-            return Ok(json!({"ignored":"application stopped"}));
+        if crate::hooks::synchronization_held(&self.options.root)? {
+            return Ok(json!({"ignored":"synchronization held"}));
         }
         let state = crate::owner_wake::ledger(&self.options.root)?;
         let target = match crate::owner_wake::inspect(&self.options.root, &state, remote_id, false)?
@@ -1665,8 +1667,8 @@ impl Runtime {
             }
         }
         target.recheck()?;
-        if crate::hooks::app_stopped(&self.options.root)? {
-            return Ok(json!({"ignored":"application stopped"}));
+        if crate::hooks::synchronization_held(&self.options.root)? {
+            return Ok(json!({"ignored":"synchronization held"}));
         }
         let active = self
             .owner(&record.conversation_id, &record.cwd, self.title(record))
@@ -1680,6 +1682,7 @@ impl Runtime {
         Ok(json!({"woken":true}))
     }
     pub async fn publish_folders(&self) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.options.root)?, "Conversation synchronization is paused.");
         let _lock = FileLock::acquire(&self.options.root.join("desktop-operation.lock"), true)?;
         let state = self.bridge_state()?;
         crate::owner_wake::publish_folders(&self.options.root, &state)
@@ -1693,6 +1696,7 @@ impl Runtime {
         registry: &Path,
         scope: Option<&std::collections::BTreeSet<String>>,
     ) -> Result<Value> {
+        ensure!(!crate::hooks::synchronization_paused(&self.options.root)?, "Conversation synchronization is paused.");
         let _lock = FileLock::acquire(&self.options.root.join("desktop-operation.lock"), true)?;
         let state = self.bridge_state()?;
         self.handoffs

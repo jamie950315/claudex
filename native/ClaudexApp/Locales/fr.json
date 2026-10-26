@@ -406,5 +406,11 @@
   "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.": "Utilisez les commandes de réception de Claudex Mod pour activer explicitement nativeWake et selfWake.",
   "Check the recipient session's native inbound-message policy.": "Vérifiez la politique native des messages entrants de la session du destinataire.",
   "Verify that the recipient has loaded the supported chat-wake adapter.": "Vérifiez que le destinataire a chargé l’adaptateur chat-wake pris en charge.",
-  "Check the exact task recipient and native SendMessage capability.": "Vérifiez le destinataire exact de la tâche et la capacité native SendMessage."
+  "Check the exact task recipient and native SendMessage capability.": "Vérifiez le destinataire exact de la tâche et la capacité native SendMessage.",
+  "Pause synchronization": "Suspendre la synchronisation",
+  "Resume synchronization": "Reprendre la synchronisation",
+  "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available.": "La synchronisation est suspendue. Les appels entre modèles, les commandes et le maintien du cache activé restent disponibles.",
+  "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available. Remote Control handoffs and recovery are suspended.": "La synchronisation est suspendue. Les appels entre modèles, les commandes et le maintien du cache activé restent disponibles. Les transferts et la récupération Remote Control sont suspendus.",
+  "Folder mapping is paused with synchronization. Desktop command and cache maintenance continue.": "La correspondance des dossiers est suspendue avec la synchronisation. Les commandes Desktop et la maintenance du cache continuent.",
+  "Predecessor archival is paused with synchronization. Original histories and pending handoffs are preserved.": "L’archivage des conversations précédentes est suspendu avec la synchronisation. Les historiques originaux et les transferts en attente sont conservés."
 }

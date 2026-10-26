@@ -181,6 +181,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn synchronization_pause_keeps_mailbox_commands_independent_without_sync_hints() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir()?;
+        std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o700))?;
+        let root = std::fs::canonicalize(temp.path())?;
+        storage::write_json(root.join("synchronization-state.json"), &json!({"version":1,"paused":true}))?;
+        let mailbox = ChatMailbox::new(root.join("collaboration/chat-mailbox"));
+        mailbox.hook(Provider::Codex, SESSION, Path::new("/synthetic/project"), "SessionStart", false, "")?;
+        mailbox.send(&json!({"fromProvider":"claude","targetProvider":"codex","targetSessionId":SESSION,"message":"synthetic peer context","requestId":"paused-mailbox"}),None)?;
+        let output = handle(&root,"codex", &json!({"hook_event_name":"Stop","session_id":SESSION,"cwd":"/synthetic/project"})).await?.unwrap();
+        assert_eq!(output["decision"],"block");
+        assert!(output["reason"].as_str().unwrap().contains("synthetic peer context"));
+        assert!(!root.join("sync-events").exists());
+        assert!(!hooks::app_stopped(&root)?);
+        Ok(())
+    }
+    #[tokio::test]
     async fn stopped_and_subagent_hooks_neither_register_nor_publish() -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::tempdir()?;

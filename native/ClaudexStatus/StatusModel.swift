@@ -40,7 +40,7 @@ func statusTimestamp(_ value: Any?) -> Double? {
 }
 
 func initialChecking(_ watcher: [String: Any]) -> Bool {
-    guard watcher["mode"] as? String == "desktop" else { return false }
+    guard watcher["synchronizationPaused"] as? Bool != true, watcher["mode"] as? String == "desktop" else { return false }
     let explicitSweep = watcher["checkingConversationCount"] != nil || watcher.keys.contains("initialSweepCompletedAt")
     let completion = explicitSweep ? "initialSweepCompletedAt" : "foregroundCompletedAt"
     return watcher[completion] as? NSNumber == nil
@@ -178,6 +178,10 @@ func classifyHealthBase(watcher: [String: Any]?, service: [String: Any]?, now: D
         // Fresh status is not proof that every conversation has been delivered.
     } else {
         return report("unknown", "Status update overdue", "The process is alive, but its last status update is over two minutes old. It may be busy; synchronization is not confirmed.", true)
+    }
+    if watcher["synchronizationPaused"] as? Bool == true {
+        return report("paused", "Synchronization paused",
+                      "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available.", operational: true)
     }
     if let blocked = watcher["blocked"] as? [String: Any] {
         return report("paused", "Synchronization paused", blocked["reason"] as? String ?? "A saved handoff needs verified recovery.", true,

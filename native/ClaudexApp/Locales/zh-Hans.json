@@ -406,5 +406,11 @@
   "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.": "请使用 Claudex Mod 的接收端控件，明确启用 nativeWake 和 selfWake。",
   "Check the recipient session's native inbound-message policy.": "请检查接收者会话的原生传入消息策略。",
   "Verify that the recipient has loaded the supported chat-wake adapter.": "请确认接收者已加载受支持的 chat-wake adapter。",
-  "Check the exact task recipient and native SendMessage capability.": "请检查该任务的确切接收者与原生 SendMessage 能力。"
+  "Check the exact task recipient and native SendMessage capability.": "请检查该任务的确切接收者与原生 SendMessage 能力。",
+  "Pause synchronization": "暂停同步",
+  "Resume synchronization": "恢复同步",
+  "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available.": "同步已暂停。跨模型调用、指令及自行启用的缓存保温仍可使用。",
+  "Synchronization is paused. Cross-model calls, commands and opt-in cache warming remain available. Remote Control handoffs and recovery are suspended.": "同步已暂停。跨模型调用、指令及自行启用的缓存保温仍可使用；Remote Control 接续与事务恢复暂停。",
+  "Folder mapping is paused with synchronization. Desktop command and cache maintenance continue.": "文件夹映射随同步暂停。Desktop 指令与缓存维护继续运行。",
+  "Predecessor archival is paused with synchronization. Original histories and pending handoffs are preserved.": "前身对话归档随同步暂停。原始历史与待处理接续事务均保留。"
 }
