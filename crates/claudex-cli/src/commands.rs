@@ -10,6 +10,7 @@ pub const HELP:&str="Claudex: bounded conversation synchronization and opt-in mo
   claudex init [--all-projects | --project PATH] [--codex-home PATH] [--claude-home PATH]
   claudex track --from codex|claude --source PATH [--title TITLE]
   claudex sync CONVERSATION_ID [--from codex|claude]
+  claudex handoff-profile CONVERSATION_ID  Recreate one unchanged Local owner in the selected Desktop profile (no inference)
   claudex watch                    Event-driven conversation synchronization
   claudex hooks install|status     Native completion hooks (no inference)
   claudex status                   Current identities, pending work and diagnostics
@@ -125,6 +126,7 @@ pub async fn run(raw: &[String]) -> Result<()> {
             raw[index].as_str(),
             "track"
                 | "sync"
+                | "handoff-profile"
                 | "watch"
                 | "gc"
                 | "recover"

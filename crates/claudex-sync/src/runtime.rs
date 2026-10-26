@@ -389,7 +389,7 @@ impl Runtime {
         )
     }
     async fn owner(&self, id: &str, cwd: &str, title: &str) -> Result<Arc<Mutex<OwnerEntry>>> {
-        self.owner_profile(id, cwd, title, false).await
+        self.owner_profile(id, cwd, title, false, false).await
     }
     async fn owner_profile(
         &self,
@@ -397,6 +397,7 @@ impl Runtime {
         cwd: &str,
         title: &str,
         maintenance: bool,
+        require_local: bool,
     ) -> Result<Arc<Mutex<OwnerEntry>>> {
         loop {
             let entry = {
@@ -435,6 +436,46 @@ impl Runtime {
                 let handle = entry.clone();
                 let mut entry = entry.lock().await;
                 entry.used = Instant::now();
+                let disk = crate::owner::owned_state(&entry.owner.state_path)?;
+                if disk
+                    .as_ref()
+                    .is_some_and(|state| state["sessionId"] != entry.owner.state["sessionId"])
+                {
+                    let retired = self.options.root.join("owners/retired").join(format!(
+                        "{}-{}.json",
+                        digest_bytes(id.as_bytes()),
+                        entry.owner.state["sessionId"].as_str().unwrap_or("")
+                    ));
+                    let retired = crate::owner::owned_state(&retired)?;
+                    ensure!(
+                        entry.owner.state["transport"] == "local-mod"
+                            && entry.owner.state["localPhase"] == "adopted"
+                            && entry.owner.session.is_none()
+                            && entry.owner.state["pending"].is_null()
+                            && entry.owner.state["reset"].is_null()
+                            && retired.as_ref().is_some_and(|old| old["sessionId"]
+                                == entry.owner.state["sessionId"]
+                                && old["conversationId"] == id
+                                && old["cwd"] == entry.owner.state["cwd"]
+                                && old["pending"].is_null()
+                                && old["reset"].is_null())
+                            && disk
+                                .as_ref()
+                                .is_some_and(|state| state["conversationId"] == id),
+                        "Cached owner generation changed without an exact retired Local predecessor."
+                    );
+                    entry.owner.close().await?;
+                    drop(entry);
+                    let mut owners = self.owners.lock().await;
+                    if owners
+                        .get(id)
+                        .is_some_and(|saved| Arc::ptr_eq(saved, &handle))
+                    {
+                        owners.remove(id);
+                    }
+                    drop(owners);
+                    continue;
+                }
                 ensure!(
                     !maintenance || entry.owner.state["transport"] != "local-mod",
                     "Native Local context maintenance must be performed by its current Desktop owner; SDK takeover is forbidden."
@@ -460,6 +501,15 @@ impl Runtime {
                     }
                     drop(owners);
                     continue;
+                }
+                if require_local {
+                    ensure!(
+                        !maintenance
+                            && crate::local_sync::configured_transport(&self.options.root)?
+                                == "local-mod",
+                        "Profile handoff requires the configured native Local transport."
+                    );
+                    entry.owner.use_local().await?;
                 }
                 if !maintenance
                     && entry.owner.state["remoteId"].is_null()
@@ -509,7 +559,7 @@ impl Runtime {
                 return Ok(entry);
             }
         }
-        self.owner_profile(&r.conversation_id, &r.cwd, self.title(r), true)
+        self.owner_profile(&r.conversation_id, &r.cwd, self.title(r), true, false)
             .await
     }
     fn title<'a>(&self, r: &'a Record) -> &'a str {
@@ -549,6 +599,21 @@ impl Runtime {
                 .ok_or_else(|| anyhow::anyhow!("Home directory unavailable."))?,
         );
         claudex_core::claude_desktop::registry(&home, config["desktopHome"].as_str())
+    }
+    fn profile_handoff(&self, record: &Record) -> Result<Option<Value>> {
+        let config = storage::read_json_or(self.options.root.join("config.json"), Value::Null)?;
+        let home = PathBuf::from(
+            std::env::var_os("HOME")
+                .ok_or_else(|| anyhow::anyhow!("Home directory unavailable."))?,
+        );
+        let (saved, _) = self.saved_owner(record)?;
+        profile_handoff_proof(
+            &self.options.root,
+            &home,
+            config["desktopHome"].as_str(),
+            record,
+            &saved,
+        )
     }
     fn saved_owner(&self, r: &Record) -> Result<(Value, bool)> {
         let state = self.options.root.join("owners").join(format!(
@@ -2023,6 +2088,16 @@ impl Adapter for NativeAdapter {
         }
         Ok(images.then(|| "images".into()))
     }
+    async fn needs_profile_handoff(&self, r: &Record, data: &Reading) -> Result<bool> {
+        if self.side != Side::Claude || !r.managed || !r.verified || r.kind != "owner" {
+            return Ok(false);
+        }
+        ensure!(
+            !data.incomplete_tail && r.checkpoint.exact_dialogue(&data.common)?,
+            "Deployment replacement requires its unchanged complete owner checkpoint."
+        );
+        Ok(self.runtime.profile_handoff(r)?.is_some())
+    }
     async fn plan(&self, input: &PlanInput) -> Result<Record> {
         // Refuse an inactive deployment before publishing a global pending
         // operation or acquiring a new owner. A profile switch is not a lease
@@ -2030,7 +2105,10 @@ impl Adapter for NativeAdapter {
         if self.side == Side::Claude {
             if let Some(target) = input.target.as_ref().filter(|target| target.managed) {
                 let (saved, _) = self.runtime.saved_owner(target)?;
-                if saved["transport"] == "local-mod" && saved["localPhase"] == "adopted" {
+                if !input.profile_handoff
+                    && saved["transport"] == "local-mod"
+                    && saved["localPhase"] == "adopted"
+                {
                     require_active_local_owner(&self.runtime.desktop_registry()?, target)?;
                 }
             }
@@ -2051,7 +2129,7 @@ impl Adapter for NativeAdapter {
                 .insert("imageProjectionVersion".into(), json!(1));
         }
         if self.side == Side::Claude {
-            if input.relocation {
+            if input.relocation || input.profile_handoff {
                 let target = input
                     .target
                     .as_ref()
@@ -2060,9 +2138,25 @@ impl Adapter for NativeAdapter {
                     target.managed
                         && target.verified
                         && target.kind == "owner"
-                        && target.cwd != input.common.cwd()?,
+                        && (input.profile_handoff || target.cwd != input.common.cwd()?),
                     "Owner relocation requires its exact verified prior owner."
                 );
+                if input.profile_handoff {
+                    ensure!(
+                        !input.relocation
+                            && !input.context_reset
+                            && !input.context_refresh
+                            && target.cwd == input.common.cwd()?,
+                        "Profile handoff cannot combine another owner transition."
+                    );
+                    let proof = self.runtime.profile_handoff(target)?.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Desktop deployment no longer requires this profile handoff."
+                        )
+                    })?;
+                    self.assert_idle(target).await?;
+                    record.extra.insert("profileHandoff".into(), proof);
+                }
                 let active = self
                     .runtime
                     .owners
@@ -2070,7 +2164,8 @@ impl Adapter for NativeAdapter {
                     .await
                     .get(&input.conversation_id)
                     .cloned();
-                if let Some(active) = active {
+                let already_retired = input.profile_handoff && self.runtime.saved_owner(target)?.1;
+                if let Some(active) = active.filter(|_| !already_retired) {
                     let mut entry = active.lock().await;
                     ensure!(
                         entry.owner.state["sessionId"] == target.native_id,
@@ -2093,6 +2188,7 @@ impl Adapter for NativeAdapter {
                     input.common.cwd()?,
                     &input.title,
                     input.context_reset,
+                    input.profile_handoff,
                 )
                 .await?;
             let owner = owner.lock().await;
@@ -2102,6 +2198,7 @@ impl Adapter for NativeAdapter {
             }
             let refresh =
                 !input.relocation
+                    && !input.profile_handoff
                     && !input.context_reset
                     && archive
                     && input.target.as_ref().is_some_and(|t| t.managed)
@@ -2117,7 +2214,10 @@ impl Adapter for NativeAdapter {
             record.kind = "owner".into();
             if let Some(target) = &input.target {
                 ensure!(
-                    !target.managed || target.native_id == record.native_id || input.relocation,
+                    !target.managed
+                        || target.native_id == record.native_id
+                        || input.relocation
+                        || input.profile_handoff,
                     "Existing Claude owner changed identity."
                 );
             }
@@ -2619,6 +2719,148 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct ProfileFixture {
+        _temp: tempfile::TempDir,
+        root: PathBuf,
+        home: PathBuf,
+        first: PathBuf,
+        third: PathBuf,
+        record: Record,
+        saved: Value,
+        journal: PathBuf,
+    }
+    fn profile_fixture() -> Result<ProfileFixture> {
+        let temp = tempfile::tempdir()?;
+        let root = storage::private_directory(temp.path())?;
+        let home = storage::private_directory(root.join("home"))?;
+        let first = storage::private_directory(
+            home.join("Library/Application Support/Claude/claude-code-sessions"),
+        )?;
+        let third = storage::private_directory(
+            home.join("Library/Application Support/Claude-3p/claude-code-sessions"),
+        )?;
+        storage::write_json(
+            claudex_core::claude_desktop::configuration_path(&home),
+            &json!({"deploymentMode":"3p"}),
+        )?;
+        let conversation = Uuid::new_v4().to_string();
+        let operation = Uuid::new_v4().to_string();
+        let session = Uuid::new_v4().to_string();
+        let local = format!("local_{}", Uuid::new_v4());
+        let mut record = Record::source(Side::Claude, &root.join("native.jsonl"), &session);
+        record.conversation_id = conversation.clone();
+        record.cwd = root.to_str().unwrap().into();
+        record.kind = "owner".into();
+        record.managed = true;
+        record.verified = true;
+        let saved = json!({"version":1,"sessionId":session,"conversationId":conversation,"cwd":root,"claudeHome":home.join(".claude"),"transport":"local-mod","localPhase":"adopted","nativeStartOperation":operation});
+        let registry_path = first.join(format!("{local}.json"));
+        storage::write_json(
+            &registry_path,
+            &json!({"sessionId":local,"cliSessionId":session,"cwd":root,"title":"Fixture","isArchived":false,"lastActivityAt":1}),
+        )?;
+        let mapping =
+            crate::desktop_mapping::mappings(&first, &[session.clone()])?[&session].clone();
+        let mut provisional = record.clone();
+        provisional.native_id = Uuid::new_v4().to_string();
+        provisional.verified = false;
+        let original_owner = json!({"sessionId":provisional.native_id,"conversationId":conversation,"cwd":root,"claudeHome":home.join(".claude")});
+        let pending = Pending {
+            phase: crate::desktop::Phase::Prepared,
+            operation_id: operation.clone(),
+            record: provisional,
+            source_id: Uuid::new_v4().to_string(),
+            target_id: None,
+            archive_original_id: None,
+            reuse: false,
+            common: Common {
+                meta: Map::new(),
+                messages: vec![],
+                extra: Map::new(),
+            },
+            checkpoint: Default::default(),
+            previous: Default::default(),
+            extra: Map::new(),
+        };
+        let directory = storage::private_directory(root.join("local-start"))?;
+        let journal = directory.join(format!("{operation}.json"));
+        storage::write_json(
+            &journal,
+            &json!({"version":1,"registryRoot":first,"opId":operation,"originalPending":pending,"originalOwner":original_owner,"resolved":record,"newOwner":saved,"targetProof":{"mapping":mapping},"prewarm":{"result":{"sessionId":local}},"status":"packet-acknowledged"}),
+        )?;
+        Ok(ProfileFixture {
+            _temp: temp,
+            root,
+            home,
+            first,
+            third,
+            record,
+            saved,
+            journal,
+        })
+    }
+    #[test]
+    fn profile_replacement_requires_the_retained_creation_identity_in_a_distinct_native_store()
+    -> Result<()> {
+        let f = profile_fixture()?;
+        let before = storage::read_stable(&f.journal)?;
+        let proof = profile_handoff_proof(&f.root, &f.home, None, &f.record, &f.saved)?.unwrap();
+        assert_eq!(proof["fromRegistry"], json!(f.first));
+        assert_eq!(proof["toRegistry"], json!(f.third));
+        assert_eq!(before.identity, storage::read_stable(&f.journal)?.identity);
+        let mut legacy = storage::read_json(&f.journal)?;
+        legacy.as_object_mut().unwrap().remove("registryRoot");
+        storage::write_json(&f.journal, &legacy)?;
+        assert!(profile_handoff_proof(&f.root, &f.home, None, &f.record, &f.saved)?.is_some());
+        storage::write_json(
+            claudex_core::claude_desktop::configuration_path(&f.home),
+            &json!({"deploymentMode":"1p"}),
+        )?;
+        assert!(profile_handoff_proof(&f.root, &f.home, None, &f.record, &f.saved)?.is_none());
+        Ok(())
+    }
+    #[test]
+    fn profile_replacement_rejects_unproven_ack_missing_original_and_cross_store_identity_reuse()
+    -> Result<()> {
+        for change in ["ack", "native", "missing", "duplicate", "explicit"] {
+            let f = profile_fixture()?;
+            let mut journal = storage::read_json(&f.journal)?;
+            match change {
+                "ack" => {
+                    journal["status"] = json!("packet-pending");
+                    storage::write_json(&f.journal, &journal)?;
+                }
+                "native" => {
+                    journal["targetProof"]["mapping"]["nativeId"] = json!(Uuid::new_v4());
+                    storage::write_json(&f.journal, &journal)?;
+                }
+                "missing" => fs::remove_file(
+                    journal["targetProof"]["mapping"]["registryPath"]
+                        .as_str()
+                        .unwrap(),
+                )?,
+                "duplicate" => {
+                    let path = Path::new(
+                        journal["targetProof"]["mapping"]["registryPath"]
+                            .as_str()
+                            .unwrap(),
+                    );
+                    storage::write_json(
+                        f.third.join(path.file_name().unwrap()),
+                        &storage::read_json(path)?,
+                    )?;
+                }
+                _ => {}
+            }
+            let explicit = (change == "explicit").then(|| f.third.to_str().unwrap());
+            assert!(
+                profile_handoff_proof(&f.root, &f.home, explicit, &f.record, &f.saved).is_err(),
+                "{change}"
+            );
+            assert!(!f.root.join("desktop-state.json").exists());
+        }
+        Ok(())
+    }
     #[test]
     fn inactive_local_deployment_cannot_prepare_an_append_or_borrow_another_store() -> Result<()> {
         let temp = tempfile::tempdir()?;
@@ -2642,6 +2884,68 @@ mod tests {
         );
         assert!(!root.join("desktop-state.json").exists());
         assert_eq!(crate::desktop_mapping::mappings(&first, &[id])?.len(), 1);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn cached_local_owner_reloads_only_an_exact_retired_generation_without_a_native_process()
+    -> Result<()> {
+        for (retired, uncertain) in [(false, false), (true, false), (true, true)] {
+            let temp = tempfile::tempdir()?;
+            let root = storage::private_directory(temp.path())?;
+            let codex = storage::private_directory(root.join("codex"))?;
+            let claude = storage::private_directory(root.join("claude"))?;
+            let runtime = Runtime::new(Options::from_config(
+                &root,
+                &json!({"codexHome":codex,"claudeHome":claude}),
+            )?)?;
+            let conversation = Uuid::new_v4().to_string();
+            let session = Uuid::new_v4().to_string();
+            let owners = storage::private_directory(root.join("owners"))?;
+            let file = owners.join(format!("{}.json", digest_bytes(conversation.as_bytes())));
+            let state = json!({"version":1,"conversationId":conversation,"sessionId":session,"cwd":root,"claudeHome":claude,"transport":"local-mod","localPhase":"adopted","remoteId":null,"pending":null,"reset":null,"lastAppend":null});
+            storage::write_json(&file, &state)?;
+            let cached = runtime
+                .owner(&conversation, root.to_str().unwrap(), "Fixture")
+                .await?;
+            assert!(cached.lock().await.owner.session.is_none());
+            let mut record = Record::source(
+                Side::Claude,
+                &codecs::claude_path(&claude, root.to_str().unwrap(), &session)?,
+                &session,
+            );
+            record.conversation_id = conversation.clone();
+            record.cwd = root.to_str().unwrap().into();
+            record.managed = true;
+            record.verified = true;
+            record.kind = "owner".into();
+            if retired {
+                Owner::retire(&root, &record)?;
+            }
+            let mut replacement = state.clone();
+            replacement["sessionId"] = json!(Uuid::new_v4());
+            storage::write_json(&file, &replacement)?;
+            if uncertain {
+                cached.lock().await.owner.state["pending"] = json!({"operationId":"uncertain"});
+            }
+            let current = runtime
+                .owner(&conversation, root.to_str().unwrap(), "Fixture")
+                .await;
+            if retired && !uncertain {
+                let current = current?;
+                assert_eq!(
+                    current.lock().await.owner.state["sessionId"],
+                    replacement["sessionId"]
+                );
+                assert!(current.lock().await.owner.session.is_none());
+                assert!(!Arc::ptr_eq(&cached, &current));
+            } else {
+                assert!(current.is_err());
+            }
+            assert_eq!(
+                cached.lock().await.owner.state["sessionId"],
+                state["sessionId"]
+            );
+        }
         Ok(())
     }
     #[tokio::test]
@@ -2687,6 +2991,7 @@ mod tests {
             title: "Fixture".into(),
             target: Some(target),
             relocation: false,
+            profile_handoff: false,
             context_reset: false,
             context_refresh: false,
         };
@@ -3667,6 +3972,87 @@ mod tests {
         assert!(runtime.inspect(&record).await.is_err());
         Ok(())
     }
+}
+
+fn profile_handoff_proof(
+    root: &Path,
+    home: &Path,
+    explicit: Option<&str>,
+    record: &Record,
+    saved: &Value,
+) -> Result<Option<Value>> {
+    if saved["transport"] != "local-mod" || saved["localPhase"] != "adopted" {
+        return Ok(None);
+    }
+    let active = claudex_core::claude_desktop::registry(home, explicit)?;
+    let mappings = crate::desktop_mapping::mappings(&active, &[record.native_id.clone()])?;
+    if let Some(mapping) = mappings.get(&record.native_id) {
+        ensure!(
+            mapping["cwd"] == record.cwd && mapping["isArchived"] == false,
+            "Selected Desktop Local owner identity changed."
+        );
+        if let Some(operation) = saved["nativeStartOperation"].as_str() {
+            let retained = crate::local_start::deployment_mapping(root, record, operation)?;
+            ensure!(
+                mapping["registryPath"] == retained["mapping"]["registryPath"]
+                    && mapping["sessionId"] == retained["mapping"]["sessionId"],
+                "Selected Desktop mapping contradicts the owner's saved deployment identity."
+            );
+        }
+        return Ok(None);
+    }
+    ensure!(
+        explicit.is_none(),
+        "Configured Desktop registry does not contain its exact Local owner."
+    );
+    ensure!(
+        crate::local_sync::configured_transport(root)? == "local-mod",
+        "Profile handoff requires the configured native Local transport."
+    );
+    let selected = claudex_core::claude_desktop::Selection::read(home)?;
+    ensure!(
+        selected.registry() == active,
+        "Desktop deployment changed during profile inspection."
+    );
+    let operation = saved["nativeStartOperation"].as_str().ok_or_else(|| anyhow::anyhow!(
+        "Inactive Local owner lacks a native creation journal; deployment replacement is not proven."
+    ))?;
+    let retained = crate::local_start::deployment_mapping(root, record, operation)?;
+    let path = Path::new(retained["mapping"]["registryPath"].as_str().unwrap());
+    let roots: Vec<_> = ["Claude", "Claude-3p"]
+        .iter()
+        .map(|name| {
+            home.join("Library/Application Support")
+                .join(name)
+                .join("claude-code-sessions")
+        })
+        .collect();
+    let from = roots
+        .iter()
+        .find(|candidate| path.starts_with(candidate))
+        .ok_or_else(|| {
+            anyhow::anyhow!("Saved Local mapping is outside the native deployment stores.")
+        })?;
+    ensure!(
+        *from != active
+            && (retained["registryRoot"].is_null() || retained["registryRoot"] == json!(from)),
+        "Saved Local owner deployment contradicts its retained creation proof."
+    );
+    let previous = crate::desktop_mapping::mappings(from, &[record.native_id.clone()])?;
+    let previous = previous.get(&record.native_id).ok_or_else(|| {
+        anyhow::anyhow!("Previous deployment no longer contains its exact Local owner.")
+    })?;
+    ensure!(
+        previous["registryPath"] == retained["mapping"]["registryPath"]
+            && previous["sessionId"] == retained["mapping"]["sessionId"]
+            && previous["cwd"] == record.cwd
+            && previous["isArchived"] == false,
+        "Previous deployment Local identity changed; profile handoff refused."
+    );
+    selected.verify()?;
+    Ok(Some(
+        json!({"version":1,"fromRegistry":from,"toRegistry":active,"previousNativeId":record.native_id,"previousRegistryPath":path}),
+    ))
 }
 
 fn require_active_local_owner(registry: &Path, record: &Record) -> Result<()> {

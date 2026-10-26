@@ -659,6 +659,27 @@ pub fn record_ack(root: &Path, op: &str, session: &str, rows: &[Value]) -> Resul
     j["status"] = json!("packet-acknowledged");
     storage::write_json(path(root, op)?, &j)
 }
+/// Recover only the retained creation identity, never an active writer lease.
+pub(crate) fn deployment_mapping(root: &Path, record: &Record, operation: &str) -> Result<Value> {
+    let j = journal(root, operation)?;
+    let mapping = &j["targetProof"]["mapping"];
+    ensure!(
+        j["status"] == "packet-acknowledged"
+            && j["resolved"]["nativeId"] == record.native_id
+            && j["resolved"]["path"] == json!(record.path)
+            && j["resolved"]["cwd"] == record.cwd
+            && j["resolved"]["conversationId"] == record.conversation_id
+            && j["newOwner"]["sessionId"] == record.native_id
+            && mapping["nativeId"] == record.native_id
+            && mapping["sessionId"] == j["prewarm"]["result"]["sessionId"]
+            && mapping["cwd"] == record.cwd
+            && mapping["registryPath"]
+                .as_str()
+                .is_some_and(|s| Path::new(s).is_absolute()),
+        "Saved native Local deployment lacks its complete creation and packet-ACK proof."
+    );
+    Ok(json!({"registryRoot":j["registryRoot"],"mapping":mapping}))
+}
 /// The pending record remains old until the coordinator has verified the new
 /// packet ACK. Only this retained, exact migration can authorize that target.
 pub fn matches_pending(

@@ -52,9 +52,11 @@ stores. Unsafe, malformed or unsupported settings refuse selection. Explicit
 registry per request rather than caching the startup deployment. This setting
 does not establish a running renderer, model route or writer lease. Never copy
 registries or credentials, merge Local IDs across stores, or reinterpret an
-already claimed operation under a different registry. A managed adopted owner
-outside the selected registry refuses a new append plan before global pending
-publication; its original owner, transcript and recovery journals remain intact.
+already claimed operation under a different registry. An inactive adopted owner
+cannot receive an append. Deployment replacement requires its retained native
+creation/packet-ACK journal, exact old registry/UI/CLI identity and unchanged
+complete canonical prefix. Unknown, missing or contradictory origin proof holds
+before publishing global pending work; it never authorizes a borrowed identity.
 New Local-start journals bind `registryRoot`; manifest version 3 requires the
 renderer to match that root against its own compiled deployment before and
 after claim, so a saved mode change cannot authorize the still-running prior
@@ -62,6 +64,18 @@ profile. Legacy manifests cannot authorize this renderer. An unclaimed legacy
 journal may bind before its first action; an already started legacy journal
 requires its saved exact registry mapping or the existing narrow prewrite
 certification, never an inferred profile or another invocation.
+
+Replace a profile only when an actual Codex delivery needs it or through scoped
+`handoff-profile CONVERSATION_ID`; idle startup never migrates all owners. The
+explicit command requires an idle, unchanged verified pair. Retire the exact
+old app-owned metadata through `Owner::retire`, retain its native transcript and
+registry, and allocate a distinct native Local owner with the full packet and
+empty previous checkpoint. Promote only through ordinary complete packet ACK.
+The old record is a permanent `retired-owner`, never a disposable backup or
+archival intent. Pending work stays bound to its selected registry after a mode
+change, and unknown actions never resend. A second runtime may reload an exact
+retired Local metadata generation without starting a process; an unexplained
+generation change or any native SDK writer still refuses replacement.
 
 `local-start/<pending operation>.json` retains the full original pending/owner
 and exact original seed file identity when present. Its separate `prewarm`,

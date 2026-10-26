@@ -320,6 +320,29 @@ to synchronize the selected history normally. Applied or uncertain delivery,
 active work, independently edited content and an existing counterpart remain
 blocked; this command cannot merge branches or cancel an uncertain write.
 
+### Continue one conversation in another Desktop profile
+
+First-party and Gateway profiles have separate native Local-session stores.
+Claudex never copies their registries or credentials. After a reviewed native
+profile switch and restart, the next completed Codex delivery can create a new
+Local continuation in the selected profile, with the full synchronized history.
+The previous Local owner and its history remain preserved.
+
+To move one idle, fully synchronized conversation without a new model turn:
+
+```sh
+claudex handoff-profile CONVERSATION_ID
+```
+
+The selected profile must have the enabled Mod and a supported, loaded native
+frontend consumer. A saved Gateway setting alone does not establish that
+readiness. The command refuses pending work, incomplete or changed histories,
+and missing native creation proofs. Native workspace trust may still require
+normal approval. Completion requires the full packet ACK and normal promotion;
+an awaiting result remains pending for ordinary recovery, never a reason to
+repeat native actions. Unchanged conversations are not migrated in bulk at
+startup. Switching profiles never moves an already pending transaction.
+
 ### Stop tracking while preserving history
 
 During normal synchronization, Claudex automatically stops tracking a conversation

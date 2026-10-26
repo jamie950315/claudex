@@ -257,6 +257,20 @@ text; encrypted reasoning and native permissions do not migrate.
 
 ## Native Local target resolution
 
+An authorized Desktop deployment-profile handoff is a new transaction, not a
+reroute of existing pending work. Only a needed Codex-to-Claude delivery or
+explicit `handoff-profile CONVERSATION_ID` may request it; unchanged startup
+checks never create replacements. Require the normal lock, no existing pending,
+an idle verified old owner and exact retained creation/packet-ACK mapping in the
+other native profile. The explicit command additionally requires both current
+histories to equal the complete canonical checkpoint. Use the existing durable
+owner retirement, full-history packet, native creation and ACK/promotion paths.
+Preserve the former Local registry/transcript and keep its record permanently
+`retired-owner`. Pending recovery cannot switch its bound registry or resend
+unknown actions. Native renderer readiness remains a separate prerequisite:
+the consumer must be installed in the selected profile and match the manifest's
+registry, never the previous profile's still-loaded renderer.
+
 A prepared first Claude handoff may resolve its provisional/legacy SDK target
 only through the exact `local-start` migration journal. Retain the complete old
 pending and owner, and verify any old seed's nanosecond identity. Never clear the

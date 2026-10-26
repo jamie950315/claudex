@@ -149,7 +149,7 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
         .unwrap_or("help");
     if args.flags.contains("help") || command == "help" {
         println!(
-            "Claudex synchronization: track, sync, watch, gc, recover, abort, untrack, resume-tracking, split-original, resolve-edited-source, archive-original, hooks install|status"
+            "Claudex synchronization: track, sync, handoff-profile, watch, gc, recover, abort, untrack, resume-tracking, split-original, resolve-edited-source, archive-original, hooks install|status"
         );
         return Ok(());
     }
@@ -202,6 +202,7 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
                     .await
             }
             "sync" => bridge.sync(args.id()?).await,
+            "handoff-profile" => bridge.handoff_profile(args.id()?).await,
             "recover" => bridge.recover().await,
             "abort" => bridge.abandon_unapplied().await,
             "gc" => bridge.collect().await,
@@ -286,6 +287,7 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
         "gc" => bridge.collect().await?,
         "watch" => return watch_legacy(bridge, &config).await,
         "untrack"
+        | "handoff-profile"
         | "resume-tracking"
         | "split-original"
         | "resolve-edited-source"

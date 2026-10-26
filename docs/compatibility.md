@@ -73,6 +73,9 @@ Installed launch customizations can change effective routing; CLI settings alone
 do not establish the route. A native Gateway profile change affects the whole
 Desktop and requires review of its sign-out/restart effects; see [model routing](app.md#claude-accounts-and-model-routing).
 See [Local transport requirements and recovery](synchronization.md#native-local-mod-transport).
+To continue one fully synchronized Local conversation after a reviewed native
+profile switch, use `bin/claudex handoff-profile CONVERSATION_ID`; see
+[profile handoff requirements](synchronization.md#continue-one-conversation-in-another-desktop-profile).
 
 ### Claude Mod from the command line
 
