@@ -158,7 +158,7 @@ test('witness refuses missing/duplicate catalogue, draft, shell and lifecycle ch
   for(const change of ['draft','shell','busy','title','activity','catalogue','profile']) {
     const f=fixture({stage:'witness',draft:change==='draft'});
     if(change==='shell')f.native.getBusyShellPtyKeys=async()=>({probed:true,busy:[],unknown:['unknown']});
-    if(change==='busy')f.state.cliBootPending=true;
+    if(change==='busy')f.state.hasBackgroundWork=true;
     if(change==='title')f.state.title='changed';
     const call=f.client.callTool;
     f.client.callTool=async args=>{const reply=await call(args);if(args.name.endsWith('_claim')) {
@@ -180,7 +180,7 @@ test('move and witness readiness diagnostics identify the exact refused predicat
     ['isRunning',undefined,'cwd-waiting-native-running-state'],
     ['turnRunning',true,'cwd-waiting-native-turn-state'],
     ['lastActivityAt',12345,'cwd-native-registry-activity-mismatch'],
-    ['cliBootPending',true,'cwd-waiting-native-cliBootPending'],
+    ['cliBootPending','true','cwd-waiting-native-cliBootPending'],
     ['lanyard','private pending value','cwd-waiting-native-lanyard'],
     ['pendingToolPermissions',{},'cwd-waiting-native-pendingToolPermissions'],
     ['loops',['private loop value'],'cwd-waiting-native-loops'],
@@ -198,4 +198,46 @@ test('move and witness readiness diagnostics identify the exact refused predicat
   const f=fixture({stage:'move'});f.state.cliBootPending=true;await run(f);
   assert.ok(f.statuses.includes('cwd-waiting-native-cliBootPending'));
   assert.equal(f.calls.filter(c=>c[0].endsWith('_claim')||c[0]==='move').length,0);
+});
+
+test('input-free witness requires its unique live registered command despite the native boot marker',async()=>{
+  const f=fixture({stage:'witness'});f.state.cliBootPending=true;await run(f);
+  assert.equal(f.calls.filter(c=>c[0]==='witness').length,1);
+  assert.equal(f.calls.filter(c=>c[0]==='catalogue').length,2);
+  assert.ok(f.statuses.includes('witness-catalogue-ready'));
+  assert.equal(f.calls.find(c=>c[0]==='claudex_local_start_claim')[1].proof.command,'claudex-witness');
+  for(const commands of [[],[{name:'claudex-witness'},{name:'claudex-witness'}],null,[{name:'claudex-bootstrap'}]]) {
+    const f=fixture({stage:'witness',commands});f.state.cliBootPending=true;await run(f);
+    assert.equal(f.calls.filter(c=>c[0].endsWith('_claim')||c[0]==='witness').length,0);
+    assert.ok(f.statuses.some(s=>s.startsWith('witness-catalogue-')));
+  }
+  for(const marker of ['true',1,{},[]]) {
+    const f=fixture({stage:'witness'});f.state.cliBootPending=marker;await run(f);
+    assert.equal(f.calls.filter(c=>c[0].endsWith('_claim')||c[0]==='witness').length,0);
+    assert.ok(f.statuses.includes('cwd-waiting-native-cliBootPending'));
+  }
+  const blocked=fixture({stage:'witness'});blocked.state.cliBootPending=true;blocked.state.hasBackgroundWork=true;
+  await run(blocked);assert.equal(blocked.calls.filter(c=>c[0].endsWith('_claim')||c[0]==='witness').length,0);
+  const uncertain=fixture({stage:'witness',fail:'witness'});uncertain.state.cliBootPending=true;
+  await run(uncertain);await run(uncertain);
+  assert.equal(uncertain.calls.filter(c=>c[0]==='witness').length,1);
+  assert.equal(uncertain.calls.find(c=>c[0]==='claudex_local_start_receipt')[1].outcome,'unknown');
+});
+
+test('warm witness never claims across catalogue activity races or dispatches after command revocation',async()=>{
+  for(const change of ['activity-before-claim','activity-after-claim','catalogue-after-claim','catalogue-error']) {
+    const f=fixture({stage:'witness'});f.state.cliBootPending=true;
+    let count=0;
+    f.native.getSupportedCommands=async()=>{
+      count++;
+      if(change==='catalogue-error')throw Error('Private native error');
+      if((change==='activity-before-claim'&&count===1)||(change==='activity-after-claim'&&count===2))f.state.lastActivityAt++;
+      return change==='catalogue-after-claim'&&count===2?[]:[{name:'claudex-witness'}];
+    };
+    await run(f);
+    assert.equal(f.calls.filter(c=>c[0]==='witness').length,0,change);
+    const claims=f.calls.filter(c=>c[0]==='claudex_local_start_claim');
+    assert.equal(claims.length,change.includes('after-claim')?1:0,change);
+    if(claims.length)assert.equal(f.calls.find(c=>c[0]==='claudex_local_start_receipt')[1].outcome,'rejected',change);
+  }
 });

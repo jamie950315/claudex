@@ -251,10 +251,11 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
       && running && ticket === generation && !hasDraft(e.prewarm?.sessionId);
   }
   async function catalogue(e) {
+    const kind = e.stage === 'witness' ? 'witness' : 'bootstrap';
     const commands = await native.getSupportedCommands({ sessionId: e.prewarm.sessionId });
-    if (!Array.isArray(commands)) { report('bootstrap-catalogue-unavailable'); return false; }
+    if (!Array.isArray(commands)) { report(`${kind}-catalogue-unavailable`); return false; }
     const count = commands.filter(c => c?.name === e.command).length;
-    report(count === 1 ? 'bootstrap-catalogue-ready' : count ? 'bootstrap-catalogue-duplicate' : 'bootstrap-catalogue-missing');
+    report(`${kind}-catalogue-${count === 1 ? 'ready' : count ? 'duplicate' : 'missing'}`);
     return count === 1;
   }
   async function moveProof(e) {
@@ -267,8 +268,9 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
     }
     const s = await native.getSession(e.prewarm.sessionId);
     // Identify the first refused predicate without logging native metadata.
-    // These are the same strict move/witness guards, not the Local-sync
-    // catalogue substitute for an input-free warm's initialization marker.
+    // An input-free warm retains cliBootPending until its first system/init.
+    // Only witness may defer the exact boolean to its live registered command
+    // proof on both sides of the claim. Ordinary move retains its strict guard.
     const reason = !s ? 'cwd-native-session-missing'
       : s.sessionId !== m.sessionId ? 'cwd-native-session-identity-mismatch'
       : s.cwd !== m.cwd ? 'cwd-native-session-cwd-mismatch'
@@ -281,7 +283,8 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
     const pending = ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork', 'remoteTarget',
       'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
       'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt', 'pendingLanyardConsent',
-      'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'lanyard'].find(k => s[k]);
+      'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'lanyard']
+      .find(k => s[k] && !(k === 'cliBootPending' && e.stage === 'witness' && s[k] === true));
     if (pending) { report(`cwd-waiting-native-${pending}`); return null; }
     const activity = ['pendingToolPermissions', 'loops', 'spawningTaskIds']
       .find(k => s[k] !== undefined && (!Array.isArray(s[k]) || s[k].length));
@@ -311,7 +314,11 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
           proof = await moveProof(e); if (!proof) continue;
           if (e.stage === 'witness') {
             if (typeof native.sendMessage !== 'function' || !await catalogue(e)) continue;
-            proof = { ...proof, command: e.command, unique: true };
+            // The awaited live catalogue is initialization proof, not an idle
+            // snapshot. Recheck activity and every other guard before claiming.
+            const currentProof = await moveProof(e);
+            if (!currentProof || JSON.stringify(currentProof) !== JSON.stringify(proof)) continue;
+            proof = { ...currentProof, command: e.command, unique: true };
           }
         }
         if (!await current(e, ticket)) continue;

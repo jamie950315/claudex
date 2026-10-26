@@ -455,7 +455,14 @@ register that command. The native session/activity recheck after the catalogue
 and each complete inspection before and after claim remain mandatory. Missing,
 duplicate, failed or revoked commands still refuse, as do every other activity,
 identity, draft and shell guard. Malformed truthy boot markers still refuse.
-The Local start/move guards do not use this substitute initialization proof.
+The independent recovery witness uses only its own unique live
+`claudex-witness` command as that initialization proof for the exact boolean
+`cliBootPending:true`. Inspect the same identity/activity and every idle/shell
+guard again after the awaited catalogue before claiming, and repeat the complete
+proof after claiming and before dispatch. Missing, duplicate, unavailable or
+revoked witness commands and malformed truthy boot markers still refuse;
+diagnostics identify witness catalogues separately from bootstrap catalogues.
+Ordinary start and move do not use this substitute initialization proof.
 
 Dispatch only the fixed `/claudex-sync <operation UUID> <claim UUID>` envelope
 with its deterministic input UUID and ordered native image input. The loaded
