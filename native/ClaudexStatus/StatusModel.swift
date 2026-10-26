@@ -347,6 +347,7 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
             var details = handoff; details["reason"] = "A conversation changed while its old Desktop entry was being checked. Archival was postponed and will be rechecked automatically; synchronization is not blocked by this check."
             append(details, target: "Desktop handoff", waiting: true, fallback: result.detail)
         }
+        let synchronizationPaused = watcher["synchronizationPaused"] as? Bool == true
         let renderer = watcher["rendererAdapters"] as? [String: Any]
         let adapters = renderer?["adapters"] as? [String: [String: Any]] ?? [:]
         for (key, label) in [("folders", "Native project folders"), ("chatWake", "Conversation wake"),
@@ -359,9 +360,14 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
                 : adapter["status"] as? String == "disabled" ? "Disabled by configuration."
                 : "Renderer files are prepared; live activation is not verified."
             let code = (adapter["failure"] as? [String: Any])?["code"] as? String
-            feature(label, reason, "Review the adapter status in diagnostics. Do not resend messages or change native permissions.",
+            // These two adapters serve synchronized history and RC owners only.
+            // Keep their actual failure evidence in diagnostics during a user
+            // pause, without asking the user to repair a suspended capability.
+            let suspended = synchronizationPaused && ["folders", "ownerWake"].contains(key)
+            feature(label, reason, suspended ? "Synchronization paused"
+                    : "Review the adapter status in diagnostics. Do not resend messages or change native permissions.",
                     identity: code.map { String($0.prefix(64)) },
-                    attention: refused && !["checking", "held"].contains(renderer?["state"] as? String ?? ""))
+                    attention: refused && !suspended && !["checking", "held"].contains(renderer?["state"] as? String ?? ""))
         }
         let hooks = watcher["hookStatus"] as? [String: Any]
         if let origin = hooks?["notificationOrigin"] as? [String: Any] {
@@ -402,6 +408,15 @@ func classifyHealth(watcher: [String: Any]?, service: [String: Any]?, now: Doubl
         }
     }
     if issues.isEmpty && result.attention { append([:], target: "Synchronization", waiting: false, fallback: result.detail) }
+    // An intentional sync pause must not hide an independent command, wake or
+    // hook failure behind a green headline.
+    if fresh && watcher?["synchronizationPaused"] as? Bool == true && !issues.isEmpty && !result.attention {
+        result.state = "degraded"
+        result.title = "Claudex needs attention"
+        result.symbol = "exclamationmark.triangle"
+        result.attention = true
+        result.operational = false
+    }
     result.issues = issues
     result.featureDiagnostics = featureDiagnostics
     return result

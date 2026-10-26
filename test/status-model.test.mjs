@@ -118,10 +118,35 @@ changed = ready; changed["rendererAdapters"] = ["state": "degraded", "adapters":
   "commands": ["status": "skipped"]]] as [String: Any]
 check(health(changed).state == "degraded" && health(changed).attention)
 check(health(changed).issues.contains { $0.target == "Conversation wake" })
+// A deliberate sync pause suspends only folders/RC-owner adapters. Keep their
+// real refusal codes in diagnostics; independent command/wake/hook faults remain actionable.
+var pausedAdapters = ready; pausedAdapters["synchronizationPaused"] = true
+pausedAdapters["rendererAdapters"] = ["state": "degraded", "adapters": [
+  "folders": ["status": "skipped", "failure": ["code": "folder-proof-refused"]],
+  "ownerWake": ["status": "skipped", "failure": ["code": "owner-proof-refused"]],
+  "chatWake": ["status": "installed", "activation": "load-not-verified"],
+  "commands": ["status": "installed", "activation": "load-not-verified"]]] as [String: Any]
+check(health(pausedAdapters).title == "Synchronization paused" && !health(pausedAdapters).attention)
+check(health(pausedAdapters).issues.isEmpty)
+check(health(pausedAdapters).featureDiagnostics.contains { $0.identity == "folder-proof-refused" && $0.nextStep == "Synchronization paused" })
+check(health(pausedAdapters).featureDiagnostics.contains { $0.identity == "owner-proof-refused" && $0.nextStep == "Synchronization paused" })
+var independentFault = pausedAdapters
+independentFault["rendererAdapters"] = ["state": "degraded", "adapters": [
+  "folders": ["status": "skipped"], "ownerWake": ["status": "skipped"],
+  "chatWake": ["status": "skipped"], "commands": ["status": "skipped"]]] as [String: Any]
+check(health(independentFault).state == "degraded" && health(independentFault).attention && !health(independentFault).operational)
+check(health(independentFault).title == "Claudex needs attention")
+check(health(independentFault).issues.map { $0.target } == ["Conversation wake", "Claude commands"])
+independentFault = pausedAdapters
+independentFault["hookStatus"] = ["health": ["codex": ["state": "recorded", "phases": [
+  "mailbox": ["errorCount": 1, "lastError": ["code": "MAILBOX_CAPACITY_EXHAUSTED", "at": now]] as [String: Any]]] as [String: Any]]] as [String: Any]
+check(health(independentFault).attention && health(independentFault).issues.contains { $0.identity == "mailbox/MAILBOX_CAPACITY_EXHAUSTED [1]" })
 changed = ready; changed["hookStatus"] = ["ready": true, "notificationOrigin": ["ready": false,
   "codex": ["configured": true, "trusted": false], "claude": ["configured": true, "enabled": true]] as [String: Any]] as [String: Any]
 check(health(changed).title == "Notification origin needs attention" && health(changed).attention)
 check(health(changed).issues.contains { $0.target == "Codex notification origin" })
+changed["synchronizationPaused"] = true
+check(health(changed).attention && health(changed).issues.contains { $0.target == "Codex notification origin" })
 changed = ready; changed["rendererAdapters"] = ["state": "ready", "adapters": [
   "chatWake": ["status": "installed", "activation": "load-not-verified"]]]
 check(health(changed).state == "ready" && health(changed).issues.isEmpty)

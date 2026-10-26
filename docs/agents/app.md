@@ -144,6 +144,9 @@ drains it before clearing the fence. Restart the installed watcher in maintenanc
 mode, never stop collaboration for this choice. Startup, setup and login preserve
 it; only explicit sync-resume clears it. Keep the visible synchronization control
 separate from Quit and show intentional pause without an automatic-retry promise.
+While paused, folder and RC-owner adapter refusals remain diagnostic evidence,
+not repair prompts for suspended features. Independent chat-wake, command and
+origin/mailbox-hook failures remain actionable and change the health headline.
 Do not delete native data, credentials, or login definitions. Inspect/smoke and
 duplicate-instance exits must never stop services. CLI-only status display Quit
 retains its display-only behavior.
