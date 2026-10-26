@@ -708,6 +708,48 @@ pub fn settle(root: &Path, op: &str, rows: &[Value]) -> Result<()> {
     entries.retain(|e| e["opId"] != op);
     storage::write_json(path, &manifest)
 }
+/// Contract only journal-proven transport ancestors in an in-memory view.
+/// The native graph and all command/receipt proofs are checked before removal.
+pub(crate) fn without_transport_rows(rows: &[Value], remove: &[String]) -> Result<Vec<Value>> {
+    use std::collections::{HashMap, HashSet};
+    let removed: HashSet<_> = remove.iter().map(String::as_str).collect();
+    ensure!(
+        removed.len() == remove.len(),
+        "Repeated Local transport identity."
+    );
+    let mut parents = HashMap::new();
+    for uuid in &removed {
+        let row = one(rows, &json!(uuid))?;
+        let mut parent = row["parentUuid"].clone();
+        let mut seen = HashSet::from([(*uuid).to_owned()]);
+        while let Some(id) = parent.as_str() {
+            ensure!(
+                seen.insert(id.to_owned()),
+                "Native Local transport parent cycle."
+            );
+            let ancestor = one(rows, &parent)?;
+            if !removed.contains(id) {
+                break;
+            }
+            parent = ancestor["parentUuid"].clone();
+        }
+        ensure!(
+            parent.is_null() || parent.is_string(),
+            "Invalid Local transport parent."
+        );
+        parents.insert(*uuid, parent);
+    }
+    rows.iter()
+        .filter(|row| !row["uuid"].as_str().is_some_and(|id| removed.contains(id)))
+        .map(|row| {
+            let mut row = row.clone();
+            if let Some(parent) = row["parentUuid"].as_str().and_then(|id| parents.get(id)) {
+                row["parentUuid"] = parent.clone();
+            }
+            Ok(row)
+        })
+        .collect()
+}
 /// Exact journal-bound restoration of the original packet's block order.
 pub fn normalize(root: &Path, session: &str, rows: &[Value]) -> Result<Vec<Value>> {
     let d = root.join("local-sync");
@@ -716,6 +758,7 @@ pub fn normalize(root: &Path, session: &str, rows: &[Value]) -> Result<Vec<Value
     }
     directory(root)?;
     let mut result = rows.to_vec();
+    let mut remove = vec![];
     for e in fs::read_dir(d)? {
         let e = e?;
         let name = e.file_name().to_string_lossy().into_owned();
@@ -731,12 +774,7 @@ pub fn normalize(root: &Path, session: &str, rows: &[Value]) -> Result<Vec<Value
         if j["cliSessionId"] != session || j["applied"].is_null() {
             continue;
         }
-        let remove = verified(&j, rows)?;
-        result.retain(|r| {
-            !r["uuid"]
-                .as_str()
-                .is_some_and(|s| remove.iter().any(|u| u == s))
-        });
+        remove.extend(verified(&j, rows)?);
         if j["kind"] == "append" {
             let row = result
                 .iter_mut()
@@ -746,7 +784,7 @@ pub fn normalize(root: &Path, session: &str, rows: &[Value]) -> Result<Vec<Value
             row["queueTranscriptOnly"] = json!(true);
         }
     }
-    Ok(result)
+    without_transport_rows(&result, &remove)
 }
 
 #[cfg(test)]
@@ -943,6 +981,70 @@ mod tests {
             .unwrap()
             .swap(0, 1);
         assert!(normalize(&f.root, f.j["cliSessionId"].as_str().unwrap(), &f.rows).is_err());
+        Ok(())
+    }
+    #[test]
+    fn transport_contraction_rejects_cycles_missing_and_duplicate_ancestors() -> Result<()> {
+        let rows = vec![
+            json!({"uuid":"first","parentUuid":null}),
+            json!({"uuid":"command","parentUuid":"first"}),
+            json!({"uuid":"completion","parentUuid":"command"}),
+            json!({"uuid":"next","parentUuid":"completion"}),
+        ];
+        let remove = vec!["completion".into(), "command".into()];
+        let normalized = without_transport_rows(&rows, &remove)?;
+        assert_eq!(
+            normalized,
+            vec![rows[0].clone(), json!({"uuid":"next","parentUuid":"first"})]
+        );
+        for change in ["cycle", "missing", "duplicate", "invalid"] {
+            let mut variant = rows.clone();
+            match change {
+                "cycle" => variant[1]["parentUuid"] = json!("completion"),
+                "missing" => variant[1]["parentUuid"] = json!("absent"),
+                "duplicate" => variant.push(variant[1].clone()),
+                "invalid" => variant[1]["parentUuid"] = json!(true),
+                _ => unreachable!(),
+            }
+            assert!(
+                without_transport_rows(&variant, &remove).is_err(),
+                "{change}"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn native_reply_after_command_keeps_packet_ancestry() -> Result<()> {
+        let mut f = fixture(false)?;
+        f.receive()?;
+        f.complete()?;
+        let parent = f.rows.last().unwrap()["uuid"].clone();
+        let reply = json!({"type":"assistant","uuid":Uuid::new_v4(),"parentUuid":parent,
+            "sessionId":f.j["cliSessionId"],"cwd":f.j["cwd"],"timestamp":"2026-10-26T00:00:00.000Z",
+            "message":{"role":"assistant","model":"fixture-model","stop_reason":"end_turn",
+                "content":[{"type":"text","text":"A later native reply."}]}});
+        f.rows.push(reply);
+        let original = f.rows.clone();
+        let normalized = normalize(&f.root, f.j["cliSessionId"].as_str().unwrap(), &f.rows)?;
+        assert_eq!(normalized.len(), 2);
+        assert_eq!(normalized[1]["parentUuid"], normalized[0]["uuid"]);
+        let decoded = owned_history::completed_claude(
+            &codecs::serialize_rows(&normalized)?,
+            &f.root,
+            f.j["conversationId"].as_str().unwrap(),
+            f.j["cliSessionId"].as_str().unwrap(),
+            Some(&f.key),
+        )?;
+        let mut expected = f.common.messages;
+        let mut reply = Message::text("assistant", "A later native reply.");
+        reply.extra = json!({"timestamp":"2026-10-26T00:00:00.000Z",
+            "model":"fixture-model","stop_reason":"end_turn"})
+        .as_object()
+        .unwrap()
+        .clone();
+        expected.push(reply);
+        assert_eq!(decoded.common.messages, expected);
+        assert_eq!(f.rows, original);
         Ok(())
     }
     #[test]

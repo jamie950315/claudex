@@ -131,6 +131,14 @@ reminder (with optional stale-environment sentence and appended native project
 context), matching target cwd/session, direct bootstrap parent, unique UUID and
 all four meta/transcript-only/skip flags. Preserve original bytes, including
 CLAUDE.md context; unrelated user/meta content still prevents first migration.
+A resume can append `No response requested.` before the first packet. Exclude
+only one exact synthetic assistant with stop_sequence and zero usage, directly
+parented by this proven move context in the same session/cwd. Other assistant
+content remains dialogue. In-memory bootstrap and sync normalization contracts
+parent links through only journal-verified removed transport rows, preserving
+retained ancestors and rejecting missing, duplicate or cyclic transport ancestry.
+Verify every command against the original snapshot before contracting the graph;
+never change native bytes or loosen the generic missing-parent guard.
 
 Only a literal native control `subtype:error` is an explicit failure; an unknown
 response outcome preserves the registering intent and never permits another

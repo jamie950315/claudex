@@ -722,18 +722,46 @@ fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
                 rows.iter().filter(|r| r["uuid"] == uuid).count() == 1,
                 "Native Local move context identity duplicated."
             );
+            // Resuming this native moved, no-query bootstrap may record one
+            // zero-usage placeholder before the first packet. Its direct
+            // journal-proven context parent, session and cwd distinguish it
+            // from real assistant output or an unrelated synthetic record.
+            let placeholders: Vec<_> = rows
+                .iter()
+                .filter(|r| {
+                    r["type"] == "assistant"
+                        && r["message"]["role"] == "assistant"
+                        && r["parentUuid"] == uuid
+                        && r["sessionId"] == j["bootstrap"]["sessionId"]
+                        && r["cwd"] == cwd
+                        && r["message"]["model"] == "<synthetic>"
+                        && r["message"]["stop_reason"] == "stop_sequence"
+                        && r["message"]["content"]
+                            == json!([{"type":"text","text":"No response requested."}])
+                        && r["message"]["usage"].as_object().is_some_and(|usage| {
+                            usage.get("input_tokens") == Some(&json!(0))
+                                && usage.get("output_tokens") == Some(&json!(0))
+                                && ["cache_read_input_tokens", "cache_creation_input_tokens"]
+                                    .iter()
+                                    .all(|field| {
+                                        usage
+                                            .get(*field)
+                                            .is_none_or(|v| v.is_null() || v == &json!(0))
+                                    })
+                        })
+                })
+                .collect();
+            ensure!(
+                placeholders.len() <= 1,
+                "Native Local bootstrap placeholder duplicated."
+            );
+            if let Some(placeholder) = placeholders.first() {
+                remove.push(id(placeholder, "uuid")?);
+            }
             remove.push(uuid);
         }
     }
-    Ok(rows
-        .iter()
-        .filter(|r| {
-            !r["uuid"]
-                .as_str()
-                .is_some_and(|s| remove.iter().any(|v| v == s))
-        })
-        .cloned()
-        .collect())
+    crate::local_sync::without_transport_rows(rows, &remove)
 }
 fn move_context(cwd: &str, stale: bool) -> String {
     let stale = if stale {
@@ -1189,6 +1217,84 @@ mod tests {
         let duplicate = rows[1].clone();
         rows.push(duplicate);
         assert!(normalize_journal(&migrated, &rows).is_err());
+        Ok(())
+    }
+    #[test]
+    fn resumed_bootstrap_placeholder_preserves_first_packet_parent_closure() -> Result<()> {
+        let f = fixture(false)?;
+        let (_, mut rows) = boot(&f)?;
+        let context = moved_context(&f, &rows[2]["uuid"]);
+        let placeholder = json!({"type":"assistant","uuid":Uuid::new_v4(),
+            "parentUuid":context["uuid"],"sessionId":f.cli,"cwd":f.record.cwd,
+            "message":{"role":"assistant","model":"<synthetic>","stop_reason":"stop_sequence",
+                "content":[{"type":"text","text":"No response requested."}],
+                "usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}}});
+        let key = [7; 32];
+        let messages = vec![
+            crate::history::Message::text("user", "Imported question"),
+            crate::history::Message::text("assistant", "Imported answer"),
+        ];
+        let content = packet::encode_inline(
+            &messages,
+            json!({"conversationId":f.record.conversation_id,"targetSessionId":f.cli,
+                "operationId":f.pending.operation_id,"sourceSide":"codex","previousDigest":null}),
+            &key,
+        )?;
+        rows.push(context);
+        rows.push(placeholder.clone());
+        rows.push(
+            json!({"type":"user","uuid":Uuid::new_v4(),"parentUuid":placeholder["uuid"],
+            "sessionId":f.cli,"cwd":f.record.cwd,"timestamp":"2026-10-26T00:00:00.000Z",
+            "queueTranscriptOnly":true,"message":{"role":"user","content":content}}),
+        );
+        let original = rows.clone();
+        let j = journal(&f.root, &f.pending.operation_id)?;
+        let normalized = normalize_journal(&j, &rows)?;
+        assert_eq!(normalized.len(), 1);
+        assert!(normalized[0]["parentUuid"].is_null());
+        let decoded = crate::owned_history::completed_claude(
+            &codecs::serialize_rows(&normalized)?,
+            &f.root,
+            &f.record.conversation_id,
+            &f.cli,
+            Some(&key),
+        )?;
+        assert_eq!(decoded.common.messages, messages);
+        assert!(!decoded.incomplete_tail);
+        assert_eq!(rows, original);
+        for change in [
+            "content",
+            "model",
+            "usage",
+            "stop",
+            "session",
+            "cwd",
+            "parent",
+            "duplicate",
+        ] {
+            let mut variant = rows.clone();
+            match change {
+                "content" => variant[4]["message"]["content"][0]["text"] = json!("Real reply"),
+                "model" => variant[4]["message"]["model"] = json!("real-model"),
+                "usage" => variant[4]["message"]["usage"]["input_tokens"] = json!(1),
+                "stop" => variant[4]["message"]["stop_reason"] = json!("end_turn"),
+                "session" => variant[4]["sessionId"] = json!(Uuid::new_v4()),
+                "cwd" => variant[4]["cwd"] = json!(f.scratch),
+                "parent" => variant[4]["parentUuid"] = rows[2]["uuid"].clone(),
+                "duplicate" => variant.push(variant[4].clone()),
+                _ => unreachable!(),
+            }
+            let result = normalize_journal(&j, &variant).and_then(|v| {
+                crate::owned_history::completed_claude(
+                    &codecs::serialize_rows(&v)?,
+                    &f.root,
+                    &f.record.conversation_id,
+                    &f.cli,
+                    Some(&key),
+                )
+            });
+            assert!(result.is_err(), "{change}");
+        }
         Ok(())
     }
     #[test]
