@@ -223,9 +223,6 @@ impl AppRuntime for NativeApp {
     async fn authentication(&self, provider: &str, binary: Option<&Path>) -> Authentication {
         providers::authentication(provider, binary, &self.discovery, self.runner.as_ref()).await
     }
-    async fn configured_authentication(&self, binary: Option<&Path>) -> Authentication {
-        providers::configured_authentication(binary, &self.discovery, self.runner.as_ref()).await
-    }
     async fn mod_status(
         &self,
         providers: &Providers,
@@ -512,9 +509,7 @@ impl AppRuntime for NativeApp {
 }
 
 pub async fn run(args: &[String]) -> Result<()> {
-    if crate::commands::command_index(args)
-        .is_some_and(|i| ["build", "renderer-bundle"].contains(&args[i].as_str()))
-    {
+    if crate::commands::command_index(args).is_some_and(|i| args[i] == "build") {
         let mut domain = args.to_vec();
         let index = crate::commands::command_index(args).unwrap();
         let command = domain.remove(index);

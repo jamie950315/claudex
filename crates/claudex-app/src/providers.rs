@@ -153,9 +153,7 @@ pub async fn authentication(
         if provider == "codex" {
             vec!["login", "status"]
         } else {
-            // This row checks the official account, not the inference route.
-            // Settings-provided proxy tokens otherwise hide an existing login.
-            vec!["--setting-sources", "", "auth", "status", "--json"]
+            vec!["auth", "status", "--json"]
         },
     );
     spec.env = native_environment(options);
@@ -193,40 +191,6 @@ pub async fn authentication(
             && value["authMethod"] == "claude.ai"
             && value["apiProvider"] == "firstParty",
         failed: out.code != 0,
-        ..Default::default()
-    }
-}
-/// Status for the native configured Claude route, without selecting a provider
-/// or testing inference, subscription entitlement or available allowance.
-pub async fn configured_authentication(
-    binary: Option<&Path>,
-    options: &DiscoveryOptions,
-    runner: &dyn Runner,
-) -> crate::setup::Authentication {
-    use crate::setup::Authentication;
-    let Some(binary) = binary else {
-        return Authentication {
-            missing: true,
-            ..Default::default()
-        };
-    };
-    let mut spec = CommandSpec::new(binary, ["auth", "status", "--json"]);
-    spec.env = native_environment(options);
-    let Ok(out) = runner.run(spec).await else {
-        return Authentication {
-            failed: true,
-            ..Default::default()
-        };
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&out.stdout) else {
-        return Authentication {
-            failed: true,
-            ..Default::default()
-        };
-    };
-    Authentication {
-        ready: out.code == 0 && value["loggedIn"] == true,
-        failed: out.code != 0 && value["loggedIn"] != false || !value["loggedIn"].is_boolean(),
         ..Default::default()
     }
 }
@@ -802,7 +766,7 @@ mod tests {
             async fn run(&self, spec: CommandSpec) -> Result<CommandOutput> {
                 assert_eq!(spec.env.get("HOME").unwrap(), "/private/home");
                 assert!(!spec.env.contains_key("ANTHROPIC_API_KEY"));
-                if spec.args == ["--setting-sources", "", "auth", "status", "--json"] {
+                if spec.args == ["auth", "status", "--json"] {
                     Ok(CommandOutput{stdout:r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty"}"#.into(),..Default::default()})
                 } else if spec.args == ["login", "status"] {
                     Ok(CommandOutput {
@@ -857,111 +821,5 @@ mod tests {
         assert!(!e.contains("secret"));
         assert!(e.contains("Official sign-in"));
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn proxy_auth_is_not_an_official_account_login() {
-        use crate::platform::CommandOutput;
-        use async_trait::async_trait;
-        struct ProxyOnly;
-        #[async_trait]
-        impl Runner for ProxyOnly {
-            async fn run(&self, spec: CommandSpec) -> Result<CommandOutput> {
-                assert_eq!(
-                    spec.args,
-                    ["--setting-sources", "", "auth", "status", "--json"]
-                );
-                Ok(CommandOutput {
-                    stdout:
-                        r#"{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}"#
-                            .into(),
-                    ..Default::default()
-                })
-            }
-        }
-        let options = DiscoveryOptions {
-            root: "/private/state".into(),
-            home: "/private/home".into(),
-            runtime: None,
-            applications: "/Applications".into(),
-            path: "/usr/bin:/bin".into(),
-        };
-        let auth = authentication(
-            "claude",
-            Some(Path::new("/private/claude")),
-            &options,
-            &ProxyOnly,
-        )
-        .await;
-        assert!(!auth.ready);
-        assert!(!auth.failed);
-    }
-
-    #[tokio::test]
-    async fn configured_auth_keeps_native_settings_and_accepts_proxy_without_subscription() {
-        use crate::platform::CommandOutput;
-        use async_trait::async_trait;
-        struct Configured {
-            output: &'static str,
-            code: i32,
-        }
-        #[async_trait]
-        impl Runner for Configured {
-            async fn run(&self, spec: CommandSpec) -> Result<CommandOutput> {
-                assert_eq!(spec.args, ["auth", "status", "--json"]);
-                assert_eq!(spec.env.get("HOME").unwrap(), "/private/home");
-                assert!(!spec.env.contains_key("CLAUDE_CONFIG_DIR"));
-                assert!(!spec.env.contains_key("ANTHROPIC_API_KEY"));
-                Ok(CommandOutput {
-                    stdout: self.output.into(),
-                    code: self.code,
-                    ..Default::default()
-                })
-            }
-        }
-        let options = DiscoveryOptions {
-            root: "/private/state".into(),
-            home: "/private/home".into(),
-            runtime: None,
-            applications: "/Applications".into(),
-            path: "/usr/bin:/bin".into(),
-        };
-        let binary = Some(Path::new("/private/claude"));
-        for output in [
-            r#"{"loggedIn":true,"authMethod":"api_key","apiProvider":"custom","subscriptionType":null}"#,
-            r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty","subscriptionType":"pro"}"#,
-        ] {
-            let auth =
-                configured_authentication(binary, &options, &Configured { output, code: 0 }).await;
-            assert!(auth.ready);
-            assert!(!auth.failed);
-        }
-        let absent = configured_authentication(
-            binary,
-            &options,
-            &Configured {
-                output: r#"{"loggedIn":false}"#,
-                code: 1,
-            },
-        )
-        .await;
-        assert!(!absent.ready && !absent.failed);
-        for output in ["not-json", "{}"] {
-            let invalid =
-                configured_authentication(binary, &options, &Configured { output, code: 0 }).await;
-            assert!(!invalid.ready && invalid.failed);
-        }
-        assert!(
-            configured_authentication(
-                None,
-                &options,
-                &Configured {
-                    output: "",
-                    code: 0
-                }
-            )
-            .await
-            .missing
-        );
     }
 }

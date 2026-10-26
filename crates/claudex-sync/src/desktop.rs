@@ -363,7 +363,6 @@ pub struct PlanInput {
     pub title: String,
     pub target: Option<Record>,
     pub relocation: bool,
-    pub profile_handoff: bool,
     pub context_reset: bool,
     pub context_refresh: bool,
 }
@@ -387,10 +386,6 @@ pub trait Adapter: Send + Sync {
         _reading: &Reading,
     ) -> Result<Option<String>> {
         Ok(None)
-    }
-    /// Only a delivery or an explicit scoped request may replace a deployment.
-    async fn needs_profile_handoff(&self, _record: &Record, _reading: &Reading) -> Result<bool> {
-        Ok(false)
     }
     async fn resolve_applied(&self, record: &Record, _pending: &Pending) -> Result<Record> {
         Ok(record.clone())
@@ -1198,12 +1193,6 @@ impl DesktopBridge {
         Ok(json!({"changed":true,"tracking":"active","conversationId":id}))
     }
     pub async fn sync(&self, id: &str) -> Result<Value> {
-        self.sync_profile(id, false).await
-    }
-    pub async fn handoff_profile(&self, id: &str) -> Result<Value> {
-        self.sync_profile(id, true).await
-    }
-    async fn sync_profile(&self, id: &str, profile_requested: bool) -> Result<Value> {
         let _lock = self.lock()?;
         let mut state = self.status()?;
         ensure!(
@@ -1215,7 +1204,7 @@ impl DesktopBridge {
         if stopped["tracking"] == "stopped" {
             return Ok(stopped);
         }
-        let result = self.sync_active(&mut state, id, profile_requested).await;
+        let result = self.sync_active(&mut state, id).await;
         if result
             .as_ref()
             .is_err_and(|e| e.is::<WorkingDirectoryUnavailable>())
@@ -1231,12 +1220,7 @@ impl DesktopBridge {
         }
         result
     }
-    async fn sync_active(
-        &self,
-        state: &mut State,
-        id: &str,
-        profile_requested: bool,
-    ) -> Result<Value> {
+    async fn sync_active(&self, state: &mut State, id: &str) -> Result<Value> {
         let mut c = state
             .conversations
             .get(id)
@@ -1287,37 +1271,6 @@ impl DesktopBridge {
             changed.len() <= 1,
             "Both sides changed; no history was replaced."
         );
-        let profile_candidate = readings.iter().find(|(r, _)| r.side == Side::Claude);
-        if profile_requested {
-            ensure!(
-                readings.len() == 2
-                    && changed.is_empty()
-                    && profile_candidate
-                        .is_some_and(|(r, _)| r.managed && r.verified && r.kind == "owner"),
-                "Profile handoff requires one unchanged verified managed pair; synchronize completed changes first."
-            );
-            for (record, reading) in &readings {
-                self.adapter(record.side)?.assert_idle(record).await?;
-                ensure!(
-                    !reading.incomplete_tail && c.canonical.exact_dialogue(&reading.common)?,
-                    "Profile handoff requires complete unchanged canonical histories."
-                );
-            }
-        }
-        let profile_handoff =
-            if profile_requested || changed.first().is_some_and(|(r, _)| r.side == Side::Codex) {
-                if let Some((record, reading)) =
-                    profile_candidate.filter(|(r, _)| r.managed && r.kind == "owner")
-                {
-                    self.adapter(Side::Claude)?
-                        .needs_profile_handoff(record, reading)
-                        .await?
-                } else {
-                    false
-                }
-            } else {
-                false
-            };
         let relocated = readings.iter().find(|(r, _)| r.cwd != c.cwd);
         if let Some((target, data)) = relocated {
             ensure!(
@@ -1340,9 +1293,6 @@ impl DesktopBridge {
             );
         }
         let mut maintenance = vec![];
-        if profile_handoff {
-            maintenance.push((Side::Claude, "profile".to_owned()));
-        }
         if let Some((target, _)) = relocated {
             maintenance.push((target.side, "relocation".to_owned()));
         }
@@ -1370,7 +1320,6 @@ impl DesktopBridge {
         let upkeep = maintenance
             .iter()
             .find(|(_, kind)| kind == "relocation")
-            .or_else(|| maintenance.iter().find(|(_, kind)| kind == "profile"))
             .or_else(|| maintenance.iter().find(|(_, kind)| kind == "reset"))
             .or_else(|| maintenance.first());
         if changed.is_empty() && readings.len() == 2 && upkeep.is_none() {
@@ -1478,7 +1427,6 @@ impl DesktopBridge {
                 title: c.title,
                 target: target.clone(),
                 relocation: owner_relocation,
-                profile_handoff,
                 context_reset,
                 context_refresh,
             })
@@ -1490,17 +1438,6 @@ impl DesktopBridge {
         ensure!(
             !owner_relocation || !reuse && record.kind == "owner",
             "A moved Claude owner must receive a new native owner."
-        );
-        ensure!(
-            !profile_handoff
-                || side == Side::Claude
-                    && !reuse
-                    && record.kind == "owner"
-                    && record
-                        .extra
-                        .get("profileHandoff")
-                        .is_some_and(Value::is_object),
-            "Profile handoff requires a distinct deployment-proven Claude owner."
         );
         ensure!(
             !context_reset
@@ -1582,11 +1519,8 @@ impl DesktopBridge {
                 } else {
                     Checkpoint::empty()
                 },
-                extra: if owner_relocation || profile_handoff {
-                    json!({"relocation":owner_relocation,"profileHandoff":profile_handoff})
-                        .as_object()
-                        .unwrap()
-                        .clone()
+                extra: if owner_relocation {
+                    json!({"relocation":true}).as_object().unwrap().clone()
                 } else {
                     Map::new()
                 },
@@ -1709,15 +1643,10 @@ impl DesktopBridge {
             let resolved = adapter.resolve_applied(&p.record, &p).await?;
             ensure!(
                 resolved.native_id == p.record.native_id
-                    || p.record.side == Side::Claude
-                        && !p.reuse
-                        && crate::local_start::verify_resolution(
-                            &self.root, &p.record, &resolved, &p
-                        )?
                     || p.reuse
                         && p.record.side == Side::Claude
                         && p.record.extra.get("contextReset") == Some(&json!(true)),
-                "Only a journal-proven native Local creation or context reset may change a target identity."
+                "Only a verified native context reset may adopt a different reusable identity."
             );
             if serde_json::to_value(&resolved)? != serde_json::to_value(&p.record)? {
                 p.record = resolved;
@@ -1791,17 +1720,15 @@ impl DesktopBridge {
                         .iter_mut()
                         .find(|r| r.id == target.id)
                         .unwrap();
-                    old.status = if (p.extra.get("relocation") == Some(&json!(true))
-                        || p.extra.get("profileHandoff") == Some(&json!(true)))
-                        && old.kind == "owner"
-                    {
-                        "retired-owner"
-                    } else if old.managed {
-                        "previous"
-                    } else {
-                        "original"
-                    }
-                    .into();
+                    old.status =
+                        if p.extra.get("relocation") == Some(&json!(true)) && old.kind == "owner" {
+                            "retired-owner"
+                        } else if old.managed {
+                            "previous"
+                        } else {
+                            "original"
+                        }
+                        .into();
                     old.retired_at = Some(now());
                 }
                 state.records.push(p.record.clone());
@@ -2922,7 +2849,6 @@ mod tests {
         unstable_relocation: bool,
         relocation_reads: usize,
         maintenance: BTreeMap<String, String>,
-        profile_handoffs: BTreeSet<String>,
         reset_ids: BTreeMap<String, String>,
         promotions: Vec<String>,
         fail_resolved_inspection: bool,
@@ -3016,9 +2942,11 @@ mod tests {
                 }
             }
             if self.side == Side::Claude {
-                if let Some(r) = input.target.as_ref().filter(|r| {
-                    r.managed && r.kind == "owner" && !input.relocation && !input.profile_handoff
-                }) {
+                if let Some(r) = input
+                    .target
+                    .as_ref()
+                    .filter(|r| r.managed && r.kind == "owner" && !input.relocation)
+                {
                     let mut planned = r.clone();
                     if input.context_reset {
                         planned.extra.insert("contextReset".into(), json!(true));
@@ -3042,18 +2970,7 @@ mod tests {
                 "snapshot"
             }
             .into();
-            if input.profile_handoff {
-                r.extra.insert("profileHandoff".into(), json!({"version":1,"fromRegistry":"/synthetic/first","toRegistry":"/synthetic/third"}));
-            }
             Ok(r)
-        }
-        async fn needs_profile_handoff(&self, r: &Record, _reading: &Reading) -> Result<bool> {
-            Ok(self
-                .native
-                .lock()
-                .unwrap()
-                .profile_handoffs
-                .contains(&r.native_id))
         }
         async fn needs_maintenance(
             &self,
@@ -3281,141 +3198,6 @@ mod tests {
             .histories
             .insert(source.native_id.clone(), history());
         (tmp, DesktopBridge::new(root, adapters), native, source)
-    }
-    #[tokio::test]
-    async fn profile_handoff_is_scoped_and_retains_the_prior_owner_without_startup_migration()
-    -> Result<()> {
-        let (_tmp, bridge, native, source) = fixture();
-        let id = bridge.track(source, None).await?["conversationId"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        bridge.sync(&id).await?;
-        let before = bridge.status()?;
-        let old = bridge.current(&before, &id, Side::Claude).unwrap().clone();
-        let original = native.lock().unwrap().histories[&old.native_id].clone();
-        native
-            .lock()
-            .unwrap()
-            .profile_handoffs
-            .insert(old.native_id.clone());
-        let applications = native.lock().unwrap().applications;
-        assert_eq!(bridge.sync(&id).await?["changed"], false);
-        assert_eq!(native.lock().unwrap().applications, applications);
-        bridge.handoff_profile(&id).await?;
-        let after = bridge.status()?;
-        let current = bridge.current(&after, &id, Side::Claude).unwrap();
-        assert_ne!(current.native_id, old.native_id);
-        assert_eq!(
-            after
-                .records
-                .iter()
-                .find(|r| r.id == old.id)
-                .unwrap()
-                .status,
-            "retired-owner"
-        );
-        assert_eq!(
-            after.conversations[&id].canonical,
-            before.conversations[&id].canonical
-        );
-        assert_eq!(native.lock().unwrap().histories[&old.native_id], original);
-        assert_eq!(bridge.handoff_profile(&id).await?["changed"], false);
-        bridge.collect().await?;
-        assert!(!native.lock().unwrap().removed.contains(&old.native_id));
-        assert!(
-            bridge
-                .status()?
-                .records
-                .iter()
-                .any(|r| r.id == old.id && r.status == "retired-owner")
-        );
-        Ok(())
-    }
-    #[tokio::test]
-    async fn delivery_profile_handoff_copies_full_history_and_recovers_without_resend() -> Result<()>
-    {
-        let (_tmp, bridge, native, source) = fixture();
-        let source_id = source.native_id.clone();
-        let id = bridge.track(source, None).await?["conversationId"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        bridge.sync(&id).await?;
-        let before = bridge.status()?;
-        let old = bridge.current(&before, &id, Side::Claude).unwrap().clone();
-        {
-            let mut state = native.lock().unwrap();
-            state.profile_handoffs.insert(old.native_id.clone());
-            extend(
-                state.histories.get_mut(&source_id).unwrap(),
-                "Continue in selected deployment",
-            );
-            state.fail_after_apply = true;
-        }
-        assert!(bridge.sync(&id).await.is_err());
-        let pending = bridge.status()?.pending.unwrap();
-        let PendingOperation::Handoff(pending) = pending else {
-            panic!()
-        };
-        assert!(!pending.reuse);
-        assert_eq!(pending.extra["profileHandoff"], true);
-        assert_eq!(pending.previous, Checkpoint::empty());
-        assert_eq!(pending.common.messages.len(), 4);
-        let applications = native.lock().unwrap().applications;
-        bridge.recover().await?;
-        assert_eq!(native.lock().unwrap().applications, applications);
-        let after = bridge.status()?;
-        assert!(after.pending.is_none());
-        assert_eq!(after.conversations[&id].canonical.count, 4);
-        assert_ne!(
-            bridge.current(&after, &id, Side::Claude).unwrap().native_id,
-            old.native_id
-        );
-        assert_eq!(
-            after
-                .records
-                .iter()
-                .find(|r| r.id == old.id)
-                .unwrap()
-                .status,
-            "retired-owner"
-        );
-        assert_eq!(
-            native.lock().unwrap().histories[&old.native_id]
-                .messages
-                .len(),
-            2
-        );
-        Ok(())
-    }
-    #[tokio::test]
-    async fn explicit_profile_handoff_refuses_advanced_history_before_preparing() -> Result<()> {
-        let (_tmp, bridge, native, source) = fixture();
-        let source_id = source.native_id.clone();
-        let id = bridge.track(source, None).await?["conversationId"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        bridge.sync(&id).await?;
-        let old = bridge
-            .current(&bridge.status()?, &id, Side::Claude)
-            .unwrap()
-            .native_id
-            .clone();
-        {
-            let mut state = native.lock().unwrap();
-            state.profile_handoffs.insert(old);
-            extend(
-                state.histories.get_mut(&source_id).unwrap(),
-                "Unsynchronized turn",
-            );
-        }
-        let applications = native.lock().unwrap().applications;
-        assert!(bridge.handoff_profile(&id).await.is_err());
-        assert!(bridge.status()?.pending.is_none());
-        assert_eq!(native.lock().unwrap().applications, applications);
-        Ok(())
     }
     async fn edited_fixture() -> Result<(
         tempfile::TempDir,

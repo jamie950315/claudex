@@ -15,9 +15,6 @@ Configuration hints retain the current initial source/history queues and their
 initialSweepCompletedAt; only startup, a released application hold or a real
 reconnection starts that reconciliation again. An unrelated native MCP setting
 must not turn an already completed sweep into another full history scan.
-The native Desktop deployment setting is a configuration target too. Follow its
-nearest existing ancestor until its directory exists, then watch the exact file;
-registry consumers reselect the deployment without restarting the watcher.
 An idle pass with no discovery, cold operation, native event or due handoff
 maintenance leaves the previous publication untouched, including its original
 expiry. It neither revokes nor renews intents. Known managed session registration and started events
@@ -205,14 +202,6 @@ dialogue digests gains its dialogue only from a read that matches its exact
 bytes (`checkpoint-dialogue-recorded`); until then it compares exactly, and the
 cold scheduler does not reuse a cached read for such a conversation. The frozen
 JavaScript archive retains its historical exact-checkpoint behavior.
-
-Local command graph verification shares one exact-output implementation for
-ordinary authenticated receipts and the separately enrolled Local-start identity
-certificate. Only that certificate may bind the complete failed bootstrap,
-no-query pane and fresh witness graphs; it does not make arbitrary BLOCKED output
-or diagnostics a receipt. Verify all original graphs before parent contraction,
-keep their complete retained bytes, and require the claimed move context to
-follow the final witness completion. Ordinary missing-receipt guards stay exact.
 
 ## Hook health diagnostics
 

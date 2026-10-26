@@ -62,21 +62,6 @@ backend activates on the next normal desktop-app start. Desktop
 owned watcher to be stopped; see
 [history-preserving maintenance](synchronization.md#stop-tracking-while-preserving-history).
 
-### Local Claude transport
-
-New Desktop owners default to `local-mod`, preserving the native configured
-provider, model and authentication route. Native Desktop Local-session creation,
-project/trust checks and the current enabled Mod/frontend integration are
-required. Existing Remote Control owners keep their transport.
-Stock, unmodified Desktop and CLI launchers follow Desktop's deployment profile.
-Installed launch customizations can change effective routing; CLI settings alone
-do not establish the route. A native Gateway profile change affects the whole
-Desktop and requires review of its sign-out/restart effects; see [model routing](app.md#claude-accounts-and-model-routing).
-See [Local transport requirements and recovery](synchronization.md#native-local-mod-transport).
-To continue one fully synchronized Local conversation after a reviewed native
-profile switch, use `bin/claudex handoff-profile CONVERSATION_ID`; see
-[profile handoff requirements](synchronization.md#continue-one-conversation-in-another-desktop-profile).
-
 ### Claude Mod from the command line
 
 Stage the Mod with
@@ -95,7 +80,7 @@ synchronization runtime allowlist.
 | --- | --- | --- |
 | Cross-model collaboration | Codex CLI `0.158.0-alpha.2.1`; Claude Code `2.1.283` | Both-direction child delegation and result return, parent resumption after file edits, and consecutive owner transfers under one task ID. |
 | Cooperative in-flight follow-up | Codex CLI `0.159.0-alpha.12.1`; Claude Code `2.1.283` | Both real supervisor/child directions accepted a proactive instruction and completed in generation one, without a child blocker or duplicate invocation. |
-| Claude Mod | Bundled `0.8.90`; Desktop Code `2.1.286`, documented Mod API baseline `2.1.287` | Pane, commands and cache settings; native activation is verified separately from source checks. Installed and loaded versions are separate. See the [Mod guide](claude-mod.md) and [cache-warming guide](cache-warming.md). |
+| Claude Mod | Bundled `0.8.75`; Desktop Code `2.1.286`, documented Mod API baseline `2.1.287` | Pane, commands and cache settings; native activation is verified separately from source checks. Installed and loaded versions are separate. See the [Mod guide](claude-mod.md) and [cache-warming guide](cache-warming.md). |
 | Codex cache warming | Desktop native runtime `0.160.0` or later, experimental best-effort | Default-off CLI opt-in and a separately trusted `/claudex:warm` hook. See [limits and confirmation](cache-warming.md#codex-desktop-experimental-best-effort). |
 | Desktop synchronization | Strict Codex baseline `0.155.0-alpha.16.3` / `.16.4`; Claude Code `2.1.281` with SDK `0.3.281` | Native conversation delivery, real Desktop alternation, supported compaction and image cases, identity preservation, and bounded snapshot retirement. |
 

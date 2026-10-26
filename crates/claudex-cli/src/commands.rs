@@ -10,7 +10,6 @@ pub const HELP:&str="Claudex: bounded conversation synchronization and opt-in mo
   claudex init [--all-projects | --project PATH] [--codex-home PATH] [--claude-home PATH]
   claudex track --from codex|claude --source PATH [--title TITLE]
   claudex sync CONVERSATION_ID [--from codex|claude]
-  claudex handoff-profile CONVERSATION_ID  Recreate one unchanged Local owner in the selected Desktop profile (no inference)
   claudex watch                    Event-driven conversation synchronization
   claudex hooks install|status     Native completion hooks (no inference)
   claudex status                   Current identities, pending work and diagnostics
@@ -83,11 +82,6 @@ pub async fn run(raw: &[String]) -> Result<()> {
         if raw[index] == "sync-hook" {
             return crate::sync_hook::run(raw).await;
         }
-        if raw[index] == "local-sync" {
-            let mut domain = raw.to_vec();
-            domain.remove(index);
-            return local_sync_stdio(&domain).await;
-        }
         if raw[index] == "mod-bridge" {
             let mut domain = raw.to_vec();
             domain.remove(index);
@@ -126,7 +120,6 @@ pub async fn run(raw: &[String]) -> Result<()> {
             raw[index].as_str(),
             "track"
                 | "sync"
-                | "handoff-profile"
                 | "watch"
                 | "gc"
                 | "recover"
@@ -585,88 +578,4 @@ async fn doctor(config: &Value) -> Result<Value> {
         "versionPolicy":policy,"synchronizationAllowedByVersionPolicy":policy.allows_codex(&codex)&&policy.permits(claude_version,verified_claude.then_some(claude_version)),
         "note":if policy==VersionPolicy::Warn {"Version changes alone do not produce warnings. Protocol, ownership and history failures remain explicit."}else{"Other native versions require compatibility validation."}}),
     )
-}
-
-/// The large native context packet has a dedicated bounded local helper, not
-/// the 1 MiB collaboration or control-pane protocol.
-async fn local_sync_stdio(raw: &[String]) -> Result<()> {
-    anyhow::ensure!(
-        std::env::var("CLAUDEX_COLLABORATION_WORKER").as_deref() != Ok("1"),
-        "Managed worker controller access is disabled."
-    );
-    let a = Args::parse(raw, &["root", "desktop-app"], &[])?;
-    anyhow::ensure!(
-        a.positionals.len() == 1,
-        "Expected local-sync receive|applied|bootstrap|witness|recover-bootstrap|recover-prewarm."
-    );
-    let root = a.root()?;
-    if a.positionals[0] == "recover-prewarm" {
-        let app = crate::args::absolute(Path::new(
-            a.value("desktop-app")
-                .ok_or_else(|| anyhow::anyhow!("Prewarm recovery requires --desktop-app."))?,
-        ))?;
-        claudex_app::providers::verify(
-            &app,
-            &claudex_app::providers::CLAUDE,
-            &claudex_app::platform::SystemRunner,
-        )
-        .await?;
-        let homes = crate::native_clients::Homes::read(&root, &home()?)?;
-        let result =
-            claudex_sync::local_start::recover_prewarm(&root, &homes.desktop_registry, |at| {
-                claudex_app::local_prewarm_proof::certify(
-                    &root,
-                    &app,
-                    &home()?.join("Library/Logs/Claude/claude.ai-web.log"),
-                    at,
-                )
-            })?;
-        println!(
-            "{}",
-            serde_json::to_string(&json!({"ok":true,"result":result}))?
-        );
-        return Ok(());
-    }
-    anyhow::ensure!(
-        a.value("desktop-app").is_none(),
-        "--desktop-app is only for recover-prewarm."
-    );
-    let mut input = Vec::new();
-    tokio::io::stdin()
-        .take(8193)
-        .read_to_end(&mut input)
-        .await?;
-    anyhow::ensure!(
-        input.len() <= 8192,
-        "Local synchronization input exceeds bound."
-    );
-    let params: Value = serde_json::from_slice(&input)?;
-    let result = match a.positionals[0].as_str() {
-        "receive" => {
-            let homes = crate::native_clients::Homes::read(&root, &home()?)?;
-            claudex_sync::local_sync::receive(&root, &homes.desktop_registry, &params)?
-        }
-        "applied" => claudex_sync::local_sync::applied(&root, &params)?,
-        "bootstrap" => claudex_sync::local_start::bootstrap(&root, &params)?,
-        "witness" | "recover-bootstrap" => {
-            let homes = crate::native_clients::Homes::read(&root, &home()?)?;
-            if a.positionals[0] == "witness" {
-                claudex_sync::local_start::witness(&root, &homes.desktop_registry, &params)?
-            } else {
-                claudex_sync::local_start::recover_bootstrap(
-                    &root,
-                    &homes.desktop_registry,
-                    &params,
-                )?
-            }
-        }
-        _ => bail!("Expected local-sync receive|applied|bootstrap|witness|recover-bootstrap."),
-    };
-    let output = serde_json::to_string(&json!({"ok":true,"result":result}))?;
-    anyhow::ensure!(
-        output.len() <= claudex_sync::packet::MAX_PACKET_BYTES + 1024,
-        "Local synchronization output exceeds bound; never replay consumed input."
-    );
-    println!("{output}");
-    Ok(())
 }

@@ -158,16 +158,6 @@ pub fn ensure(
     platform::absolute(root)?;
     platform::absolute(home)?;
     check_hold(root, fence)?;
-    if let Some(mut summary) = crate::frontend_bundle::installed(root, home)? {
-        if !folders {
-            summary["adapters"]["folders"] = json!({"status":"disabled"});
-        }
-        check_hold(root, fence)?;
-        return Ok(Pass {
-            summary,
-            observations: BTreeMap::new(),
-        });
-    }
     let mut graph = frontend_graph::discover(root, home)?;
     let selections = frontend_adapters::resolve(&graph);
     ensure_graph(root, home, folders, &mut graph, &selections, fence)
@@ -180,7 +170,6 @@ pub fn ensure_graph(
     selections: &Selections,
     fence: &dyn Fn() -> Result<()>,
 ) -> Result<Pass> {
-    let profile = frontend_graph::profile(&graph.selection)?;
     let mut adapters = json!({});
     for adapter in Adapter::ALL {
         if adapter == Adapter::Folders && !folders {
@@ -250,15 +239,14 @@ pub fn ensure_graph(
                             adapters[remaining.name()] = json!({"status":"held"});
                         }
                     }
-                    return Err(InterruptedPass { code, summary: json!({"nativeProfile":profile,"entry":graph.entry,"missingChunks":graph.missing,"adapters":adapters}) }.into());
+                    return Err(InterruptedPass { code, summary: json!({"entry":graph.entry,"missingChunks":graph.missing,"adapters":adapters}) }.into());
                 }
                 json!({"status":"skipped","reason":"Cache publication or recovery refused; original and journal preserved","failure":{"code":code.name()}})
             }
         };
     }
-    frontend_graph::verify(graph)?;
     Ok(Pass {
-        summary: json!({"nativeProfile":profile,"entry":graph.entry,"missingChunks":graph.missing,"adapters":adapters}),
+        summary: json!({"entry":graph.entry,"missingChunks":graph.missing,"adapters":adapters}),
         observations: frontend_graph::capture_hints(graph),
     })
 }
@@ -329,11 +317,7 @@ fn publish_sources(
         );
         frontend_ast::syntax(&part.source)?;
         cache::replace_source(&module.original_bytes, &part.source, Some(&module.url))?;
-        let state = owner(
-            &frontend_graph::journal_directory(root, &graph.selection)?,
-            adapter,
-            &module.name,
-        )?;
+        let state = owner(root, adapter, &module.name)?;
         validate_recovery(&state, &module.path, &module.source_hash)?;
     }
     frontend_graph::verify(graph)?;
@@ -341,11 +325,7 @@ fn publish_sources(
     let mut outcomes = vec![];
     for part in prepared {
         let module = &graph.modules[&part.url];
-        let state = owner(
-            &frontend_graph::journal_directory(root, &graph.selection)?,
-            adapter,
-            &module.name,
-        )?;
+        let state = owner(root, adapter, &module.name)?;
         let current = native_snapshot(&module.path)?;
         if current.hash != module.current_hash || current.identity != module.identity {
             return Err(Failure(FailureCode::CacheChanged).into());
@@ -439,11 +419,7 @@ fn release_independent_chat(
         .modules
         .get(url)
         .context("Shared renderer target is unavailable")?;
-    let state = owner(
-        &frontend_graph::journal_directory(root, &graph.selection)?,
-        Adapter::ChatWake,
-        &module.name,
-    )?;
+    let state = owner(root, Adapter::ChatWake, &module.name)?;
     let receipt = state.join("ui-folder-compat/manifest.json");
     if !exists(&receipt)? {
         return Ok(());
@@ -476,16 +452,14 @@ fn release_independent_chat(
     module.identity = restored.identity;
     Ok(())
 }
-fn resource_path(
-    selection: &claudex_core::claude_desktop::Selection,
-    path: &Path,
-) -> Result<String> {
+fn resource_path(home: &Path, path: &Path) -> Result<String> {
     let name = path
         .file_name()
         .and_then(|n| n.to_str())
         .context("Invalid renderer cache filename")?;
     ensure!(
-        frontend_graph::cache_filename(name) && path.parent() == Some(selection.cache().as_path()),
+        frontend_graph::cache_filename(name)
+            && path.parent() == Some(frontend_graph::cache_directory(home).as_path()),
         "Renderer restore target differs from its native cache directory."
     );
     Ok(name.into())
@@ -500,31 +474,17 @@ pub fn restore_adapter(
 ) -> Result<Value> {
     platform::absolute(root)?;
     platform::absolute(home)?;
-    let selection = claudex_core::claude_desktop::Selection::read(home)?;
-    let journals = frontend_graph::journal_directory(root, &selection)?;
-    let selected_fence = || {
-        check_hold(root, fence)?;
-        selection.verify()
-    };
-    restore_recursive(
-        &journals,
-        &selection,
-        path,
-        adapter,
-        &selected_fence,
-        &mut BTreeSet::new(),
-    )
+    restore_recursive(root, home, path, adapter, fence, &mut BTreeSet::new())
 }
 fn restore_recursive(
     root: &Path,
-    selection: &claudex_core::claude_desktop::Selection,
+    home: &Path,
     path: &Path,
     adapter: Adapter,
     fence: &dyn Fn() -> Result<()>,
     visiting: &mut BTreeSet<PathBuf>,
 ) -> Result<Value> {
-    selection.verify()?;
-    let name = resource_path(selection, path)?;
+    let name = resource_path(home, path)?;
     ensure!(
         visiting.insert(path.into()),
         "Renderer restore dependency cycle."
@@ -563,7 +523,7 @@ fn restore_recursive(
     let entry = cache::inspect(&current.bytes, None)?;
     if folder_owner && entry.source.contains("__cldxFolderStore") {
         for name in generation_names(root, Adapter::Folders)? {
-            let other = selection.cache().join(name);
+            let other = frontend_graph::cache_directory(home).join(name);
             if other == path {
                 continue;
             }
@@ -587,7 +547,7 @@ fn restore_recursive(
                         == Some(entry.url.as_str())
             });
             if dependent {
-                restore_recursive(root, selection, &other, Adapter::Folders, fence, visiting)?;
+                restore_recursive(root, home, &other, Adapter::Folders, fence, visiting)?;
             }
         }
     }
@@ -624,16 +584,8 @@ pub fn restore_folder_generations(
 ) -> Result<Value> {
     platform::absolute(root)?;
     platform::absolute(home)?;
-    let selection = claudex_core::claude_desktop::Selection::read(home)?;
-    let journals = frontend_graph::journal_directory(root, &selection)?;
-    let selected_fence = || {
-        check_hold(root, fence)?;
-        selection.verify()
-    };
-    let root = journals.as_path();
-    let fence: &dyn Fn() -> Result<()> = &selected_fence;
     let mut legacy = None;
-    let legacy_path = selection.cache().join("15bc54146dcdb4ce_0");
+    let legacy_path = frontend_graph::cache_directory(home).join("15bc54146dcdb4ce_0");
     let legacy_manifest = root.join("ui-folder-compat/manifest.json");
     if exists(&legacy_manifest)? && exists(&legacy_path)? {
         let receipt = evidence_snapshot(&legacy_manifest, 16 * 1024)?;
@@ -659,18 +611,11 @@ pub fn restore_folder_generations(
     }
     let mut results = vec![];
     for name in generation_names(root, Adapter::Folders)? {
-        let path = selection.cache().join(name);
+        let path = frontend_graph::cache_directory(home).join(name);
         if !exists(&path)? {
             continue;
         }
-        results.push(restore_recursive(
-            root,
-            &selection,
-            &path,
-            Adapter::Folders,
-            fence,
-            &mut BTreeSet::new(),
-        )?);
+        results.push(restore_adapter(root, home, &path, Adapter::Folders, fence)?);
     }
     let mut value = json!({"status":"restored","changed":results.iter().any(|r|r["changed"]==true)||legacy.as_ref().is_some_and(|r|r["changed"]==true),"generations":results.len()});
     if let Some(legacy) = legacy {
@@ -703,7 +648,7 @@ mod tests {
             let home = fs::canonicalize(temp.path()).unwrap();
             let root = home.join("state");
             platform::create_private(&root).unwrap();
-            platform::create_private(&frontend_graph::cache_directory(&home).unwrap()).unwrap();
+            platform::create_private(&frontend_graph::cache_directory(&home)).unwrap();
             Self {
                 _temp: temp,
                 home,
@@ -717,9 +662,7 @@ mod tests {
                 .map(|(number, (asset, source))| {
                     let url = format!("{ASSET_ROOT}{asset}");
                     let name = format!("{number:016x}_0");
-                    let path = frontend_graph::cache_directory(&self.home)
-                        .unwrap()
-                        .join(&name);
+                    let path = frontend_graph::cache_directory(&self.home).join(&name);
                     let bytes = container(asset, source);
                     platform::publish(&path, &bytes, 0o600).unwrap();
                     let entry = cache::inspect(&bytes, Some(&url)).unwrap();
@@ -744,7 +687,6 @@ mod tests {
                 })
                 .collect();
             Graph {
-                selection: claudex_core::claude_desktop::Selection::read(&self.home).unwrap(),
                 entry: EntrySummary {
                     asset: sources[0].0.into(),
                     cache_filename: "0000000000000000_0".into(),
@@ -782,163 +724,6 @@ mod tests {
             .source
     }
 
-    fn deployment(f: &Fixture, mode: &str) {
-        let path = claudex_core::claude_desktop::configuration_path(&f.home);
-        platform::create_private(path.parent().unwrap()).unwrap();
-        fs::write(&path, format!(r#"{{"deploymentMode":"{mode}"}}"#)).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
-        platform::create_private(&frontend_graph::cache_directory(&f.home).unwrap()).unwrap();
-    }
-    fn chat_target(graph: &Graph) -> Target {
-        Target {
-            url: graph.entry_url.clone(),
-            bindings: Bindings::Chat(ChatAnchor {
-                native: "n".into(),
-                fork_action: false,
-            }),
-            consumer: None,
-        }
-    }
-    #[test]
-    fn identical_profile_resources_keep_separate_journals_and_compiled_registries() {
-        let f = Fixture::new();
-        let sources = [(
-            "chat.js",
-            "const n={};const supported=n?.forkSession!==void 0;",
-        )];
-        let mut first = f.graph(&sources);
-        let target = chat_target(&first);
-        let prepared = frontend_adapters::prepare_sources(
-            &f.root,
-            &f.home,
-            &first,
-            &target,
-            Adapter::ChatWake,
-            None,
-        )
-        .unwrap();
-        assert!(
-            prepared[0]
-                .source
-                .contains(first.selection.registry().to_str().unwrap())
-        );
-        publish_sources(
-            &f.root,
-            &mut first,
-            Adapter::ChatWake,
-            &prepared,
-            &|| Ok(()),
-        )
-        .unwrap();
-        let first_path = first.modules[&first.entry_url].path.clone();
-        let first_bytes = fs::read(&first_path).unwrap();
-        let journal = f
-            .root
-            .join("ui-chat-wake/0000000000000000_0/ui-folder-compat");
-        let receipt = evidence_snapshot(&journal.join("manifest.json"), 16384).unwrap();
-        let original =
-            evidence_snapshot(&journal.join("original.cache"), cache::MAX_CACHE_BYTES).unwrap();
-        deployment(&f, "3p");
-        let mut third = f.graph(&sources);
-        assert_eq!(first.entry_url, third.entry_url);
-        assert_eq!(
-            first.modules[&first.entry_url].name,
-            third.modules[&third.entry_url].name
-        );
-        assert_eq!(
-            first.modules[&first.entry_url].original_bytes,
-            third.modules[&third.entry_url].original_bytes
-        );
-        let target = chat_target(&third);
-        let prepared = frontend_adapters::prepare_sources(
-            &f.root,
-            &f.home,
-            &third,
-            &target,
-            Adapter::ChatWake,
-            None,
-        )
-        .unwrap();
-        assert!(
-            prepared[0]
-                .source
-                .contains(third.selection.registry().to_str().unwrap())
-        );
-        assert!(
-            !prepared[0]
-                .source
-                .contains(first.selection.registry().to_str().unwrap())
-        );
-        publish_sources(
-            &f.root,
-            &mut third,
-            Adapter::ChatWake,
-            &prepared,
-            &|| Ok(()),
-        )
-        .unwrap();
-        let third_journal = frontend_graph::journal_directory(&f.root, &third.selection)
-            .unwrap()
-            .join("ui-chat-wake/0000000000000000_0/ui-folder-compat");
-        assert!(third_journal.join("manifest.json").exists());
-        assert_ne!(third_journal, journal);
-        let third_path = &third.modules[&third.entry_url].path;
-        restore_adapter(&f.root, &f.home, third_path, Adapter::ChatWake, &|| Ok(())).unwrap();
-        assert_eq!(source(third_path), sources[0].1);
-        assert_eq!(fs::read(&first_path).unwrap(), first_bytes);
-        let after = evidence_snapshot(&journal.join("manifest.json"), 16384).unwrap();
-        assert_eq!(
-            (after.identity, after.bytes),
-            (receipt.identity, receipt.bytes)
-        );
-        let after =
-            evidence_snapshot(&journal.join("original.cache"), cache::MAX_CACHE_BYTES).unwrap();
-        assert_eq!(
-            (after.identity, after.bytes),
-            (original.identity, original.bytes)
-        );
-        deployment(&f, "1p");
-        restore_adapter(&f.root, &f.home, &first_path, Adapter::ChatWake, &|| Ok(())).unwrap();
-        assert_eq!(source(&first_path), sources[0].1);
-    }
-    #[test]
-    fn profile_switch_during_publication_preserves_both_native_stores() {
-        let f = Fixture::new();
-        let mut graph = f.graph(&[("helper.js", "export const a=1;")]);
-        let path = graph.modules[&graph.entry_url].path.clone();
-        let original = fs::read(&path).unwrap();
-        let calls = Cell::new(0);
-        let fence = || {
-            calls.set(calls.get() + 1);
-            if calls.get() == 2 {
-                deployment(&f, "3p");
-            }
-            Ok(())
-        };
-        assert!(
-            publish_sources(
-                &f.root,
-                &mut graph,
-                Adapter::Commands,
-                &[part("helper.js", "export const a=2;")],
-                &fence
-            )
-            .is_err()
-        );
-        assert!(calls.get() >= 2);
-        assert_eq!(fs::read(&path).unwrap(), original);
-        assert!(
-            !frontend_graph::cache_directory(&f.home)
-                .unwrap()
-                .join("0000000000000000_0")
-                .exists()
-        );
-        assert!(
-            !f.root
-                .join("renderer-profiles/claude-3p/ui-commands")
-                .exists()
-        );
-    }
     #[test]
     fn complete_pair_preflight_precedes_any_publication() {
         let f = Fixture::new();
@@ -1252,9 +1037,7 @@ mod tests {
                 .join("ui-folders/0000000000000000_0/ui-folder-compat/original.cache")
                 .exists()
         );
-        let path = frontend_graph::cache_directory(&f.home)
-            .unwrap()
-            .join("15bc54146dcdb4ce_0");
+        let path = frontend_graph::cache_directory(&f.home).join("15bc54146dcdb4ce_0");
         let bytes = container("shared-23-Db0dcGkF.js", "export const a=1;");
         platform::publish(&path, &bytes, 0o600).unwrap();
         let entry = cache::inspect(&bytes, None).unwrap();

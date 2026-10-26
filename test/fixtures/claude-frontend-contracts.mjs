@@ -72,11 +72,6 @@ export function chatPatchContract(source, original, b) {
   const ast = syntax(source), options = only(nodes(ast, n => n.type === 'CallExpression'
     && n.callee.name === 'createClaudeChatWakeRuntime'), 'chat runtime').arguments[0];
   assert.equal(only(options.properties.filter(p => p.key.name === 'native'), 'native binding').value.name, b.native);
-  const local = only(nodes(ast, n => n.type === 'CallExpression'
-    && n.callee.name === 'createClaudeLocalSyncRuntime'), 'local sync runtime').arguments[0];
-  assert.equal(only(local.properties.filter(p => p.key.name === 'native'), 'local sync native binding').value.name, b.native);
-  assert.ok(nodes(local, n => n.type === 'Literal' && n.value === 'local-sync-manifest.json').length,
-    'local sync reads its independent coordinator manifest');
   return astValue(options);
 }
 

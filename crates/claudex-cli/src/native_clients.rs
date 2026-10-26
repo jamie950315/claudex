@@ -11,8 +11,6 @@ pub struct Homes {
     pub codex: PathBuf,
     pub claude: PathBuf,
     pub desktop_registry: PathBuf,
-    /// Reselect the native deployment per action; None pins an explicit registry.
-    pub selection_home: Option<PathBuf>,
 }
 impl Homes {
     pub fn read(root: &Path, home: &Path) -> Result<Self> {
@@ -37,59 +35,11 @@ impl Homes {
             codex.is_absolute() && claude.is_absolute(),
             "Native homes must be absolute."
         );
-        let desktop_registry =
-            claudex_core::claude_desktop::registry(home, value["desktopHome"].as_str())?;
         Ok(Self {
             codex,
             claude,
-            desktop_registry,
-            selection_home: value["desktopHome"].as_str().is_none().then(|| home.into()),
+            desktop_registry: home.join("Library/Application Support/Claude/claude-code-sessions"),
         })
-    }
-    pub fn desktop_registry(&self) -> Result<PathBuf> {
-        match &self.selection_home {
-            Some(home) => claudex_core::claude_desktop::registry(home, None),
-            None => Ok(self.desktop_registry.clone()),
-        }
-    }
-}
-
-#[cfg(test)]
-mod home_tests {
-    use super::*;
-    #[test]
-    fn deployment_is_reselected_for_each_native_action_and_explicit_registry_is_preserved()
-    -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let root = claudex_core::storage::private_directory(temp.path())?;
-        let home = root.join("home");
-        std::fs::create_dir(&home)?;
-        let homes = Homes::read(&root, &home)?;
-        assert!(
-            homes
-                .desktop_registry()?
-                .ends_with("Claude/claude-code-sessions")
-        );
-        let config = claudex_core::claude_desktop::configuration_path(&home);
-        std::fs::create_dir_all(config.parent().unwrap())?;
-        claudex_core::storage::write_json(&config, &serde_json::json!({"deploymentMode":"3p"}))?;
-        assert!(
-            homes
-                .desktop_registry()?
-                .ends_with("Claude-3p/claude-code-sessions")
-        );
-        claudex_core::storage::write_json(
-            root.join("config.json"),
-            &serde_json::json!({"version":1,"desktopHome":root.join("registry")}),
-        )?;
-        let explicit = Homes::read(&root, &home)?;
-        claudex_core::storage::write_json(
-            &config,
-            &serde_json::json!({"deploymentMode":"unsupported"}),
-        )?;
-        assert_eq!(explicit.desktop_registry()?, root.join("registry"));
-        assert!(homes.desktop_registry().is_err());
-        Ok(())
     }
 }
 

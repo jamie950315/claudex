@@ -53,9 +53,8 @@ insert older transcript segments into their saved prefix.
 
 ## Desktop integration
 
-The historical Remote Control Desktop baseline is CLI `2.1.281` with normal
-subscription OAuth and SDK `0.3.281`; warn policy permits other runtime versions
-to be attempted.
+Desktop mode's validated Claude baseline is CLI `2.1.281` with normal subscription
+OAuth and SDK `0.3.281`; warn policy permits other runtime versions to be attempted.
 It is integrated with the coordinator and background watcher.
 Explicitly user-authorized acceptance has verified two real model-authored
 Desktop roundtrips, continuation from a compacted source, stable Claude identity,
@@ -319,29 +318,6 @@ It sends no native message and leaves every native file intact. Reopen Claudex
 to synchronize the selected history normally. Applied or uncertain delivery,
 active work, independently edited content and an existing counterpart remain
 blocked; this command cannot merge branches or cancel an uncertain write.
-
-### Continue one conversation in another Desktop profile
-
-First-party and Gateway profiles have separate native Local-session stores.
-Claudex never copies their registries or credentials. After a reviewed native
-profile switch and restart, the next completed Codex delivery can create a new
-Local continuation in the selected profile, with the full synchronized history.
-The previous Local owner and its history remain preserved.
-
-To move one idle, fully synchronized conversation without a new model turn:
-
-```sh
-claudex handoff-profile CONVERSATION_ID
-```
-
-The selected profile must have the enabled Mod and a supported, loaded native
-frontend consumer. A saved Gateway setting alone does not establish that
-readiness. The command refuses pending work, incomplete or changed histories,
-and missing native creation proofs. Native workspace trust may still require
-normal approval. Completion requires the full packet ACK and normal promotion;
-an awaiting result remains pending for ordinary recovery, never a reason to
-repeat native actions. Unchanged conversations are not migrated in bulk at
-startup. Switching profiles never moves an already pending transaction.
 
 ### Stop tracking while preserving history
 
@@ -1217,94 +1193,19 @@ appends to adopted transcripts, even though the isolated synthetic probe works.
 Do not promote the fixture append helper into a runtime writer based on an
 archived flag, an absent PID, or a successful reload alone.
 
-### Native Local Mod transport
-
-`claudeDesktopTransport` in the synchronization configuration selects
-`local-mod` (the default when absent) or explicit `remote-control`. New Local
-owners preserve the native configured provider, endpoint, model, authentication
-and usage route; official authentication can also be used through Local. An owner
-with a saved Remote Control ID keeps that transport and identity regardless of
-the default. Invalid transport values fail explicitly.
-
-With stock, unmodified Desktop and CLI launchers, Local routing follows Claude
-Desktop's deployment profile. Its first-party launch environment overrides
-ordinary CLI proxy settings. Installed launch customizations can alter that
-environment; verify the effective launch path and configuration rather than
-inferring a route from CLI settings alone. Native Local creation exposes no
-per-session provider override, and a custom-model CLI history does not select a
-provider for its Desktop continuation. Desktop's native Gateway profile supports
-an Anthropic-compatible endpoint; it is a global profile change with
-sign-out/restart effects, not a synchronization setting.
-See [accounts and model routing](app.md#claude-accounts-and-model-routing) before
-changing it. Claudex never switches profiles automatically.
-
-Local synchronization needs an enabled current Mod loaded in the native Local
-session and the loaded frontend integration. The renderer verifies the exact
-session, native idle/activity metadata, draft absence and the unique live
-`claudex-sync` command before and after claiming a durable operation. It submits
-only the fixed no-query command, never an ordinary model prompt. The Mod consumes
-the claim before returning packet text and uses the native append API without
-model execution. Long history does not pass through shell-command output.
-
-New Local handoffs use Desktop's normal no-input folderless prewarm, not an
-SDK seed or CLI resume import. The exact hidden Local query must advertise the
-fixed Mod bootstrap command before Claudex claims that same prewarm. Bootstrap
-records actual native ownership without appending history or running a model.
-Claudex then uses normal native folder movement with trust acceptance disabled;
-a native trust request remains visible and waits for the normal user action.
-The full history packet is withheld until the exact Local/CLI identity, target
-project and relocated transcript are proven.
-
-Every native prewarm, start and folder move has a durable one-use claim and
-receipt in `local-start`. Unknown actions remain consumed across restart.
-Exact independent native ownership/relocation proofs may reconcile an unknown
-start or move without resending it. A prewarm whose identity was never returned
-cannot be recreated automatically. A completed legacy SDK seed remains unchanged
-with its old owner and pending evidence in the migration journal; it is never
-replayed or passed to an import API that excludes SDK sessions. Only the normal
-coordinator resolves the replacement target after the packet's actual native
-ACK. Pending work is never cleared to regain availability or change routing.
-
-A returned send or dispatch receipt is not a native ACK. Promotion requires the
-applied receipt and exact persisted native command, UUID, content and ordered
-image proofs. Each image's JSON envelope (base64 and MIME type) must be smaller
-than 4 MiB for the native file reader; the complete packet retains its existing
-64 MiB limit. Native resizing or re-encoding that changes image bytes refuses
-promotion while preserving the operation journal; image acceptance depends on
-that exact persisted proof. Existing source, ownership and superseded-original
-guards remain unchanged.
-
 ### Native SDK owner path
 
-`crates/claudex-sync/src/owner.rs` provides Remote Control synchronization: a
-persistent native Claude process using its SDK protocol is the only transcript writer.
+`crates/claudex-sync/src/owner.rs` provides Desktop synchronization: a persistent
+native Claude process using its SDK protocol is the only transcript writer.
 Claude Desktop connects through native Remote Control. Synchronization submits
 `shouldQuery: false` messages; normal user requests from Desktop remain native user turns. The
 component implements that native protocol directly in Rust. Its strict validated
 CLI baseline is `2.1.281`, originally accepted with SDK `0.3.281`; the Rust owner
 does not load the Node SDK. `warn` permits other runtimes to attempt the existing
-protocol without claiming compatibility. This Remote Control path requires
-normal subscription OAuth and does not copy credentials from Desktop. Setting
-`CLAUDE_CONFIG_DIR` even to the default path selects a different native credential
-namespace, so the owner omits that variable for the standard home.
-
-Local synchronization preserves the native configured provider, endpoint, model,
-authentication and usage route. Explicit `remote-control` selects the official
-account profile for that process, without editing ordinary CLI settings or
-copying credentials. Native permissions, hooks, plugins and managed policy remain
-authoritative. A transport refusal does not authorize switching to that profile
-or forcing an official model. Claude Code 2.1.302 refuses
-custom endpoints for Remote Control even with
-`_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. Native auth status and cached account
-labels do not establish an active subscription, available allowance or model access.
-
-The model that authored a source history does not prove the continuation's
-provider or transport availability. Histories from custom-model CLI sessions
-remain readable and importable under the same history guards; that alone does
-not establish a working Remote Control continuation on a custom endpoint.
-Ordinary proxy sessions retain their settings and entry points. The existing
-superseded-original guard still applies: do not add new work to the old source
-after its synchronized continuation has taken over.
+protocol without claiming compatibility. It requires normal subscription OAuth
+and does not copy credentials from Desktop. Setting `CLAUDE_CONFIG_DIR`
+even to the default path selects a different native credential namespace, so
+the owner omits that variable for the standard home.
 
 The component verifies no-query receipts against the exact persisted UUID and
 content, keeps one durable pending operation, deduplicates operation IDs, and

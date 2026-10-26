@@ -236,7 +236,7 @@ pub fn resolve(graph: &Graph) -> Selections {
 /// A combined resource adds the independent chat bootstrap only once.
 pub fn prepare_sources(
     root: &Path,
-    _home: &Path,
+    home: &Path,
     graph: &Graph,
     target: &Target,
     adapter: Adapter,
@@ -246,7 +246,7 @@ pub fn prepare_sources(
         .modules
         .get(&target.url)
         .context("Frontend selected target disappeared.")?;
-    let registry = graph.selection.registry();
+    let registry = home.join("Library/Application Support/Claude/claude-code-sessions");
     let asset = module.url.rsplit('/').next().unwrap();
     let source = match (&target.bindings, adapter) {
         (Bindings::Commands(anchor), Adapter::Commands) => {
@@ -255,7 +255,7 @@ pub fn prepare_sources(
         (Bindings::Owner(anchor), Adapter::OwnerWake) => frontend_owner::transform(
             &module.source,
             anchor,
-            &frontend_runtime::owner(root, &registry, anchor, asset)?,
+            &frontend_runtime::owner(root, anchor, asset)?,
         )?,
         (Bindings::Chat(anchor), Adapter::ChatWake) => {
             let result = module.source.clone()

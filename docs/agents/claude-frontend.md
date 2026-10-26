@@ -86,25 +86,11 @@ the coordinator lock, and never report a boundary while a transaction is pending
 
 `crates/claudex-app/src/frontend_graph.rs` discovers the latest fetched index entry from the
 private HTTP cache using verified Chromium HttpResponseInfo response timestamps,
-never filesystem mtime (patches change mtime). Capture one shared
-`claude_desktop::Selection` for graph discovery, injected registry paths and
-publication. First-party and Gateway graphs use only their own `Claude` or
-`Claude-3p` cache; never combine their modules or recover one from the other's
-journals. Verify the exact saved deployment configuration at every publication
-and restore fence, including across asynchronous runtime/signature checks. A
-profile switch refuses the old pass; a saved mode is not running-renderer proof.
-Require a unique newest entry and
+never filesystem mtime (patches change mtime). Require a unique newest entry and
 its root bootstrap. Follow literal static/re-export/dynamic imports within the
 exact Anthropic assets origin; only reachable cached modules qualify. Missing
 lazy chunks are counted, never fetched or replaced with an older graph. Cache
 recency cannot prove which graph a running renderer has already evaluated.
-A Gateway `app://localhost` frontend may instead be served directly from signed
-`ion-dist` bundle resources. The HTTP-cache installer does not patch that
-source. An absent HTTP graph remains explicit; namespace plumbing or transformed
-static sources cannot certify a loaded Gateway renderer. Bundle-resource
-installation uses the explicit offline `claudex app renderer-bundle` command.
-Setup and the watcher never sign or mutate a native app bundle. See
-[the operator guide](../renderer-bundle.md) for opt-in and recovery commands.
 Resolve LocalSessions from its globalThis["claude.web"] binding/export/import and
 React hooks from their public getter, definition and export/import relationships.
 Also accept the observed two-expression LocalSessions initializer containing
@@ -277,215 +263,11 @@ native command, install a same-name prompt skill, or change submission/dispatch
 to make the item appear.
 Use reserved identifiers and the normal original/journal and reload boundaries.
 
-## Gateway signed-bundle installation
-
-`frontend_bundle.rs` owns `renderer-bundle check|status|install|restore|recover`.
-`check` and `status` are read-only. Every mutation requires
-`--allow-bundle-modification yes`, an unchanged stopped app hold, exclusive watch,
-operation and Desktop-operation locks, and a closed native Desktop. Capture one
-exact Selection through asynchronous process/copy/signature checks and recheck
-the complete source and candidate immediately before publication. Install
-requires Gateway; restoration and recovery use the saved app/home identities
-and a stable current Selection even after a native switch back to first-party.
-
-The signed `ion-dist/index.html` must name one direct `assets/v1/index-*.js`
-entry. Follow its complete reachable JavaScript graph, bounded to 8,192 modules
-and 512 MiB, with the existing per-source limit. Existing HTTPS asset identities
-are logical keys internal to the structural resolver only, never HTTP-cache
-evidence or a relaxed origin allowlist. Keep all native structural proofs and
-failure containment. Folders retain their actual resolver outcome; a missing
-raw-context proof stays skipped. A proven shared folder/chat target uses the
-existing combined recipe. Require all three independent chat, owner and commands
-capabilities before publishing. Detailed refusal reasons stay in the private
-journal and explicit source-check output; public maintenance uses fixed reasons
-and preserves partial statuses.
-
-Copy the complete verified Claude.app into a private sibling container on the
-same filesystem. Complete stable-file byte inventories prove copy integrity;
-regular resources are single-linked and symlinks remain internal. Never modify
-native history, registries, credentials or ASAR. Patch only proved resources,
-ad-hoc sign the outer bundle preserving identifier, flags, runtime metadata and
-all entitlements except the vendor-restricted application identifier, team
-identifier and Keychain access groups. Read back the exact resulting dictionary;
-never claim the vendor's protected groups under a local identity. Those restricted
-claims pass disk verification but macOS refuses process launch. Require the
-normal Claude publisher check and strict deep
-verification. Do not use a personal Development identity or re-sign nested vendor
-code. The local outer process explicitly disables hardened library validation
-so it can load those unchanged vendor frameworks despite their different Team ID;
-without this entitlement dyld aborts before Electron starts. Preserve all other
-runtime permissions and hardened flags. Refuse changes outside proved patches and the outer code seal/executable;
-flush the candidate before recording swap authority.
-
-Each generation keeps its private journal and complete preserved bundle. Record
-the authoritative Mod version as its renderer recipe; a different recipe requires
-explicit restore then install, never automatic re-signing or current readiness.
-Bundle journal reads and exact-private atomic updates share their 32 MiB bound;
-the generic private-state writer's smaller bound does not apply to this inventory.
-`renamex_np(RENAME_SWAP)` exchanges the complete app and candidate after durable
-intent. Recovery classifies exact object placement; it never replays a swap.
-An explicit install may publish the same current-recipe Prepared candidate after
-rechecking both complete inventories and all fences, before its first swap intent.
-Ordinary pending classification accounts only for the exchanged root directory's
-expected ctime change; all child identities remain exact. A completed restore has
-also exhibited ctime-only drift on the original resources whose saved bytes differ
-from the locally signed counterpart; the OS mechanism is not established. Only
-explicit stopped/closed offline restore or recovery may re-establish those exact
-original objects: both inventories must save distinct authenticated digests for
-the single-linked regular resource, its expected-direction bytes must match, and
-every non-ctime identity field must remain exact. Require strict deep publisher
-verification of both bundles, the unchanged lifecycle fences, and an exact stable
-recheck of both complete trees before saving the restored outcome. This never
-applies to publication, an unswapped intent, unchanged resources or ordinary
-installed recognition, and never issues another exchange. Foreign changes or
-uncertain placement preserve both bundles and the pending journal. An interrupted unpublished build may be marked
-abandoned only after its full original still matches; its artifacts are retained.
-Restored generations remain too. A replacement app cannot borrow an older journal.
-macOS can attach MACL metadata after exchange, changing ctime on the app root and
-outer CodeResources seal. Installed recognition may re-establish those two exact
-identities only when every other identity field, every child and the seal's
-authenticated bytes remain unchanged, followed by an exact stable recheck.
-Explicit offline restore verifies both publishers and saves those current exact
-identities before its swap intent. Other ctime changes, permissions, links,
-inodes, resource changes and changed seal bytes still refuse.
-
-Normal frontend installation recognizes installed bundle generations read-only
-before HTTP-cache discovery. Verify every saved file identity and both complete
-inventories; never repair a signed bundle. The shared OS source also watches the
-generation's resource/code directories and forces full revalidation on their
-events. Installation occurs while Claude is closed, so the next normal open
-remains `load-not-verified`, not activation or delivery proof. Native evaluation,
-namespaced claims and persisted packet ACKs are separate acceptance conditions.
-See [operator commands](../renderer-bundle.md).
-
-## Local no-query synchronization bootstrap
-
-The proved, statically loaded chat-wake resource also embeds
-`claude-local-sync-runtime.mjs`. Its bootstrap, lifecycle and
-`local-sync-manifest.json` are independent of collaboration wake messages and
-the owner-wake inbox. It uses the same normal cache installer, immutable originals,
-combined-resource journals and restart boundaries as chat wake; installing bytes
-or logging `started` does not prove the running renderer loaded them. Preserve
-the existing adapter selection, native code and failure containment. There is no
-new vendor anchor or permission to borrow an unrelated native client.
-
-The owner-wake bootstrap independently starts the native Local creation poller
-with the same structurally proven attached user-config stdio lookup. Keep its
-try/catch independent so an unavailable creation API cannot disable owner wake.
-Poll only `local-start-manifest.json`. Each prewarm/start/changeCwd invocation
-requires a durable one-use claim through that exact client. Do not borrow a
-Local session to create another. Keep the same manifest entry after claim for
-its final exact check, without allowing a second claim. Refused/unknown calls
-remain consumed across renderer unload and process restart.
-
-Use normal no-input `prewarmFolderless({cwd:"",message:"",useWorktree:false})`.
-The public IPC schema requires a string message; native prewarm overrides it to
-undefined, so this placeholder is not model input. Persist all three options in
-the prewarm claim proof. Manifest version 3 is mandatory; older renderers cannot
-consume a namespaced action. Compile the same graph Selection's registry root
-into the owner bootstrap. Every manifest entry must name that exact
-`registryRoot`, including prewarm before any Local mapping exists. Missing or
-mismatched roots refuse before a claim. Recheck the entry after a claim and
-again after final asynchronous catalogue/move proofs; lost authority consumes a
-rejected receipt without invoking native creation, start or move. Move registry
-paths must also remain beneath the compiled root. Never infer a loaded
-renderer's namespace from the current deployment setting. Never use
-`prewarmLocal` spares or an
-empty ordinary `start` message. The prewarm's returned Local ID and scratch cwd
-are authority for one `getSupportedCommands({sessionId})` query. Require a unique
-live `claudex-bootstrap` entry before and after start claim. Start the same
-prewarm in its returned scratch cwd with only the fixed bootstrap command, no
-packet or model input. Do not pass the target cwd to claim a scratch prewarm:
-native claim keeps the existing query's cwd. Require actual bootstrap receipt
-(or the independent certificate below), exact native registry mapping and
-idle/shell/draft checks before a separately claimed normal `changeCwd(localId,target,false)`. Keep native trust/policy and
-configured provider/account/model authoritative. No packet is exposed until the
-coordinator proves target cwd/identity and complete transcript relocation.
-
-An explicitly enrolled failed-bootstrap recovery adds a separate `witness` stage
-in that same version-3 manifest. It uses the retained scratch Local/CLI mapping,
-compiled registry namespace, title/activity, exact idle/shell/no-draft checks and
-unique live `claudex-witness` catalogue before and after its separate durable
-claim. Recheck activity after the awaited final catalogue and recheck the exact
-manifest/lifecycle before one `sendMessage` with the fixed command envelope and
-saved deterministic input UUID. It never invokes prewarm/start/changeCwd or
-creates a model prompt as an alternative. Consume an unknown claim permanently,
-including across restart; no new claim is minted to retry it. An observed helper
-receipt and complete certified graph are separate coordinator gates before move.
-The manifest's `identity` may name that certificate's context while `bootstrap`
-remains null; standard READY entries retain their original behavior.
-
-Content-free `[Claudex local start]` diagnostics distinguish API availability,
-prewarm/start/move/witness claimed and returned/unknown/rejected/needs_trust outcomes,
-bootstrap catalogue ready/missing/duplicate/unavailable, registry mismatch and
-native idle/shell waits. Move/witness readiness reports the first fixed
-`cwd-*` identity, archive/running/turn/activity or pending-field refusal instead
-of a combined idle message. Field suffixes come only from the existing fixed
-pending lists; never log field values, paths, titles or IDs. These diagnostics
-preserve every strict predicate and add no catalogue reads, native calls or
-retries. Private local-start journals contain the exact native receipts and
-original/migrated target evidence. Its content-free `status` reaches
-`target-migrated` only after native target proofs and `packet-acknowledged` only
-after exact persisted command/append verification; neither grants authority.
-Diagnostics never log input,
-paths, IDs or arbitrary native errors. Mapping and migration are intermediate;
-the existing Local consumer still requires the live command and exact ACK below.
-
-The Local consumer polls only its bounded operation manifest and native identity,
-idle/activity, draft, registry and busy-shell metadata. Before claiming, require
-exact Local/CLI session, cwd, title and registry identity, plus exactly one native
-`getSupportedCommands({sessionId: localId})` catalogue entry whose name is
-`claudex-sync`. Recheck that proof and activity after claim, and recheck the exact
-manifest entry before dispatch. A cold, absent, duplicated or revoked command
-never becomes an ordinary model prompt. Do not advertise this command through
-the sessionless catalogue adapter or substitute a prompt skill.
-Content-free diagnostics distinguish registry/session identity, the separate
-archive/running/turn-running flags, invalid activity timestamps, each fixed
-pending-activity field, registry/activity changes, composer drafts, shell probes,
-and missing/duplicate/unavailable live commands. Metadata read failures identify
-their fixed phase, including the final session recheck. Report no native values,
-errors, paths, IDs or input; an unchanged reason logs only once. These diagnostics
-add no native calls or retries and do not relax pre-claim or post-claim guards.
-
-An input-free native warm leaves `cliBootPending:true` until the first turn's
-`system/init`, even after the SDK's control initialization and Mod registration
-finish. Local sync therefore defers only that exact boolean to the unique live
-`claudex-sync` catalogue proof above; cold queries disable hooks and cannot
-register that command. The native session/activity recheck after the catalogue
-and each complete inspection before and after claim remain mandatory. Missing,
-duplicate, failed or revoked commands still refuse, as do every other activity,
-identity, draft and shell guard. Malformed truthy boot markers still refuse.
-The independent recovery witness uses only its own unique live
-`claudex-witness` command as that initialization proof for the exact boolean
-`cliBootPending:true`. Inspect the same identity/activity and every idle/shell
-guard again after the awaited catalogue before claiming, and repeat the complete
-proof after claiming and before dispatch. Missing, duplicate, unavailable or
-revoked witness commands and malformed truthy boot markers still refuse;
-diagnostics identify witness catalogues separately from bootstrap catalogues.
-Ordinary start and move do not use this substitute initialization proof.
-
-Dispatch only the fixed `/claudex-sync <operation UUID> <claim UUID>` envelope
-with its deterministic input UUID and ordered native image input. The loaded
-Mod's non-immediate handler consumes both success and failure without calling
-`next()`; it verifies the current durable claim and performs only the authorized
-native no-query append. Long packet text comes through the authenticated helper,
-not a shell command or command arguments. Claim once, consume once and retain
-uncertain outcomes across renderer unload/restart; never retry a native send or
-repeat a consumed helper response. A claim is dispatch authority, and a returned
-send/receipt is transport evidence, not a native ACK or completed synchronization.
-Only the coordinator's applied receipt plus exact persisted native transcript
-proof permits promotion. Native image resizing or re-encoding that changes the
-intended bytes refuses promotion and preserves the journal.
-
 `crates/claudex-app/src/frontend_maintenance.rs` is owned by the normal Desktop watcher under
 watch.lock. It performs one startup cache pass, then debounces cache-directory
 notifications and serially re-discovers/reapplies all enabled adapters. Exact
 metadata/key hints suppress unchanged JS entries and unrelated HTTP/image writes;
-anonymous notifications still recheck the graph. Watch both native cache ancestor
-chains and the deployment configuration through the same shared OS source, so
-missing directories and profile changes re-arm without polling. Configuration
-hints force a full pass rather than filename-only suppression; unrelated writes
-in the unselected cache do not select it. Hints never authorize patches.
+anonymous notifications still recheck the graph. Hints never authorize patches.
 Failed or partially refused passes discard unchanged-asset suppression evidence;
 the next JavaScript cache hint revalidates through the normal guarded installer.
 Do not schedule polling or retry timers. A missing cache entry or changed graph
@@ -539,15 +321,8 @@ chat/owner/command failure into a folder-map error. Prepared files with
 from synchronization health and actual recipient/delivery proof.
 
 Each resource uses <adapter>/<cache filename>/ui-folder-compat, with adapter
-ui-folders, ui-chat-wake, ui-owner-wake or ui-commands, an immutable original and a
-prepared/installed journal. First-party journals retain their existing root;
-Gateway journals live under `renderer-profiles/claude-3p/`. Equal URLs, source
-hashes and cache filenames never share recovery evidence across profiles.
-Restores capture one Selection and use only its cache/journal namespace; legacy
-first-party restoration is never borrowed by Gateway. Restart pending/attempt
-receipts use the same profile separation, retaining existing first-party files.
-Maintenance exposes only a bounded `nativeProfile` label, not a user-data path;
-the restart consumer verifies that label against its exact Selection fence.
+ui-folders, ui-chat-wake or ui-owner-wake, an immutable original and a
+prepared/installed journal.
 Older graphs can share one folder/chat resource. The all-adapter installer
 combines both complete transforms in one transaction and owns its immutable
 original/journal under ui-folders/<cache filename>/ui-folder-compat. A disabled
@@ -624,7 +399,7 @@ module is distinct from a started subscription, a finished native read and a
 verified archive outcome.
 
 The frontend engine is Rust: `crates/claudex-app/src/frontend_*.rs` owns graph
-proofs, selection, transformation, installation and maintenance. The seven files
+proofs, selection, transformation, installation and maintenance. The six files
 under `crates/claudex-app/host/renderer/` are injected browser-host runtimes,
 not another engine. JavaScript developer tools download/copy assets, run the
 Rust checker and independently inspect its output with Acorn and `node --check`.
@@ -649,8 +424,7 @@ the optimized codec and proofs avoid development-build overhead. The legacy
 `--rust-only true` verifier option is accepted for existing callers; all modes now use Rust.
 
 `dev/verify-claude-frontend-builds.mjs` inventories real cached entries and all
-current/legacy renderer journals for the selected profile through the Rust
-checker, validates immutable
+current/legacy renderer journals through the Rust checker, validates immutable
 originals, and copies exact reachable graphs into temporary homes. It runs the
 production Rust selection, complete transforms and installer, `node --check`,
 and independent AST/native-preservation/wiring contracts. It proves idempotent
@@ -666,8 +440,7 @@ never write into the supplied native home or state.
 
 The historical hand-pin JavaScript oracle is archived on
 `codex/javascript-legacy`, not loaded from Git and executed by this checkout.
-Every selected-profile legacy journal is still validated and inventoried,
-including resources
+Every legacy journal is still validated and inventoried, including resources
 not selected by a current graph. Obsolete shared Chat/Cowork owner-wake pins are
 not equivalent to the required Code/attached-stdio design: keep their evidence,
 never restore directMcpCallTool or the wrong component to pass acceptance.

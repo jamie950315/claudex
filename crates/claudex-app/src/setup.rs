@@ -82,7 +82,6 @@ pub trait AppRuntime: Send + Sync {
         provider: &str,
         binary: Option<&std::path::Path>,
     ) -> Authentication;
-    async fn configured_authentication(&self, binary: Option<&std::path::Path>) -> Authentication;
     async fn mod_status(
         &self,
         providers: &Providers,
@@ -105,21 +104,6 @@ pub struct AppSetup<'a> {
     pub runtime: &'a dyn AppRuntime,
 }
 impl AppSetup<'_> {
-    fn local_claude_authentication(&self) -> Result<bool> {
-        Ok(claudex_sync::local_sync::configured_transport(&self.root)? == "local-mod")
-    }
-    async fn authentication(
-        &self,
-        provider: &str,
-        binary: Option<&std::path::Path>,
-        local_claude: bool,
-    ) -> Authentication {
-        if provider == "claude" && local_claude {
-            self.runtime.configured_authentication(binary).await
-        } else {
-            self.runtime.authentication(provider, binary).await
-        }
-    }
     pub fn writable(&self) -> Result<()> {
         ensure!(
             !self.read_only,
@@ -168,7 +152,6 @@ impl AppSetup<'_> {
         mod_status: &Value,
         notes: &std::collections::BTreeMap<String, String>,
     ) -> Result<Report> {
-        let local_claude = self.local_claude_authentication()?;
         let mut rows = vec![row(
             "projects",
             "Project access",
@@ -222,10 +205,7 @@ impl AppSetup<'_> {
                     .unwrap_or("The official tool will be installed during setup.".into()),
                 Some("retry"),
             ));
-            let configured = !codex && local_claude;
-            let auth = self
-                .authentication(name, p.binary.as_deref(), local_claude)
-                .await;
+            let auth = self.runtime.authentication(name, p.binary.as_deref()).await;
             let state = if auth.ready {
                 State::Ready
             } else if auth.missing {
@@ -239,21 +219,11 @@ impl AppSetup<'_> {
                 &format!("{name}-login"),
                 if codex {
                     "ChatGPT sign-in"
-                } else if configured {
-                    "Claude authentication"
                 } else {
                     "Claude sign-in"
                 },
                 state,
-                if configured && auth.ready {
-                    "Native configured authentication is available. Model access and allowance are not verified."
-                } else if configured && auth.missing {
-                    "Install the native tool before checking configured authentication."
-                } else if configured && auth.failed {
-                    "Native configured authentication status could not be verified. Check your Claude Code settings."
-                } else if configured {
-                    "Configure authentication in Claude Code for your selected provider."
-                } else if auth.ready {
+                if auth.ready {
                     "Native account sign-in is available. Credentials are not copied."
                 } else if auth.missing {
                     "Install the native tool before signing in."
@@ -262,7 +232,7 @@ impl AppSetup<'_> {
                 } else {
                     "Sign in through the official provider in your browser."
                 },
-                if configured { Some("retry") } else { Some(if codex { "login-codex" } else { "login-claude" }) },
+                Some(&format!("login-{name}")),
             ));
             rows.push(row(&format!("{name}-desktop"),if codex{"Codex Desktop integration"}else{"Claude Desktop integration"},if p.app.is_some(){State::Ready}else if p.app_issue.is_some(){State::Blocked}else{State::Missing},if p.app.is_some(){if p.app_signature==Some(crate::providers::Publisher::Local){"The installed app is a locally re-signed build of the official app.".into()}else{"The installed app has the expected vendor signature.".into()}}else{p.app_issue.clone().unwrap_or("Claudex expects this desktop app to be installed already. It will not download or replace it.".into())},Some(if p.app_issue.is_some(){"retry"}else if codex{"open-codex"}else{"open-claude"})));
         }
@@ -474,7 +444,6 @@ impl AppSetup<'_> {
     }
     pub async fn setup(&self) -> Result<Report> {
         self.writable()?;
-        let local_claude = self.local_claude_authentication()?;
         platform::create_private(&self.root)?;
         let _lock = FileLock::acquire(&self.root.join("app-setup.lock"), true)?;
         let mut notes = std::collections::BTreeMap::new();
@@ -488,10 +457,12 @@ impl AppSetup<'_> {
             .await?;
         if providers.codex.app.is_some() && providers.claude.app.is_some() {
             let a = self
-                .authentication("codex", providers.codex.binary.as_deref(), local_claude)
+                .runtime
+                .authentication("codex", providers.codex.binary.as_deref())
                 .await;
             let b = self
-                .authentication("claude", providers.claude.binary.as_deref(), local_claude)
+                .runtime
+                .authentication("claude", providers.claude.binary.as_deref())
                 .await;
             if a.ready && b.ready {
                 if self
@@ -894,49 +865,18 @@ mod tests {
         root: PathBuf,
         calls: Mutex<Vec<String>>,
         fail_sync: bool,
-        ready_profile: bool,
     }
     #[async_trait]
     impl AppRuntime for Runtime {
         async fn providers(&self, _: bool, _: bool) -> Result<Providers> {
-            if self.ready_profile {
-                return Ok(Providers {
-                    codex: crate::providers::ProviderInfo {
-                        app: Some("/Applications/Codex.app".into()),
-                        binary: Some("/native/codex".into()),
-                        ..Default::default()
-                    },
-                    claude: crate::providers::ProviderInfo {
-                        app: Some("/Applications/Claude.app".into()),
-                        binary: Some("/native/claude".into()),
-                        ..Default::default()
-                    },
-                });
-            }
             Ok(Providers {
                 codex: Default::default(),
                 claude: Default::default(),
             })
         }
-        async fn authentication(
-            &self,
-            provider: &str,
-            _: Option<&std::path::Path>,
-        ) -> Authentication {
-            self.calls
-                .lock()
-                .unwrap()
-                .push(format!("official-auth:{provider}"));
+        async fn authentication(&self, _: &str, _: Option<&std::path::Path>) -> Authentication {
             Authentication {
-                ready: self.ready_profile && provider == "codex",
-                missing: !self.ready_profile,
-                ..Default::default()
-            }
-        }
-        async fn configured_authentication(&self, _: Option<&std::path::Path>) -> Authentication {
-            self.calls.lock().unwrap().push("configured-auth".into());
-            Authentication {
-                ready: true,
+                missing: true,
                 ..Default::default()
             }
         }
@@ -970,140 +910,17 @@ mod tests {
             Ok(json!({"allowed":true,"blockers":[]}))
         }
         async fn install_interface(&self) -> Result<()> {
-            self.calls.lock().unwrap().push("install-interface".into());
-            Ok(())
+            bail!("not called")
         }
         async fn install_collaboration(&self, _: &Providers) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push("install-collaboration".into());
-            Ok(())
+            bail!("not called")
         }
         async fn configure_synchronization(&self, _: &Providers) -> Result<()> {
-            self.calls
-                .lock()
-                .unwrap()
-                .push("configure-synchronization".into());
-            Ok(())
+            bail!("not called")
         }
         async fn login(&self, _: &str, _: &std::path::Path) -> Result<()> {
             bail!("not called")
         }
-    }
-    #[tokio::test]
-    async fn readiness_uses_configured_auth_by_default_and_official_auth_only_for_remote_control()
-    -> Result<()> {
-        let t = tempfile::tempdir()?;
-        let root = std::fs::canonicalize(t.path())?;
-        let runtime = Runtime {
-            root: root.clone(),
-            calls: Mutex::default(),
-            fail_sync: false,
-            ready_profile: false,
-        };
-        let app = AppSetup {
-            root: root.clone(),
-            read_only: true,
-            runtime: &runtime,
-        };
-        for transport in [None, Some("local-mod"), Some("remote-control")] {
-            if let Some(transport) = transport {
-                platform::write_json(
-                    &root.join("config.json"),
-                    &json!({"claudeDesktopTransport":transport}),
-                )?;
-            }
-            runtime.calls.lock().unwrap().clear();
-            let report = app.inspect().await?;
-            let row = report
-                .components
-                .iter()
-                .find(|row| row.id == "claude-login")
-                .unwrap();
-            let local = transport != Some("remote-control");
-            assert_eq!(row.state, if local { State::Ready } else { State::Missing });
-            assert_eq!(
-                row.label,
-                if local {
-                    "Claude authentication"
-                } else {
-                    "Claude sign-in"
-                }
-            );
-            assert_eq!(
-                row.action.as_deref(),
-                Some(if local { "retry" } else { "login-claude" })
-            );
-            let calls = runtime.calls.lock().unwrap();
-            assert!(calls.iter().any(|call| call == "official-auth:codex"));
-            assert_eq!(calls.iter().any(|call| call == "configured-auth"), local);
-            assert_eq!(
-                calls.iter().any(|call| call == "official-auth:claude"),
-                !local
-            );
-            if local {
-                assert!(
-                    row.detail
-                        .contains("Model access and allowance are not verified")
-                );
-            }
-        }
-        platform::write_json(
-            &root.join("config.json"),
-            &json!({"claudeDesktopTransport":"unsupported"}),
-        )?;
-        runtime.calls.lock().unwrap().clear();
-        assert!(app.inspect().await.is_err());
-        assert!(
-            !runtime
-                .calls
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|call| call.contains("auth"))
-        );
-        Ok(())
-    }
-    #[tokio::test]
-    async fn local_setup_can_configure_services_without_an_official_claude_login() -> Result<()> {
-        let t = tempfile::tempdir()?;
-        let root = std::fs::canonicalize(t.path())?;
-        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
-        let runtime = Runtime {
-            root: root.clone(),
-            calls: Mutex::default(),
-            fail_sync: false,
-            ready_profile: true,
-        };
-        let app = AppSetup {
-            root: root.clone(),
-            read_only: false,
-            runtime: &runtime,
-        };
-        for transport in ["local-mod", "remote-control"] {
-            platform::write_json(
-                &root.join("config.json"),
-                &json!({"claudeDesktopTransport":transport}),
-            )?;
-            runtime.calls.lock().unwrap().clear();
-            app.setup().await?;
-            let calls = runtime.calls.lock().unwrap();
-            let local = transport == "local-mod";
-            assert_eq!(
-                calls.iter().any(|call| call == "install-collaboration"),
-                local
-            );
-            assert_eq!(
-                calls.iter().any(|call| call == "configure-synchronization"),
-                local
-            );
-            assert_eq!(
-                calls.iter().any(|call| call == "official-auth:claude"),
-                !local
-            );
-        }
-        Ok(())
     }
     #[tokio::test]
     async fn app_stop_hold_precedes_both_service_stops_even_if_one_refuses() {
@@ -1114,7 +931,6 @@ mod tests {
             root: root.clone(),
             calls: Mutex::default(),
             fail_sync: true,
-            ready_profile: false,
         };
         let app = AppSetup {
             root: root.clone(),
@@ -1135,7 +951,6 @@ mod tests {
             root: t.path().into(),
             calls: Mutex::default(),
             fail_sync: false,
-            ready_profile: false,
         };
         let app = AppSetup {
             root: t.path().into(),

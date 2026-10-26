@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.32**, with **Claude Mod 0.8.90** bundled.
+Current build: **Claudex.app 2.0.17**, with **Claude Mod 0.8.75** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -50,61 +50,6 @@ The signed app bundle and executable may be owned by the current user or root,
 with no group/other write access. Setup verifies the strict deep signature and
 app identity. Private state, login files and plugin caches remain owned by the
 current user.
-
-### Claude accounts and model routing
-
-Synchronization and model routing are separate. Synchronizing history sends no
-model query. Local Claude replies use the native session's configured provider,
-endpoint, model and authentication route. Claudex must not switch those settings
-or the account charged for replies to make a transport available. Explicit Remote
-Control selects the official-account route, not an automatic replacement for a proxy.
-
-New owners default to the Local Mod transport, retaining the configured route,
-including either a proxy or official account. Native Desktop creates the Local
-session; Claudex verifies its project identity and preserves native project-trust
-checks. The current enabled Mod and frontend integration must be loaded, after
-any required normal restart. Missing native capabilities or unconfirmed
-operations remain pending. Existing Remote Control owners retain their saved
-transport and identity; changing the default does not migrate them.
-
-With stock, unmodified Desktop and CLI launchers, Local follows **Claude Desktop's
-deployment profile**. The first-party launch environment supplies the official
-API endpoint and takes precedence over CLI settings. Installed launcher
-customizations can change that environment; check the effective launch path and
-configuration before identifying the route. CLI settings alone do not establish
-the effective route. Native session creation has no per-session provider override.
-
-Desktop's native third-party **Gateway** profile supports an Anthropic-compatible
-endpoint. Where native policy permits it, its setup is under **Developer →
-Configure Third-Party Inference…**; Developer Mode is enabled through **Help →
-Troubleshooting → Enable Developer Mode…**. Review the native warnings first.
-Switching to this profile signs out Claude.ai and restarts the whole Desktop,
-affecting other Desktop work. Switching back to first-party mode is supported,
-but clears third-party interactive authentication/session secrets and restarts;
-sign-in may be required again. Claudex never performs this profile switch or
-copies credentials automatically. Enter credentials only through native setup.
-
-If Gateway loads its interface from signed `ion-dist` resources rather than the
-HTTP cache, frontend installation is a separate explicit opt-in operation. See
-[Gateway frontend installation and recovery](renderer-bundle.md). Ordinary
-setup does not modify or re-sign Claude.app; installed resources and signatures
-remain separate from native activation and acknowledged history delivery.
-
-Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
-including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. An existing official
-sign-in does not remove that restriction from the configured custom route.
-The account checklist follows the configured synchronization transport. Local
-checks Claude Code's configured authentication without requiring an official
-sign-in or subscription. Explicit Remote Control checks official sign-in
-independently of proxy settings. Neither check proves an active subscription,
-available allowance or model access. Cached account labels such as `pro` are not
-current subscription evidence.
-
-Your regular CLI proxy configuration stays available through its normal entry
-point. Histories produced by your own models remain subject to the same native
-history, project and loaded-integration checks as official-route histories.
-Continue the synchronized branch in its current entry; adding work to a
-superseded original still causes a history conflict.
 
 Conversation synchronization wakes on native completion hooks/events, not a recurring
 two-second history scan. Startup/reconnection reconciliation and a status-only
@@ -314,9 +259,7 @@ recipient's ACK are different states. ACK means receipt, not completion of the
 requested action.
 
 The Desktop watcher automatically follows the latest fetched frontend entry and
-its cached import graph for folders, chat wake, Local synchronization and owner
-wake. Local synchronization has its own operation manifest and no-query command;
-collaboration message delivery remains separate. The watcher resolves unique
+its cached import graph for folders, chat wake and owner wake. It resolves unique
 structural bindings, checks transformed module syntax and keeps an immutable
 original plus recovery journal for each cache filename. Earlier originals and
 receipts remain. Missing/ambiguous anchors or foreign cache changes skip that

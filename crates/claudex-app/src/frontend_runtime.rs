@@ -9,7 +9,6 @@ const FOLDER: &str = include_str!("../host/renderer/claude-folder-runtime.mjs");
 const HANDOFF: &str = include_str!("../host/renderer/claude-desktop-handoff-runtime.mjs");
 const LOCAL_ANCHOR: &str = include_str!("../host/renderer/claude-folder-anchor.mjs");
 const CHAT: &str = include_str!("../host/renderer/claude-chat-wake-runtime.mjs");
-const LOCAL_SYNC: &str = include_str!("../host/renderer/claude-local-sync-runtime.mjs");
 const OWNER: &str = include_str!("../host/renderer/claude-owner-wake-runtime.mjs");
 fn embedded(source: &str) -> Result<String> {
     let ast = syntax(source)?;
@@ -78,8 +77,6 @@ pub fn chat(root: &Path, registry: &Path, native_binding: &str, asset: &str) -> 
     native(native_binding)?;
     let template = r#"
 ;(()=>{try{@RUNTIME@
-@LOCAL_SYNC@
-const localSync=createClaudeLocalSyncRuntime({native:@NATIVE@,root:@ROOT@,registryRoot:@REGISTRY@,readManifest:()=>@NATIVE@.readFileAtCwd(@ROOT@,"local-sync-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onStatus:e=>console.warn("[Claudex local synchronization] "+e)});localSync.start();window.addEventListener("beforeunload",()=>localSync.stop(),{once:true});
 const wake=createClaudeChatWakeRuntime({native:@NATIVE@,registryRoot:@REGISTRY@,readManifest:()=>@NATIVE@.readFileAtCwd(@ROOT@,"collaboration/chat-mailbox/wake-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onError:e=>console.warn("[Claudex chat wake] "+e),onStatus:e=>console.warn("[Claudex chat wake] "+e)});console.warn("[Claudex chat wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});}catch{try{console.warn("[Claudex chat wake] disabled")}catch{}}})();
 "#;
     let result = template
@@ -87,33 +84,22 @@ const wake=createClaudeChatWakeRuntime({native:@NATIVE@,registryRoot:@REGISTRY@,
         .replace("@REGISTRY@", &path(registry)?)
         .replace("@ROOT@", &path(root)?)
         .replace("@ASSET@", &serde_json::to_string(asset)?)
-        .replace("@RUNTIME@", &embedded(CHAT)?)
-        .replace("@LOCAL_SYNC@", &embedded(LOCAL_SYNC)?);
+        .replace("@RUNTIME@", &embedded(CHAT)?);
     syntax(&result)?;
     Ok(result)
 }
-pub fn owner(
-    root: &Path,
-    registry: &Path,
-    anchor: &frontend_owner::Anchor,
-    asset: &str,
-) -> Result<String> {
+pub fn owner(root: &Path, anchor: &frontend_owner::Anchor, asset: &str) -> Result<String> {
     let template = r#"
 import{@EXPORT@ as __cldxOwnerWakeClient}from@CLIENT@;
 const __cldxOwnerWake=(()=>{try{@RUNTIME@
-@LOCAL_SYNC@
-const local=globalThis["claude.web"]?.LocalSessions;
-try{const adoption=createClaudeLocalStartRuntime({native:local,registryRoot:@REGISTRY@,getClient:__cldxOwnerWakeClient,readManifest:()=>local.readFileAtCwd(@ROOT@,"local-start-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onStatus:e=>console.warn("[Claudex local start] "+e)});adoption.start();window.addEventListener("beforeunload",()=>{try{adoption.stop()}catch{}},{once:true});}catch{try{console.warn("[Claudex local start] disabled")}catch{}}
-const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(@ROOT@,"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return{signal(...a){try{const p=wake.signal(...a);if(p&&typeof p.catch==="function")p.catch(()=>{})}catch{}}}}catch{try{console.warn("[Claudex owner wake] disabled")}catch{}return{signal(){}}}})();
+const local=globalThis["claude.web"]?.LocalSessions;const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(@ROOT@,"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return{signal(...a){try{const p=wake.signal(...a);if(p&&typeof p.catch==="function")p.catch(()=>{})}catch{}}}}catch{try{console.warn("[Claudex owner wake] disabled")}catch{}return{signal(){}}}})();
 "#;
     let result = template
         .replace("@EXPORT@", &anchor.client.exported)
         .replace("@CLIENT@", &serde_json::to_string(&anchor.client.path)?)
         .replace("@ROOT@", &path(root)?)
-        .replace("@REGISTRY@", &path(registry)?)
         .replace("@ASSET@", &serde_json::to_string(asset)?)
-        .replace("@RUNTIME@", &embedded(OWNER)?)
-        .replace("@LOCAL_SYNC@", &embedded(LOCAL_SYNC)?);
+        .replace("@RUNTIME@", &embedded(OWNER)?);
     syntax(&result)?;
     Ok(result)
 }

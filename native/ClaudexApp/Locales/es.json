@@ -406,10 +406,5 @@
   "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.": "Use los controles del receptor de Claudex Mod para activar explícitamente nativeWake y selfWake.",
   "Check the recipient session's native inbound-message policy.": "Compruebe la política nativa de mensajes entrantes de la sesión del destinatario.",
   "Verify that the recipient has loaded the supported chat-wake adapter.": "Verifique que el destinatario haya cargado el adaptador chat-wake compatible.",
-  "Check the exact task recipient and native SendMessage capability.": "Compruebe el destinatario exacto de la tarea y la capacidad nativa SendMessage.",
-  "Claude authentication": "Autenticación de Claude",
-  "Native configured authentication is available. Model access and allowance are not verified.": "La autenticación nativa configurada está disponible. No se han verificado el acceso al modelo ni la cuota.",
-  "Install the native tool before checking configured authentication.": "Instala la herramienta nativa antes de comprobar la autenticación configurada.",
-  "Native configured authentication status could not be verified. Check your Claude Code settings.": "No se pudo verificar el estado de autenticación nativa configurada. Revisa la configuración de Claude Code.",
-  "Configure authentication in Claude Code for your selected provider.": "Configura en Claude Code la autenticación del proveedor seleccionado."
+  "Check the exact task recipient and native SendMessage capability.": "Compruebe el destinatario exacto de la tarea y la capacidad nativa SendMessage."
 }

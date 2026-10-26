@@ -228,17 +228,8 @@ impl Controller {
         };
         let mut last = self.last.lock().await;
         platform::directory(&self.root, true, false)?;
-        let state = match summary["nativeProfile"].as_str() {
-            Some("3p") => {
-                let state = self.root.join("renderer-profiles/claude-3p");
-                platform::create_private(&state)?;
-                state
-            }
-            Some("1p") | None => self.root.clone(),
-            Some(_) => anyhow::bail!("Unknown renderer restart profile."),
-        };
-        let _lock = FileLock::acquire(state.join("claude-relaunch.lock"), true)?;
-        let path = state.join("claude-relaunch.json");
+        let _lock = FileLock::acquire(self.root.join("claude-relaunch.lock"), true)?;
+        let path = self.root.join("claude-relaunch.json");
         let (mut record, mut identity) = read_record(&path)?;
         let previous = record.pending.take();
         let mut changed = previous
@@ -553,27 +544,6 @@ mod tests {
         ));
         assert!(controller.consider(&pass(false), true).await?.is_none());
         assert_eq!(env.count("/usr/bin/osascript"), 1);
-        Ok(())
-    }
-    #[tokio::test]
-    async fn identical_entry_profiles_keep_independent_restart_receipts() -> Result<()> {
-        let (_temp, root, env, controller) = profile()?;
-        let first = pass(true);
-        controller.consider(&first, false).await?;
-        let first_path = root.join("claude-relaunch.json");
-        let before = storage::read_stable_with_limit(&first_path, 65536)?;
-        let mut third = pass(true);
-        third["nativeProfile"] = json!("3p");
-        controller.consider(&third, false).await?;
-        let third_path = root.join("renderer-profiles/claude-3p/claude-relaunch.json");
-        assert!(read_record(&third_path)?.0.pending.is_some());
-        let after = storage::read_stable_with_limit(&first_path, 65536)?;
-        assert_eq!(
-            (before.identity, before.bytes),
-            (after.identity, after.bytes)
-        );
-        assert_eq!(env.count("/usr/bin/osascript"), 0);
-        assert_eq!(env.count("/usr/bin/open"), 0);
         Ok(())
     }
     #[tokio::test]

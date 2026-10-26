@@ -91,7 +91,7 @@ fn check(graph: &Graph, root: &Path, home: &Path, output: &Path) -> Result<Value
     frontend_graph::verify(graph).context("Static graph changed during verification.")?;
     Ok(json!({"entry":graph.entry,"missing":graph.missing,"adapters":adapters}))
 }
-fn published(manifest: &Path, entry: &str, home: &Path) -> Result<Graph> {
+fn published(manifest: &Path, entry: &str) -> Result<Graph> {
     let rows: Vec<Value> =
         serde_json::from_slice(&storage::read_stable_with_limit(manifest, 4 * 1024 * 1024)?.bytes)?;
     ensure!(rows.len() <= 8192, "Published graph module bound exceeded");
@@ -166,7 +166,6 @@ fn published(manifest: &Path, entry: &str, home: &Path) -> Result<Graph> {
     );
     modules.retain(|url, _| found.contains(url));
     Ok(Graph {
-        selection: claudex_core::claude_desktop::Selection::read(home)?,
         entry: frontend_graph::EntrySummary {
             asset: entry.into(),
             cache_filename: String::new(),
@@ -228,9 +227,6 @@ fn cache_url(path: &Path) -> Result<Option<String>> {
     Ok(url)
 }
 fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
-    let selection = claudex_core::claude_desktop::Selection::read(home)?;
-    let journals_root = frontend_graph::journal_directory(root, &selection)?;
-    let root = journals_root.as_path();
     let mut observed: BTreeMap<PathBuf, Snapshot> = BTreeMap::new();
     let mut journals = vec![];
     let mut originals: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -259,12 +255,7 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         if let Some(old) = originals.insert(entry.url.clone(), original.bytes.clone()) {
             ensure!(old == original.bytes, "Conflicting journal originals");
         }
-        let filename = m
-            .cache_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .context("Journal cache filename is not UTF-8")?;
-        journals.push(json!({"adapter":adapter.name(),"asset":entry.url.rsplit('/').next(),"url":entry.url,"cacheFilename":filename,"status":"validated","manifest":m}));
+        journals.push(json!({"adapter":adapter.name(),"asset":entry.url.rsplit('/').next(),"url":entry.url,"cacheFilename":m.cache_path.file_name(),"status":"validated","manifest":m}));
         observed.insert(path.join("manifest.json"), receipt);
         observed.insert(path.join("original.cache"), original);
         Ok(())
@@ -280,7 +271,7 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         }
     }
     read_journal(Adapter::Folders, root.join("ui-folder-compat"))?;
-    let directory = selection.cache();
+    let directory = frontend_graph::cache_directory(home);
     platform::directory(&directory, true, false)?;
     let names = optional_names(&directory)?;
     ensure!(names.len() <= 32768, "Cache inventory bound exceeded");
@@ -316,10 +307,7 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
     }
     for (url, bytes) in originals {
         modules.entry(url.clone()).or_insert_with(|| {
-            let name = journals
-                .iter()
-                .find(|j| j["url"] == url)
-                .expect("Original has a validated journal")["cacheFilename"]
+            let name = journals.iter().find(|j| j["url"] == url).unwrap()["cacheFilename"]
                 .as_str()
                 .unwrap()
                 .to_owned();
@@ -355,10 +343,9 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         )?;
         ensure!(
             actual.identity == saved.identity && actual.bytes == saved.bytes,
-            "Live source changed during inventory: {}", path.display()
+            "Live source changed during inventory"
         );
     }
-    selection.verify()?;
     Ok(json!({"modules":rows,"journals":journals,"liveSourcesUnchanged":true}))
 }
 fn platform_exists(path: &Path) -> Result<bool> {
@@ -491,8 +478,7 @@ async fn main() -> Result<()> {
     ensure!(
         !platform_exists(&output)?
             && !output.starts_with(&root)
-            && !output.starts_with(home.join("Library/Application Support/Claude"))
-            && !output.starts_with(home.join("Library/Application Support/Claude-3p")),
+            && !output.starts_with(home.join("Library/Application Support/Claude")),
         "Output must be new and outside live state/cache"
     );
     platform::create_private(&output)?;
@@ -506,7 +492,6 @@ async fn main() -> Result<()> {
                     .values
                     .get("entry")
                     .context("Published entry missing")?,
-                &home,
             )?
         } else {
             frontend_graph::discover(&root, &home)?

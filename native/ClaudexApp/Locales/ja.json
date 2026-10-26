@@ -406,10 +406,5 @@
   "Use the Claudex Mod receiver controls to explicitly enable nativeWake and selfWake.": "Claudex Mod の受信設定から、nativeWake と selfWake を明示的に有効にしてください。",
   "Check the recipient session's native inbound-message policy.": "受信者のセッションのネイティブ受信メッセージポリシーを確認してください。",
   "Verify that the recipient has loaded the supported chat-wake adapter.": "受信者が対応する chat-wake アダプターを読み込んでいることを確認してください。",
-  "Check the exact task recipient and native SendMessage capability.": "該当タスクの正確な受信者とネイティブ SendMessage 機能を確認してください。",
-  "Claude authentication": "Claude 認証",
-  "Native configured authentication is available. Model access and allowance are not verified.": "ネイティブ設定の認証を利用できます。モデルへのアクセスと利用枠は未確認です。",
-  "Install the native tool before checking configured authentication.": "設定済み認証を確認する前に、ネイティブツールをインストールしてください。",
-  "Native configured authentication status could not be verified. Check your Claude Code settings.": "ネイティブ設定の認証状態を確認できませんでした。Claude Code の設定を確認してください。",
-  "Configure authentication in Claude Code for your selected provider.": "選択したプロバイダーの認証を Claude Code で設定してください。"
+  "Check the exact task recipient and native SendMessage capability.": "該当タスクの正確な受信者とネイティブ SendMessage 機能を確認してください。"
 }

@@ -176,14 +176,14 @@ fn entries(path: &Path, max: usize) -> Result<Vec<fs::DirEntry>> {
     Ok(out)
 }
 async fn desktop(o: &Options<'_>, run: &dyn Runner) -> Result<Option<Runtime>> {
-    let selection = claudex_core::claude_desktop::Selection::read(o.home)?;
-    let cache = selection.cli_cache();
+    let cache = o
+        .home
+        .join("Library/Application Support/Claude/claude-code");
     if !crate::status_app::exists(&cache)? {
-        selection.verify()?;
         return Ok(None);
     }
     let mut current = o.home.to_path_buf();
-    for n in cache.strip_prefix(o.home)?.components() {
+    for n in ["Library", "Application Support", "Claude", "claude-code"] {
         current.push(n);
         platform::directory(&current, false, false)?;
     }
@@ -243,7 +243,6 @@ async fn desktop(o: &Options<'_>, run: &dyn Runner) -> Result<Option<Runtime>> {
                 .map(|p| Ok(platform::Identity::of(&fs::symlink_metadata(p)?)))
                 .collect::<Result<Vec<_>>>()?;
             let stable = || -> Result<()> {
-                selection.verify()?;
                 for (path, identity) in proof_paths.iter().zip(&identities) {
                     ensure!(
                         *identity == platform::Identity::of(&fs::symlink_metadata(path)?),
@@ -295,7 +294,6 @@ async fn desktop(o: &Options<'_>, run: &dyn Runner) -> Result<Option<Runtime>> {
             }
         }
     }
-    selection.verify()?;
     Ok(None)
 }
 async fn private(prefix: &Path, o: &Options<'_>, run: &dyn Runner) -> Result<Runtime> {
@@ -520,70 +518,6 @@ mod tests {
         };
         assert!(matches!(find(&o, &run).await, Runtime::Missing { .. }));
         assert_eq!(run.calls.lock().unwrap().len(), 2);
-        Ok(())
-    }
-    struct DesktopProbe {
-        inner: Probe,
-        switch: Option<PathBuf>,
-    }
-    #[async_trait]
-    impl Runner for DesktopProbe {
-        async fn run(&self, spec: CommandSpec) -> Result<CommandOutput> {
-            if spec.program == Path::new("/usr/bin/codesign") {
-                if let Some(configuration) = &self.switch {
-                    fs::write(configuration, br#"{"deploymentMode":"1p"}"#)?;
-                }
-                return Ok(CommandOutput {
-                    stderr: "Identifier=com.anthropic.claude-code\nTeamIdentifier=Q6L2SF6YDW\n"
-                        .into(),
-                    ..Default::default()
-                });
-            }
-            self.inner.run(spec).await
-        }
-    }
-    #[tokio::test]
-    async fn desktop_manager_uses_selected_namespace_and_fences_async_verification() -> Result<()> {
-        let t = tempfile::tempdir()?;
-        fs::set_permissions(t.path(), fs::Permissions::from_mode(0o700))?;
-        let root = fs::canonicalize(t.path())?;
-        let configuration = claudex_core::claude_desktop::configuration_path(&root);
-        platform::create_private(configuration.parent().unwrap())?;
-        file_at(&configuration, &json!({"deploymentMode":"3p"}))?;
-        for profile in ["Claude", "Claude-3p"] {
-            let app = root
-                .join("Library/Application Support")
-                .join(profile)
-                .join("claude-code/2.1.302/abcdef12/claude.app");
-            platform::create_private(&app.join("Contents/MacOS"))?;
-            platform::create_private(&app.join("Contents/_CodeSignature"))?;
-            platform::publish(&app.join("Contents/Info.plist"), b"synthetic", 0o600)?;
-            platform::publish(
-                &app.join("Contents/_CodeSignature/CodeResources"),
-                b"synthetic",
-                0o600,
-            )?;
-            platform::publish(&app.join("Contents/MacOS/claude"), b"synthetic", 0o700)?;
-        }
-        let o = Options {
-            root: &root,
-            home: &root,
-            claude_binary: None,
-            arch: Some("arm64"),
-        };
-        let make = |switch| DesktopProbe {
-            inner: Probe {
-                calls: Mutex::new(vec![]),
-                failure: false,
-                missing_capability: false,
-            },
-            switch,
-        };
-        let selected = desktop(&o, &make(None)).await?.unwrap();
-        assert!(
-            matches!(selected, Runtime::Ready { binary, source, .. } if source == "desktop-cache" && binary.starts_with(root.join("Library/Application Support/Claude-3p")))
-        );
-        assert!(desktop(&o, &make(Some(configuration))).await.is_err());
         Ok(())
     }
     #[tokio::test]

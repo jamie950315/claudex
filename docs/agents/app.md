@@ -14,11 +14,7 @@ for verified source migration; never marketplace remove, which deletes native
 plugin state. Newer installed versions are not downgraded. Explicit receiver or
 enable requests must not report success if newer-version preservation refused them.
 Missing management capabilities use a separately pinned, integrity-checked Mod
-manager, not replacement of an existing inference CLI. Desktop cache discovery
-uses the shared deployment Selection's `cli_cache()` only; it never borrows the
-other profile's executable. Verify that exact Selection after asynchronous
-signature and capability checks, alongside the unchanged bundle identities.
-Its bootstrap disables
+manager, not replacement of an existing inference CLI. Its bootstrap disables
 package scripts and selects the exact native platform package, not the wrapper's
 postinstall placeholder. Bundled source/runtime and the signed app bundle/executable
 may be owned by the current user or root, protected from foreign writes. Private
@@ -147,28 +143,13 @@ duplicate-instance exits must never stop services. CLI-only status display Quit
 retains its display-only behavior.
 
 `native/ClaudexApp` and the Rust `claudex app` command provide automatic setup for users
-who already have signed ChatGPT/Codex and Claude desktop apps. Setup never
-downloads or replaces those apps. The separate explicit offline
-`app renderer-bundle` command may patch and ad-hoc re-sign Claude's proved
-Gateway resources after opt-in; its complete-original preservation and recovery
-contract is in claude-frontend.md. Reuse native CLIs or fill missing CLI components
-from pinned official npm packages in the private root. Keep normal native credential
+who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
+replace those apps. Reuse native CLIs or fill missing CLI components from pinned
+official npm packages in the private root. Keep normal native credential
 namespaces, never copy credentials, and do not auto-start model work during setup.
 Private state and status reads use non-blocking, no-follow file descriptors and
 reject non-regular files before reading. Read-only AppSetup inspection refuses
 setup, account, service and model-setting mutations before any native operation.
-The Claude readiness row follows `claudeDesktopTransport` through the shared
-runtime selector: absent means `local-mod`, while explicit `remote-control`
-requires the official account probe. Local uses native `auth status --json`
-with the normal setting sources and accepts configured authentication without
-requiring official sign-in or a subscription. Its action checks setup again;
-never direct a configured-route failure into an automatic official login.
-Preserve `providers::authentication` as the independent official-account probe
-using `--setting-sources "" auth status --json` in the unchanged default credential
-namespace. Proxy tokens must not qualify as an official login. Auth status and
-cached labels such as `subscriptionType: "pro"` do not establish an active
-subscription, available allowance or successful model access. Neither probe
-changes inference routing, native settings, hooks, plugins or credentials.
 Service control verifies the loaded launchd job's definition path, program and
 exact arguments against the owned installation before reporting readiness or
 starting, stopping or removing it; a matching on-disk plist alone is insufficient.

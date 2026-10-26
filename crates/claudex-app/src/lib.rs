@@ -7,7 +7,6 @@ pub mod frontend_adapters;
 pub mod frontend_anchors;
 pub mod frontend_ast;
 pub mod frontend_bindings;
-pub mod frontend_bundle;
 pub mod frontend_folders;
 pub mod frontend_metadata;
 pub mod frontend_graph;
@@ -80,10 +79,6 @@ fn validate_mod_options(options: &platform::Options) -> Result<()> {
 pub async fn run(args: &[String]) -> Result<()> {
     let action = args.first().map(String::as_str).unwrap_or("app");
     let options = platform::Options::parse(args.get(1..).unwrap_or_default())?;
-    if action == "renderer-bundle" && options.flag("help") {
-        println!("{}", frontend_bundle::HELP);
-        return Ok(());
-    }
     if action == "mod" {
         validate_mod_options(&options)?;
         if options.flag("help") {
@@ -101,7 +96,6 @@ pub async fn run(args: &[String]) -> Result<()> {
         PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/share/claudex")
     });
     let value = match action {
-        "renderer-bundle" => frontend_bundle::run(&options, &root, &platform::SystemRunner).await?,
         "build" => {
             anyhow::ensure!(
                 options.positions.is_empty()
@@ -236,5 +230,3 @@ mod command_tests {
         }
     }
 }
-
-pub mod local_prewarm_proof;

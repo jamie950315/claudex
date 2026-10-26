@@ -127,9 +127,6 @@ export function register(on, options = {}) {
     const ticket = ++lifecycle;
     if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') !== '1') {
       await localization.load(api($, options));
-      await $.command.register({ name: 'claudex-bootstrap', description: 'Confirm native Claudex ownership without model execution or history input.', immediate: false });
-      await $.command.register({ name: 'claudex-witness', description: 'Observe an existing native Claudex identity without replaying initialization.', immediate: false });
-      await $.command.register({ name: 'claudex-sync', description: 'Apply an exact Claudex history packet without model execution.', immediate: false });
       await $.command.register({ name: 'claudex', description: localization.t('Open the Claudex control pane. /claudex receipt UUID inspects an action.'), immediate: true });
       await controller.bind(api($, options));
       await controller.refreshUsage(api($, options));
@@ -215,93 +212,6 @@ export function register(on, options = {}) {
   });
   // The shipped warm skill supplies the native namespaced catalogue entry.
   // Return locally without next(): never execute its model prompt as a command.
-  // Non-immediate local commands preserve the native ordered image input.
-  // Always consume this command, including failures: never call next().
-  for (const command of ['claudex-bootstrap', 'claudex-witness']) on('command.run', { command }, async ($, e) => {
-    const ticket = lifecycle;
-    const witness = command === 'claudex-witness';
-    let phase = 'worker';
-    try {
-      if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker access is disabled.');
-      phase = 'envelope';
-      const words = (e.args ?? '').trim().split(/\s+/u);
-      if (words.length !== 2 || !words.every(word => UUID.test(word)) || !validPath(options.stateRoot) || !validPath($.plugin.root)) throw new Error('Invalid native identity envelope.');
-      phase = 'context';
-      const context = { sessionId: await $.session.id(), cwd: await $.session.cwd() };
-      phase = 'lifecycle';
-      if (ticket !== lifecycle) throw new Error('Native identity lifecycle changed.');
-      phase = 'helper';
-      const reply = await $.process.run([`${$.plugin.root}/runtime/bin/claudex`, 'local-sync', witness ? 'witness' : 'bootstrap', '--root', options.stateRoot], {
-        stdin: JSON.stringify({ opId: words[0], claimId: words[1], ...context, pluginName: $.plugin.name }), timeoutMs: 20000,
-      });
-      phase = 'receipt';
-      if (reply.exitCode !== 0 || reply.isStdoutTruncated === true || typeof reply.stdout !== 'string' || reply.stdout.length > 8192) throw new Error('Native identity receipt unavailable.');
-      const decoded = JSON.parse(reply.stdout);
-      if (decoded.ok !== true || decoded.result?.recorded !== true) throw new Error('Native identity receipt invalid.');
-      phase = 'recheck';
-      if (ticket !== lifecycle || await $.session.id() !== context.sessionId || await $.session.cwd() !== context.cwd) throw new Error('Native identity context changed.');
-      return { text: `${witness ? 'CLAUDEX_LOCAL_WITNESSED' : 'CLAUDEX_LOCAL_READY'} ${words[0]}` };
-    } catch {
-      // Fixed content-free phases locate future refusals without disclosing
-      // input, paths, native errors or identities. Never infer a prewrite lease.
-      return { text: `${witness ? 'CLAUDEX_WITNESS_BLOCKED' : 'CLAUDEX_LOCAL_BLOCKED'}: ${phase}. Preserve the receipt; do not resend this command.` };
-    }
-  });
-  on('command.run', { command: 'claudex-sync' }, async ($, e) => {
-    const ticket = lifecycle;
-    try {
-      if (await $.env.get('CLAUDEX_COLLABORATION_WORKER') === '1') throw new Error('Managed worker access is disabled.');
-      const words = (e.args ?? '').trim().split(/\s+/u);
-      if (words.length !== 2 || !words.every(word => UUID.test(word))) throw new Error('Invalid Local synchronization envelope.');
-      if (!validPath(options.stateRoot) || !validPath($.plugin.root)) throw new Error('Local synchronization is not configured.');
-      const context = { sessionId: await $.session.id(), cwd: await $.session.cwd() };
-      const request = { opId: words[0], claimId: words[1], ...context };
-      const helper = async (action, params) => {
-        const argv = [`${$.plugin.root}/runtime/bin/claudex`, 'local-sync', action, '--root', options.stateRoot];
-        let stdout = '';
-        if (action === 'receive') {
-          // process.run truncates native stdout at 4 MiB. The native stream
-          // supplies backpressure and cancellation without truncating packets.
-          const stream = $.process.spawn({ argv, input: JSON.stringify(params) });
-          try {
-            for (;;) {
-              const item = await stream.next();
-              if (item.done) {
-                if (item.value?.code !== 0) throw new Error('Local receive helper failed; preserve its consumed receipt.');
-                break;
-              }
-              if (item.value?.stream === 'stdout') {
-                if (typeof item.value.text !== 'string') throw new Error('Invalid Local helper output.');
-                stdout += item.value.text;
-                if (stdout.length > 65 * 1024 * 1024) throw new Error('Local packet exceeds its native context bound.');
-              }
-            }
-          } finally { await stream.return(); }
-        } else {
-          const reply = await $.process.run(argv, { stdin: JSON.stringify(params), timeoutMs: 20000 });
-          if (reply.exitCode !== 0 || reply.isStdoutTruncated === true || typeof reply.stdout !== 'string' || reply.stdout.length > 8192) throw new Error('Local synchronization receipt failed; never replay.');
-          stdout = reply.stdout;
-        }
-        const decoded = JSON.parse(stdout);
-        if (decoded.ok !== true) throw new Error('Local synchronization helper refused the existing claim.');
-        return decoded.result;
-      };
-      const received = await helper('receive', { ...request, pluginName: $.plugin.name });
-      if (ticket !== lifecycle || await $.session.id() !== context.sessionId || await $.session.cwd() !== context.cwd
-        || received?.ready !== true || !Array.isArray(received.content) || !['adopt', 'append'].includes(received.kind)
-        || received.content.some(block => block?.type !== 'text' || typeof block.text !== 'string')) throw new Error('Local synchronization owner changed.');
-      let textUuid = null;
-      if (received.kind === 'append') {
-        const applied = await $.session.append({ message: { type: 'user', content: received.content } });
-        if (!UUID.test(applied?.uuid ?? '')) throw new Error('Native append outcome unknown; never replay.');
-        textUuid = applied.uuid;
-      } else if (received.content.length !== 0) throw new Error('Adoption cannot append seed history.');
-      await helper('applied', { ...request, textUuid });
-      return { text: `CLAUDEX_SYNC_APPLIED ${words[0]}` };
-    } catch {
-      return { text: 'CLAUDEX_SYNC_BLOCKED: Preserve the existing receipt; do not resend this command.' };
-    }
-  });
   on('command.run', { command: 'claudex:warm' }, async ($, e) => {
     try {
       const words = (e.args ?? '').trim().split(/\s+/u).filter(Boolean);

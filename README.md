@@ -4,7 +4,7 @@ Let Codex and Claude Code work together on your Mac: ask one to delegate a task
 to the other, hand a task over, message an existing chat, and continue a
 conversation in the other app.
 
-Current build: **Claudex.app 2.0.32**, bundling **Claude Mod 0.8.90**.
+Current build: **Claudex.app 2.0.17**, bundling **Claude Mod 0.8.75**.
 Latest published release: **2.0.17** · [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.17)
 · [Release notes](docs/releases/2.0.17.md)
 
@@ -65,17 +65,9 @@ access). **Quit Claudex** stops its services safely; closing the window does not
   native permissions. Sandboxed Claude workers cannot run shell builds or tests.
 - Writable tasks in one folder are not locked against each other; give
   parallel tasks separate files.
-- Synchronization covers Claude Desktop's Code paths, not ordinary Chat or
-  Cowork conversations. Local synchronization needs the current Mod loaded in
-  the native Desktop-created session, verified project identity, and the frontend
-  integration loaded after any required restart. The Local route retains the
-  configured provider and authentication; availability still depends on native
-  runtime support and these checks. Remote Control carries the selected
+- Synchronization covers Claude Desktop's Code/Remote Control paths, not
+  ordinary Chat or Cowork conversations. Remote Control carries the selected
   conversation through your Claude account; it is not a local-only transport.
-- Synchronization does not authorize changing your native provider, endpoint,
-  model, authentication or usage route. Claude Code 2.1.302 refuses Remote
-  Control through custom API endpoints; an official sign-in does not remove
-  that transport restriction or establish an active subscription.
 - Incomplete or opaque histories, conflicting edits on both sides and active
   native writers pause synchronization instead of discarding anything. Failed
   or uncertain writes are never replayed automatically.

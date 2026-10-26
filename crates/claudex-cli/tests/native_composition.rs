@@ -28,7 +28,6 @@ fn fixture() -> Result<(tempfile::TempDir, PathBuf, Homes)> {
     let root = fs::canonicalize(temp.path())?;
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
     let homes = Homes {
-        selection_home: None,
         codex: root.join("c"),
         claude: root.join("a"),
         desktop_registry: root.join("r"),

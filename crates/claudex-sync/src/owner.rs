@@ -30,38 +30,13 @@ pub const CLAUDE_CLI_VERSION: &str = "2.1.281";
 /// recovery, so it may grow up to the packet bound. Every reader shares it.
 pub(crate) const OWNER_STATE_LIMIT: usize = packet::MAX_PACKET_BYTES;
 #[derive(Debug)]
-pub struct ControlRequestFailed {
-    custom_endpoint: bool,
-}
+pub struct ControlRequestFailed;
 impl std::fmt::Display for ControlRequestFailed {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(if self.custom_endpoint {
-            "Claude Remote Control requires api.anthropic.com, but this session uses a proxy endpoint. The saved synchronization operation is preserved."
-        } else {
-            "Native control request failed explicitly."
-        })
+        f.write_str("Native control request failed explicitly.")
     }
 }
 impl std::error::Error for ControlRequestFailed {}
-
-fn control_result(response: &Value) -> Result<Value> {
-    match response["subtype"].as_str() {
-        Some("success") => Ok(response["response"].clone()),
-        Some("error") => Err(ControlRequestFailed {
-            // Report this native refusal without copying arbitrary error text,
-            // which may contain private URLs or account information.
-            custom_endpoint: response["error"].as_str().is_some_and(|error| {
-                error.starts_with(
-                    "Remote Control is only available when using Claude via api.anthropic.com.",
-                )
-            }),
-        }
-        .into()),
-        _ => {
-            bail!("Native control response outcome unknown; saved intent preserved, never resend.")
-        }
-    }
-}
 
 /// Match the native SDK's no-callback behavior. Remote tool routing and user
 /// dialogs belong to the capable serving client, not the history bridge.
@@ -571,75 +546,6 @@ fn consume_identity(state: &mut Value, event: &Value, original: &str) {
     state["nativeState"] = json!("unknown");
     state["identityUncertain"] = json!(true);
 }
-
-// Native account, provider and model selectors. These names are passed with
-// empty values to the native CLI, never populated from user settings.
-const SUBSCRIPTION_OVERRIDES: &[&str] = &[
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL",
-    "ANTHROPIC_UNIX_SOCKET",
-    "ANTHROPIC_CUSTOM_HEADERS",
-    "CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR",
-    "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
-    "CLAUDE_CODE_USE_BEDROCK",
-    "CLAUDE_CODE_USE_VERTEX",
-    "CLAUDE_CODE_USE_FOUNDRY",
-    "CLAUDE_CODE_USE_ANTHROPIC_AWS",
-    "CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD",
-    "CLAUDE_CODE_USE_MANTLE",
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_MODEL",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_SMALL_FAST_MODEL",
-    "CLAUDE_CODE_SUBAGENT_MODEL",
-    "CLAUDE_CODE_WORKFLOW_SUBAGENT_MODEL",
-    "CLAUDE_CODE_AUTO_MODE_MODEL",
-];
-
-fn configure_session_settings(
-    command: &mut Command,
-    maintenance: bool,
-    official_account: bool,
-) -> Result<()> {
-    let mut settings = if maintenance {
-        command.args([
-            "--setting-sources=",
-            "--strict-mcp-config",
-            "--mcp-config",
-            r#"{"mcpServers":{}}"#,
-            "--tools",
-            "",
-        ]);
-        json!({"remoteControlAtStartup":false,"crossSessionInbound":"refuse","disableAllHooks":true,"enabledPlugins":{}})
-    } else {
-        command.arg("--setting-sources=user,project,local");
-        json!({})
-    };
-    if official_account {
-        settings["env"] = json!({});
-        for key in SUBSCRIPTION_OVERRIDES {
-            // Remove inherited routing before startup as well as overriding
-            // settings.env later. Never read, copy or forward its value.
-            command.env_remove(key);
-            settings["env"][*key] = json!("");
-        }
-        settings["apiKeyHelper"] = json!("");
-        // Native "default" resolves from the subscription tier, ahead of a
-        // custom settings.model. Do not pin a vendor model release here.
-        command.args(["--model", "default"]);
-    }
-    if maintenance || official_account {
-        command.args(["--settings", &claudex_core::json::stringify(&settings)?]);
-    }
-    Ok(())
-}
-
 impl CliSession {
     pub async fn launch(
         binary: &Path,
@@ -654,36 +560,6 @@ impl CliSession {
         conversation_id: String,
         maintenance: bool,
     ) -> Result<Arc<Self>> {
-        Self::launch_with_account(
-            binary,
-            claude_home,
-            cwd,
-            id,
-            resume,
-            permission_mode,
-            lease,
-            event_sink,
-            activity_suppressed,
-            conversation_id,
-            maintenance,
-            false,
-        )
-        .await
-    }
-    async fn launch_with_account(
-        binary: &Path,
-        claude_home: &Path,
-        cwd: &Path,
-        id: &str,
-        resume: bool,
-        permission_mode: Option<&str>,
-        lease: &mut OwnerLease,
-        event_sink: Option<broadcast::Sender<Value>>,
-        activity_suppressed: Arc<AtomicBool>,
-        conversation_id: String,
-        maintenance: bool,
-        official_account: bool,
-    ) -> Result<Arc<Self>> {
         Uuid::parse_str(id)?;
         ensure!(
             fs::canonicalize(cwd)? == cwd,
@@ -697,7 +573,11 @@ impl CliSession {
             "--input-format",
             "stream-json",
         ]);
-        configure_session_settings(&mut command, maintenance, official_account)?;
+        if maintenance {
+            command.args(["--setting-sources=","--strict-mcp-config","--mcp-config",r#"{"mcpServers":{}}"#,"--tools","","--settings",r#"{"remoteControlAtStartup":false,"crossSessionInbound":"refuse","disableAllHooks":true,"enabledPlugins":{}}"#]);
+        } else {
+            command.arg("--setting-sources=user,project,local");
+        }
         command.arg(if resume {
             format!("--resume={id}")
         } else {
@@ -802,7 +682,12 @@ impl CliSession {
                     let response = &event["response"];
                     if let Some(id) = response["request_id"].as_str() {
                         if let Some(sender) = controls.lock().await.remove(id) {
-                            let _ = sender.send(control_result(response));
+                            let result = if response["subtype"] == "success" {
+                                Ok(response["response"].clone())
+                            } else {
+                                Err(ControlRequestFailed.into())
+                            };
+                            let _ = sender.send(result);
                         }
                     }
                     continue;
@@ -1039,49 +924,14 @@ impl Owner {
         storage::require_private_directory(&directory)?;
         let state_path =
             directory.join(format!("{}.json", digest_bytes(conversation_id.as_bytes())));
-        let saved = owned_state(&state_path)?;
-        let local = saved
-            .as_ref()
-            .is_some_and(|s| s["transport"] == "local-mod" && s["localPhase"] != "seed");
-        let lease = if local {
-            // Reap only an exactly proven dead SDK lease left by a crash
-            // between publishing Local ownership and closing the old owner.
-            // Never retain a transcript-writer lease for native Desktop.
-            let path = PathBuf::from(format!("{}.lock", state_path.display()));
-            match fs::symlink_metadata(&path) {
-                Ok(_) => OwnerLease::acquire(&path)?.release()?,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => (),
-                Err(e) => return Err(e.into()),
-            }
-            None
-        } else {
-            Some(OwnerLease::acquire(&PathBuf::from(format!(
-                "{}.lock",
-                state_path.display()
-            )))?)
-        };
-        let mut state=saved.unwrap_or_else(||json!({"version":1,"conversationId":conversation_id,"cwd":cwd,"claudeHome":claude_home,"sessionId":Uuid::new_v4().to_string(),"remoteId":null,"registration":null,"pending":null,"lastAppend":null,"displayTitle":title}));
+        let lease = OwnerLease::acquire(&PathBuf::from(format!("{}.lock", state_path.display())))?;
+        let mut state=owned_state(&state_path)?.unwrap_or_else(||json!({"version":1,"conversationId":conversation_id,"cwd":cwd,"claudeHome":claude_home,"sessionId":Uuid::new_v4().to_string(),"remoteId":null,"registration":null,"pending":null,"lastAppend":null,"displayTitle":title}));
         ensure!(
             state["version"] == 1
                 && state["conversationId"] == conversation_id
                 && state["cwd"] == json!(cwd)
                 && state["claudeHome"] == json!(claude_home),
             "Owner state identity mismatch."
-        );
-        ensure!(
-            state["transport"] != "local-mod"
-                || matches!(
-                    state["localPhase"].as_str(),
-                    Some(
-                        "native-start"
-                            | "seed"
-                            | "seeded"
-                            | "handoff-intent"
-                            | "handoff-sent"
-                            | "adopted"
-                    )
-                ),
-            "Unknown native Local owner phase; existing writer state preserved."
         );
         let id = state["sessionId"]
             .as_str()
@@ -1112,7 +962,7 @@ impl Owner {
             connected: false,
             event_sink: None,
             activity_suppressed: Arc::new(AtomicBool::new(suppressed)),
-            lease,
+            lease: Some(lease),
             maintenance,
             cold_verified: false,
             clear_supported: false,
@@ -1299,9 +1149,6 @@ impl Owner {
         );
         if self.find_append(&pending)? {
             self.state["lastAppend"] = json!({"operationId":pending["operationId"],"uuid":pending["uuid"],"contentHash":pending["contentHash"],"content":pending["content"],"recovered":true});
-            if self.state["transport"] == "local-mod" && self.state["localPhase"] == "seed" {
-                self.state["localPhase"] = json!("seeded");
-            }
             self.state["pending"] = Value::Null;
             self.activity_suppressed
                 .store(self.maintenance, Ordering::Release);
@@ -1315,29 +1162,7 @@ impl Owner {
         Ok(false)
     }
     pub async fn start(&mut self, binary: &Path, permission_mode: Option<&str>) -> Result<()> {
-        self.start_with_account(binary, permission_mode, false)
-            .await
-    }
-    /// Desktop continuations use subscription OAuth without changing native
-    /// settings or the routing of ordinary CLI and original Local sessions.
-    pub async fn start_official(
-        &mut self,
-        binary: &Path,
-        permission_mode: Option<&str>,
-    ) -> Result<()> {
-        self.start_with_account(binary, permission_mode, true).await
-    }
-    async fn start_with_account(
-        &mut self,
-        binary: &Path,
-        permission_mode: Option<&str>,
-        official_account: bool,
-    ) -> Result<()> {
         ensure!(self.session.is_none(), "Owner already started.");
-        ensure!(
-            self.state["transport"] != "local-mod" || self.state["localPhase"] == "seed",
-            "Native Desktop owns this Local history; SDK writer restart is forbidden."
-        );
         if self.lease.is_none() {
             self.lease = Some(OwnerLease::acquire(&PathBuf::from(format!(
                 "{}.lock",
@@ -1357,7 +1182,7 @@ impl Owner {
             )?);
         }
         let id = self.state["sessionId"].as_str().unwrap().to_owned();
-        let session = CliSession::launch_with_account(
+        let session = CliSession::launch(
             &binary,
             &self.claude_home,
             &self.cwd,
@@ -1369,7 +1194,6 @@ impl Owner {
             self.activity_suppressed.clone(),
             self.conversation_id.clone(),
             self.maintenance,
-            official_account,
         )
         .await?;
         self.session = Some(session.clone());
@@ -1574,63 +1398,16 @@ impl Owner {
             "No-query receipt lacks exact persisted native append."
         );
         self.state["lastAppend"] = json!({"operationId":operation_id,"uuid":pending["uuid"],"contentHash":content_hash,"content":content,"recovered":false});
-        if self.state["transport"] == "local-mod" && self.state["localPhase"] == "seed" {
-            self.state["localPhase"] = json!("seeded");
-        }
         self.state["pending"] = Value::Null;
         self.save()?;
         self.activity_suppressed
             .store(self.maintenance, Ordering::Release);
-        if !self.maintenance && self.state["transport"] != "local-mod" {
+        if !self.maintenance {
             self.connect().await?;
         }
         Ok(
             json!({"duplicate":false,"uuid":pending["uuid"],"cumulativeCost":receipt["total_cost_usd"]}),
         )
-    }
-    /// Set the transport before any native launch. A persisted seed is never
-    /// resent when moving the sole writer to native Desktop.
-    pub async fn use_local(&mut self) -> Result<()> {
-        ensure!(
-            self.state["remoteId"].is_null() && self.state["registration"] != "registering",
-            "Existing or uncertain Remote Control owner cannot change transport."
-        );
-        if self.state["transport"] == "local-mod" {
-            return Ok(());
-        }
-        self.state["transport"] = json!("local-mod");
-        self.state["localPhase"] = json!(if self.state["lastAppend"].is_null() {
-            "native-start"
-        } else {
-            "seeded"
-        });
-        self.save()?;
-        self.close().await?;
-        Ok(())
-    }
-    /// Release the SDK writer after exact seed readback. Native Desktop's
-    /// resume picker owns adoption; no CLI opener or model request is sent.
-    /// Legacy opener intents survive and can only advance through a separately
-    /// claimed native resume and exact registry/Mod acknowledgement.
-    pub async fn prepare_local_adoption(&mut self) -> Result<()> {
-        ensure!(
-            self.state["transport"] == "local-mod"
-                && self.state["pending"].is_null()
-                && self.state["reset"].is_null()
-                && !self.state["lastAppend"].is_null(),
-            "Local adoption requires an exact completed seed."
-        );
-        let seed = self.state["lastAppend"].clone();
-        ensure!(
-            self.find_append(&seed)?,
-            "Local adoption seed lacks exact persisted native proof."
-        );
-        self.close().await?;
-        if matches!(self.state["localPhase"].as_str(), Some("seed" | "seeded")) {
-            self.state["localPhase"] = json!("handoff-intent");
-            self.save()?;
-        }
-        Ok(())
     }
     pub async fn close(&mut self) -> Result<()> {
         if let Some(session) = &self.session {
@@ -1743,184 +1520,6 @@ pub fn append_uuid(session: &str, operation: &str) -> String {
 mod tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
-    #[tokio::test]
-    async fn local_adoption_releases_sdk_lease_and_never_restarts_or_replays_handoff() -> Result<()>
-    {
-        let temp = tempfile::tempdir_in("/tmp")?;
-        let root = temp.path().canonicalize()?;
-        storage::private_directory(&root)?;
-        let cwd = storage::private_directory(root.join("project"))?;
-        let home = storage::private_directory(root.join("claude"))?;
-        let binary = root.join("native-fixture");
-        fs::write(
-            &binary,
-            r#"#!/bin/sh
-if [ "$1" = '--version' ]; then printf '2.1.281 (Claude Code)\n'; exit 0; fi
-printf '%s\n' "$@" >> "${0%/*}/arguments"
-exit 0
-"#,
-        )?;
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
-        let mut owner = Owner::open(&root, &cwd, &home, "local-fixture", "Title")?;
-        let native = owner.state["sessionId"].clone();
-        let content = json!([{"type":"text","text":"Already applied seed"}]);
-        let seed_uuid = append_uuid(native.as_str().unwrap(), "already-applied-seed");
-        storage::publish_exclusive(
-            &owner.transcript_path,
-            format!(
-                "{}\n",
-                json!({"type":"user","uuid":seed_uuid,"sessionId":native,"cwd":cwd,"queueTranscriptOnly":true,"message":{"role":"user","content":content}})
-            ),
-        )?;
-        owner.state["lastAppend"] = json!({"operationId":"already-applied-seed","uuid":seed_uuid,"contentHash":storage::hash_json(&content)?,"content":content});
-        owner.save()?;
-        owner.use_local().await?;
-        let lease = PathBuf::from(format!("{}.lock", owner.state_path.display()));
-        assert!(!lease.try_exists()?);
-        owner.state["localPhase"] = json!("seed");
-        owner.save()?;
-        owner.prepare_local_adoption().await?;
-        assert_eq!(owner.state["localPhase"], "handoff-intent");
-        assert!(!root.join("arguments").try_exists()?);
-        owner.prepare_local_adoption().await?;
-        assert!(!root.join("arguments").try_exists()?);
-        assert!(owner.start(&binary, None).await.is_err());
-        drop(owner);
-        let mut reopened = Owner::open(&root, &cwd, &home, "local-fixture", "Title")?;
-        assert_eq!(reopened.state["sessionId"], native);
-        assert!(!lease.try_exists()?);
-        assert!(reopened.start(&binary, None).await.is_err());
-        reopened.prepare_local_adoption().await?;
-        assert!(!root.join("arguments").try_exists()?);
-        Ok(())
-    }
-    #[test]
-    fn subscription_profile_is_process_local_and_keeps_normal_and_cold_settings_separate()
-    -> Result<()> {
-        for maintenance in [false, true] {
-            for official in [false, true] {
-                let mut command = Command::new("/private/claude");
-                for key in SUBSCRIPTION_OVERRIDES {
-                    command.env(key, "fixture-custom-route");
-                }
-                command.env("CLAUDE_CONFIG_DIR", "/private/native-home");
-                configure_session_settings(&mut command, maintenance, official)?;
-                let command = command.as_std();
-                let args: Vec<_> = command.get_args().map(|v| v.to_str().unwrap()).collect();
-                let overlay = args
-                    .iter()
-                    .position(|v| *v == "--settings")
-                    .map(|i| serde_json::from_str::<Value>(args[i + 1]))
-                    .transpose()?;
-                let env: HashMap<_, _> = command.get_envs().collect();
-                assert_eq!(
-                    env[std::ffi::OsStr::new("CLAUDE_CONFIG_DIR")].unwrap(),
-                    "/private/native-home"
-                );
-                for key in SUBSCRIPTION_OVERRIDES {
-                    if official {
-                        assert_eq!(env[std::ffi::OsStr::new(key)], None);
-                        assert_eq!(overlay.as_ref().unwrap()["env"][*key], "");
-                    } else {
-                        assert_eq!(
-                            env[std::ffi::OsStr::new(key)].unwrap(),
-                            "fixture-custom-route"
-                        );
-                    }
-                }
-                if official {
-                    assert!(args.windows(2).any(|v| v == ["--model", "default"]));
-                    assert_eq!(overlay.as_ref().unwrap()["apiKeyHelper"], "");
-                } else {
-                    assert!(!args.contains(&"--model"));
-                }
-                if maintenance {
-                    assert!(args.contains(&"--setting-sources="));
-                    assert_eq!(overlay.as_ref().unwrap()["disableAllHooks"], true);
-                    assert_eq!(overlay.as_ref().unwrap()["crossSessionInbound"], "refuse");
-                    assert_eq!(overlay.as_ref().unwrap()["enabledPlugins"], json!({}));
-                } else {
-                    assert!(args.contains(&"--setting-sources=user,project,local"));
-                    if let Some(overlay) = overlay {
-                        assert!(overlay.get("hooks").is_none());
-                        assert!(overlay.get("permissions").is_none());
-                        assert!(overlay.get("enabledPlugins").is_none());
-                        assert!(overlay.get("disableAllHooks").is_none());
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn subscription_owner_launch_and_restart_keep_native_identity_and_original_settings()
-    -> Result<()> {
-        let temporary = tempfile::tempdir()?;
-        let root = storage::private_directory(temporary.path())?;
-        let cwd = storage::private_directory(root.join("project"))?;
-        let home = storage::private_directory(root.join("claude"))?;
-        let settings = home.join("settings.json");
-        let original = r#"{"env":{"ANTHROPIC_BASE_URL":"https://proxy.example","ANTHROPIC_AUTH_TOKEN":"fixture","ANTHROPIC_DEFAULT_HAIKU_MODEL":"custom-model"},"model":"custom-model","permissions":{"defaultMode":"default"},"enabledPlugins":{"fixture":true}}"#;
-        storage::write_json(&settings, &serde_json::from_str::<Value>(original)?)?;
-        let original = storage::read_stable(&settings)?;
-        let binary = root.join("native-fixture");
-        fs::write(
-            &binary,
-            r#"#!/bin/sh
-if [ "$1" = '--version' ]; then printf '2.1.281 (Claude Code)\n'; exit 0; fi
-printf '%s\n' "$@" > "${0%/*}/arguments"
-while IFS= read -r frame; do
-    request_id=${frame#*\"request_id\":\"}
-    request_id=${request_id%%\"*}
-    printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"session_state":"idle","commands":[]}}}\n' "$request_id"
-done
-"#,
-        )?;
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
-        let mut owner = Owner::open(&root, &cwd, &home, "subscription", "Title")?;
-        let native_id = owner.state["sessionId"].clone();
-        for _ in 0..2 {
-            owner.start_official(&binary, Some("default")).await?;
-            assert_eq!(owner.state["sessionId"], native_id);
-            let args = fs::read_to_string(root.join("arguments"))?;
-            assert!(args.contains("--setting-sources=user,project,local\n"));
-            assert!(args.contains("--model\ndefault\n"));
-            assert!(args.contains(r#""apiKeyHelper":"""#));
-            assert!(!args.contains("fixture"));
-            owner.close().await?;
-        }
-        assert_eq!(storage::read_stable(&settings)?.bytes, original.bytes);
-        assert!(owner.state["pending"].is_null());
-        Ok(())
-    }
-
-    #[test]
-    fn control_errors_explain_proxy_refusals_without_exposing_native_details() {
-        let error = control_result(&json!({"subtype":"error","error":"Remote Control is only available when using Claude via api.anthropic.com. private diagnostic"})).unwrap_err();
-        assert!(error.downcast_ref::<ControlRequestFailed>().is_some());
-        assert!(error.to_string().contains("proxy endpoint"));
-        assert!(!error.to_string().contains("private diagnostic"));
-        let error = control_result(
-            &json!({"subtype":"error","error":"https://private.example/?token=secret"}),
-        )
-        .unwrap_err();
-        assert!(error.downcast_ref::<ControlRequestFailed>().is_some());
-        assert_eq!(
-            error.to_string(),
-            "Native control request failed explicitly."
-        );
-        for subtype in [Value::Null, json!("unknown")] {
-            let error = control_result(&json!({"subtype":subtype})).unwrap_err();
-            assert!(error.downcast_ref::<ControlRequestFailed>().is_none());
-            assert!(error.to_string().contains("outcome unknown"));
-        }
-        assert_eq!(
-            control_result(&json!({"subtype":"success","response":{"ok":true}})).unwrap(),
-            json!({"ok":true})
-        );
-    }
-
     #[test]
     fn cold_clear_identity_adoption_requires_correlated_init_and_zero_query_receipt() {
         let old = Uuid::new_v4().to_string();

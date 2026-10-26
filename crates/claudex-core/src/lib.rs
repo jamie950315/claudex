@@ -1,5 +1,4 @@
 //! Shared storage, configuration and native process contracts.
-pub mod claude_desktop;
 pub mod codex_layout;
 pub mod json;
 pub mod rpc;
