@@ -544,13 +544,11 @@ impl Runtime {
     }
     fn desktop_registry(&self) -> Result<PathBuf> {
         let config = storage::read_json_or(self.options.root.join("config.json"), Value::Null)?;
-        Ok(config["desktopHome"].as_str().map(PathBuf::from).unwrap_or(
-            PathBuf::from(
-                std::env::var_os("HOME")
-                    .ok_or_else(|| anyhow::anyhow!("Home directory unavailable."))?,
-            )
-            .join("Library/Application Support/Claude/claude-code-sessions"),
-        ))
+        let home = PathBuf::from(
+            std::env::var_os("HOME")
+                .ok_or_else(|| anyhow::anyhow!("Home directory unavailable."))?,
+        );
+        claudex_core::claude_desktop::registry(&home, config["desktopHome"].as_str())
     }
     fn saved_owner(&self, r: &Record) -> Result<(Value, bool)> {
         let state = self.options.root.join("owners").join(format!(
@@ -2026,6 +2024,17 @@ impl Adapter for NativeAdapter {
         Ok(images.then(|| "images".into()))
     }
     async fn plan(&self, input: &PlanInput) -> Result<Record> {
+        // Refuse an inactive deployment before publishing a global pending
+        // operation or acquiring a new owner. A profile switch is not a lease
+        // to adopt the old profile's exact Local identity.
+        if self.side == Side::Claude {
+            if let Some(target) = input.target.as_ref().filter(|target| target.managed) {
+                let (saved, _) = self.runtime.saved_owner(target)?;
+                if saved["transport"] == "local-mod" && saved["localPhase"] == "adopted" {
+                    require_active_local_owner(&self.runtime.desktop_registry()?, target)?;
+                }
+            }
+        }
         let mut record = Record::source(self.side, Path::new("/"), &input.native_id);
         record.conversation_id = input.conversation_id.clone();
         record.cwd = input.common.cwd()?.into();
@@ -2610,6 +2619,90 @@ impl Adapter for NativeAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn inactive_local_deployment_cannot_prepare_an_append_or_borrow_another_store() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = storage::private_directory(temp.path())?;
+        let first = storage::private_directory(root.join("first"))?;
+        let third = storage::private_directory(root.join("third"))?;
+        let id = Uuid::new_v4().to_string();
+        let mut record = Record::source(Side::Claude, &root.join("history.jsonl"), &id);
+        record.cwd = root.to_str().unwrap().into();
+        let local = format!("local_{}", Uuid::new_v4());
+        storage::write_json(
+            first.join(format!("{local}.json")),
+            &json!({"sessionId":local,"cliSessionId":id,"cwd":root,"title":"Fixture","isArchived":false,"lastActivityAt":1}),
+        )?;
+        require_active_local_owner(&first, &record)?;
+        assert!(
+            require_active_local_owner(&third, &record)
+                .unwrap_err()
+                .to_string()
+                .contains("CLAUDEX_DESKTOP_PROFILE_INACTIVE")
+        );
+        assert!(!root.join("desktop-state.json").exists());
+        assert_eq!(crate::desktop_mapping::mappings(&first, &[id])?.len(), 1);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn inactive_local_plan_refuses_before_owner_acquisition_or_pending_publication()
+    -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let registry = storage::private_directory(root.join("active-registry"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude,"desktopHome":registry});
+        storage::write_json(root.join("config.json"), &config)?;
+        let runtime = Runtime::new(Options::from_config(&root, &config)?)?;
+        let adapter = NativeAdapter {
+            runtime: runtime.clone(),
+            side: Side::Claude,
+        };
+        let conversation = Uuid::new_v4().to_string();
+        let mut target = Record::source(
+            Side::Claude,
+            &root.join("original.jsonl"),
+            &Uuid::new_v4().to_string(),
+        );
+        target.conversation_id = conversation.clone();
+        target.cwd = root.to_str().unwrap().into();
+        target.managed = true;
+        let owners = storage::private_directory(root.join("owners"))?;
+        let path = owners.join(format!("{}.json", digest_bytes(conversation.as_bytes())));
+        storage::write_json(
+            &path,
+            &json!({"version":1,"sessionId":target.native_id,"conversationId":conversation,"cwd":root,"claudeHome":claude,"transport":"local-mod","localPhase":"adopted"}),
+        )?;
+        let before = storage::read_stable(&path)?;
+        let input = PlanInput {
+            conversation_id: conversation,
+            native_id: Uuid::new_v4().to_string(),
+            operation_id: Uuid::new_v4().to_string(),
+            common: Common {
+                meta: Map::new(),
+                messages: vec![],
+                extra: Map::new(),
+            },
+            title: "Fixture".into(),
+            target: Some(target),
+            relocation: false,
+            context_reset: false,
+            context_refresh: false,
+        };
+        assert!(
+            adapter
+                .plan(&input)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("CLAUDEX_DESKTOP_PROFILE_INACTIVE")
+        );
+        assert!(runtime.owners.lock().await.is_empty());
+        assert_eq!(storage::read_stable(&path)?.identity, before.identity);
+        assert!(!root.join("desktop-state.json").exists());
+        Ok(())
+    }
     #[test]
     fn acknowledged_local_adoption_still_recovers_the_original_seed_without_republishing() {
         let state = json!({"transport":"local-mod","localPhase":"adopted","lastAppend":{"operationId":"seed"}});
@@ -3574,6 +3667,18 @@ mod tests {
         assert!(runtime.inspect(&record).await.is_err());
         Ok(())
     }
+}
+
+fn require_active_local_owner(registry: &Path, record: &Record) -> Result<()> {
+    let mapping = crate::desktop_mapping::mappings(registry, &[record.native_id.clone()])?;
+    let local = mapping.get(&record.native_id).ok_or_else(|| anyhow::anyhow!(
+        "CLAUDEX_DESKTOP_PROFILE_INACTIVE: saved Local owner is not in the selected Desktop deployment; original owner and history are preserved."
+    ))?;
+    ensure!(
+        local["cwd"] == record.cwd && local["isArchived"] == false,
+        "Selected Desktop Local owner identity changed."
+    );
+    Ok(())
 }
 
 async fn local_adoption(

@@ -101,6 +101,14 @@ fn journal(root: &Path, op: &str) -> Result<Value> {
     id(&j["originalOwner"], "sessionId")?;
     id(&j["originalOwner"], "conversationId")?;
     let pending: Pending = serde_json::from_value(j["originalPending"].clone())?;
+    if let Some(registry) = j.get("registryRoot") {
+        ensure!(
+            registry
+                .as_str()
+                .is_some_and(|s| Path::new(s).is_absolute()),
+            "Native Local journal deployment registry is invalid."
+        );
+    }
     ensure!(
         pending.record.native_id == j["originalOwner"]["sessionId"]
             && pending.record.conversation_id == j["originalOwner"]["conversationId"]
@@ -140,6 +148,12 @@ fn original_unchanged(j: &Value) -> Result<()> {
     Ok(())
 }
 fn original_native_clear(root: &Path, registry: &Path, j: &Value) -> Result<()> {
+    if let Some(bound) = j.get("registryRoot") {
+        ensure!(
+            *bound == json!(registry),
+            "Native Local operation belongs to another Desktop deployment; original claims are preserved."
+        );
+    }
     let old = id(&j["originalOwner"], "sessionId")?;
     ensure!(
         desktop_mapping::mappings(registry, &[old.clone()])?.is_empty(),
@@ -247,12 +261,20 @@ fn publish(root: &Path, j: &Value) -> Result<()> {
     } else {
         None
     };
-    let entries = action.map(|stage| vec![json!({"opId":j["opId"],"stage":stage,
+    if action.is_some() {
+        ensure!(
+            j["registryRoot"]
+                .as_str()
+                .is_some_and(|s| Path::new(s).is_absolute()),
+            "Legacy native Local action lacks a proven deployment registry; preserved action requires exact recovery evidence."
+        );
+    }
+    let entries = action.map(|stage| vec![json!({"opId":j["opId"],"stage":stage,"registryRoot":j["registryRoot"],
         "cwd":j["originalPending"]["record"]["cwd"],"title":j["originalOwner"]["displayTitle"],
         "prewarm":j["prewarm"]["result"],"bootstrap":j["bootstrap"],"mapping":j["mapping"],"command":COMMAND,"expiresAt":j["expiresAt"]})]).unwrap_or_default();
     storage::write_json(
         root.join("local-start-manifest.json"),
-        &json!({"version":2,"entries":entries}),
+        &json!({"version":3,"entries":entries}),
     )
 }
 /// Certify only the shipped v1 missing-message prewrite rejection. The caller
@@ -326,11 +348,12 @@ pub fn recover_prewarm(
     original_native_clear(root, registry, &j)?;
     j["supersedes"] = json!({"identity":saved.identity,"claim":j["prewarm"],"certification":proof});
     j["version"] = json!(2);
+    j["registryRoot"] = json!(registry);
     j["prewarm"] = Value::Null;
     j["status"] = json!("prewarm-prewrite-rejection-certified");
     j["expiresAt"] = json!(storage::now_ms() + 600000);
     storage::write_json(&replacement, &j)?;
-    // Version 2 cannot be consumed by the still-loaded v1 renderer. Startup
+    // The namespace-bound manifest cannot be consumed by a legacy renderer. Startup
     // republishes the new intent after the corrected renderer is installed.
     publish(root, &j)?;
     Ok(json!({"recovered":true,"alreadyCertified":false,"opId":op}))
@@ -371,11 +394,21 @@ pub fn prepare(
                 Err(e) if storage::is_not_found(&e) && o["lastAppend"].is_null() => Value::Null,
                 Err(e) => return Err(e),
             };
-            json!({"version":1,"opId":p.operation_id,"originalPending":p,"originalOwner":o,"originalIdentity":identity,
+            json!({"version":1,"registryRoot":registry,"opId":p.operation_id,"originalPending":p,"originalOwner":o,"originalIdentity":identity,
                 "prewarm":null,"start":null,"bootstrap":null,"move":null,"resolved":null,"newOwner":null,"mapping":null,"status":"prewarm-pending","expiresAt":storage::now_ms()+600_000})
         }
         Err(e) => return Err(e),
     };
+    if j.get("registryRoot").is_none() {
+        ensure!(
+            j["prewarm"].is_null()
+                || j["mapping"]["registryPath"]
+                    .as_str()
+                    .is_some_and(|path| Path::new(path).starts_with(registry)),
+            "Legacy native Local action lacks a proven deployment registry; original claim is preserved."
+        );
+        j["registryRoot"] = json!(registry);
+    }
     authority(root, &j)?;
     original_native_clear(root, registry, &j)?;
     if j["expiresAt"]
@@ -475,6 +508,10 @@ pub fn claim(root: &Path, registry: &Path, p: &Value) -> Result<Value> {
         .ok_or_else(|| anyhow::anyhow!("Invalid native Local stage."))?;
     let _guard = FileLock::acquire(dir(root)?.join(".lock"), true)?;
     let mut j = journal(root, &op)?;
+    ensure!(
+        j["registryRoot"] == json!(registry),
+        "Native Local claim deployment differs from its saved namespace."
+    );
     authority(root, &j)?;
     original_native_clear(root, registry, &j)?;
     ensure!(
@@ -891,6 +928,29 @@ mod tests {
             "options":{"cwd":"","useWorktree":false},"synthetic":true}))
     }
     #[test]
+    fn namespace_bound_manifest_and_claim_never_borrow_another_deployment() -> Result<()> {
+        let f = fixture(false)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let manifest = read(&f.root.join("local-start-manifest.json"))?;
+        assert_eq!(manifest["version"], 3);
+        assert_eq!(manifest["entries"][0]["registryRoot"], json!(f.registry));
+        let file = original_path(&f.root, &f.pending.operation_id)?;
+        let before = storage::read_stable(&file)?;
+        let other = storage::private_directory(f.root.join("other-registry"))?;
+        assert!(prepare(&f.root, &other, &f.state, &f.record, &f.pending).is_err());
+        assert!(
+            claim(
+                &f.root,
+                &other,
+                &json!({"opId":f.pending.operation_id,"stage":"prewarm","proof":prewarm_proof()})
+            )
+            .is_err()
+        );
+        assert_eq!(storage::read_stable(&file)?.identity, before.identity);
+        assert_eq!(read(&f.root.join("local-start-manifest.json"))?, manifest);
+        Ok(())
+    }
+    #[test]
     fn certified_prewrite_rejection_retains_original_and_issues_a_separate_corrected_claim()
     -> Result<()> {
         let f = fixture(true)?;
@@ -903,7 +963,7 @@ mod tests {
         assert_eq!(saved.identity, retained.identity);
         assert_eq!(
             read(&f.root.join("local-start-manifest.json"))?["version"],
-            2
+            3
         );
         assert_eq!(
             recover_prewarm(&f.root, &f.registry, |_| panic!(

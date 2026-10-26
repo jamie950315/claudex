@@ -110,8 +110,26 @@ struct SourceState {
     external_directories: BTreeMap<PathBuf, FileIdentity>,
     active: BTreeSet<String>,
     root: PathBuf,
+    deployment_path: Option<PathBuf>,
 }
 impl SourceState {
+    fn deployment_configuration(&mut self) -> Result<()> {
+        let Some(mut target) = self.deployment_path.clone() else {
+            return Ok(());
+        };
+        while let Some(parent) = target.parent() {
+            match fs::symlink_metadata(parent) {
+                Ok(_) => break,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => target = parent.into(),
+                Err(e) => return Err(e.into()),
+            }
+        }
+        self.subscribe(
+            "claude-desktop-deployment",
+            vec![target],
+            event(Kind::Configuration),
+        )
+    }
     fn watcher(&mut self) -> Result<&mut RecommendedWatcher> {
         self.watcher
             .as_mut()
@@ -244,6 +262,7 @@ impl SourceState {
             self.connection()?;
             self.release_unused()?;
         }
+        self.deployment_configuration()?;
         Ok(published)
     }
     fn native(&mut self, value: &Value) -> Result<Option<Event>> {
@@ -426,6 +445,8 @@ impl Source {
             external_directories: BTreeMap::new(),
             active: BTreeSet::new(),
             root: root.clone(),
+            deployment_path: std::env::var_os("HOME")
+                .map(|home| claudex_core::claude_desktop::configuration_path(Path::new(&home))),
         };
         state.subscribe(
             "shared-directory",
@@ -443,6 +464,7 @@ impl Source {
             vec![root.join("config.json")],
             event(Kind::Configuration),
         )?;
+        state.deployment_configuration()?;
         for (key, home, names) in [
             (
                 "codex-config",
@@ -661,6 +683,40 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn deployment_watch_follows_new_directories_without_a_timer_or_history_rescan() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let home = storage::private_directory(temp.path())?;
+        let watcher = notify::recommended_watcher(|_: notify::Result<notify::Event>| {})?;
+        let desired = claudex_core::claude_desktop::configuration_path(&home);
+        let mut state = SourceState {
+            watcher: Some(watcher),
+            targets: BTreeMap::new(),
+            directories: BTreeSet::new(),
+            external_directories: BTreeMap::new(),
+            active: BTreeSet::new(),
+            root: home.clone(),
+            deployment_path: Some(desired.clone()),
+        };
+        state.deployment_configuration()?;
+        assert_eq!(
+            state.targets["claude-desktop-deployment"].paths,
+            vec![home.join("Library")]
+        );
+        fs::create_dir_all(desired.parent().unwrap())?;
+        let events = state.filesystem(&[home.join("Library")])?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, Kind::Configuration);
+        assert_eq!(
+            state.targets["claude-desktop-deployment"].paths,
+            vec![desired.clone()]
+        );
+        storage::write_json(&desired, &json!({"deploymentMode":"3p"}))?;
+        assert_eq!(state.filesystem(&[desired])?.len(), 1);
+        assert!(state.filesystem(&[])?.is_empty());
+        Ok(())
+    }
+
     fn notification(path: &Path) -> notify::Result<notify::Event> {
         Ok(notify::Event::new(notify::EventKind::Any).add_path(path.into()))
     }
@@ -723,6 +779,7 @@ mod tests {
             external_directories: BTreeMap::new(),
             active: BTreeSet::new(),
             root: root.clone(),
+            deployment_path: None,
         };
         let ids = [
             "00000000-0000-4000-8000-000000000010",
@@ -910,6 +967,7 @@ mod tests {
             external_directories: BTreeMap::new(),
             active: BTreeSet::new(),
             root: base.clone(),
+            deployment_path: None,
         }));
         let handle = DirectoryWatch {
             state: state.clone(),

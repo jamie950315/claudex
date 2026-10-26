@@ -283,7 +283,7 @@ impl Integration for NativeIntegration {
                 if method == "local_start_claim" {
                     claudex_sync::local_start::claim(
                         &self.root,
-                        &self.homes.desktop_registry,
+                        &self.homes.desktop_registry()?,
                         &params,
                     )
                 } else {
@@ -298,7 +298,7 @@ impl Integration for NativeIntegration {
                 if method == "local_activation_claim" {
                     claudex_sync::local_adoption::activation_claim(
                         &self.root,
-                        &self.homes.desktop_registry,
+                        &self.homes.desktop_registry()?,
                         &params,
                     )
                 } else {
@@ -313,7 +313,7 @@ impl Integration for NativeIntegration {
                 if method == "local_adoption_claim" {
                     claudex_sync::local_adoption::claim(
                         &self.root,
-                        &self.homes.desktop_registry,
+                        &self.homes.desktop_registry()?,
                         &params,
                     )
                 } else {
@@ -328,7 +328,7 @@ impl Integration for NativeIntegration {
                 if method == "local_sync_claim" {
                     claudex_sync::local_sync::claim(
                         &self.root,
-                        &self.homes.desktop_registry,
+                        &self.homes.desktop_registry()?,
                         &params,
                     )
                 } else {
@@ -344,7 +344,7 @@ impl Integration for NativeIntegration {
                 Ok(json!(claudex_sync::native_chat::enrich_titles(
                     chats,
                     &self.homes.codex,
-                    &self.homes.desktop_registry
+                    &self.homes.desktop_registry()?
                 )?))
             }
             "mod_target_verify" | "desktop_wake_verify" => {
@@ -352,7 +352,7 @@ impl Integration for NativeIntegration {
                     .as_str()
                     .context("Exact Mod target missing.")?;
                 claudex_sync::desktop_mapping::verify_claude_target(
-                    &self.homes.desktop_registry,
+                    &self.homes.desktop_registry()?,
                     id,
                     params["cwd"].as_str(),
                 )
@@ -539,6 +539,7 @@ mod tests {
                 codex,
                 claude,
                 desktop_registry: registry,
+                selection_home: None,
             },
         ));
         let b = Broker::open_with_integration(
@@ -762,7 +763,12 @@ mod tests {
             .is_none()
         );
         let before = claudex_core::storage::read_json(root.join("local-start-manifest.json"))?;
-        let p = json!({"opId":fresh_op,"stage":"prewarm","proof":{}});
+        assert_eq!(before["version"], 3);
+        assert_eq!(
+            before["entries"][0]["registryRoot"],
+            json!(root.join("registry"))
+        );
+        let p = json!({"opId":fresh_op,"stage":"prewarm","proof":{"options":{"cwd":"","message":"","useWorktree":false}}});
         assert_eq!(
             transport::validate_tool("claudex_local_start_claim", &p, true)?,
             "local_start_claim"

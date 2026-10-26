@@ -332,6 +332,10 @@ pub fn prepare(
                 && j["content"] == json!(if adoption { &[][..] } else { content }),
             "Local operation identity reused with different content."
         );
+        ensure!(
+            Path::new(j["entry"]["registryPath"].as_str().unwrap()).starts_with(registry),
+            "Local operation belongs to another Desktop deployment; saved claim and history are preserved."
+        );
         if j["claim"].is_null()
             && j["entry"]["expiresAt"]
                 .as_i64()

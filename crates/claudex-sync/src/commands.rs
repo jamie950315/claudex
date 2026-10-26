@@ -110,9 +110,10 @@ fn legacy(root: &Path, config: &Value) -> Result<Bridge> {
             .ok_or_else(|| anyhow::anyhow!("Missing Claude home."))?
             .into(),
         binary: config["binary"].as_str().unwrap_or("codex").into(),
-        desktop_registry: Some(
-            home()?.join("Library/Application Support/Claude/claude-code-sessions"),
-        ),
+        desktop_registry: Some(claudex_core::claude_desktop::registry(
+            &home()?,
+            config["desktopHome"].as_str(),
+        )?),
     });
     let mut bridge = Bridge::new(root, drivers);
     if let Some(policy) = config.get("policy") {
@@ -603,8 +604,6 @@ async fn watch_desktop_control(
     let result = async {
         if let Some(lifecycle)=&lifecycle {lifecycle.start(&source,&bridge.root,config).await?;}
         let handoff_enabled = config["desktopLocalHandoff"]["enabled"] == true;
-        let desktop_registry = config["desktopHome"].as_str().map(PathBuf::from)
-            .unwrap_or(home()?.join("Library/Application Support/Claude/claude-code-sessions"));
         let mut blocked = BTreeMap::<String, String>::new();
         let mut unsupported = json!({"unsupportedSources":[],"absentSources":[]});
         let mut startup = true;
@@ -983,7 +982,10 @@ async fn watch_desktop_control(
             let renderer=lifecycle.as_ref().map(|l|l.status()).unwrap_or(Value::Null);let folder_projection=folder_view(&folder_map,&renderer);
             let handoff_full = sweep_full_handoff || tokio::time::Instant::now() >= handoff_maintenance;
             if handoff_enabled && transport_wait.is_none() && !sweep_in_progress && handoff_publication_needed(handoff_full, &handoff_scope, handoff_revoked) {
-                let value = match runtime.publish_handoffs(&desktop_registry, if handoff_full {None} else {Some(&handoff_scope)}).await {
+                let value = match async {
+                    let registry = claudex_core::claude_desktop::registry(&home()?, config["desktopHome"].as_str())?;
+                    runtime.publish_handoffs(&registry, if handoff_full {None} else {Some(&handoff_scope)}).await
+                }.await {
                     Ok(mut value) => {value["state"]=json!(if value["deferred"].is_null(){"ready"}else{"waiting"});value}, Err(error) => json!({"state":"error","actions":0,"error":format!("{error:#}")})
                 };
                 if handoff_full { handoff_maintenance = tokio::time::Instant::now() + Duration::from_secs(30); }

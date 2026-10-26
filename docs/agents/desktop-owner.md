@@ -43,6 +43,26 @@ never use an empty start message, a spare prewarm, the CLI
 resume picker, `--desktop`, a deep link or another Local session's MCP client.
 SDK entrypoints are excluded from Desktop's ordinary resume discovery.
 
+Native first-party and Gateway deployments keep separate user-data stores,
+`Claude` and `Claude-3p`. The shared `claude_desktop::Selection` reads the native
+deployment setting with bounded stable no-follow proofs. Missing configuration
+or an absent mode selects first-party; explicit `1p` and `3p` select their own
+stores. Unsafe, malformed or unsupported settings refuse selection. Explicit
+`desktopHome` remains authoritative. Native action endpoints reselect the
+registry per request rather than caching the startup deployment. This setting
+does not establish a running renderer, model route or writer lease. Never copy
+registries or credentials, merge Local IDs across stores, or reinterpret an
+already claimed operation under a different registry. A managed adopted owner
+outside the selected registry refuses a new append plan before global pending
+publication; its original owner, transcript and recovery journals remain intact.
+New Local-start journals bind `registryRoot`; manifest version 3 requires the
+renderer to match that root against its own compiled deployment before and
+after claim, so a saved mode change cannot authorize the still-running prior
+profile. Legacy manifests cannot authorize this renderer. An unclaimed legacy
+journal may bind before its first action; an already started legacy journal
+requires its saved exact registry mapping or the existing narrow prewrite
+certification, never an inferred profile or another invocation.
+
 `local-start/<pending operation>.json` retains the full original pending/owner
 and exact original seed file identity when present. Its separate `prewarm`,
 `start` and `move` claims are one-use, written before each native invocation.
@@ -67,8 +87,8 @@ unknown, failed response, or missing native identity.
 Certification leaves the original unknown journal byte-for-byte and identity-
 exact, creating `<operation>.prewarm-v2.json` with the retained claim, source and
 process proof. Every read checks the original journal identity. New claims record
-the complete corrected native prewarm options. Manifest version 2 fences the old
-v1 renderer; certify before installing/restarting the corrected renderer, then
+the complete corrected native prewarm options. Namespace-bound manifest version 3
+fences legacy renderers; certify before installing/restarting the corrected renderer, then
 resume through the ordinary coordinator. A certified replacement is itself
 single-use; unknown outcomes in it still block. No native files are changed.
 
