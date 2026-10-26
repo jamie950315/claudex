@@ -338,6 +338,17 @@ or restarts active apps. Controller capabilities are private files; worker
 capabilities go through environment variables, never argv or returned status.
 This fences protocol operations, not hostile same-UID processes.
 
+Desktop wake connector installation selects the native deployment through
+`claude_desktop::Selection` and updates only that user-data store's configuration.
+First-party keeps `claude-desktop-wake-install.json`; Gateway uses the separate
+`claude-desktop-wake-install-3p.json` journal and lock. Never copy another profile's
+configuration, connectors or credentials. Preserve entry-scoped publication and
+exact prepared-state recovery. Verify the original Selection immediately before
+publication. Gateway's config is also the selection source: after its own write,
+require the complete prepared bytes, then reselect and prove the same active
+profile with unchanged publication identity. Do not mistake that expected config
+replacement for a profile race, or accept another writer's change as our own.
+
 Native execution uses fresh Codex ephemeral exec or Claude nonpersistent print
 sessions with normal account authentication, no copied credentials, no inherited
 API keys, and explicit collaboration MCP configuration. Ordinary sync must not
