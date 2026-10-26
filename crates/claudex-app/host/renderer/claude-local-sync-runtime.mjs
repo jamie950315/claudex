@@ -194,7 +194,7 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
 /** Native folderless prewarm -> proven fixed Mod bootstrap -> normal cwd move.
  * Every side effect consumes a durable claim; an unknown action is never retried.
  */
-export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
+export function createClaudeLocalStartRuntime({ readManifest, native, getClient, registryRoot,
   hasDraft = () => true, now = () => Date.now(), setTimer = setTimeout,
   clearTimer = clearTimeout, intervalMs = 2000, onStatus = () => {} } = {}) {
   let running = false, generation = 0, inFlight = false, timer, lastStatus, apiReady = false;
@@ -207,16 +207,18 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
   };
   async function manifest() {
     const value = decode(await readManifest(), 256 * 1024);
-    if (value?.version !== 2 || !Array.isArray(value.entries) || value.entries.length > 1)
+    if (value?.version !== 3 || !Array.isArray(value.entries) || value.entries.length > 1)
       throw new Error('Native Local manifest invalid');
     for (const e of value.entries) {
-      if (!['prewarm', 'start', 'move'].includes(e.stage) || !syncUuid(e.opId) || !syncPath(e.cwd)
+      if (!syncPath(registryRoot) || e.registryRoot !== registryRoot
+        || !['prewarm', 'start', 'move'].includes(e.stage) || !syncUuid(e.opId) || !syncPath(e.cwd)
         || !syncText(e.title) || e.command !== 'claudex-bootstrap' || !Number.isSafeInteger(e.expiresAt))
         throw new Error('Native Local identity invalid');
       if (e.stage !== 'prewarm' && (!syncPath(e.prewarm?.cwd) || !e.prewarm.sessionId?.startsWith('local_')
         || !syncUuid(e.prewarm.sessionId.slice(6)))) throw new Error('Native prewarm receipt invalid');
       if (e.stage === 'move' && (!syncUuid(e.bootstrap?.sessionId) || e.bootstrap.cwd !== e.prewarm.cwd
-        || !syncPath(e.mapping?.registryPath) || !e.mapping.registryPath.endsWith(`/${e.prewarm.sessionId}.json`)
+        || !syncPath(e.mapping?.registryPath) || !e.mapping.registryPath.startsWith(`${registryRoot}/`)
+        || !e.mapping.registryPath.endsWith(`/${e.prewarm.sessionId}.json`)
         || e.mapping.sessionId !== e.prewarm.sessionId || e.mapping.nativeId !== e.bootstrap.sessionId
         || e.mapping.cwd !== e.prewarm.cwd || !Number.isSafeInteger(e.mapping.lastActivityAt)))
         throw new Error('Native bootstrap mapping invalid');
@@ -241,7 +243,8 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
     return JSON.parse(texts[0].text);
   }
   async function current(e, ticket) {
-    return running && ticket === generation && e.expiresAt > now() && !hasDraft(e.prewarm?.sessionId)
+    return running && ticket === generation && e.registryRoot === registryRoot
+      && e.expiresAt > now() && !hasDraft(e.prewarm?.sessionId)
       && (await manifest()).some(v => JSON.stringify(v) === JSON.stringify(e))
       && running && ticket === generation && !hasDraft(e.prewarm?.sessionId);
   }
@@ -299,9 +302,13 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
         report(`${e.stage}-claimed`);
         let outcome = 'rejected', result = null;
         // Last lifecycle/catalogue/registry checks occur after the durable claim.
-        let permitted = await current(e, ticket);
-        if (permitted && e.stage === 'start') permitted = await catalogue(e);
-        if (permitted && e.stage === 'move') permitted = JSON.stringify(await moveProof(e)) === JSON.stringify(proof);
+        let permitted = false;
+        try {
+          permitted = await current(e, ticket);
+          if (permitted && e.stage === 'start') permitted = await catalogue(e);
+          if (permitted && e.stage === 'move') permitted = JSON.stringify(await moveProof(e)) === JSON.stringify(proof);
+          if (permitted) permitted = await current(e, ticket);
+        } catch { permitted = false; report('native-start-authority-changed'); }
         if (permitted) {
           outcome = 'unknown';
           try {

@@ -381,14 +381,17 @@ impl Worker {
             }
             let shared = self.shared.clone();
             let result = tokio::task::spawn_blocking(move || {
+                let selection = claudex_core::claude_desktop::Selection::read(&shared.config.home)?;
                 let fence = || {
                     if shared.closed.load(Ordering::Acquire) {
                         Err(Failure(FailureCode::Stopped).into())
                     } else {
-                        Ok(())
+                        selection.verify()
                     }
                 };
-                shared.runtime.maintain(&shared.config, &fence)
+                let pass = shared.runtime.maintain(&shared.config, &fence)?;
+                fence()?;
+                Ok(pass)
             })
             .await
             .unwrap_or_else(|_| Err(Failure(FailureCode::ValidationRefused).into()));
@@ -606,7 +609,7 @@ fn details(source: &Value) -> Value {
             adapters.insert(name.clone(), Value::Object(row));
         }
     }
-    json!({"entry":source["entry"],"missingChunks":source["missingChunks"],"refusedAdapters":refused,"adapters":adapters})
+    json!({"nativeProfile":source["nativeProfile"],"entry":source["entry"],"missingChunks":source["missingChunks"],"refusedAdapters":refused,"adapters":adapters})
 }
 
 #[cfg(test)]

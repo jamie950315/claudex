@@ -25,6 +25,7 @@ use tokio::{
 };
 
 struct RestartConsumer {
+    home: PathBuf,
     controller: Controller,
     automatic: bool,
     closed: AtomicBool,
@@ -33,12 +34,24 @@ struct RestartConsumer {
 #[async_trait]
 impl AfterPass for RestartConsumer {
     async fn consume(&self, summary: &Value) -> Result<bool> {
+        let selection = claudex_core::claude_desktop::Selection::read(&self.home)?;
+        if let Some(profile) = summary["nativeProfile"].as_str() {
+            ensure!(
+                profile == frontend_graph::profile(&selection)?,
+                "Renderer summary belongs to another Desktop profile."
+            );
+        } else {
+            ensure!(
+                selection.user_data.ends_with("Claude"),
+                "Renderer summary has no Gateway profile proof."
+            );
+        }
         let fence = || -> Result<()> {
             ensure!(
                 !self.closed.load(Ordering::Acquire),
                 "Renderer restart consumer is closed."
             );
-            Ok(())
+            selection.verify()
         };
         let decision = self
             .controller
@@ -83,16 +96,20 @@ impl Renderer {
             runtime: None,
         })
     }
-    fn enabled(&self, config: &Value) -> bool {
-        config["rendererAdapters"]["enabled"] != false
-            && (config["rendererAdapters"]["enabled"] == true
-                || config["folderProjection"]["enabled"] == true
-                    && config["folderProjection"]["cachePath"]
-                        .as_str()
-                        .is_some_and(|path| {
-                            Path::new(path).parent()
-                                == Some(frontend_graph::cache_directory(&self.home).as_path())
-                        }))
+    fn enabled(&self, config: &Value) -> Result<bool> {
+        if config["rendererAdapters"]["enabled"] == false {
+            return Ok(false);
+        }
+        if config["rendererAdapters"]["enabled"] == true {
+            return Ok(true);
+        }
+        if config["folderProjection"]["enabled"] != true {
+            return Ok(false);
+        }
+        let cache = frontend_graph::cache_directory(&self.home)?;
+        Ok(config["folderProjection"]["cachePath"]
+            .as_str()
+            .is_some_and(|path| Path::new(path).parent() == Some(cache.as_path())))
     }
 }
 
@@ -115,6 +132,19 @@ fn watch_cache(watcher: &DirectoryWatch, home: &Path, cache: &Path) -> Result<()
     }
     Ok(())
 }
+fn native_caches(home: &Path) -> [PathBuf; 2] {
+    ["Claude", "Claude-3p"].map(|name| {
+        home.join("Library/Application Support")
+            .join(name)
+            .join("Cache/Cache_Data")
+    })
+}
+fn watch_profiles(watcher: &DirectoryWatch, home: &Path) -> Result<()> {
+    for cache in native_caches(home) {
+        watch_cache(watcher, home, &cache)?;
+    }
+    Ok(())
+}
 fn cache_related(path: &Path, home: &Path, cache: &Path) -> bool {
     path.starts_with(cache) || path.starts_with(home) && cache.starts_with(path)
 }
@@ -126,7 +156,7 @@ async fn receive_hints(
     maintenance: Maintenance,
     mut stop: watch::Receiver<bool>,
 ) {
-    let cache = frontend_graph::cache_directory(&home);
+    let configuration = claudex_core::claude_desktop::configuration_path(&home);
     loop {
         let paths = tokio::select! {
             biased;
@@ -144,7 +174,7 @@ async fn receive_hints(
             break;
         }
         if paths.is_empty() {
-            if watch_cache(&watcher, &home, &cache).is_err() {
+            if watch_profiles(&watcher, &home).is_err() {
                 maintenance.notifications_failed();
                 break;
             }
@@ -157,6 +187,24 @@ async fn receive_hints(
         {
             maintenance.app_stop_changed();
         }
+        if paths
+            .iter()
+            .any(|path| path == &configuration || configuration.starts_with(path))
+        {
+            if watch_profiles(&watcher, &home).is_err() {
+                maintenance.notifications_failed();
+                break;
+            }
+            maintenance.notify(None);
+            continue;
+        }
+        let cache = match frontend_graph::cache_directory(&home) {
+            Ok(cache) => cache,
+            Err(_) => {
+                maintenance.notify(None);
+                continue;
+            }
+        };
         let relevant = paths
             .iter()
             .filter(|path| cache_related(path, &home, &cache))
@@ -164,7 +212,7 @@ async fn receive_hints(
         if relevant.is_empty() {
             continue;
         }
-        if watch_cache(&watcher, &home, &cache).is_err() {
+        if watch_profiles(&watcher, &home).is_err() {
             maintenance.notifications_failed();
             break;
         }
@@ -189,7 +237,7 @@ impl WatchLifecycle for Renderer {
     async fn start(&self, source: &Source, root: &Path, config: &Value) -> Result<()> {
         let mut running = self.running.lock().await;
         ensure!(running.is_none(), "Renderer lifecycle has already started.");
-        if !self.enabled(config) {
+        if !self.enabled(config)? {
             return Ok(());
         }
         // Subscribe before both directory registration and the first hold check.
@@ -205,6 +253,7 @@ impl WatchLifecycle for Renderer {
         }
         let consumer = if self.runtime.is_none() {
             Some(Arc::new(RestartConsumer {
+                home: self.home.clone(),
                 controller: Controller::new(root.into(), Arc::new(NativeEnvironment))?,
                 automatic: config["rendererAdapters"]["relaunchAfterUpdate"] != false,
                 closed: AtomicBool::new(false),
@@ -220,11 +269,7 @@ impl WatchLifecycle for Renderer {
         });
         let maintenance = Maintenance::new(options, runtime)?;
         *self.visible.write().unwrap() = Some(maintenance.clone());
-        let registration = watch_cache(
-            &watcher,
-            &self.home,
-            &frontend_graph::cache_directory(&self.home),
-        );
+        let registration = watch_profiles(&watcher, &self.home);
         let (stop, receive) = watch::channel(false);
         let task = tokio::spawn(receive_hints(
             hints,
@@ -329,6 +374,7 @@ mod tests {
         });
         let request = Arc::new(RwLock::new(Value::Null));
         let consumer = RestartConsumer {
+            home: fs::canonicalize(temp.path()).unwrap(),
             controller: Controller::new(root, environment.clone())?,
             automatic: false,
             closed: AtomicBool::new(false),
@@ -358,6 +404,14 @@ mod tests {
     }
     #[async_trait]
     impl Runtime for Fake {
+        fn changed_hint(
+            &self,
+            _: &Path,
+            name: &str,
+            _: &std::collections::BTreeMap<String, claudex_core::storage::FileIdentity>,
+        ) -> Result<bool> {
+            Ok(frontend_graph::cache_filename(name))
+        }
         fn maintain(&self, _: &Config, fence: &dyn Fn() -> Result<()>) -> Result<Pass> {
             fence()?;
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -368,7 +422,7 @@ mod tests {
         }
     }
     async fn until(renderer: &Renderer, predicate: impl Fn(&Value) -> bool) {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(Duration::from_secs(10), async {
             while !predicate(&renderer.status()) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -399,7 +453,7 @@ mod tests {
         renderer.start(&source, &root, &config).await?;
         assert_eq!(renderer.status()["state"], "held");
         assert_eq!(fake.calls.load(Ordering::SeqCst), 0);
-        assert!(!frontend_graph::cache_directory(&home).exists());
+        assert!(!frontend_graph::cache_directory(&home).unwrap().exists());
         storage::write_json(
             root.join("app-stop.json"),
             &json!({"version":1,"stopped":false}),
@@ -408,9 +462,34 @@ mod tests {
         assert_eq!(fake.calls.load(Ordering::SeqCst), 1);
         // Missing cache directory creation is caught through the same Source,
         // and only configuration hints (not cache) reach the durable inbox.
-        let cache = frontend_graph::cache_directory(&home);
+        let cache = frontend_graph::cache_directory(&home).unwrap();
         storage::private_directory(&cache)?;
         until(&renderer, |_| fake.calls.load(Ordering::SeqCst) > 1).await;
+        let before_switch = fake.calls.load(Ordering::SeqCst);
+        let profile = claudex_core::claude_desktop::configuration_path(&home);
+        storage::private_directory(profile.parent().unwrap())?;
+        storage::write_json(&profile, &json!({"deploymentMode":"3p"}))?;
+        until(&renderer, |_| {
+            fake.calls.load(Ordering::SeqCst) > before_switch
+        })
+        .await;
+        let third_cache = frontend_graph::cache_directory(&home)?;
+        assert!(third_cache.ends_with("Claude-3p/Cache/Cache_Data"));
+        let before_directory = fake.calls.load(Ordering::SeqCst);
+        storage::private_directory(&third_cache)?;
+        until(&renderer, |_| {
+            fake.calls.load(Ordering::SeqCst) > before_directory
+        })
+        .await;
+        let before_resource = fake.calls.load(Ordering::SeqCst);
+        storage::write_json(
+            third_cache.join("0123456789abcdef_0"),
+            &json!({"synthetic":true}),
+        )?;
+        until(&renderer, |_| {
+            fake.calls.load(Ordering::SeqCst) > before_resource
+        })
+        .await;
         assert!(
             inbox
                 .list()?
@@ -433,13 +512,13 @@ mod tests {
     #[test]
     fn explicit_disable_and_legacy_cache_opt_in_are_preserved() -> Result<()> {
         let renderer = Renderer::new(PathBuf::from("/synthetic/home"))?;
-        let mut config = json!({"folderProjection":{"enabled":true,"cachePath":frontend_graph::cache_directory(&renderer.home).join("0123456789abcdef_0")}});
-        assert!(renderer.enabled(&config));
+        let mut config = json!({"folderProjection":{"enabled":true,"cachePath":frontend_graph::cache_directory(&renderer.home).unwrap().join("0123456789abcdef_0")}});
+        assert!(renderer.enabled(&config).unwrap());
         config["rendererAdapters"] = json!({"enabled":false});
-        assert!(!renderer.enabled(&config));
+        assert!(!renderer.enabled(&config).unwrap());
         config["rendererAdapters"]["enabled"] = json!(true);
         config["folderProjection"]["enabled"] = json!(false);
-        assert!(renderer.enabled(&config));
+        assert!(renderer.enabled(&config).unwrap());
         Ok(())
     }
 }

@@ -92,19 +92,25 @@ const wake=createClaudeChatWakeRuntime({native:@NATIVE@,registryRoot:@REGISTRY@,
     syntax(&result)?;
     Ok(result)
 }
-pub fn owner(root: &Path, anchor: &frontend_owner::Anchor, asset: &str) -> Result<String> {
+pub fn owner(
+    root: &Path,
+    registry: &Path,
+    anchor: &frontend_owner::Anchor,
+    asset: &str,
+) -> Result<String> {
     let template = r#"
 import{@EXPORT@ as __cldxOwnerWakeClient}from@CLIENT@;
 const __cldxOwnerWake=(()=>{try{@RUNTIME@
 @LOCAL_SYNC@
 const local=globalThis["claude.web"]?.LocalSessions;
-try{const adoption=createClaudeLocalStartRuntime({native:local,getClient:__cldxOwnerWakeClient,readManifest:()=>local.readFileAtCwd(@ROOT@,"local-start-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onStatus:e=>console.warn("[Claudex local start] "+e)});adoption.start();window.addEventListener("beforeunload",()=>{try{adoption.stop()}catch{}},{once:true});}catch{try{console.warn("[Claudex local start] disabled")}catch{}}
+try{const adoption=createClaudeLocalStartRuntime({native:local,registryRoot:@REGISTRY@,getClient:__cldxOwnerWakeClient,readManifest:()=>local.readFileAtCwd(@ROOT@,"local-start-manifest.json"),hasDraft:()=>Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).some(e=>String(e.value??e.textContent??"").trim()),onStatus:e=>console.warn("[Claudex local start] "+e)});adoption.start();window.addEventListener("beforeunload",()=>{try{adoption.stop()}catch{}},{once:true});}catch{try{console.warn("[Claudex local start] disabled")}catch{}}
 const wake=createClaudeOwnerWakeRuntime({readMap:typeof local?.readFileAtCwd==="function"?()=>local.readFileAtCwd(@ROOT@,"folder-map.json"):undefined,getClient:__cldxOwnerWakeClient,onStatus:e=>console.warn("[Claudex owner wake] "+e)});console.warn("[Claudex owner wake] loaded "+@ASSET@);wake.start();window.addEventListener("beforeunload",()=>wake.stop(),{once:true});return{signal(...a){try{const p=wake.signal(...a);if(p&&typeof p.catch==="function")p.catch(()=>{})}catch{}}}}catch{try{console.warn("[Claudex owner wake] disabled")}catch{}return{signal(){}}}})();
 "#;
     let result = template
         .replace("@EXPORT@", &anchor.client.exported)
         .replace("@CLIENT@", &serde_json::to_string(&anchor.client.path)?)
         .replace("@ROOT@", &path(root)?)
+        .replace("@REGISTRY@", &path(registry)?)
         .replace("@ASSET@", &serde_json::to_string(asset)?)
         .replace("@RUNTIME@", &embedded(OWNER)?)
         .replace("@LOCAL_SYNC@", &embedded(LOCAL_SYNC)?);

@@ -86,11 +86,23 @@ the coordinator lock, and never report a boundary while a transaction is pending
 
 `crates/claudex-app/src/frontend_graph.rs` discovers the latest fetched index entry from the
 private HTTP cache using verified Chromium HttpResponseInfo response timestamps,
-never filesystem mtime (patches change mtime). Require a unique newest entry and
+never filesystem mtime (patches change mtime). Capture one shared
+`claude_desktop::Selection` for graph discovery, injected registry paths and
+publication. First-party and Gateway graphs use only their own `Claude` or
+`Claude-3p` cache; never combine their modules or recover one from the other's
+journals. Verify the exact saved deployment configuration at every publication
+and restore fence, including across asynchronous runtime/signature checks. A
+profile switch refuses the old pass; a saved mode is not running-renderer proof.
+Require a unique newest entry and
 its root bootstrap. Follow literal static/re-export/dynamic imports within the
 exact Anthropic assets origin; only reachable cached modules qualify. Missing
 lazy chunks are counted, never fetched or replaced with an older graph. Cache
 recency cannot prove which graph a running renderer has already evaluated.
+A Gateway `app://localhost` frontend may instead be served directly from signed
+`ion-dist` bundle resources. The HTTP-cache installer does not patch that
+source. An absent HTTP graph remains explicit; namespace plumbing or transformed
+static sources cannot certify a loaded Gateway renderer. Bundle-resource
+installation and signing are a separate authorized implementation boundary.
 Resolve LocalSessions from its globalThis["claude.web"] binding/export/import and
 React hooks from their public getter, definition and export/import relationships.
 Also accept the observed two-expression LocalSessions initializer containing
@@ -286,8 +298,16 @@ remain consumed across renderer unload and process restart.
 Use normal no-input `prewarmFolderless({cwd:"",message:"",useWorktree:false})`.
 The public IPC schema requires a string message; native prewarm overrides it to
 undefined, so this placeholder is not model input. Persist all three options in
-the prewarm claim proof. Manifest version 2 is mandatory; old v1 renderers cannot
-consume a corrected or certified action. Never use `prewarmLocal` spares or an
+the prewarm claim proof. Manifest version 3 is mandatory; older renderers cannot
+consume a namespaced action. Compile the same graph Selection's registry root
+into the owner bootstrap. Every manifest entry must name that exact
+`registryRoot`, including prewarm before any Local mapping exists. Missing or
+mismatched roots refuse before a claim. Recheck the entry after a claim and
+again after final asynchronous catalogue/move proofs; lost authority consumes a
+rejected receipt without invoking native creation, start or move. Move registry
+paths must also remain beneath the compiled root. Never infer a loaded
+renderer's namespace from the current deployment setting. Never use
+`prewarmLocal` spares or an
 empty ordinary `start` message. The prewarm's returned Local ID and scratch cwd
 are authority for one `getSupportedCommands({sessionId})` query. Require a unique
 live `claudex-bootstrap` entry before and after start claim. Start the same
@@ -353,7 +373,11 @@ intended bytes refuses promotion and preserves the journal.
 watch.lock. It performs one startup cache pass, then debounces cache-directory
 notifications and serially re-discovers/reapplies all enabled adapters. Exact
 metadata/key hints suppress unchanged JS entries and unrelated HTTP/image writes;
-anonymous notifications still recheck the graph. Hints never authorize patches.
+anonymous notifications still recheck the graph. Watch both native cache ancestor
+chains and the deployment configuration through the same shared OS source, so
+missing directories and profile changes re-arm without polling. Configuration
+hints force a full pass rather than filename-only suppression; unrelated writes
+in the unselected cache do not select it. Hints never authorize patches.
 Failed or partially refused passes discard unchanged-asset suppression evidence;
 the next JavaScript cache hint revalidates through the normal guarded installer.
 Do not schedule polling or retry timers. A missing cache entry or changed graph
@@ -407,8 +431,15 @@ chat/owner/command failure into a folder-map error. Prepared files with
 from synchronization health and actual recipient/delivery proof.
 
 Each resource uses <adapter>/<cache filename>/ui-folder-compat, with adapter
-ui-folders, ui-chat-wake or ui-owner-wake, an immutable original and a
-prepared/installed journal.
+ui-folders, ui-chat-wake, ui-owner-wake or ui-commands, an immutable original and a
+prepared/installed journal. First-party journals retain their existing root;
+Gateway journals live under `renderer-profiles/claude-3p/`. Equal URLs, source
+hashes and cache filenames never share recovery evidence across profiles.
+Restores capture one Selection and use only its cache/journal namespace; legacy
+first-party restoration is never borrowed by Gateway. Restart pending/attempt
+receipts use the same profile separation, retaining existing first-party files.
+Maintenance exposes only a bounded `nativeProfile` label, not a user-data path;
+the restart consumer verifies that label against its exact Selection fence.
 Older graphs can share one folder/chat resource. The all-adapter installer
 combines both complete transforms in one transaction and owns its immutable
 original/journal under ui-folders/<cache filename>/ui-folder-compat. A disabled
@@ -510,7 +541,8 @@ the optimized codec and proofs avoid development-build overhead. The legacy
 `--rust-only true` verifier option is accepted for existing callers; all modes now use Rust.
 
 `dev/verify-claude-frontend-builds.mjs` inventories real cached entries and all
-current/legacy renderer journals through the Rust checker, validates immutable
+current/legacy renderer journals for the selected profile through the Rust
+checker, validates immutable
 originals, and copies exact reachable graphs into temporary homes. It runs the
 production Rust selection, complete transforms and installer, `node --check`,
 and independent AST/native-preservation/wiring contracts. It proves idempotent
@@ -526,7 +558,8 @@ never write into the supplied native home or state.
 
 The historical hand-pin JavaScript oracle is archived on
 `codex/javascript-legacy`, not loaded from Git and executed by this checkout.
-Every legacy journal is still validated and inventoried, including resources
+Every selected-profile legacy journal is still validated and inventoried,
+including resources
 not selected by a current graph. Obsolete shared Chat/Cowork owner-wake pins are
 not equivalent to the required Code/attached-stdio design: keep their evidence,
 never restore directMcpCallTool or the wrong component to pass acceptance.

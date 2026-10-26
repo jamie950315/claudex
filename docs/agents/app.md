@@ -14,7 +14,11 @@ for verified source migration; never marketplace remove, which deletes native
 plugin state. Newer installed versions are not downgraded. Explicit receiver or
 enable requests must not report success if newer-version preservation refused them.
 Missing management capabilities use a separately pinned, integrity-checked Mod
-manager, not replacement of an existing inference CLI. Its bootstrap disables
+manager, not replacement of an existing inference CLI. Desktop cache discovery
+uses the shared deployment Selection's `cli_cache()` only; it never borrows the
+other profile's executable. Verify that exact Selection after asynchronous
+signature and capability checks, alongside the unchanged bundle identities.
+Its bootstrap disables
 package scripts and selects the exact native platform package, not the wrapper's
 postinstall placeholder. Bundled source/runtime and the signed app bundle/executable
 may be owned by the current user or root, protected from foreign writes. Private

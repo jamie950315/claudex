@@ -8,7 +8,7 @@ use crate::{
     platform,
 };
 use anyhow::{Context, Result, ensure};
-use claudex_core::storage::FileIdentity;
+use claudex_core::{claude_desktop::Selection, storage::FileIdentity};
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -71,8 +71,29 @@ fn evidence<T>(value: Result<T>) -> Result<T> {
         }
     })
 }
-pub fn cache_directory(home: &Path) -> PathBuf {
-    home.join("Library/Application Support/Claude/Cache/Cache_Data")
+pub fn cache_directory(home: &Path) -> Result<PathBuf> {
+    Ok(Selection::read(home)?.cache())
+}
+/// First-party journals retain their historical paths. Gateway resources have
+/// their own recovery namespace even when URLs, bytes and filenames coincide.
+pub fn journal_directory(root: &Path, selection: &Selection) -> Result<PathBuf> {
+    match profile(selection)? {
+        "1p" => Ok(root.into()),
+        "3p" => Ok(root.join("renderer-profiles/claude-3p")),
+        _ => unreachable!(),
+    }
+}
+pub fn profile(selection: &Selection) -> Result<&'static str> {
+    selection.verify()?;
+    match selection
+        .user_data
+        .file_name()
+        .and_then(|name| name.to_str())
+    {
+        Some("Claude") => Ok("1p"),
+        Some("Claude-3p") => Ok("3p"),
+        _ => anyhow::bail!("Unknown Claude Desktop resource namespace."),
+    }
 }
 pub fn asset_url(value: &str) -> bool {
     crate::frontend_bindings::asset_url(value)
@@ -249,6 +270,7 @@ pub struct EntrySummary {
     pub fetched_at: String,
 }
 pub struct Graph {
+    pub selection: Selection,
     pub entry: EntrySummary,
     pub entry_url: String,
     pub modules: BTreeMap<String, Module>,
@@ -298,7 +320,7 @@ pub fn changed_hint(
     if !cache_filename(filename) {
         return Ok(false);
     }
-    let cache = cache_directory(home);
+    let cache = cache_directory(home)?;
     directory(&cache)?;
     let path = cache.join(filename);
     let current = match fs::symlink_metadata(&path) {
@@ -314,6 +336,7 @@ pub fn changed_hint(
     Ok(key_url(&path)?.is_some() || observations.contains_key(filename))
 }
 pub fn verify(graph: &Graph) -> Result<()> {
+    graph.selection.verify()?;
     for module in graph.modules.values() {
         if identity(&module.path)? != module.identity {
             return Err(changed("graph changed before publication"));
@@ -323,7 +346,9 @@ pub fn verify(graph: &Graph) -> Result<()> {
 }
 /// No downloads, vendor evaluation, patch publication, histories or inference.
 pub fn discover(root: &Path, home: &Path) -> Result<Graph> {
-    let cache = cache_directory(home);
+    let selection = Selection::read(home)?;
+    let cache = selection.cache();
+    let journals = journal_directory(root, &selection)?;
     let before = directory(&cache)?;
     let mut names = Vec::new();
     for entry in native(fs::read_dir(&cache).map_err(Into::into))? {
@@ -404,7 +429,7 @@ pub fn discover(root: &Path, home: &Path) -> Result<Graph> {
             bytes <= MAX_BYTES,
             "Claude frontend graph: graph bytes exceed their bound."
         );
-        let (entry, original_bytes) = original_entry(root, name, path, &current, &url)?;
+        let (entry, original_bytes) = original_entry(&journals, name, path, &current, &url)?;
         let ast = frontend_ast::syntax(&entry.source)?;
         let imports = frontend_ast::imports(&ast, false);
         let eager_imports = frontend_ast::imports(&ast, true);
@@ -436,6 +461,7 @@ pub fn discover(root: &Path, home: &Path) -> Result<Graph> {
         .context("Invalid frontend fetch timestamp.")?
         .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let graph = Graph {
+        selection,
         entry: EntrySummary {
             asset: entry_url.strip_prefix(ASSET_ROOT).unwrap().into(),
             cache_filename: entry_name,
@@ -491,7 +517,7 @@ mod tests {
             fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
             let home = fs::canonicalize(temp.path()).unwrap();
             let root = home.join("state");
-            let cache = cache_directory(&home);
+            let cache = cache_directory(&home).unwrap();
             platform::create_private(&root).unwrap();
             platform::create_private(&cache).unwrap();
             Self {
@@ -588,6 +614,45 @@ mod tests {
             "VariableDeclarator"
         );
         verify(&graph).unwrap();
+    }
+
+    #[test]
+    fn discovery_uses_only_the_selected_cache_and_fences_the_configuration() {
+        let mut fixture = Fixture::new();
+        fixture.put(
+            1,
+            "index-profile.js",
+            &format!("{BOOT};const firstParty=true;"),
+            FETCH_TIME + 1_000_000,
+        );
+        let first = fixture.discover().unwrap();
+        let configuration = claudex_core::claude_desktop::configuration_path(&fixture.home);
+        platform::create_private(configuration.parent().unwrap()).unwrap();
+        platform::publish(&configuration, br#"{"deploymentMode":"3p"}"#, 0o600).unwrap();
+        fixture.cache = cache_directory(&fixture.home).unwrap();
+        platform::create_private(&fixture.cache).unwrap();
+        fixture.put(
+            1,
+            "index-profile.js",
+            &format!("{BOOT};const gateway=true;"),
+            FETCH_TIME,
+        );
+        let third = fixture.discover().unwrap();
+        assert_eq!(first.entry.asset, third.entry.asset);
+        assert!(
+            third.modules[&third.entry_url]
+                .source
+                .contains("gateway=true")
+        );
+        assert!(
+            !third.modules[&third.entry_url]
+                .source
+                .contains("firstParty=true")
+        );
+        assert_eq!(profile(&third.selection).unwrap(), "3p");
+        assert!(verify(&first).is_err());
+        fs::write(&configuration, br#"{"deploymentMode":"3p","other":true}"#).unwrap();
+        assert!(verify(&third).is_err());
     }
 
     #[test]

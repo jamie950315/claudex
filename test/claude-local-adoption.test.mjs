@@ -6,10 +6,10 @@ import { createClaudeLocalStartRuntime } from '../crates/claudex-app/host/render
 const OP='11111111-1111-4111-8111-111111111111', CLI='22222222-2222-4222-8222-222222222222';
 const UI='local_33333333-3333-4333-8333-333333333333', CLAIM='55555555-5555-4555-8555-555555555555';
 const flush=async()=>{for(let n=0;n<30;n++)await new Promise(r=>setImmediate(r));};
-function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,draft=false,connected=true,version=2}={}) {
+function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,draft=false,connected=true,version=3}={}) {
   const calls=[],statuses=[],claimed=new Set();
   const mapping={sessionId:UI,nativeId:CLI,cwd:'/fixture/scratch',title:'Fixture',lastActivityAt:1,registryPath:`/fixture/registry/${UI}.json`};
-  const entry={stage,opId:OP,cwd:'/fixture/project',title:'Fixture',prewarm:{sessionId:UI,cwd:mapping.cwd},
+  const entry={stage,registryRoot:'/fixture/registry',opId:OP,cwd:'/fixture/project',title:'Fixture',prewarm:{sessionId:UI,cwd:mapping.cwd},
     bootstrap:{sessionId:CLI,cwd:mapping.cwd},mapping,command:'claudex-bootstrap',expiresAt:10000};
   const state={sessionId:UI,cwd:mapping.cwd,title:'Fixture',lastActivityAt:1,isArchived:false,isRunning:false,turnRunning:false};
   const native={
@@ -25,7 +25,7 @@ function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,dra
       if(claimed.has(a.stage))return{structuredContent:{ready:false}};claimed.add(a.stage);
       return{structuredContent:{ready:true,opId:OP,stage:a.stage,claimId:CLAIM}};
     }return{structuredContent:{recorded:true}};}};
-  const options={readManifest:async()=>({contents:JSON.stringify({version,entries:[entry]})}),native,getClient:()=>client,
+  const options={registryRoot:'/fixture/registry',readManifest:async()=>({contents:JSON.stringify({version,entries:[entry]})}),native,getClient:()=>client,
     hasDraft:()=>draft,now:()=>1,setTimer:()=>1,clearTimer(){},onStatus:s=>statuses.push(s)};
   return{entry,state,native,calls,statuses,client,create:()=>createClaudeLocalStartRuntime(options)};
 }
@@ -90,15 +90,15 @@ test('native-start constructor or start failure leaves the existing owner bootst
     const script=template.replace('@RUNTIME@',`function createClaudeOwnerWakeRuntime(){return{start(){globalThis.started++},stop(){},signal(){globalThis.signals++}}}`)
       .replace('@LOCAL_SYNC@',fail==='constructor'?`function createClaudeLocalStartRuntime(){throw Error('synthetic constructor')}`
         :`function createClaudeLocalStartRuntime(){return{start(){throw Error('synthetic start')},stop(){}}}`)
-      .replaceAll('@ROOT@',JSON.stringify('/fixture/state')).replaceAll('@ASSET@',JSON.stringify('fixture.js'));
+      .replaceAll('@REGISTRY@',JSON.stringify('/fixture/registry')).replaceAll('@ROOT@',JSON.stringify('/fixture/state')).replaceAll('@ASSET@',JSON.stringify('fixture.js'));
     const context={started:0,signals:0,__cldxOwnerWakeClient(){},console:{warn(){}},window:{addEventListener(){}}};
     vm.runInNewContext(`${script};__cldxOwnerWake.signal('synthetic','selection','bridge');`,context);
     assert.equal(context.started,1);assert.equal(context.signals,1);
   }
 });
 
-test('v1 manifests cannot authorize the corrected runtime',async()=>{
-  const f=fixture({version:1});await run(f);assert.equal(f.calls.length,0);
+test('older manifests cannot authorize the namespaced runtime',async()=>{
+  for(const version of [1,2]) { const f=fixture({version});await run(f);assert.equal(f.calls.length,0); }
 });
 test('required message schema rejects legacy options before implementation',async()=>{
   let implementations=0;
@@ -111,4 +111,27 @@ test('required message schema rejects legacy options before implementation',asyn
   await assert.rejects(f.native.prewarmFolderless({cwd:'',useWorktree:false}));
   assert.equal(implementations,0);await run(f);assert.equal(implementations,1);
   assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'returned');
+});
+
+
+test('another profile or missing namespace never claims prewarm, start or move',async()=>{
+  for(const stage of ['prewarm','start','move']) for(const registryRoot of [undefined,'/fixture/other']) {
+    const f=fixture({stage});f.entry.registryRoot=registryRoot;await run(f);
+    assert.equal(f.calls.filter(x=>['prewarm','start','move'].includes(x[0])||x[0].endsWith('_claim')).length,0);
+  }
+});
+test('profile changes after claim consume a rejected receipt without native invocation',async()=>{
+  for(const stage of ['prewarm','start','move']) {
+    const f=fixture({stage}),call=f.client.callTool;
+    f.client.callTool=async args=>{const result=await call(args);if(args.name.endsWith('_claim'))f.entry.registryRoot='/fixture/other';return result;};
+    await run(f);
+    assert.equal(f.calls.filter(x=>['prewarm','start','move'].includes(x[0])).length,0);
+    assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'rejected');
+  }
+});
+test('profile changes during final catalogue proof still refuse the native start',async()=>{
+  const f=fixture({stage:'start'}),catalogue=f.native.getSupportedCommands;let n=0;
+  f.native.getSupportedCommands=async args=>{const result=await catalogue(args);if(++n===2)f.entry.registryRoot='/fixture/other';return result;};
+  await run(f);assert.equal(f.calls.filter(x=>x[0]==='start').length,0);
+  assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'rejected');
 });

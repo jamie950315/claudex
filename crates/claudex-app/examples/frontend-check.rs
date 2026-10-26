@@ -91,7 +91,7 @@ fn check(graph: &Graph, root: &Path, home: &Path, output: &Path) -> Result<Value
     frontend_graph::verify(graph).context("Static graph changed during verification.")?;
     Ok(json!({"entry":graph.entry,"missing":graph.missing,"adapters":adapters}))
 }
-fn published(manifest: &Path, entry: &str) -> Result<Graph> {
+fn published(manifest: &Path, entry: &str, home: &Path) -> Result<Graph> {
     let rows: Vec<Value> =
         serde_json::from_slice(&storage::read_stable_with_limit(manifest, 4 * 1024 * 1024)?.bytes)?;
     ensure!(rows.len() <= 8192, "Published graph module bound exceeded");
@@ -166,6 +166,7 @@ fn published(manifest: &Path, entry: &str) -> Result<Graph> {
     );
     modules.retain(|url, _| found.contains(url));
     Ok(Graph {
+        selection: claudex_core::claude_desktop::Selection::read(home)?,
         entry: frontend_graph::EntrySummary {
             asset: entry.into(),
             cache_filename: String::new(),
@@ -227,6 +228,9 @@ fn cache_url(path: &Path) -> Result<Option<String>> {
     Ok(url)
 }
 fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
+    let selection = claudex_core::claude_desktop::Selection::read(home)?;
+    let journals_root = frontend_graph::journal_directory(root, &selection)?;
+    let root = journals_root.as_path();
     let mut observed: BTreeMap<PathBuf, Snapshot> = BTreeMap::new();
     let mut journals = vec![];
     let mut originals: BTreeMap<String, Vec<u8>> = BTreeMap::new();
@@ -276,7 +280,7 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         }
     }
     read_journal(Adapter::Folders, root.join("ui-folder-compat"))?;
-    let directory = frontend_graph::cache_directory(home);
+    let directory = selection.cache();
     platform::directory(&directory, true, false)?;
     let names = optional_names(&directory)?;
     ensure!(names.len() <= 32768, "Cache inventory bound exceeded");
@@ -354,6 +358,7 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
             "Live source changed during inventory: {}", path.display()
         );
     }
+    selection.verify()?;
     Ok(json!({"modules":rows,"journals":journals,"liveSourcesUnchanged":true}))
 }
 fn platform_exists(path: &Path) -> Result<bool> {
@@ -486,7 +491,8 @@ async fn main() -> Result<()> {
     ensure!(
         !platform_exists(&output)?
             && !output.starts_with(&root)
-            && !output.starts_with(home.join("Library/Application Support/Claude")),
+            && !output.starts_with(home.join("Library/Application Support/Claude"))
+            && !output.starts_with(home.join("Library/Application Support/Claude-3p")),
         "Output must be new and outside live state/cache"
     );
     platform::create_private(&output)?;
@@ -500,6 +506,7 @@ async fn main() -> Result<()> {
                     .values
                     .get("entry")
                     .context("Published entry missing")?,
+                &home,
             )?
         } else {
             frontend_graph::discover(&root, &home)?
