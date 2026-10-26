@@ -304,8 +304,12 @@ Copy the complete verified Claude.app into a private sibling container on the
 same filesystem. Complete stable-file byte inventories prove copy integrity;
 regular resources are single-linked and symlinks remain internal. Never modify
 native history, registries, credentials or ASAR. Patch only proved resources,
-ad-hoc sign the outer bundle preserving identifier, entitlements, flags and
-runtime metadata, then require the normal Claude publisher check and strict deep
+ad-hoc sign the outer bundle preserving identifier, flags, runtime metadata and
+all entitlements except the vendor-restricted application identifier, team
+identifier and Keychain access groups. Read back the exact resulting dictionary;
+never claim the vendor's protected groups under a local identity. Those restricted
+claims pass disk verification but macOS refuses process launch. Require the
+normal Claude publisher check and strict deep
 verification. Do not use a personal Development identity or re-sign nested vendor
 code. Refuse changes outside proved patches and the outer code seal/executable;
 flush the candidate before recording swap authority.
@@ -325,6 +329,13 @@ nanosecond fields stay exact. Foreign changes or uncertain placement preserve bo
 bundles and the pending journal. An interrupted unpublished build may be marked
 abandoned only after its full original still matches; its artifacts are retained.
 Restored generations remain too. A replacement app cannot borrow an older journal.
+macOS can attach MACL metadata after exchange, changing ctime on the app root and
+outer CodeResources seal. Installed recognition may re-establish those two exact
+identities only when every other identity field, every child and the seal's
+authenticated bytes remain unchanged, followed by an exact stable recheck.
+Explicit offline restore verifies both publishers and saves those current exact
+identities before its swap intent. Other ctime changes, permissions, links,
+inodes, resource changes and changed seal bytes still refuse.
 
 Normal frontend installation recognizes installed bundle generations read-only
 before HTTP-cache discovery. Verify every saved file identity and both complete

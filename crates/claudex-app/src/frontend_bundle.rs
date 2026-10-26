@@ -150,6 +150,46 @@ fn verify_tree(app: &Path, expected: &Tree, relocated: bool) -> Result<Tree> {
     Ok(current)
 }
 
+/// macOS may attach its MACL after publication, changing ctime on the app root
+/// and outer seal. Re-establish their exact current identities from unchanged
+/// objects and authenticated seal bytes; never accept a resource/inode change.
+fn verify_installed_tree(app: &Path, expected: &Tree) -> Result<Tree> {
+    let mut current = inventory(app, false)?;
+    ensure!(
+        current.len() == expected.len(),
+        "Claude bundle inventory changed."
+    );
+    for (path, node) in &mut current {
+        let before = expected
+            .get(path)
+            .context("Claude bundle resource set changed.")?;
+        let mut identity = before.identity.clone();
+        let metadata_boundary = path.as_os_str().is_empty()
+            || path == Path::new("Contents/_CodeSignature/CodeResources");
+        if metadata_boundary && node.identity.ctime_ns != identity.ctime_ns {
+            identity.ctime_ns = node.identity.ctime_ns.clone();
+            ensure!(
+                node.identity == identity && node.link == before.link,
+                "Claude bundle object changed; all artifacts were preserved."
+            );
+            if !path.as_os_str().is_empty() {
+                let bytes = storage::read_stable_with_limit(app.join(path), LIMIT)?;
+                ensure!(
+                    bytes.identity == node.identity
+                        && Some(storage::hash_bytes(&bytes.bytes)) == before.digest,
+                    "Claude outer seal bytes changed; all artifacts were preserved."
+                );
+            }
+        }
+        ensure!(
+            node.identity == identity && node.link == before.link,
+            "Claude bundle changed; no foreign resource was overwritten."
+        );
+        node.digest = before.digest.clone();
+    }
+    verify_tree(app, &current, false)
+}
+
 fn copy_matches(original: &Tree, copy: &Tree) -> Result<()> {
     ensure!(
         original.len() == copy.len(),
@@ -601,15 +641,14 @@ pub fn installed(root: &Path, home: &Path) -> Result<Option<Value>> {
         journal.recipe == recipe(),
         "Renderer bundle upgrade required. Stop both apps, then explicitly restore and install the current renderer bundle."
     );
-    verify_tree(
+    verify_installed_tree(
         &journal.app,
         journal
             .patched
             .as_ref()
             .context("Installed bundle proof is absent.")?,
-        false,
     )?;
-    verify_tree(&journal.slot, &journal.original, false)?;
+    verify_installed_tree(&journal.slot, &journal.original)?;
     selection.verify()?;
     let current =
         storage::read_stable_with_limit(&journal_path(root, &journal.generation)?, LIMIT)?;
@@ -731,6 +770,25 @@ pub async fn run(options: &platform::Options, root: &Path, runner: &dyn Runner) 
             return Ok(result(&journal));
         }
         if action == "restore" {
+            if journal.phase == Phase::Installed {
+                // Explicit offline recovery binds fresh exact metadata before
+                // recording any swap intent. Nothing native is changed here.
+                let patched = verify_installed_tree(
+                    &app,
+                    journal
+                        .patched
+                        .as_ref()
+                        .context("Patched proof is absent.")?,
+                )?;
+                let original = verify_installed_tree(&journal.slot, &journal.original)?;
+                if journal.patched.as_ref() != Some(&patched) || journal.original != original {
+                    providers::verify(&app, &providers::CLAUDE, runner).await?;
+                    providers::verify(&journal.slot, &providers::CLAUDE, runner).await?;
+                    journal.patched = Some(patched);
+                    journal.original = original;
+                    save(&journal, &mut snapshot)?;
+                }
+            }
             recover(&mut journal, &mut snapshot)?;
             if journal.phase == Phase::Prepared {
                 verify_tree(&app, &journal.original, false)?;
@@ -947,19 +1005,7 @@ async fn install(
     }
     verify_tree(&slot, &candidate, false)?;
     fence.closed(app, runner).await?;
-    let mut sign = CommandSpec::new(
-        "/usr/bin/codesign",
-        [
-            "--force",
-            "--sign",
-            "-",
-            "--preserve-metadata=identifier,entitlements,flags,runtime",
-            "--timestamp=none",
-            &slot.to_string_lossy(),
-        ],
-    );
-    sign.timeout = Duration::from_secs(180);
-    platform::checked(runner, sign).await?;
+    sign_local(&slot, &container, runner).await?;
     ensure!(
         providers::verify(&slot, &providers::CLAUDE, runner).await? == providers::Publisher::Local,
         "Claude bundle candidate is not an ad-hoc local build."
@@ -979,6 +1025,68 @@ async fn install(
     save(&journal, &mut expected)?;
     publish_prepared(&mut journal, &mut expected, runner, fence).await?;
     Ok(result(&journal))
+}
+
+async fn entitlements(app: &Path, runner: &dyn Runner) -> Result<Value> {
+    let output = platform::checked(
+        runner,
+        CommandSpec::new(
+            "/usr/bin/codesign",
+            ["-d", "--entitlements", "-", "--xml", &app.to_string_lossy()],
+        ),
+    )
+    .await?;
+    if output.stdout.trim().is_empty() {
+        return Ok(json!({}));
+    }
+    let mut convert = CommandSpec::new("/usr/bin/plutil", ["-convert", "json", "-o", "-", "-"]);
+    convert.input = output.stdout.into_bytes();
+    let parsed: Value = serde_json::from_str(&platform::checked(runner, convert).await?.stdout)?;
+    ensure!(
+        parsed.is_object(),
+        "Native entitlements must be a dictionary."
+    );
+    Ok(parsed)
+}
+
+async fn sign_local(app: &Path, container: &Path, runner: &dyn Runner) -> Result<()> {
+    let mut local = entitlements(app, runner).await?;
+    // These claims require the vendor's signing identity. Preserving them in an
+    // ad-hoc seal passes codesign verification but AMFI refuses process launch.
+    // Runtime/device permissions remain unchanged; never invent a new identity
+    // or claim access to the vendor's protected Keychain groups.
+    for key in [
+        "com.apple.application-identifier",
+        "com.apple.developer.team-identifier",
+        "keychain-access-groups",
+    ] {
+        local.as_object_mut().unwrap().remove(key);
+    }
+    let mut convert = CommandSpec::new("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", "-"]);
+    convert.input = serde_json::to_vec(&local)?;
+    let xml = platform::checked(runner, convert).await?.stdout;
+    let path = container.join("local-entitlements.plist");
+    platform::publish(&path, xml.as_bytes(), 0o600)?;
+    let mut sign = CommandSpec::new(
+        "/usr/bin/codesign",
+        [
+            "--force",
+            "--sign",
+            "-",
+            "--preserve-metadata=identifier,flags,runtime",
+            "--entitlements",
+            &path.to_string_lossy(),
+            "--timestamp=none",
+            &app.to_string_lossy(),
+        ],
+    );
+    sign.timeout = Duration::from_secs(180);
+    platform::checked(runner, sign).await?;
+    ensure!(
+        entitlements(app, runner).await? == local,
+        "Local signing did not preserve the exact permitted entitlements."
+    );
+    Ok(())
 }
 
 async fn publish_prepared(
@@ -1126,6 +1234,31 @@ mod tests {
     }
     struct Processes {
         output: &'static str,
+    }
+
+    #[test]
+    fn installed_metadata_revalidation_keeps_exact_objects_and_seal_bytes() -> Result<()> {
+        let f = Fixture::new()?;
+        let seal = f.app.join("Contents/_CodeSignature/CodeResources");
+        platform::create_private(seal.parent().unwrap())?;
+        platform::publish(&seal, b"sealed bytes", 0o644)?;
+        let expected = inventory(&f.app, true)?;
+        // A same-mode metadata update changes ctime like a native xattr update.
+        fs::set_permissions(&f.app, fs::metadata(&f.app)?.permissions())?;
+        fs::set_permissions(&seal, fs::metadata(&seal)?.permissions())?;
+        assert!(verify_tree(&f.app, &expected, false).is_err());
+        let current = verify_installed_tree(&f.app, &expected)?;
+        verify_tree(&f.app, &current, false)?;
+        let modified = fs::metadata(&seal)?.modified()?;
+        fs::write(&seal, b"forged bytes")?;
+        fs::File::open(&seal)?.set_times(fs::FileTimes::new().set_modified(modified))?;
+        assert!(verify_installed_tree(&f.app, &expected).is_err());
+        fs::write(&seal, b"sealed bytes")?;
+        fs::File::open(&seal)?.set_times(fs::FileTimes::new().set_modified(modified))?;
+        verify_installed_tree(&f.app, &expected)?;
+        fs::set_permissions(f.app.join("retained"), fs::Permissions::from_mode(0o600))?;
+        assert!(verify_installed_tree(&f.app, &expected).is_err());
+        Ok(())
     }
     #[async_trait]
     impl Runner for Processes {
@@ -1464,7 +1597,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(target_os = "macos")]
-    async fn synthetic_adhoc_signing_preserves_unrelated_resources_and_publisher() -> Result<()> {
+    async fn synthetic_adhoc_signing_preserves_runtime_permissions_and_can_launch() -> Result<()> {
         let f = Fixture::new()?;
         platform::create_private(&f.app.join("Contents/MacOS"))?;
         platform::create_private(&f.app.join("Contents/Resources"))?;
@@ -1478,15 +1611,8 @@ mod tests {
             fs::Permissions::from_mode(0o755),
         )?;
         platform::publish(&f.app.join("Contents/Info.plist"), br#"<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.anthropic.claudefordesktop</string><key>CFBundleExecutable</key><string>Claude</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>"#, 0o644)?;
-        platform::checked(
-            &platform::SystemRunner,
-            CommandSpec::new(
-                "/usr/bin/codesign",
-                ["--force", "--sign", "-", &f.app.to_string_lossy()],
-            ),
-        )
-        .await?;
-        let before = inventory(&f.app, true)?;
+        let vendor_entitlements = f.base.join("vendor-entitlements.plist");
+        platform::publish(&vendor_entitlements, br#"<?xml version="1.0"?><plist version="1.0"><dict><key>com.apple.application-identifier</key><string>VENDOR.com.anthropic.claudefordesktop</string><key>com.apple.developer.team-identifier</key><string>VENDOR</string><key>keychain-access-groups</key><array><string>VENDOR.protected</string></array><key>com.apple.security.cs.allow-jit</key><true/><key>com.apple.security.device.audio-input</key><true/></dict></plist>"#, 0o600)?;
         platform::checked(
             &platform::SystemRunner,
             CommandSpec::new(
@@ -1495,18 +1621,34 @@ mod tests {
                     "--force",
                     "--sign",
                     "-",
-                    "--preserve-metadata=identifier,entitlements,flags,runtime",
-                    "--timestamp=none",
+                    "--entitlements",
+                    &vendor_entitlements.to_string_lossy(),
                     &f.app.to_string_lossy(),
                 ],
             ),
         )
         .await?;
+        let before = inventory(&f.app, true)?;
+        sign_local(&f.app, &f.base, &platform::SystemRunner).await?;
+        assert_eq!(
+            entitlements(&f.app, &platform::SystemRunner).await?,
+            json!({
+                "com.apple.security.cs.allow-jit":true,
+                "com.apple.security.device.audio-input":true
+            })
+        );
         signed_changes(&before, &inventory(&f.app, true)?)?;
         assert_eq!(
             providers::verify(&f.app, &providers::CLAUDE, &platform::SystemRunner).await?,
             providers::Publisher::Local
         );
+        // Disk verification alone cannot catch AMFI's restricted-entitlement
+        // refusal. Execute the isolated system true fixture, never Claude.
+        platform::checked(
+            &platform::SystemRunner,
+            CommandSpec::new(f.app.join("Contents/MacOS/Claude"), [] as [&str; 0]),
+        )
+        .await?;
         Ok(())
     }
 

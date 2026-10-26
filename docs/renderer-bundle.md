@@ -51,6 +51,11 @@ preserves the complete original. It does not stop or open an app or start a
 model query. The output names the exact `journal` and `preservedBundle` paths.
 Keep both: neither is a disposable cache.
 
+Local signing retains runtime and device permissions but removes vendor-only
+application/team identifiers and protected Keychain group claims. These cannot
+be used by an ad-hoc build. The original app retains its complete vendor seal;
+the local build does not read or copy credentials from those groups.
+
 Open Claude and Claudex normally afterward. Background maintenance recognizes
 the installed generation read-only. Each adapter retains its own status; a
 folder proof refusal remains explicit even when chat, owner and commands are
