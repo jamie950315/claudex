@@ -266,15 +266,26 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
       report('cwd-registry-identity-changed'); return null;
     }
     const s = await native.getSession(e.prewarm.sessionId);
-    if (!s || s.sessionId !== m.sessionId || s.cwd !== m.cwd || s.title !== e.title || s.isArchived !== false
-      || s.isRunning !== false || s.turnRunning !== false || s.lastActivityAt !== m.lastActivityAt
-      || ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork', 'remoteTarget',
-        'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
-        'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt', 'pendingLanyardConsent',
-        'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'lanyard'].some(k => s[k])
-      || ['pendingToolPermissions', 'loops', 'spawningTaskIds'].some(k => s[k] !== undefined && (!Array.isArray(s[k]) || s[k].length))) {
-      report('cwd-waiting-native-idle'); return null;
-    }
+    // Identify the first refused predicate without logging native metadata.
+    // These are the same strict move/witness guards, not the Local-sync
+    // catalogue substitute for an input-free warm's initialization marker.
+    const reason = !s ? 'cwd-native-session-missing'
+      : s.sessionId !== m.sessionId ? 'cwd-native-session-identity-mismatch'
+      : s.cwd !== m.cwd ? 'cwd-native-session-cwd-mismatch'
+      : s.title !== e.title ? 'cwd-native-session-title-mismatch'
+      : s.isArchived !== false ? 'cwd-waiting-native-archive-state'
+      : s.isRunning !== false ? 'cwd-waiting-native-running-state'
+      : s.turnRunning !== false ? 'cwd-waiting-native-turn-state'
+      : s.lastActivityAt !== m.lastActivityAt ? 'cwd-native-registry-activity-mismatch' : null;
+    if (reason) { report(reason); return null; }
+    const pending = ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork', 'remoteTarget',
+      'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
+      'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt', 'pendingLanyardConsent',
+      'pendingViolinBowPrompt', 'pendingRewind', 'isStopping', 'lanyard'].find(k => s[k]);
+    if (pending) { report(`cwd-waiting-native-${pending}`); return null; }
+    const activity = ['pendingToolPermissions', 'loops', 'spawningTaskIds']
+      .find(k => s[k] !== undefined && (!Array.isArray(s[k]) || s[k].length));
+    if (activity) { report(`cwd-waiting-native-${activity}`); return null; }
     const busy = await native.getBusyShellPtyKeys(s.sessionId, false);
     if (busy?.probed !== true || !Array.isArray(busy.busy) || busy.busy.length || !Array.isArray(busy.unknown) || busy.unknown.length) {
       report('cwd-waiting-native-shells'); return null;

@@ -409,8 +409,13 @@ remains null; standard READY entries retain their original behavior.
 Content-free `[Claudex local start]` diagnostics distinguish API availability,
 prewarm/start/move/witness claimed and returned/unknown/rejected/needs_trust outcomes,
 bootstrap catalogue ready/missing/duplicate/unavailable, registry mismatch and
-native idle/shell waits. Private local-start journals contain the exact native
-receipts and original/migrated target evidence. Its content-free `status` reaches
+native idle/shell waits. Move/witness readiness reports the first fixed
+`cwd-*` identity, archive/running/turn/activity or pending-field refusal instead
+of a combined idle message. Field suffixes come only from the existing fixed
+pending lists; never log field values, paths, titles or IDs. These diagnostics
+preserve every strict predicate and add no catalogue reads, native calls or
+retries. Private local-start journals contain the exact native receipts and
+original/migrated target evidence. Its content-free `status` reaches
 `target-migrated` only after native target proofs and `packet-acknowledged` only
 after exact persisted command/append verification; neither grants authority.
 Diagnostics never log input,

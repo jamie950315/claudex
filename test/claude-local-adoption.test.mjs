@@ -169,3 +169,33 @@ test('witness refuses missing/duplicate catalogue, draft, shell and lifecycle ch
     await run(f);assert.equal(f.calls.filter(c=>c[0]==='witness').length,0,change);
   }
 });
+
+test('move and witness readiness diagnostics identify the exact refused predicate without native values or input',async()=>{
+  const cases=[
+    ['missing',null,'cwd-native-session-missing'],
+    ['sessionId','private-native-id','cwd-native-session-identity-mismatch'],
+    ['cwd','/private/native-cwd','cwd-native-session-cwd-mismatch'],
+    ['title','Private native title','cwd-native-session-title-mismatch'],
+    ['isArchived',true,'cwd-waiting-native-archive-state'],
+    ['isRunning',undefined,'cwd-waiting-native-running-state'],
+    ['turnRunning',true,'cwd-waiting-native-turn-state'],
+    ['lastActivityAt',12345,'cwd-native-registry-activity-mismatch'],
+    ['cliBootPending',true,'cwd-waiting-native-cliBootPending'],
+    ['lanyard','private pending value','cwd-waiting-native-lanyard'],
+    ['pendingToolPermissions',{},'cwd-waiting-native-pendingToolPermissions'],
+    ['loops',['private loop value'],'cwd-waiting-native-loops'],
+    ['spawningTaskIds',['private task id'],'cwd-waiting-native-spawningTaskIds'],
+  ];
+  for(const [key,value,expected] of cases) {
+    const f=fixture({stage:'witness'});
+    if(key==='missing')f.native.getSession=async()=>null;else f.state[key]=value;
+    await run(f);
+    assert.ok(f.statuses.includes(expected),key);
+    assert.equal(f.calls.filter(c=>c[0].endsWith('_claim')||['witness','move','start','prewarm'].includes(c[0])).length,0,key);
+    assert.ok(!JSON.stringify(f.statuses).includes('private'),key);
+  }
+  // The same strict function serves ordinary move, not only recovery witness.
+  const f=fixture({stage:'move'});f.state.cliBootPending=true;await run(f);
+  assert.ok(f.statuses.includes('cwd-waiting-native-cliBootPending'));
+  assert.equal(f.calls.filter(c=>c[0].endsWith('_claim')||c[0]==='move').length,0);
+});
