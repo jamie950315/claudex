@@ -972,6 +972,58 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn unclaimed_legacy_pending_binds_once_through_normal_preparation() -> Result<()> {
+        let f = fixture(false)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let file = original_path(&f.root, &f.pending.operation_id)?;
+        let mut legacy = read(&file)?;
+        legacy.as_object_mut().unwrap().remove("registryRoot");
+        storage::write_json(&file, &legacy)?;
+        let other = storage::private_directory(f.root.join("gateway-registry"))?;
+
+        assert!(prepare(&f.root, &other, &f.state, &f.record, &f.pending)?.is_none());
+        let mut expected = legacy;
+        expected["registryRoot"] = json!(other);
+        assert_eq!(read(&file)?, expected);
+        let manifest = read(&f.root.join("local-start-manifest.json"))?;
+        assert_eq!(manifest["version"], 3);
+        assert_eq!(manifest["entries"][0]["registryRoot"], json!(other));
+        assert_eq!(manifest["entries"][0]["stage"], "prewarm");
+        assert_eq!(
+            read(&f.root.join("desktop-state.json"))?["pending"],
+            json!(f.pending)
+        );
+
+        let claim = claim(
+            &f.root,
+            &other,
+            &json!({"opId":f.pending.operation_id,"stage":"prewarm","proof":prewarm_proof()}),
+        )?;
+        assert_eq!(claim["ready"], true);
+        let saved = storage::read_stable(&file)?;
+        assert!(prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending).is_err());
+        assert_eq!(storage::read_stable(&file)?.identity, saved.identity);
+        assert_eq!(read(&f.root.join("local-start-manifest.json"))?, manifest);
+        Ok(())
+    }
+    #[test]
+    fn claimed_legacy_prewarm_without_mapping_never_binds_a_selected_registry() -> Result<()> {
+        let f = fixture(false)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        begin(&f, "prewarm")?;
+        let file = original_path(&f.root, &f.pending.operation_id)?;
+        let mut legacy = read(&file)?;
+        legacy.as_object_mut().unwrap().remove("registryRoot");
+        storage::write_json(&file, &legacy)?;
+        let saved = storage::read_stable(&file)?;
+        let manifest = read(&f.root.join("local-start-manifest.json"))?;
+        let other = storage::private_directory(f.root.join("gateway-registry"))?;
+        assert!(prepare(&f.root, &other, &f.state, &f.record, &f.pending).is_err());
+        assert_eq!(storage::read_stable(&file)?.identity, saved.identity);
+        assert_eq!(read(&f.root.join("local-start-manifest.json"))?, manifest);
+        Ok(())
+    }
+    #[test]
     fn certified_prewrite_rejection_retains_original_and_issues_a_separate_corrected_claim()
     -> Result<()> {
         let f = fixture(true)?;
