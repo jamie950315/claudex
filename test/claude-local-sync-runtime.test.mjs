@@ -22,10 +22,14 @@ function fixture(change = {}) {
   const native = {
     readFileAtCwd: async (cwd, filename) => {
       if (filename === 'image-0.json') return { contents: JSON.stringify({ mimeType: 'image/png', base64: 'aW1hZ2U=', ...change.image }), ...change.imageRead };
+      if (change.registryError) throw new Error('Private registry read failure');
       return { contents: JSON.stringify(registry) };
     },
     getSession: async () => change.getSession ? change.getSession({ ...session }, ++reads) : ({ ...session }),
-    getBusyShellPtyKeys: async () => ({ probed: true, busy: [], unknown: [], ...change.busy }),
+    getBusyShellPtyKeys: async () => {
+      if (change.busyError) throw new Error('Private shell read failure');
+      return { probed: true, busy: [], unknown: [], ...change.busy };
+    },
     getSupportedCommands: async options => {
       assert.deepEqual(options, { sessionId: localSessionId });
       if (change.commandError) throw new Error('Private command catalogue error');
@@ -66,13 +70,30 @@ test('text-only local sync passes no native image argument', async () => {
 });
 
 for (const [name, change] of Object.entries({
-  archived: { session: { isArchived: true } }, active: { session: { turnRunning: true } },
-  unverifiedIdle: { session: { isRunning: undefined } }, malformedLoops: { session: { loops: {} } },
-  permissions: { session: { pendingToolPermissions: [{}] } }, draft: { draft: true },
-  terminal: { busy: { unknown: ['pty'] } }, identity: { registry: { cliSessionId: opId } },
-  missingCommand: { commands: [] }, ambiguousCommand: { commands: [{ name: 'claudex-sync' }, { name: 'claudex-sync' }] },
-  aliasOnly: { commands: [{ name: 'prompt', aliases: ['claudex-sync'] }] }, commandError: { commandError: true },
-  activity: { registry: { lastActivityAt: 101 } }, expired: { entry: { expiresAt: 999 } },
+  archived: { session: { isArchived: true }, registry: { isArchived: false }, status: 'waiting-native-archive-state' },
+  active: { session: { turnRunning: true }, status: 'waiting-native-turn-state' },
+  unverifiedIdle: { session: { isRunning: undefined }, status: 'waiting-native-running-state' },
+  invalidActivity: { session: { lastActivityAt: 'private activity' }, status: 'native-last-activity-unverified' },
+  pendingCwd: { session: { pendingCwd: '/private/native/path' }, status: 'waiting-native-pendingCwd' },
+  malformedLoops: { session: { loops: {} }, status: 'waiting-native-loops' },
+  permissions: { session: { pendingToolPermissions: [{}] }, status: 'waiting-native-pendingToolPermissions' },
+  draft: { draft: true, status: 'waiting-composer-draft' },
+  terminal: { busy: { unknown: ['pty'] }, status: 'waiting-native-shells' },
+  registryError: { registryError: true, status: 'waiting-registry-metadata' },
+  shellError: { busyError: true, status: 'waiting-native-shell-metadata' },
+  identity: { registry: { cliSessionId: opId }, status: 'registry-identity-mismatch' },
+  sessionIdentity: { session: { sessionId: opId }, registry: { sessionId: localSessionId }, status: 'native-session-identity-mismatch' },
+  missingSession: { getSession: () => null, status: 'native-session-missing' },
+  missingCommand: { commands: [], status: 'native-command-missing' },
+  unavailableCommands: { commands: {}, status: 'native-command-catalogue-unavailable' },
+  ambiguousCommand: { commands: [{ name: 'claudex-sync' }, { name: 'claudex-sync' }], status: 'native-command-duplicate' },
+  aliasOnly: { commands: [{ name: 'prompt', aliases: ['claudex-sync'] }], status: 'native-command-missing' },
+  commandError: { commandError: true, status: 'waiting-native-command-catalogue' },
+  activity: { registry: { lastActivityAt: 101 }, status: 'native-registry-activity-mismatch' },
+  sessionError: { getSession: () => { throw new Error('Private session read failure'); }, status: 'waiting-native-session' },
+  sessionRecheckError: { getSession: (session, count) => { if (count % 2 === 0) throw new Error('Private recheck failure'); return session; }, status: 'waiting-native-session-recheck' },
+  sessionChanged: { getSession: (session, count) => ({ ...session, lastActivityAt: count % 2 === 0 ? 101 : 100 }), status: 'native-session-activity-changed' },
+  expired: { entry: { expiresAt: 999 } },
   foreignCommand: { entry: { command: 'ordinary-prompt' } },
   escapedRegistry: { entry: { registryPath: `/registry/../foreign/${localSessionId}.json` } },
   escapedImage: { entry: { images: [{ path: `/state/local-sync/${opId}/../image-0.json`, mimeType: 'image/png' }] } },
@@ -80,6 +101,8 @@ for (const [name, change] of Object.entries({
   truncatedImage: { imageRead: { isTail: true } },
 })) test(`local sync does not claim or send for ${name}`, async () => {
   const f = fixture(change); await run(f); assert.equal(f.claims.length, 0); assert.equal(f.sends.length, 0);
+  if (change.status) assert.ok(f.statuses.includes(change.status), JSON.stringify(f.statuses));
+  assert.doesNotMatch(JSON.stringify(f.statuses), /private|\/project|\/registry|11111111/i);
 });
 
 test('an unknown claim result is never requested again', async () => {
@@ -120,7 +143,14 @@ test('command registration revoked after claim cannot become model input', async
 test('a failed native recheck after claim records no native send', async () => {
   const f = fixture({ getSession: (session, count) => { if (count === 5) throw new Error('Private read failure'); return session; } });
   await run(f); assert.equal(f.claims.length, 1); assert.equal(f.sends.length, 0);
-  assert.equal(f.receipts[0].outcome, 'rejected'); assert.ok(f.statuses.includes('authority-unavailable'));
+  assert.equal(f.receipts[0].outcome, 'rejected'); assert.ok(f.statuses.includes('waiting-native-session'));
+});
+
+test('an unchanged blocked guard reports once without diagnostic retries or native claims', async () => {
+  const f = fixture({ commands: [] });
+  f.runtime.start(); await flush(); await f.runtime.poll(); await f.runtime.poll(); f.runtime.stop();
+  assert.deepEqual(f.statuses, ['started', 'native-command-missing']);
+  assert.equal(f.claims.length, 0); assert.equal(f.sends.length, 0);
 });
 
 test('stop during an awaited recheck cannot claim or send', async () => {

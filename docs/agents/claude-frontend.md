@@ -318,6 +318,13 @@ exact Local/CLI session, cwd, title and registry identity, plus exactly one nati
 manifest entry before dispatch. A cold, absent, duplicated or revoked command
 never becomes an ordinary model prompt. Do not advertise this command through
 the sessionless catalogue adapter or substitute a prompt skill.
+Content-free diagnostics distinguish registry/session identity, the separate
+archive/running/turn-running flags, invalid activity timestamps, each fixed
+pending-activity field, registry/activity changes, composer drafts, shell probes,
+and missing/duplicate/unavailable live commands. Metadata read failures identify
+their fixed phase, including the final session recheck. Report no native values,
+errors, paths, IDs or input; an unchanged reason logs only once. These diagnostics
+add no native calls or retries and do not relax pre-claim or post-claim guards.
 
 Dispatch only the fixed `/claudex-sync <operation UUID> <claim UUID>` envelope
 with its deterministic input UUID and ordered native image input. The loaded

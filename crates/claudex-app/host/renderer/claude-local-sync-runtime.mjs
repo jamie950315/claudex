@@ -45,36 +45,59 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
     }
     return value;
   }
-  function idle(session, entry) {
-    if (!session || session.sessionId !== entry.localSessionId || session.cwd !== entry.cwd || session.title !== entry.title)
-      return false;
-    if (['isArchived', 'isRunning', 'turnRunning'].some(key => session[key] !== false)
-      || !Number.isSafeInteger(session.lastActivityAt)) return false;
-    if (['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork',
+  function idleReason(session, entry) {
+    if (!session) return 'native-session-missing';
+    if (session.sessionId !== entry.localSessionId || session.cwd !== entry.cwd || session.title !== entry.title)
+      return 'native-session-identity-mismatch';
+    if (session.isArchived !== false) return 'waiting-native-archive-state';
+    if (session.isRunning !== false) return 'waiting-native-running-state';
+    if (session.turnRunning !== false) return 'waiting-native-turn-state';
+    if (!Number.isSafeInteger(session.lastActivityAt)) return 'native-last-activity-unverified';
+    const pending = ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork',
       'remoteTarget', 'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId',
       'agentDispatched', 'lanyard', 'pendingRefusalFallbackPrompt', 'pendingAutoModeServerFallbackPrompt',
-      'pendingLanyardConsent', 'pendingViolinBowPrompt', 'pendingRewind', 'isStopping'].some(key => session[key])) return false;
+      'pendingLanyardConsent', 'pendingViolinBowPrompt', 'pendingRewind', 'isStopping'].find(key => session[key]);
+    // This suffix comes only from the fixed list above, never native content.
+    if (pending) return `waiting-native-${pending}`;
     for (const key of ['pendingToolPermissions', 'loops', 'spawningTaskIds'])
-      if (session[key] !== undefined && (!Array.isArray(session[key]) || session[key].length)) return false;
-    return true;
+      if (session[key] !== undefined && (!Array.isArray(session[key]) || session[key].length)) return `waiting-native-${key}`;
+    return null;
   }
   async function inspect(entry) {
+    const refused = code => { report(code); return null; };
     const cut = entry.registryPath.lastIndexOf('/');
-    const mapped = decode(await native.readFileAtCwd(entry.registryPath.slice(0, cut), entry.registryPath.slice(cut + 1)), 8 * 1024 * 1024);
+    let mapped;
+    try { mapped = decode(await native.readFileAtCwd(entry.registryPath.slice(0, cut), entry.registryPath.slice(cut + 1)), 8 * 1024 * 1024); }
+    catch { return refused('waiting-registry-metadata'); }
     if (mapped.sessionId !== entry.localSessionId || mapped.cliSessionId !== entry.cliSessionId
-      || mapped.cwd !== entry.cwd || mapped.title !== entry.title || mapped.isArchived !== false) return null;
-    const session = await native.getSession(entry.localSessionId);
-    if (!idle(session, entry) || session.lastActivityAt !== mapped.lastActivityAt || hasDraft(entry.localSessionId)) return null;
-    const busy = await native.getBusyShellPtyKeys(entry.localSessionId, false);
+      || mapped.cwd !== entry.cwd || mapped.title !== entry.title || mapped.isArchived !== false) return refused('registry-identity-mismatch');
+    let session;
+    try { session = await native.getSession(entry.localSessionId); }
+    catch { return refused('waiting-native-session'); }
+    const reason = idleReason(session, entry);
+    if (reason) return refused(reason);
+    if (session.lastActivityAt !== mapped.lastActivityAt) return refused('native-registry-activity-mismatch');
+    if (hasDraft(entry.localSessionId)) return refused('waiting-composer-draft');
+    let busy;
+    try { busy = await native.getBusyShellPtyKeys(entry.localSessionId, false); }
+    catch { return refused('waiting-native-shell-metadata'); }
     if (busy?.probed !== true || !Array.isArray(busy.busy) || busy.busy.length
-      || !Array.isArray(busy.unknown) || busy.unknown.length) return null;
+      || !Array.isArray(busy.unknown) || busy.unknown.length) return refused('waiting-native-shells');
     // A cold catalogue does not run Mod registration. Never submit an unknown
     // slash command: native would otherwise treat it as an ordinary prompt.
-    const commands = await native.getSupportedCommands({ sessionId: entry.localSessionId });
-    if (!Array.isArray(commands) || commands.filter(command => command?.name === entry.command).length !== 1)
-      return null;
-    const current = await native.getSession(entry.localSessionId);
-    return idle(current, entry) && current.lastActivityAt === session.lastActivityAt ? current : null;
+    let commands;
+    try { commands = await native.getSupportedCommands({ sessionId: entry.localSessionId }); }
+    catch { return refused('waiting-native-command-catalogue'); }
+    if (!Array.isArray(commands)) return refused('native-command-catalogue-unavailable');
+    const commandCount = commands.filter(command => command?.name === entry.command).length;
+    if (commandCount !== 1) return refused(commandCount ? 'native-command-duplicate' : 'native-command-missing');
+    let current;
+    try { current = await native.getSession(entry.localSessionId); }
+    catch { return refused('waiting-native-session-recheck'); }
+    const currentReason = idleReason(current, entry);
+    if (currentReason) return refused(currentReason);
+    if (current.lastActivityAt !== session.lastActivityAt) return refused('native-session-activity-changed');
+    return current;
   }
   function toolResult(value) {
     if (value?.isError) throw new Error('Local synchronization claim was refused');
@@ -123,7 +146,7 @@ export function createClaudeLocalSyncRuntime({ readManifest, native, root, regis
         let before, images;
         try {
           before = await inspect(entry);
-          if (!before) { report('waiting-native-idle'); continue; }
+          if (!before) continue;
           images = await imagesFor(entry);
           if (!await authorized(entry, ticket, before.lastActivityAt)) continue;
         } catch { report('waiting-native-metadata'); continue; }
