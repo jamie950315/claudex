@@ -184,7 +184,7 @@ fn help_and_version_do_not_create_state_or_run_native_providers() -> Result<()> 
         .arg("--version")
         .output()?;
     assert!(version.status.success());
-    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 2.0.17");
+    assert_eq!(String::from_utf8(version.stdout)?.trim(), "claudex 2.0.33");
     for arguments in [
         &["app", "--help"][..],
         &["app", "build", "--help"][..],
@@ -213,5 +213,44 @@ fn unknown_commands_fail_without_creating_state() -> Result<()> {
     assert!(!result.status.success());
     assert!(String::from_utf8(result.stderr)?.contains("Unknown command: stauts"));
     assert!(!root.exists());
+    Ok(())
+}
+
+#[test]
+fn quarantine_command_requires_explicit_confirmation_and_never_constructs_native_runtime()
+-> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let root = claudex_core::storage::private_directory(temp.path())?;
+    // Deliberately missing native homes/binaries: maintenance cannot construct Runtime.
+    claudex_core::storage::write_json(
+        root.join("config.json"),
+        &json!({"version":1,"mode":"desktop"}),
+    )?;
+    let id = "00000000-0000-4000-8000-000000000001";
+    let missing = cli(&root, &["quarantine-pending", id, "--operation-id", id])?;
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("Missing --expected-intent"));
+    let conflicting = cli(
+        &root,
+        &[
+            "quarantine-pending",
+            id,
+            "--operation-id",
+            id,
+            "--inspect",
+            "--expected-intent",
+            "digest",
+        ],
+    )?;
+    assert!(!conflicting.status.success());
+    assert!(String::from_utf8_lossy(&conflicting.stderr).contains("inspection never commits"));
+    let preview = cli(
+        &root,
+        &["quarantine-pending", id, "--operation-id", id, "--inspect"],
+    )?;
+    assert!(!preview.status.success());
+    assert!(String::from_utf8_lossy(&preview.stderr).contains("Stop Claudex services"));
+    assert!(!root.join("packet-key").exists());
+    assert!(!root.join("owners").exists());
     Ok(())
 }

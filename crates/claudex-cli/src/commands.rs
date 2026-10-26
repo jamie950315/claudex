@@ -22,6 +22,8 @@ pub const HELP:&str="Claudex: bounded conversation synchronization and opt-in mo
   claudex split-original CONVERSATION_ID --id NATIVE_ID --record-id RECORD_ID --expected-count N --expected-digest SHA256
   claudex resolve-edited-source CONVERSATION_ID --id NATIVE_ID --operation-id OPERATION_ID --inspect
   claudex resolve-edited-source CONVERSATION_ID --id NATIVE_ID --operation-id OPERATION_ID --expected-count N --expected-digest SHA256
+  claudex quarantine-pending CONVERSATION_ID --operation-id OPERATION_ID --inspect
+  claudex quarantine-pending CONVERSATION_ID --operation-id OPERATION_ID --expected-intent DIGEST
   claudex recover-lock [--watch]    Clear a proven dead coordinator lock
   claudex doctor                   Check native versions without model execution
   claudex version-policy [strict|warn]
@@ -129,6 +131,7 @@ pub async fn run(raw: &[String]) -> Result<()> {
                 | "resume-tracking"
                 | "split-original"
                 | "resolve-edited-source"
+                | "quarantine-pending"
                 | "hooks"
         ) {
             if raw[index] == "watch" {

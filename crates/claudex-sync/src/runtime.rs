@@ -398,6 +398,14 @@ impl Runtime {
         title: &str,
         maintenance: bool,
     ) -> Result<Arc<Mutex<OwnerEntry>>> {
+        ensure!(
+            !self
+                .bridge_state()?
+                .conversations
+                .get(id)
+                .is_some_and(|c| c.quarantined()),
+            "Quarantined owner cannot be started."
+        );
         loop {
             let entry = {
                 let mut owners = self.owners.lock().await;
@@ -478,11 +486,18 @@ impl Runtime {
                             Path::new(cwd),
                         )?
                     };
-                    if let Err(error) = entry
-                        .owner
-                        .start(&self.options.claude_binary, permission.as_deref())
-                        .await
-                    {
+                    let started = if maintenance {
+                        entry
+                            .owner
+                            .start(&self.options.claude_binary, permission.as_deref())
+                            .await
+                    } else {
+                        entry
+                            .owner
+                            .start_official(&self.options.claude_binary, permission.as_deref())
+                            .await
+                    };
+                    if let Err(error) = started {
                         entry.startup_error = Some(format!("{error:#}"));
                         return Err(error);
                     }
@@ -796,6 +811,7 @@ impl Runtime {
         Ok((generation, data))
     }
     async fn inspect(&self, r: &Record) -> Result<Reading> {
+        crate::quarantine::admit_record(&self.bridge_state()?, r)?;
         if r.side == Side::Codex {
             let client = self.client().await?;
             let id = if r.native_id.is_empty() {

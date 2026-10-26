@@ -50,6 +50,7 @@ impl Args {
                         "expected-count",
                         "expected-digest",
                         "operation-id",
+                        "expected-intent",
                         "provider"
                     ]
                     .contains(&key),
@@ -148,7 +149,7 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
         .unwrap_or("help");
     if args.flags.contains("help") || command == "help" {
         println!(
-            "Claudex synchronization: track, sync, watch, gc, recover, abort, untrack, resume-tracking, split-original, resolve-edited-source, archive-original, hooks install|status"
+            "Claudex synchronization: track, sync, watch, gc, recover, abort, untrack, resume-tracking, split-original, resolve-edited-source, quarantine-pending, archive-original, hooks install|status"
         );
         return Ok(());
     }
@@ -176,6 +177,29 @@ pub async fn run_with(raw: &[String], lifecycle: Option<Arc<dyn WatchLifecycle>>
             Some("status") => hooks::inspect(&options)?,
             _ => bail!("Use hooks install or hooks status."),
         });
+    }
+    if command == "quarantine-pending" {
+        ensure!(
+            config["mode"] == "desktop",
+            "Quarantine maintenance requires Desktop mode."
+        );
+        let inspect = args.flags.contains("inspect");
+        ensure!(
+            !inspect || args.value("expected-intent").is_none(),
+            "Use --inspect without --expected-intent; inspection never commits."
+        );
+        let expected = if inspect {
+            None
+        } else {
+            Some(args.required("expected-intent")?)
+        };
+        return output(
+            &DesktopBridge::new(&root, BTreeMap::new()).quarantine_pending(
+                args.id()?,
+                args.required("operation-id")?,
+                expected,
+            )?,
+        );
     }
     if config["mode"] == "desktop" {
         let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
@@ -1218,7 +1242,8 @@ mod lifecycle_tests {
     async fn long_operation_refreshes_the_last_status_without_cancelling_it() -> Result<()> {
         let temp = tempfile::tempdir()?;
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
-        let last = json!({"updatedAt":1,"at":1,"synchronization":"ready","foregroundCompletedAt":1});
+        let last =
+            json!({"updatedAt":1,"at":1,"synchronization":"ready","foregroundCompletedAt":1});
         let finished = AtomicBool::new(false);
         let output = with_heartbeat(temp.path(), Some(&last), Duration::from_millis(20), async {
             tokio::time::sleep(Duration::from_millis(120)).await;
@@ -1236,7 +1261,13 @@ mod lifecycle_tests {
         assert_eq!(written["synchronization"], "ready");
         // Without a published status there is nothing to republish.
         let quiet = tempfile::tempdir()?;
-        with_heartbeat(quiet.path(), None, Duration::from_millis(5), tokio::time::sleep(Duration::from_millis(30))).await?;
+        with_heartbeat(
+            quiet.path(),
+            None,
+            Duration::from_millis(5),
+            tokio::time::sleep(Duration::from_millis(30)),
+        )
+        .await?;
         assert!(!quiet.path().join("watcher-status.json").exists());
         Ok(())
     }
@@ -1247,10 +1278,15 @@ mod lifecycle_tests {
         let blocked = temp.path().join("not-a-directory");
         fs::write(&blocked, b"")?;
         let finished = AtomicBool::new(false);
-        let result = with_heartbeat(&blocked, Some(&json!({})), Duration::from_millis(5), async {
-            tokio::time::sleep(Duration::from_millis(40)).await;
-            finished.store(true, Ordering::SeqCst);
-        })
+        let result = with_heartbeat(
+            &blocked,
+            Some(&json!({})),
+            Duration::from_millis(5),
+            async {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                finished.store(true, Ordering::SeqCst);
+            },
+        )
         .await;
         assert!(result.is_err());
         assert!(finished.load(Ordering::SeqCst));

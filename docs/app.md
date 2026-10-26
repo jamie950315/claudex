@@ -2,7 +2,7 @@
 
 [Back to README](../README.md)
 
-Current build: **Claudex.app 2.0.17**, with **Claude Mod 0.8.75** bundled.
+Current build: **Claudex.app 2.0.33**, with **Claude Mod 0.8.91** bundled.
 
 Codex Desktop cache warming is a separate, default-off experimental best-effort
 feature with CLI controls and a `/claudex:warm` text command in the Codex page.
@@ -105,6 +105,15 @@ a pinned official native package under the private Claudex state directory.
 The provider desktop apps must already be present before this step. Installation
 verifies the public npm registry's package integrity without running npm or
 installation scripts, copying account keys or using a global Node.js installation.
+
+## Official account for managed synchronization
+
+Managed Claude Remote Control conversations use your official Claude account and
+require an eligible subscription. Claudex clears provider, credential-helper and
+model overrides only for its managed owner process; ordinary Claude CLI and
+Desktop Code routing, model catalogs and global settings are unchanged. Returning
+to a managed conversation for a reply uses the official account allowance. An
+official sign-in check does not establish remaining allowance or subscription eligibility.
 
 ## What setup configures
 

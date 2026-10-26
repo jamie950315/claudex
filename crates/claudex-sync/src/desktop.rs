@@ -142,10 +142,15 @@ pub struct Conversation {
     pub extra: Map<String, Value>,
 }
 impl Conversation {
+    pub fn quarantined(&self) -> bool {
+        self.extra.contains_key("quarantine")
+    }
     pub fn tracked(&self) -> bool {
-        self.extra
-            .get("tracking")
-            .is_none_or(|t| t["status"] != "stopped")
+        !self.quarantined()
+            && self
+                .extra
+                .get("tracking")
+                .is_none_or(|t| t["status"] != "stopped")
     }
 }
 
@@ -502,6 +507,7 @@ pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
     if let Some(stored) = &stored {
         if let Some((identity, bytes, state)) = cache.lock().unwrap().as_ref() {
             if identity == &stored.identity && bytes == &stored.bytes {
+                crate::quarantine::validate(root, state)?;
                 return Ok(state.clone());
             }
         }
@@ -523,6 +529,7 @@ pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
             "Invalid tracking enrollment metadata."
         );
     }
+    crate::quarantine::validate(root, &state)?;
     if let Some(stored) = stored {
         *cache.lock().unwrap() = Some((stored.identity, stored.bytes, state.clone()));
     } else {
@@ -571,14 +578,14 @@ impl DesktopBridge {
             .get(&side)
             .ok_or_else(|| anyhow::anyhow!("Missing Desktop native adapter."))
     }
-    fn lock(&self) -> Result<FileLock> {
+    pub(crate) fn lock(&self) -> Result<FileLock> {
         storage::private_directory(&self.root)?;
         FileLock::acquire(&self.root.join("desktop-operation.lock"), true)
     }
     pub fn status(&self) -> Result<State> {
         read_state(&self.root, &self.state_cache)
     }
-    fn save(&self, state: &mut State, event: Option<Value>) -> Result<()> {
+    pub(crate) fn save(&self, state: &mut State, event: Option<Value>) -> Result<()> {
         if let Some(mut event) = event {
             event["at"] = json!(now());
             state.audit.push(event);
@@ -601,6 +608,7 @@ impl DesktopBridge {
             .find(|r| r.conversation_id == id && r.side == side && r.status == "current")
     }
     pub async fn inspect(&self, record: &Record) -> Result<Reading> {
+        crate::quarantine::admit_record(&self.status()?, record)?;
         let adapter = self.adapter(record.side)?;
         let mut data = if record.extra.contains_key("preservedClosedTail") {
             adapter.inspect_preserved_closed_tail(record).await?
@@ -879,6 +887,10 @@ impl DesktopBridge {
         let mut originals = vec![];
         for r in state.records.iter().filter(|r| {
             id.is_none_or(|id| r.conversation_id == id)
+                && !state
+                    .conversations
+                    .get(&r.conversation_id)
+                    .is_some_and(Conversation::quarantined)
                 && !frozen.contains(&r.conversation_id)
                 && except != Some(r.id.as_str())
         }) {
@@ -1094,6 +1106,15 @@ impl DesktopBridge {
             state.pending.is_none(),
             "Recover the pending Desktop handoff before changing tracking."
         );
+        if state
+            .conversations
+            .get(id)
+            .is_some_and(Conversation::quarantined)
+        {
+            return Ok(
+                json!({"changed":false,"conversationId":id,"tracking":"stopped","quarantined":true}),
+            );
+        }
         if missing_only {
             self.reconcile_originals(&mut state, id, false).await?;
         }
@@ -1152,6 +1173,10 @@ impl DesktopBridge {
             .get(id)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("Unknown Desktop conversation."))?;
+        ensure!(
+            !c.quarantined(),
+            "Quarantined conversation requires explicit transaction resolution; tracking cannot resume."
+        );
         if c.tracked() {
             return Ok(json!({"changed":false,"tracking":"active"}));
         }
@@ -1199,6 +1224,15 @@ impl DesktopBridge {
             state.pending.is_none(),
             "Recover the pending Desktop handoff first."
         );
+        if state
+            .conversations
+            .get(id)
+            .is_some_and(Conversation::quarantined)
+        {
+            return Ok(
+                json!({"changed":false,"tracking":"stopped","quarantined":true,"conversationId":id}),
+            );
+        }
         self.reconcile_originals(&mut state, id, false).await?;
         let stopped = self.untrack_locked(&mut state, id, true).await?;
         if stopped["tracking"] == "stopped" {
@@ -2361,6 +2395,11 @@ impl DesktopBridge {
                 v["createdAt"] = json!(r.retired_at.unwrap_or(r.created_at));
                 if frozen.contains(&r.conversation_id) {
                     v["frozen"] = json!(true);
+                    // An uncertain candidate is retained/countable rollback storage,
+                    // never a completed current copy or a deletion candidate.
+                    if r.status == "quarantined" {
+                        v["status"] = json!("previous");
+                    }
                 }
                 Ok(serde_json::from_value::<RetainedRecord>(v)?)
             })
@@ -2573,7 +2612,15 @@ impl DesktopBridge {
             let originals = state
                 .records
                 .iter()
-                .filter(|r| !r.managed && r.kind == "original" && r.status == "current")
+                .filter(|r| {
+                    !r.managed
+                        && r.kind == "original"
+                        && r.status == "current"
+                        && !state
+                            .conversations
+                            .get(&r.conversation_id)
+                            .is_some_and(Conversation::quarantined)
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             for original in originals {
@@ -3254,6 +3301,39 @@ mod tests {
         let expected = Checkpoint::of(&n.histories[&source.native_id])?;
         drop(n);
         Ok((tmp, bridge, native, id, pending, expected))
+    }
+    #[tokio::test]
+    async fn quarantining_consumed_handoff_allows_another_conversation_to_sync_without_reading_it()
+    -> Result<()> {
+        let (_tmp, bridge, native, id, pending, _) = edited_fixture().await?;
+        storage::write_json(
+            bridge.root.join("app-stop.json"),
+            &json!({"version":1,"stopped":true}),
+        )?;
+        let preserved = native.lock().unwrap().histories.clone();
+        let preview = bridge.quarantine_pending(&id, &pending.operation_id, None)?;
+        bridge.quarantine_pending(&id, &pending.operation_id, preview["intent"].as_str())?;
+        assert_eq!(native.lock().unwrap().histories, preserved);
+        native.lock().unwrap().fail_inspect = Some(bridge.status()?.records[0].native_id.clone());
+        let other = Record::source(
+            Side::Codex,
+            Path::new("/other-native"),
+            &Uuid::new_v4().to_string(),
+        );
+        native
+            .lock()
+            .unwrap()
+            .histories
+            .insert(other.native_id.clone(), history());
+        let other_id = bridge.track(other, None).await?["conversationId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(bridge.sync(&other_id).await?["changed"], true);
+        assert!(bridge.status()?.pending.is_none());
+        assert!(bridge.status()?.conversations[&id].quarantined());
+        assert!(bridge.collect().await?.is_object());
+        Ok(())
     }
     #[tokio::test]
     async fn edited_source_resolution_preserves_full_old_history_and_is_restart_idempotent()

@@ -35,6 +35,7 @@ pub mod owner;
 pub mod owner_reset;
 pub mod owner_wake;
 pub mod packet;
+pub mod quarantine;
 pub mod relocation;
 pub mod retention;
 pub mod rollout_header;

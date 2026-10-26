@@ -153,7 +153,9 @@ pub async fn authentication(
         if provider == "codex" {
             vec!["login", "status"]
         } else {
-            vec!["auth", "status", "--json"]
+            // This row checks the official account, not the inference route.
+            // Settings-provided proxy tokens otherwise hide an existing login.
+            vec!["--setting-sources", "", "auth", "status", "--json"]
         },
     );
     spec.env = native_environment(options);
@@ -766,7 +768,7 @@ mod tests {
             async fn run(&self, spec: CommandSpec) -> Result<CommandOutput> {
                 assert_eq!(spec.env.get("HOME").unwrap(), "/private/home");
                 assert!(!spec.env.contains_key("ANTHROPIC_API_KEY"));
-                if spec.args == ["auth", "status", "--json"] {
+                if spec.args == ["--setting-sources", "", "auth", "status", "--json"] {
                     Ok(CommandOutput{stdout:r#"{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty"}"#.into(),..Default::default()})
                 } else if spec.args == ["login", "status"] {
                     Ok(CommandOutput {
@@ -821,5 +823,43 @@ mod tests {
         assert!(!e.contains("secret"));
         assert!(e.contains("Official sign-in"));
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn proxy_auth_is_not_an_official_account_login() {
+        use crate::platform::CommandOutput;
+        use async_trait::async_trait;
+        struct ProxyOnly;
+        #[async_trait]
+        impl Runner for ProxyOnly {
+            async fn run(&self, spec: CommandSpec) -> Result<CommandOutput> {
+                assert_eq!(
+                    spec.args,
+                    ["--setting-sources", "", "auth", "status", "--json"]
+                );
+                Ok(CommandOutput {
+                    stdout:
+                        r#"{"loggedIn":true,"authMethod":"oauth_token","apiProvider":"firstParty"}"#
+                            .into(),
+                    ..Default::default()
+                })
+            }
+        }
+        let options = DiscoveryOptions {
+            root: "/private/state".into(),
+            home: "/private/home".into(),
+            runtime: None,
+            applications: "/Applications".into(),
+            path: "/usr/bin:/bin".into(),
+        };
+        let auth = authentication(
+            "claude",
+            Some(Path::new("/private/claude")),
+            &options,
+            &ProxyOnly,
+        )
+        .await;
+        assert!(!auth.ready);
+        assert!(!auth.failed);
     }
 }

@@ -25,6 +25,15 @@ No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
 path. Store the owner handle before start() so startup failures
 during user work retain the live owner instead of interrupting it.
 
+Managed Desktop owners start through `start_official`: remove inherited provider,
+auth and model overrides and overlay empty native settings values plus an empty
+apiKeyHelper only in that child, then select the native `default` model. Keep
+ordinary `Owner::start` and `CliSession::launch` contracts unchanged. Never modify
+user/project settings or copy credentials; ordinary CLI and Desktop Code proxy
+routing stays independent. The app probes official login with setting sources
+disabled so a settings-provided proxy token cannot hide the account. This probe
+does not prove subscription eligibility or available allowance.
+
 The CLI started through its SDK protocol ignores `permissions.defaultMode` from settings
 (observed with CLI 2.1.283: user and flag tiers both start in `default`) and has
 no local prompt surface, so tools that would ask are denied in a Desktop turn.

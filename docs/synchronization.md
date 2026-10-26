@@ -56,6 +56,14 @@ insert older transcript segments into their saved prefix.
 Desktop mode's validated Claude baseline is CLI `2.1.281` with normal subscription
 OAuth and SDK `0.3.281`; warn policy permits other runtime versions to be attempted.
 It is integrated with the coordinator and background watcher.
+
+Managed Claude Remote Control conversations use your official Claude account and
+require an eligible subscription. Claudex clears provider, credential-helper and
+model overrides only for its managed owner process; ordinary Claude CLI and
+Desktop Code routing, model catalogs and global settings are unchanged. Returning
+to a managed conversation for a reply uses the official account allowance. An
+official sign-in check does not establish remaining allowance or subscription eligibility.
+
 Explicitly user-authorized acceptance has verified two real model-authored
 Desktop roundtrips, continuation from a compacted source, stable Claude identity,
 exact logical history equality, restart recovery and bounded Codex snapshot
@@ -364,6 +372,40 @@ under their normal identity and lifecycle guards. Missing directories, changed
 prefixes, incomplete turns or independently advanced current branches leave the
 conversation stopped. No branch is selected and no replacement is allocated by
 the tracking command.
+
+### Isolate an unresolved handoff without discarding it
+
+If you choose to stop synchronizing a conversation whose native write cannot be
+fully verified, stop Claudex and inspect its exact logical and operation IDs:
+
+```sh
+claudex quarantine-pending CONVERSATION_ID --operation-id OPERATION_ID --inspect
+```
+
+Confirm using the returned intent digest:
+
+```sh
+claudex quarantine-pending CONVERSATION_ID --operation-id OPERATION_ID \
+  --expected-intent DIGEST
+```
+
+The command preserves the exact prior ledger, associated owner/recovery
+journals, operation-specific sync/image evidence and the prior archival manifest
+in an immutable private receipt before atomically quarantining that
+transaction. Confirmation revokes outstanding app-owned archival actions without
+calling a native API; inspection changes no manifest. The conversation stays
+stopped and unresolved; other conversations
+can synchronize. Both provisional and resolved native identities remain reserved
+from discovery. The command does not read native histories, start an owner,
+contact a model, replay input, accept altered images or mark delivery successful.
+Its existing records, snapshots and assets remain retained and counted normally.
+
+Confirmation refuses changed evidence, unsafe storage or active service/owner
+leases. Repeating the same confirmation after a crash is idempotent. Preserve
+`quarantined-handoffs` with the state root: missing or altered receipts block
+normal ledger use. `resume-tracking` refuses this conversation until its original
+transaction has a separately implemented, explicitly authorized resolution;
+quarantine itself supplies no resume or deletion authority.
 
 ### Preserve an independently continued original branch
 
@@ -1067,7 +1109,8 @@ published and whose thread Codex does not know; the watcher drops such a
 delivery itself when its recovery fails and holds only that conversation. Any
 other failed recovery stays visibly blocked and is retried, without ending the
 watcher.
-Promoted transactions must be recovered. If a process crashed holding a lock,
+Promoted transactions require verified recovery or explicit unresolved quarantine
+as described above; quarantine never marks them completed. If a process crashed holding a lock,
 `recover-lock` or `recover-lock --watch` removes only a lock whose PID is no
 longer alive. Desktop mode also reclaims verified dead coordinator locks at
 startup. A live process is never killed to obtain a lock. Desktop owner appends

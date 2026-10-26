@@ -147,6 +147,34 @@ the selected checkpoint and clearing that exact pending operation. Preview is
 read-only; confirmation binds the operation, source, count and digest. Retain
 the receipt across restart and repeat confirmation. This is never automatic
 recovery or permission to cancel applied, promoted or uncertain work.
+Explicit `quarantine-pending` maintenance isolates one exact pending handoff when
+the user chooses to stop its synchronization without resolving its uncertain
+write. Require stopped services, exclusive supervisor/watch/coordinator admission
+and absent native owner leases. Inspection never constructs Runtime or native
+adapters. Confirmation binds the conversation UUID, operation UUID and complete
+intent digest. Publish an exclusive private receipt containing exact prior ledger
+bytes, associated owner/retired-owner/local-start/native-operation journals, the
+complete private local-sync/<operation> subtree and the prior desktop-handoff
+manifest before one atomic ledger transition; retain every original file. After
+receipt publication, revoke app-owned archival actions/anchors through
+local_handoff::revoke without native dispatch. Inspection never revokes authority.
+A crash after receipt publication resumes only the same unchanged intent; after
+revocation, the exact empty manifest produced by that helper is the sole admitted
+metadata transition. All other evidence must still match. Conflicting evidence,
+unsafe storage, missing or altered receipts refuse.
+
+Quarantine is unresolved, not application, promotion, completion or abandonment.
+Retain the provisional and proven resolved native identities as indexed records;
+keep their original canonical checkpoints and assets. Exclude the entire
+conversation from discovery enrollment, native inspection/ownership, sync queues,
+folder/archival presentation and retirement. Preserve snapshot count/byte quota
+accounting. Ledger reads verify the receipt's exact post-publication private
+single-link nanosecond identity through a no-follow descriptor; explicit repeat
+confirmation authenticates its complete content against the saved intent digest.
+Do not hash/read the large preserved ledger on every heartbeat. `resume-tracking`
+refuses until a separately authorized exact transaction resolution exists. Never
+reintroduce a canceled native transport merely to read its app-owned inert journal.
+
 Missing tracked transcript paths are explicit history blocks, not repeated
 worker crashes. Preserve the saved native identity/path and pending evidence.
 A removed saved working directory (such as a cleaned-up Codex worktree) is the
