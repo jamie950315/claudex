@@ -139,9 +139,12 @@ fn native_caches(home: &Path) -> [PathBuf; 2] {
             .join("Cache/Cache_Data")
     })
 }
-fn watch_profiles(watcher: &DirectoryWatch, home: &Path) -> Result<()> {
+fn watch_profiles(watcher: &DirectoryWatch, home: &Path, bundle: &[PathBuf]) -> Result<()> {
     for cache in native_caches(home) {
         watch_cache(watcher, home, &cache)?;
+    }
+    for path in bundle {
+        watcher.watch_directory(path)?;
     }
     Ok(())
 }
@@ -153,6 +156,7 @@ async fn receive_hints(
     watcher: DirectoryWatch,
     root: PathBuf,
     home: PathBuf,
+    bundle: Vec<PathBuf>,
     maintenance: Maintenance,
     mut stop: watch::Receiver<bool>,
 ) {
@@ -174,11 +178,23 @@ async fn receive_hints(
             break;
         }
         if paths.is_empty() {
-            if watch_profiles(&watcher, &home).is_err() {
+            if watch_profiles(&watcher, &home, &bundle).is_err() {
                 maintenance.notifications_failed();
                 break;
             }
             maintenance.app_stop_changed();
+            continue;
+        }
+        if paths.iter().any(|path| {
+            bundle.iter().any(|directory| {
+                path == directory || path.parent() == Some(directory)
+            })
+        }) {
+            if watch_profiles(&watcher, &home, &bundle).is_err() {
+                maintenance.notifications_failed();
+                break;
+            }
+            maintenance.notify(None);
             continue;
         }
         if paths
@@ -191,7 +207,7 @@ async fn receive_hints(
             .iter()
             .any(|path| path == &configuration || configuration.starts_with(path))
         {
-            if watch_profiles(&watcher, &home).is_err() {
+            if watch_profiles(&watcher, &home, &bundle).is_err() {
                 maintenance.notifications_failed();
                 break;
             }
@@ -212,7 +228,7 @@ async fn receive_hints(
         if relevant.is_empty() {
             continue;
         }
-        if watch_profiles(&watcher, &home).is_err() {
+        if watch_profiles(&watcher, &home, &bundle).is_err() {
             maintenance.notifications_failed();
             break;
         }
@@ -269,13 +285,18 @@ impl WatchLifecycle for Renderer {
         });
         let maintenance = Maintenance::new(options, runtime)?;
         *self.visible.write().unwrap() = Some(maintenance.clone());
-        let registration = watch_profiles(&watcher, &self.home);
+        let bundle = claudex_app::frontend_bundle::notification_directories(root);
+        let registration = bundle
+            .as_ref()
+            .map_err(|error| anyhow::anyhow!("{error}"))
+            .and_then(|bundle| watch_profiles(&watcher, &self.home, bundle));
         let (stop, receive) = watch::channel(false);
         let task = tokio::spawn(receive_hints(
             hints,
             watcher,
             root.into(),
             self.home.clone(),
+            bundle.unwrap_or_default(),
             maintenance.clone(),
             receive,
         ));

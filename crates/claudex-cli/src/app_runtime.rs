@@ -512,7 +512,9 @@ impl AppRuntime for NativeApp {
 }
 
 pub async fn run(args: &[String]) -> Result<()> {
-    if crate::commands::command_index(args).is_some_and(|i| args[i] == "build") {
+    if crate::commands::command_index(args)
+        .is_some_and(|i| ["build", "renderer-bundle"].contains(&args[i].as_str()))
+    {
         let mut domain = args.to_vec();
         let index = crate::commands::command_index(args).unwrap();
         let command = domain.remove(index);

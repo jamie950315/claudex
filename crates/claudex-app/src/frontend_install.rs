@@ -158,6 +158,16 @@ pub fn ensure(
     platform::absolute(root)?;
     platform::absolute(home)?;
     check_hold(root, fence)?;
+    if let Some(mut summary) = crate::frontend_bundle::installed(root, home)? {
+        if !folders {
+            summary["adapters"]["folders"] = json!({"status":"disabled"});
+        }
+        check_hold(root, fence)?;
+        return Ok(Pass {
+            summary,
+            observations: BTreeMap::new(),
+        });
+    }
     let mut graph = frontend_graph::discover(root, home)?;
     let selections = frontend_adapters::resolve(&graph);
     ensure_graph(root, home, folders, &mut graph, &selections, fence)

@@ -102,7 +102,9 @@ A Gateway `app://localhost` frontend may instead be served directly from signed
 `ion-dist` bundle resources. The HTTP-cache installer does not patch that
 source. An absent HTTP graph remains explicit; namespace plumbing or transformed
 static sources cannot certify a loaded Gateway renderer. Bundle-resource
-installation and signing are a separate authorized implementation boundary.
+installation uses the explicit offline `claudex app renderer-bundle` command.
+Setup and the watcher never sign or mutate a native app bundle. See
+[the operator guide](../renderer-bundle.md) for opt-in and recovery commands.
 Resolve LocalSessions from its globalThis["claude.web"] binding/export/import and
 React hooks from their public getter, definition and export/import relationships.
 Also accept the observed two-expression LocalSessions initializer containing
@@ -274,6 +276,60 @@ Never enable hooks in the temporary query, create a model session, replace a
 native command, install a same-name prompt skill, or change submission/dispatch
 to make the item appear.
 Use reserved identifiers and the normal original/journal and reload boundaries.
+
+## Gateway signed-bundle installation
+
+`frontend_bundle.rs` owns `renderer-bundle check|status|install|restore|recover`.
+`check` and `status` are read-only. Every mutation requires
+`--allow-bundle-modification yes`, an unchanged stopped app hold, exclusive watch,
+operation and Desktop-operation locks, and a closed native Desktop. Capture one
+exact Selection through asynchronous process/copy/signature checks and recheck
+the complete source and candidate immediately before publication. Install
+requires Gateway; restoration and recovery use the saved app/home identities
+and a stable current Selection even after a native switch back to first-party.
+
+The signed `ion-dist/index.html` must name one direct `assets/v1/index-*.js`
+entry. Follow its complete reachable JavaScript graph, bounded to 8,192 modules
+and 512 MiB, with the existing per-source limit. Existing HTTPS asset identities
+are logical keys internal to the structural resolver only, never HTTP-cache
+evidence or a relaxed origin allowlist. Keep all native structural proofs and
+failure containment. Folders retain their actual resolver outcome; a missing
+raw-context proof stays skipped. A proven shared folder/chat target uses the
+existing combined recipe. Require all three independent chat, owner and commands
+capabilities before publishing. Detailed refusal reasons stay in the private
+journal and explicit source-check output; public maintenance uses fixed reasons
+and preserves partial statuses.
+
+Copy the complete verified Claude.app into a private sibling container on the
+same filesystem. Complete stable-file byte inventories prove copy integrity;
+regular resources are single-linked and symlinks remain internal. Never modify
+native history, registries, credentials or ASAR. Patch only proved resources,
+ad-hoc sign the outer bundle preserving identifier, entitlements, flags and
+runtime metadata, then require the normal Claude publisher check and strict deep
+verification. Do not use a personal Development identity or re-sign nested vendor
+code. Refuse changes outside proved patches and the outer code seal/executable;
+flush the candidate before recording swap authority.
+
+Each generation keeps its private journal and complete preserved bundle. Record
+the authoritative Mod version as its renderer recipe; a different recipe requires
+explicit restore then install, never automatic re-signing or current readiness.
+`renamex_np(RENAME_SWAP)` exchanges the complete app and candidate after durable
+intent. Recovery classifies exact object placement; it never replays a swap.
+Only the exchanged root directory's expected ctime change is accounted for during
+that pending classification; all child identities, inodes, modes, links and other
+nanosecond fields stay exact. Foreign changes or uncertain placement preserve both
+bundles and the pending journal. An interrupted unpublished build may be marked
+abandoned only after its full original still matches; its artifacts are retained.
+Restored generations remain too. A replacement app cannot borrow an older journal.
+
+Normal frontend installation recognizes installed bundle generations read-only
+before HTTP-cache discovery. Verify every saved file identity and both complete
+inventories; never repair a signed bundle. The shared OS source also watches the
+generation's resource/code directories and forces full revalidation on their
+events. Installation occurs while Claude is closed, so the next normal open
+remains `load-not-verified`, not activation or delivery proof. Native evaluation,
+namespaced claims and persisted packet ACKs are separate acceptance conditions.
+See [operator commands](../renderer-bundle.md).
 
 ## Local no-query synchronization bootstrap
 

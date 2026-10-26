@@ -84,6 +84,12 @@ but clears third-party interactive authentication/session secrets and restarts;
 sign-in may be required again. Claudex never performs this profile switch or
 copies credentials automatically. Enter credentials only through native setup.
 
+If Gateway loads its interface from signed `ion-dist` resources rather than the
+HTTP cache, frontend installation is a separate explicit opt-in operation. See
+[Gateway frontend installation and recovery](renderer-bundle.md). Ordinary
+setup does not modify or re-sign Claude.app; installed resources and signatures
+remain separate from native activation and acknowledged history delivery.
+
 Claude Code 2.1.302 does not permit Remote Control through a custom API endpoint,
 including with `_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL`. An existing official
 sign-in does not remove that restriction from the configured custom route.

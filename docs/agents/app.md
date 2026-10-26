@@ -147,9 +147,12 @@ duplicate-instance exits must never stop services. CLI-only status display Quit
 retains its display-only behavior.
 
 `native/ClaudexApp` and the Rust `claudex app` command provide automatic setup for users
-who already have signed ChatGPT/Codex and Claude desktop apps. Never download or
-replace those apps. Reuse native CLIs or fill missing CLI components from pinned
-official npm packages in the private root. Keep normal native credential
+who already have signed ChatGPT/Codex and Claude desktop apps. Setup never
+downloads or replaces those apps. The separate explicit offline
+`app renderer-bundle` command may patch and ad-hoc re-sign Claude's proved
+Gateway resources after opt-in; its complete-original preservation and recovery
+contract is in claude-frontend.md. Reuse native CLIs or fill missing CLI components
+from pinned official npm packages in the private root. Keep normal native credential
 namespaces, never copy credentials, and do not auto-start model work during setup.
 Private state and status reads use non-blocking, no-follow file descriptors and
 reject non-regular files before reading. Read-only AppSetup inspection refuses
