@@ -55,6 +55,9 @@ Local signing retains runtime and device permissions but removes vendor-only
 application/team identifiers and protected Keychain group claims. These cannot
 be used by an ad-hoc build. The original app retains its complete vendor seal;
 the local build does not read or copy credentials from those groups.
+The local outer process also permits loading the unchanged vendor-signed
+frameworks despite their different signing identity. This disables hardened
+library validation for that process; nested vendor signatures remain intact.
 
 Open Claude and Claudex normally afterward. Background maintenance recognizes
 the installed generation read-only. Each adapter retains its own status; a

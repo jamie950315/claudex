@@ -1062,6 +1062,10 @@ async fn sign_local(app: &Path, container: &Path, runner: &dyn Runner) -> Result
     ] {
         local.as_object_mut().unwrap().remove(key);
     }
+    // Keep nested vendor frameworks signed by their original publisher. The
+    // local outer process has no Team ID, so hardened library validation would
+    // otherwise reject those unchanged frameworks before Electron can start.
+    local["com.apple.security.cs.disable-library-validation"] = json!(true);
     let mut convert = CommandSpec::new("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", "-"]);
     convert.input = serde_json::to_vec(&local)?;
     let xml = platform::checked(runner, convert).await?.stdout;
@@ -1623,6 +1627,8 @@ mod tests {
                     "-",
                     "--entitlements",
                     &vendor_entitlements.to_string_lossy(),
+                    "--options",
+                    "runtime",
                     &f.app.to_string_lossy(),
                 ],
             ),
@@ -1634,7 +1640,8 @@ mod tests {
             entitlements(&f.app, &platform::SystemRunner).await?,
             json!({
                 "com.apple.security.cs.allow-jit":true,
-                "com.apple.security.device.audio-input":true
+                "com.apple.security.device.audio-input":true,
+                "com.apple.security.cs.disable-library-validation":true
             })
         );
         signed_changes(&before, &inventory(&f.app, true)?)?;

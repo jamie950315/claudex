@@ -311,7 +311,10 @@ never claim the vendor's protected groups under a local identity. Those restrict
 claims pass disk verification but macOS refuses process launch. Require the
 normal Claude publisher check and strict deep
 verification. Do not use a personal Development identity or re-sign nested vendor
-code. Refuse changes outside proved patches and the outer code seal/executable;
+code. The local outer process explicitly disables hardened library validation
+so it can load those unchanged vendor frameworks despite their different Team ID;
+without this entitlement dyld aborts before Electron starts. Preserve all other
+runtime permissions and hardened flags. Refuse changes outside proved patches and the outer code seal/executable;
 flush the candidate before recording swap authority.
 
 Each generation keeps its private journal and complete preserved bundle. Record
