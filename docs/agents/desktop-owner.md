@@ -106,8 +106,43 @@ fences legacy renderers; certify before installing/restarting the corrected rend
 resume through the ordinary coordinator. A certified replacement is itself
 single-use; unknown outcomes in it still block. No native files are changed.
 
-After bootstrap, require the exact native Local-to-CLI registry mapping. Move
-only that idle session through normal `changeCwd(..., false)`: preserve native
+A returned start whose sole completed bootstrap is locally `CLAUDEX_LOCAL_BLOCKED`
+and has no handler receipt may enroll an independent identity observation, never
+replay bootstrap/start or pretend the old invocation succeeded. With Claudex
+stopped and drained, `local-sync recover-bootstrap --root <root>` reads bounded
+stdin `{ "opId": "<pending UUID>", "sessionId": "<actual CLI UUID>" }`. Require
+the unchanged pending/owner/seed, bound registry, same returned prewarm Local,
+exact original start proof, scratch cwd/title, one complete BLOCKED graph and its
+one direct `/claudex` no-query pane graph; independent content refuses enrollment.
+Keep complete original snapshot bytes and its nanosecond identity in
+`identityRecovery`. No native operation occurs during enrollment.
+
+Normal prepare publishes a separate `witness` stage. Its one-use claim precedes
+one fixed `/claudex-witness <operation UUID> <new claim UUID>` in that same Local,
+with a deterministic input UUID and unique actual live command catalogue. The
+Mod records actual own session/cwd/plugin in `witnessReceipt`; it never calls
+bootstrap, appends a packet, creates/resumes a Local or invokes a model. A helper
+receipt alone is insufficient: the coordinator must read the complete unique
+`CLAUDEX_LOCAL_WITNESSED` graph directly following the saved pane completion,
+recheck authority/registry and stable transcript, then retain a separate
+`recoveryCertificate` with all nine exact graph IDs and snapshot bytes/identity.
+Old bootstrap remains null and old claims remain unchanged. A returned send is
+not certification. Missing/unknown/rejected witness outcomes never issue another
+claim; an unknown may proceed only from its independently proven receipt and
+completion. Re-enrollment does not reset it. No missing-receipt tolerance is
+added to ordinary bootstrap or sync proof.
+
+Recovery normalization verifies the three complete certified graphs before
+contracting only their exact parent links. The claimed move context must follow
+the witness completion, not the failed bootstrap. Stable reads compare saved
+byte prefixes and complete graph fields; lawful appends/relocation may change
+file timestamps and do not invalidate historical snapshot identities. Native
+bytes, ownership, private single-link files and all ordinary move/ACK guards
+remain unchanged. New bootstrap failures expose only fixed content-free phases;
+the old failure's phase is not inferred from its duration or later diagnostics.
+
+After bootstrap or its independent identity certificate, require the exact native
+Local-to-CLI registry mapping. Move only that idle session through normal `changeCwd(..., false)`: preserve native
 workspace trust and never manufacture trust acceptance. A needs-trust result
 retains its consumed claim, waiting for a person to complete the normal native
 move. No packet is published before the target canonical cwd, exact same native
@@ -160,9 +195,9 @@ receipts, mixed or different arguments and duplicate commands remain refused.
 This changes transcript readback only, never dispatch or one-use claims.
 
 The claimed normal cwd move can also write a transcript-only project-context
-user row after the bootstrap completion. Exclude only its exact native cwd
+user row after the bootstrap or independently certified witness completion. Exclude only its exact native cwd
 reminder (with optional stale-environment sentence and appended native project
-context), matching target cwd/session, direct bootstrap parent, unique UUID and
+context), matching target cwd/session, direct certified completion parent, unique UUID and
 all four meta/transcript-only/skip flags. Preserve original bytes, including
 CLAUDE.md context; unrelated user/meta content still prevents first migration.
 A resume can append `No response requested.` before the first packet. Exclude

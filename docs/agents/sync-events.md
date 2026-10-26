@@ -206,6 +206,14 @@ bytes (`checkpoint-dialogue-recorded`); until then it compares exactly, and the
 cold scheduler does not reuse a cached read for such a conversation. The frozen
 JavaScript archive retains its historical exact-checkpoint behavior.
 
+Local command graph verification shares one exact-output implementation for
+ordinary authenticated receipts and the separately enrolled Local-start identity
+certificate. Only that certificate may bind the complete failed bootstrap,
+no-query pane and fresh witness graphs; it does not make arbitrary BLOCKED output
+or diagnostics a receipt. Verify all original graphs before parent contraction,
+keep their complete retained bytes, and require the claimed move context to
+follow the final witness completion. Ordinary missing-receipt guards stay exact.
+
 ## Hook health diagnostics
 
 Keep lifecycle synchronization trust separate from

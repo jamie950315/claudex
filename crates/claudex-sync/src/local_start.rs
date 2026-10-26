@@ -17,6 +17,16 @@ use std::{
 use uuid::Uuid;
 const LIMIT: usize = 2 * packet::MAX_PACKET_BYTES + 8 * 1024 * 1024;
 const COMMAND: &str = "claudex-bootstrap";
+#[path = "local_start_recovery.rs"]
+mod recovery;
+pub use recovery::{recover_bootstrap, witness};
+fn identity(j: &Value) -> &Value {
+    if !j["bootstrap"].is_null() {
+        &j["bootstrap"]
+    } else {
+        &j["recoveryCertificate"]["receipt"]
+    }
+}
 fn read(path: &Path) -> Result<Value> {
     let f = storage::read_stable_with_limit(path, LIMIT)?;
     ensure!(
@@ -118,6 +128,7 @@ fn journal(root: &Path, op: &str) -> Result<Value> {
                 .is_some_and(|s| Path::new(s).is_absolute()),
         "Native Local retained owner identity changed."
     );
+    recovery::validate(&j)?;
     Ok(j)
 }
 fn owner_path(root: &Path, j: &Value) -> PathBuf {
@@ -233,7 +244,7 @@ fn authority_mode(root: &Path, j: &Value, stopped: bool) -> Result<()> {
     original_unchanged(j)
 }
 fn mapping(registry: &Path, j: &Value, cwd: &str) -> Result<Value> {
-    let cli = id(&j["bootstrap"], "sessionId")?;
+    let cli = id(identity(j), "sessionId")?;
     let m = desktop_mapping::mappings(registry, &[cli.clone()])?;
     let m = m
         .get(&cli)
@@ -253,7 +264,12 @@ fn publish(root: &Path, j: &Value) -> Result<()> {
         && (j["start"].is_null() || j["start"]["outcome"].is_null())
     {
         Some("start")
-    } else if !j["bootstrap"].is_null()
+    } else if !j["identityRecovery"].is_null()
+        && j["recoveryCertificate"].is_null()
+        && (j["witness"].is_null() || j["witness"]["outcome"].is_null())
+    {
+        Some("witness")
+    } else if !identity(j).is_null()
         && !j["mapping"].is_null()
         && (j["move"].is_null() || j["move"]["outcome"].is_null())
     {
@@ -271,7 +287,10 @@ fn publish(root: &Path, j: &Value) -> Result<()> {
     }
     let entries = action.map(|stage| vec![json!({"opId":j["opId"],"stage":stage,"registryRoot":j["registryRoot"],
         "cwd":j["originalPending"]["record"]["cwd"],"title":j["originalOwner"]["displayTitle"],
-        "prewarm":j["prewarm"]["result"],"bootstrap":j["bootstrap"],"mapping":j["mapping"],"command":COMMAND,"expiresAt":j["expiresAt"]})]).unwrap_or_default();
+        "prewarm":j["prewarm"]["result"],"bootstrap":j["bootstrap"],"identity":identity(j),
+        "mapping":if stage == "witness" { &j["identityRecovery"]["mapping"] } else { &j["mapping"] },
+        "witnessContext":j["identityRecovery"]["context"],"inputUuid":j["identityRecovery"]["inputUuid"],
+        "command":if stage == "witness" { recovery::COMMAND } else { COMMAND },"expiresAt":j["expiresAt"]})]).unwrap_or_default();
     storage::write_json(
         root.join("local-start-manifest.json"),
         &json!({"version":3,"entries":entries}),
@@ -417,8 +436,10 @@ pub fn prepare(
     {
         j["expiresAt"] = json!(storage::now_ms() + 600_000);
     }
-    if !j["bootstrap"].is_null() {
-        let cli = id(&j["bootstrap"], "sessionId")?;
+    recovery::certify(root, registry, &mut j)?;
+    if !identity(&j).is_null() {
+        let context = identity(&j).clone();
+        let cli = id(&context, "sessionId")?;
         let mappings = desktop_mapping::mappings(registry, &[cli.clone()])?;
         let native = mappings.get(&cli);
         if let Some(m) = native {
@@ -427,10 +448,10 @@ pub fn prepare(
                 "Native Local registry identity changed."
             );
             ensure!(
-                m["cwd"] == j["bootstrap"]["cwd"] || m["cwd"] == r.cwd,
+                m["cwd"] == context["cwd"] || m["cwd"] == r.cwd,
                 "Native Local moved to an unrelated workspace."
             );
-            if m["cwd"] == j["bootstrap"]["cwd"] && j["move"].is_null() {
+            if m["cwd"] == context["cwd"] && j["move"].is_null() {
                 j["mapping"] = m.clone();
             }
         }
@@ -440,7 +461,7 @@ pub fn prepare(
                 !j["move"].is_null(),
                 "Native Local moved without its durable claim."
             );
-            let cli = id(&j["bootstrap"], "sessionId")?;
+            let cli = id(&context, "sessionId")?;
             let home = Path::new(j["originalOwner"]["claudeHome"].as_str().unwrap());
             let transcript = codecs::claude_path(home, target, &cli)?;
             let snapshot = storage::snapshot_with_limit(&transcript, LIMIT)?;
@@ -454,11 +475,12 @@ pub fn prepare(
                         .all(|r| r["sessionId"].is_null() || r["sessionId"] == cli),
                 "Native Local target transcript ownership changed."
             );
-            let scratch = codecs::claude_path(home, j["bootstrap"]["cwd"].as_str().unwrap(), &cli)?;
+            let scratch = codecs::claude_path(home, context["cwd"].as_str().unwrap(), &cli)?;
             ensure!(
                 scratch == transcript || !scratch.try_exists()?,
                 "Native Local transcript relocation is incomplete."
             );
+            recovery::verify_bytes(&j, &snapshot.text)?;
             let clean = normalize_journal(&j, &snapshot.rows)?;
             if j["resolved"].is_null() {
                 ensure!(
@@ -504,7 +526,7 @@ pub fn claim(root: &Path, registry: &Path, p: &Value) -> Result<Value> {
     let op = id(p, "opId")?;
     let stage = p["stage"]
         .as_str()
-        .filter(|s| ["prewarm", "start", "move"].contains(s))
+        .filter(|s| ["prewarm", "start", "move", "witness"].contains(s))
         .ok_or_else(|| anyhow::anyhow!("Invalid native Local stage."))?;
     let _guard = FileLock::acquire(dir(root)?.join(".lock"), true)?;
     let mut j = journal(root, &op)?;
@@ -537,15 +559,17 @@ pub fn claim(root: &Path, registry: &Path, p: &Value) -> Result<Value> {
             );
             local(&j["prewarm"]["result"])?;
         }
+        "witness" => recovery::claim_proof(root, registry, &j, &p["proof"])?,
         "move" => {
             ensure!(
-                !j["bootstrap"].is_null() && !j["start"].is_null(),
+                !identity(&j).is_null() && !j["start"].is_null(),
                 "Native bootstrap receipt missing."
             );
-            let m = mapping(registry, &j, j["bootstrap"]["cwd"].as_str().unwrap())?;
+            recovery::verify_before_move(&j)?;
+            let m = mapping(registry, &j, identity(&j)["cwd"].as_str().unwrap())?;
             ensure!(
                 p["proof"]
-                    == json!({"sessionId":m["sessionId"],"cliSessionId":j["bootstrap"]["sessionId"],"cwd":m["cwd"],"lastActivityAt":m["lastActivityAt"]}),
+                    == json!({"sessionId":m["sessionId"],"cliSessionId":identity(&j)["sessionId"],"cwd":m["cwd"],"lastActivityAt":m["lastActivityAt"]}),
                 "Native project move proof changed."
             );
         }
@@ -567,7 +591,7 @@ pub fn receipt(root: &Path, p: &Value) -> Result<Value> {
     let op = id(p, "opId")?;
     let stage = p["stage"]
         .as_str()
-        .filter(|s| ["prewarm", "start", "move"].contains(s))
+        .filter(|s| ["prewarm", "start", "move", "witness"].contains(s))
         .ok_or_else(|| anyhow::anyhow!("Invalid native Local stage."))?;
     let _guard = FileLock::acquire(dir(root)?.join(".lock"), true)?;
     let mut j = journal(root, &op)?;
@@ -589,7 +613,7 @@ pub fn receipt(root: &Path, p: &Value) -> Result<Value> {
                 );
                 local(&p["result"])?;
             }
-            "start" => ensure!(
+            "start" | "witness" => ensure!(
                 p["result"] == json!({"sessionId":j["prewarm"]["result"]["sessionId"]}),
                 "Native start changed prewarm identity."
             ),
@@ -628,6 +652,10 @@ pub fn bootstrap(root: &Path, p: &Value) -> Result<Value> {
     let _guard = FileLock::acquire(dir(root)?.join(".lock"), true)?;
     let mut j = journal(root, &op)?;
     authority(root, &j)?;
+    ensure!(
+        j["identityRecovery"].is_null(),
+        "Independent identity recovery already selected; original bootstrap remains retained."
+    );
     ensure!(
         p["claimId"].is_string()
             && p["claimId"] == j["start"]["id"]
@@ -719,33 +747,44 @@ pub fn verify_resolution(root: &Path, old: &Record, new: &Record, p: &Pending) -
     Ok(true)
 }
 fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
+    let context = identity(j);
     ensure!(
-        !j["bootstrap"].is_null(),
-        "Native Local bootstrap receipt missing."
+        !context.is_null(),
+        "Native Local bootstrap or independent witness certificate missing."
     );
-    let args = format!(
-        "{} {}",
-        j["opId"].as_str().unwrap(),
-        j["start"]["id"].as_str().unwrap()
-    );
-    let texts = [args.as_str(), ""]
-        .map(|args| json!([{"type":"text","text":crate::local_sync::command_text(COMMAND, args)}]));
-    let candidates: Vec<_> = rows
-        .iter()
-        .filter(|r| {
-            r["type"] == "user"
-                && owner::normalize_content(&r["message"]["content"])
-                    .ok()
-                    .is_some_and(|content| texts.contains(&content))
-        })
-        .collect();
-    ensure!(
-        candidates.len() == 1,
-        "Native Local bootstrap command missing or duplicated."
-    );
-    let proof = json!({"opId":j["opId"],"claim":{"id":j["start"]["id"]},"entry":{"inputUuid":candidates[0]["uuid"]},"content":[],"cwd":j["bootstrap"]["cwd"],"cliSessionId":j["bootstrap"]["sessionId"],"pluginName":j["bootstrap"]["pluginName"],"kind":"adopt","applied":{"textUuid":null}});
-    let mut remove =
-        crate::local_sync::verified_command(&proof, rows, COMMAND, "CLAUDEX_LOCAL_READY")?;
+    let mut remove = if j["bootstrap"].is_null() {
+        recovery::verified_graphs(j, rows)?
+    } else {
+        let args = format!(
+            "{} {}",
+            j["opId"].as_str().unwrap(),
+            j["start"]["id"].as_str().unwrap()
+        );
+        let texts = [args.as_str(), ""].map(
+            |args| json!([{"type":"text","text":crate::local_sync::command_text(COMMAND, args)}]),
+        );
+        let candidates: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r["type"] == "user"
+                    && owner::normalize_content(&r["message"]["content"])
+                        .ok()
+                        .is_some_and(|content| texts.contains(&content))
+            })
+            .collect();
+        ensure!(
+            candidates.len() == 1,
+            "Native Local bootstrap command missing or duplicated."
+        );
+        let proof = json!({"opId":j["opId"],"claim":{"id":j["start"]["id"]},"entry":{"inputUuid":candidates[0]["uuid"]},"content":[],"cwd":j["bootstrap"]["cwd"],"cliSessionId":context["sessionId"],"pluginName":j["bootstrap"]["pluginName"],"kind":"adopt","applied":{"textUuid":null}});
+        crate::local_sync::verified_command(&proof, rows, COMMAND, "CLAUDEX_LOCAL_READY")?
+    };
+    let completion = if j["bootstrap"].is_null() {
+        remove.last().unwrap()
+    } else {
+        &remove[2]
+    }
+    .clone();
     // changeCwd records its new project environment as a transcript-only user
     // context, not an independently authored prompt. Bind that one native row
     // to the claimed move and bootstrap completion before excluding it from
@@ -761,9 +800,9 @@ fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
                     && r["queueTranscriptOnly"] == true
                     && r["queueSkipSlashCommands"] == true
                     && r["queueSkipAttachments"] == true
-                    && r["sessionId"] == j["bootstrap"]["sessionId"]
+                    && r["sessionId"] == context["sessionId"]
                     && r["cwd"] == cwd
-                    && r["parentUuid"] == remove[2]
+                    && r["parentUuid"] == completion
                     && r["message"]["content"].as_str().is_some_and(|s| {
                         [false, true].into_iter().any(|stale| {
                             let note = move_context(cwd, stale);
@@ -790,7 +829,7 @@ fn normalize_journal(j: &Value, rows: &[Value]) -> Result<Vec<Value>> {
                     r["type"] == "assistant"
                         && r["message"]["role"] == "assistant"
                         && r["parentUuid"] == uuid
-                        && r["sessionId"] == j["bootstrap"]["sessionId"]
+                        && r["sessionId"] == context["sessionId"]
                         && r["cwd"] == cwd
                         && r["message"]["model"] == "<synthetic>"
                         && r["message"]["stop_reason"] == "stop_sequence"
@@ -1197,6 +1236,369 @@ mod tests {
         assert!(prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?.is_none());
         let c = begin(f, "move")?;
         Ok((c, rows))
+    }
+    fn blocked_local() -> Result<(Fixture, Vec<Value>)> {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture(false)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let c = begin(&f, "prewarm")?;
+        result(
+            &f,
+            &c,
+            "returned",
+            json!({"sessionId":f.local,"cwd":f.scratch}),
+        )?;
+        let start = begin(&f, "start")?;
+        result(&f, &start, "returned", json!({"sessionId":f.local}))?;
+        registry(&f, &f.scratch)?;
+        let mut rows = bootstrap_rows(&f, &start);
+        // Native hooks withhold both persisted argument displays.
+        rows[1]["message"]["content"] = json!(crate::local_sync::command_text(COMMAND, ""));
+        rows[2]["commandRun"]["args"] = json!("");
+        rows[2]["content"] = json!(
+            "<local-command-stdout>claudex@inline: CLAUDEX_LOCAL_BLOCKED: Preserve the receipt; do not resend this command.</local-command-stdout>"
+        );
+        let mut pane = bootstrap_rows(&f, &start);
+        pane[0]["parentUuid"] = rows[2]["uuid"].clone();
+        pane[1]["message"]["content"] = json!(crate::local_sync::command_text("claudex", ""));
+        pane[2]["commandRun"] = json!({"command":"claudex","args":"","plugin":"claudex@inline"});
+        pane[2]["content"] =
+            json!("<local-command-stdout>claudex@inline: Claudex</local-command-stdout>");
+        rows.extend(pane);
+        let p = codecs::claude_path(&f.home, f.scratch.to_str().unwrap(), &f.cli)?;
+        storage::private_directory(p.parent().unwrap())?;
+        storage::atomic_write(&p, codecs::serialize_rows(&rows)?)?;
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600))?;
+        storage::write_json(
+            f.root.join("app-stop.json"),
+            &json!({"version":1,"stopped":true}),
+        )?;
+        Ok((f, rows))
+    }
+    fn enroll_witness(f: &Fixture) -> Result<Value> {
+        recover_bootstrap(
+            &f.root,
+            &f.registry,
+            &json!({"opId":f.pending.operation_id,"sessionId":f.cli}),
+        )?;
+        // A lawful stable registry rewrite changes inode/timestamps, not the
+        // exact native identity/activity fields used by the dispatch proof.
+        let native_record = f.registry.join(format!("{}.json", f.local));
+        storage::write_json(&native_record, &read(&native_record)?)?;
+        storage::write_json(
+            f.root.join("app-stop.json"),
+            &json!({"version":1,"stopped":false}),
+        )?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let e = entry(f)?;
+        assert_eq!(e["stage"], "witness");
+        claim(
+            &f.root,
+            &f.registry,
+            &json!({"opId":f.pending.operation_id,"stage":"witness","proof":{
+            "sessionId":f.local,"cliSessionId":f.cli,"cwd":f.scratch,"lastActivityAt":1,"command":"claudex-witness","unique":true}}),
+        )
+    }
+    fn witness_rows(f: &Fixture, c: &Value, parent: &Value) -> Result<Vec<Value>> {
+        let mut rows = bootstrap_rows(f, c);
+        rows[0]["parentUuid"] = parent.clone();
+        rows[1]["uuid"] =
+            journal(&f.root, &f.pending.operation_id)?["identityRecovery"]["inputUuid"].clone();
+        rows[1]["message"]["content"] =
+            json!(crate::local_sync::command_text("claudex-witness", ""));
+        rows[2]["parentUuid"] = rows[1]["uuid"].clone();
+        rows[2]["commandRun"] =
+            json!({"command":"claudex-witness","args":"","plugin":"claudex@inline"});
+        rows[2]["content"] = json!(format!(
+            "<local-command-stdout>claudex@inline: CLAUDEX_LOCAL_WITNESSED {}</local-command-stdout>",
+            f.pending.operation_id
+        ));
+        Ok(rows)
+    }
+    fn witness_receipt(f: &Fixture, c: &Value) -> Result<Value> {
+        witness(
+            &f.root,
+            &f.registry,
+            &json!({"opId":f.pending.operation_id,"claimId":c["claimId"],
+            "sessionId":f.cli,"cwd":f.scratch,"pluginName":"claudex@inline"}),
+        )
+    }
+    fn write_scratch(f: &Fixture, rows: &[Value]) -> Result<()> {
+        storage::atomic_write(
+            codecs::claude_path(&f.home, f.scratch.to_str().unwrap(), &f.cli)?,
+            codecs::serialize_rows(rows)?,
+        )
+    }
+    #[test]
+    fn independent_witness_certifies_completion_then_normal_move_without_replaying_initialization()
+    -> Result<()> {
+        let (f, mut rows) = blocked_local()?;
+        let original = journal(&f.root, &f.pending.operation_id)?;
+        let c = enroll_witness(&f)?;
+        assert_eq!(c["ready"], true);
+        result(&f, &c, "unknown", Value::Null)?;
+        witness_receipt(&f, &c)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        assert!(journal(&f.root, &f.pending.operation_id)?["recoveryCertificate"].is_null());
+        assert!(
+            read(&f.root.join("local-start-manifest.json"))?["entries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
+        let fresh = witness_rows(&f, &c, &rows[5]["uuid"])?;
+        let completion = fresh[2]["uuid"].clone();
+        rows.extend(fresh);
+        write_scratch(&f, &rows)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let j = journal(&f.root, &f.pending.operation_id)?;
+        assert_eq!(j["bootstrap"], Value::Null);
+        assert_eq!(j["start"], original["start"]);
+        assert_eq!(j["prewarm"], original["prewarm"]);
+        assert_eq!(j["recoveryCertificate"]["version"], 1);
+        assert_eq!(
+            j["recoveryCertificate"]["graphs"].as_array().unwrap().len(),
+            9
+        );
+        assert!(normalize_journal(&j, &rows)?.is_empty());
+        assert_eq!(entry(&f)?["stage"], "move");
+        // Later legal metadata/mtime changes do not invalidate saved bytes.
+        rows.push(json!({"type":"system","sessionId":f.cli,"subtype":"inert-native-metadata"}));
+        write_scratch(&f, &rows)?;
+        let m = begin(&f, "move")?;
+        rows.push(moved_context(&f, &completion));
+        result(
+            &f,
+            &m,
+            "returned",
+            json!({"status":"ok","cwd":f.record.cwd}),
+        )?;
+        let scratch = codecs::claude_path(&f.home, f.scratch.to_str().unwrap(), &f.cli)?;
+        let target = codecs::claude_path(&f.home, &f.record.cwd, &f.cli)?;
+        storage::private_directory(target.parent().unwrap())?;
+        storage::atomic_write(&target, codecs::serialize_rows(&rows)?)?;
+        fs::remove_file(scratch)?; // Controlled isolated fixture relocation only.
+        registry(&f, Path::new(&f.record.cwd))?;
+        let r = prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?.unwrap();
+        assert_eq!(r.native_id, f.cli);
+        let j = journal(&f.root, &f.pending.operation_id)?;
+        assert_eq!(normalize_journal(&j, &rows)?.len(), 1);
+        let mut continued = rows.clone();
+        let context_id = continued.last().unwrap()["uuid"].clone();
+        continued.push(json!({"type":"user","uuid":Uuid::new_v4(),"parentUuid":context_id,
+            "sessionId":f.cli,"cwd":f.record.cwd,"message":{"role":"user","content":"next independent turn"}}));
+        let normalized = normalize_journal(&j, &continued)?;
+        assert!(normalized.last().unwrap()["parentUuid"].is_null());
+        let mut wrong = rows.clone();
+        wrong.last_mut().unwrap()["parentUuid"] = original["start"]["id"].clone();
+        assert!(
+            normalize_journal(&j, &wrong)?
+                .iter()
+                .any(|r| r["type"] == "user")
+        );
+        // Every exact certified graph field remains immutable after migration.
+        let mut tampered = rows.clone();
+        tampered[7]["unexpected"] = json!(true);
+        assert!(normalize_journal(&j, &tampered).is_err());
+        assert_eq!(j["bootstrap"], Value::Null);
+        Ok(())
+    }
+    #[test]
+    fn witness_enrollment_refuses_foreign_duplicate_changed_and_nonprivate_evidence() -> Result<()>
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for change in [
+            "foreign-profile",
+            "foreign-local",
+            "content",
+            "companion",
+            "duplicate",
+            "parent",
+            "output",
+            "permissions",
+            "hardlink",
+            "pending",
+        ] {
+            let (f, mut rows) = blocked_local()?;
+            let p = codecs::claude_path(&f.home, f.scratch.to_str().unwrap(), &f.cli)?;
+            match change {
+                "foreign-local" => {
+                    let file=f.registry.join(format!("{}.json",f.local));
+                    let mut m=read(&file)?;m["sessionId"]=json!(format!("local_{}",Uuid::new_v4()));
+                    storage::write_json(file,&m)?;
+                },
+                "content" => rows.push(json!({"type":"assistant","uuid":Uuid::new_v4(),"sessionId":f.cli,"message":{"role":"assistant","content":"independent"}})),
+                "companion" => rows.push(json!({"type":"user","uuid":Uuid::new_v4(),"sessionId":f.cli,
+                    "parentUuid":rows[2]["uuid"],"isMeta":true,"turnCompanion":true,
+                    "message":{"role":"user","content":"[Image: source: /fixture/unexpected.png]"}})),
+                "duplicate" => rows.push(rows[2].clone()),
+                "parent" => rows[3]["parentUuid"]=json!(Uuid::new_v4()),
+                "output" => rows[2]["content"]=json!("unknown result"),
+                "pending" => {
+                    let mut ledger=read(&f.root.join("desktop-state.json"))?;
+                    ledger["pending"]["sourceId"]=json!(Uuid::new_v4());
+                    storage::write_json(f.root.join("desktop-state.json"),&ledger)?;
+                }, _=>{}
+            }
+            write_scratch(&f, &rows)?;
+            if change == "permissions" {
+                fs::set_permissions(&p, fs::Permissions::from_mode(0o644))?;
+            }
+            if change == "hardlink" {
+                fs::hard_link(&p, f.root.join("alias.jsonl"))?;
+            }
+            let registry = if change == "foreign-profile" {
+                storage::private_directory(f.root.join("foreign"))?
+            } else {
+                f.registry.clone()
+            };
+            assert!(
+                recover_bootstrap(
+                    &f.root,
+                    &registry,
+                    &json!({"opId":f.pending.operation_id,"sessionId":f.cli})
+                )
+                .is_err(),
+                "{change}"
+            );
+            assert!(journal(&f.root, &f.pending.operation_id)?["identityRecovery"].is_null());
+        }
+        Ok(())
+    }
+    #[test]
+    fn witness_unknown_is_one_use_and_wrong_receipts_never_gain_move_authority() -> Result<()> {
+        for outcome in [None, Some("unknown"), Some("rejected")] {
+            let (f, _) = blocked_local()?;
+            let c = enroll_witness(&f)?;
+            if let Some(outcome) = outcome {
+                result(&f, &c, outcome, Value::Null)?;
+            }
+            prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+            let proof = json!({"sessionId":f.local,"cliSessionId":f.cli,"cwd":f.scratch,"lastActivityAt":1,"command":"claudex-witness","unique":true});
+            assert_eq!(
+                claim(
+                    &f.root,
+                    &f.registry,
+                    &json!({"opId":f.pending.operation_id,"stage":"witness","proof":proof})
+                )?["ready"],
+                false
+            );
+            for field in ["claimId", "sessionId", "cwd", "pluginName"] {
+                let mut bad = json!({"opId":f.pending.operation_id,"claimId":c["claimId"],"sessionId":f.cli,"cwd":f.scratch,"pluginName":"claudex@inline"});
+                bad[field] = json!(Uuid::new_v4());
+                assert!(witness(&f.root, &f.registry, &bad).is_err(), "{field}");
+            }
+            let foreign = storage::private_directory(f.root.join("foreign"))?;
+            assert!(witness(&f.root,&foreign,&json!({"opId":f.pending.operation_id,"claimId":c["claimId"],"sessionId":f.cli,"cwd":f.scratch,"pluginName":"claudex@inline"})).is_err());
+            storage::write_json(
+                f.root.join("app-stop.json"),
+                &json!({"version":1,"stopped":true}),
+            )?;
+            assert_eq!(
+                recover_bootstrap(
+                    &f.root,
+                    &f.registry,
+                    &json!({"opId":f.pending.operation_id,"sessionId":f.cli})
+                )?["alreadyEnrolled"],
+                true
+            );
+            assert_eq!(
+                journal(&f.root, &f.pending.operation_id)?["witness"]["id"],
+                c["claimId"]
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn witness_journal_refuses_malformed_bound_evidence_without_panicking() -> Result<()> {
+        let (f, mut rows) = blocked_local()?;
+        let c = enroll_witness(&f)?;
+        witness_receipt(&f, &c)?;
+        rows.extend(witness_rows(&f, &c, &rows[5]["uuid"])?);
+        write_scratch(&f, &rows)?;
+        prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending)?;
+        let saved = journal(&f.root, &f.pending.operation_id)?;
+        for change in [
+            "context",
+            "plugin",
+            "mapping",
+            "proof",
+            "outcome",
+            "receipt",
+            "certificate",
+            "snapshot",
+        ] {
+            let mut j = saved.clone();
+            match change {
+                "context" => j["identityRecovery"]["context"]["cwd"] = json!(f.record.cwd),
+                "plugin" => j["identityRecovery"]["context"]["pluginName"] = Value::Null,
+                "mapping" => j["identityRecovery"]["mapping"] = Value::Null,
+                "proof" => j["witness"]["proof"]["unique"] = json!(false),
+                "outcome" => j["witness"]["outcome"] = json!("unrecognized"),
+                "receipt" => j["witnessReceipt"]["sessionId"] = json!(Uuid::new_v4()),
+                "certificate" => {
+                    j["recoveryCertificate"]["graphs"][1] =
+                        j["recoveryCertificate"]["graphs"][0].clone()
+                }
+                "snapshot" => j["identityRecovery"]["snapshot"]["identity"] = Value::Null,
+                _ => unreachable!(),
+            }
+            storage::write_json(path(&f.root, &f.pending.operation_id)?, &j)?;
+            assert!(
+                journal(&f.root, &f.pending.operation_id).is_err(),
+                "{change}"
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn witness_completion_missing_duplicate_or_modified_bytes_never_authorizes_move() -> Result<()>
+    {
+        for change in [
+            "missing-receipt",
+            "duplicate",
+            "prefix-bytes",
+            "wrong-parent",
+            "wrong-claim",
+            "wrong-stdout",
+        ] {
+            let (f, mut rows) = blocked_local()?;
+            let c = enroll_witness(&f)?;
+            if change != "missing-receipt" {
+                witness_receipt(&f, &c)?;
+            }
+            let mut fresh = witness_rows(&f, &c, &rows[5]["uuid"])?;
+            match change {
+                "wrong-parent" => fresh[0]["parentUuid"] = json!(Uuid::new_v4()),
+                "wrong-claim" => {
+                    fresh[2]["commandRun"]["args"] =
+                        json!(format!("{} {}", f.pending.operation_id, Uuid::new_v4()))
+                }
+                "wrong-stdout" => fresh[2]["content"] = json!("unverified result"),
+                _ => {}
+            }
+            rows.extend(fresh);
+            if change == "duplicate" {
+                rows.push(rows[8].clone());
+            }
+            write_scratch(&f, &rows)?;
+            if change == "prefix-bytes" {
+                let p = codecs::claude_path(&f.home, f.scratch.to_str().unwrap(), &f.cli)?;
+                let text = fs::read_to_string(&p)?.replacen("\n", " \n", 1);
+                storage::atomic_write(p, text)?;
+            }
+            let result = prepare(&f.root, &f.registry, &f.state, &f.record, &f.pending);
+            if change == "missing-receipt" {
+                assert!(result?.is_none());
+            } else {
+                assert!(result.is_err(), "{change}");
+            }
+            let j = journal(&f.root, &f.pending.operation_id)?;
+            assert!(j["recoveryCertificate"].is_null());
+            assert!(j["move"].is_null());
+            assert!(j["bootstrap"].is_null());
+        }
+        Ok(())
     }
     #[test]
     fn fresh_and_completed_legacy_seed_migrate_only_after_native_target_proofs() -> Result<()> {

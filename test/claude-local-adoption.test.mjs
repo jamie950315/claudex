@@ -6,17 +6,20 @@ import { createClaudeLocalStartRuntime } from '../crates/claudex-app/host/render
 const OP='11111111-1111-4111-8111-111111111111', CLI='22222222-2222-4222-8222-222222222222';
 const UI='local_33333333-3333-4333-8333-333333333333', CLAIM='55555555-5555-4555-8555-555555555555';
 const flush=async()=>{for(let n=0;n<30;n++)await new Promise(r=>setImmediate(r));};
-function fixture({stage='prewarm',commands=[{name:'claudex-bootstrap'}],fail,draft=false,connected=true,version=3}={}) {
+function fixture({stage='prewarm',commands,fail,draft=false,connected=true,version=3}={}) {
+  if(commands===undefined) commands=[{name:stage==='witness'?'claudex-witness':'claudex-bootstrap'}];
   const calls=[],statuses=[],claimed=new Set();
   const mapping={sessionId:UI,nativeId:CLI,cwd:'/fixture/scratch',title:'Fixture',lastActivityAt:1,registryPath:`/fixture/registry/${UI}.json`};
   const entry={stage,registryRoot:'/fixture/registry',opId:OP,cwd:'/fixture/project',title:'Fixture',prewarm:{sessionId:UI,cwd:mapping.cwd},
-    bootstrap:{sessionId:CLI,cwd:mapping.cwd},mapping,command:'claudex-bootstrap',expiresAt:10000};
+    bootstrap:{sessionId:CLI,cwd:mapping.cwd},witnessContext:{sessionId:CLI,cwd:mapping.cwd},inputUuid:CLAIM,
+    mapping,command:stage==='witness'?'claudex-witness':'claudex-bootstrap',expiresAt:10000};
   const state={sessionId:UI,cwd:mapping.cwd,title:'Fixture',lastActivityAt:1,isArchived:false,isRunning:false,turnRunning:false};
   const native={
     prewarmFolderless:async args=>{calls.push(['prewarm',args]);if(fail==='prewarm')throw Error('unknown');return entry.prewarm;},
     getSupportedCommands:async args=>{calls.push(['catalogue',args]);return commands;},
     start:async args=>{calls.push(['start',args]);if(fail==='start')throw Error('unknown');return{sessionId:UI};},
     changeCwd:async(...args)=>{calls.push(['move',args]);if(fail==='move')throw Error('unknown');return fail==='trust'?{status:'needs_trust',directory:entry.cwd}:{status:'ok',cwd:entry.cwd,changed:true,transcriptRelocated:true};},
+    sendMessage:async(...args)=>{calls.push(['witness',args]);if(fail==='witness')throw Error('unknown');},
     getSession:async()=>state,getBusyShellPtyKeys:async()=>({probed:true,busy:[],unknown:[]}),
     readFileAtCwd:async()=>({contents:JSON.stringify({...mapping,cliSessionId:CLI,isArchived:false})}),
   };
@@ -52,7 +55,7 @@ test('missing, duplicate and unavailable bootstrap catalogues never claim or sen
   }
 });
 test('each unknown native action remains single-use across renderer restart',async()=>{
-  for(const stage of ['prewarm','start','move']){
+  for(const stage of ['prewarm','start','move','witness']){
     const f=fixture({stage,fail:stage});await run(f);await run(f);
     assert.equal(f.calls.filter(x=>x[0]===stage).length,1);
     assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'unknown');
@@ -115,17 +118,17 @@ test('required message schema rejects legacy options before implementation',asyn
 
 
 test('another profile or missing namespace never claims prewarm, start or move',async()=>{
-  for(const stage of ['prewarm','start','move']) for(const registryRoot of [undefined,'/fixture/other']) {
+  for(const stage of ['prewarm','start','move','witness']) for(const registryRoot of [undefined,'/fixture/other']) {
     const f=fixture({stage});f.entry.registryRoot=registryRoot;await run(f);
-    assert.equal(f.calls.filter(x=>['prewarm','start','move'].includes(x[0])||x[0].endsWith('_claim')).length,0);
+    assert.equal(f.calls.filter(x=>['prewarm','start','move','witness'].includes(x[0])||x[0].endsWith('_claim')).length,0);
   }
 });
 test('profile changes after claim consume a rejected receipt without native invocation',async()=>{
-  for(const stage of ['prewarm','start','move']) {
+  for(const stage of ['prewarm','start','move','witness']) {
     const f=fixture({stage}),call=f.client.callTool;
     f.client.callTool=async args=>{const result=await call(args);if(args.name.endsWith('_claim'))f.entry.registryRoot='/fixture/other';return result;};
     await run(f);
-    assert.equal(f.calls.filter(x=>['prewarm','start','move'].includes(x[0])).length,0);
+    assert.equal(f.calls.filter(x=>['prewarm','start','move','witness'].includes(x[0])).length,0);
     assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'rejected');
   }
 });
@@ -134,4 +137,35 @@ test('profile changes during final catalogue proof still refuse the native start
   f.native.getSupportedCommands=async args=>{const result=await catalogue(args);if(++n===2)f.entry.registryRoot='/fixture/other';return result;};
   await run(f);assert.equal(f.calls.filter(x=>x[0]==='start').length,0);
   assert.equal(f.calls.find(x=>x[0]==='claudex_local_start_receipt')[1].outcome,'rejected');
+});
+
+test('witness observes the same idle Local with exact live catalogue and a separate one-use claim',async()=>{
+  const f=fixture({stage:'witness'});await run(f);
+  const sent=f.calls.find(c=>c[0]==='witness');
+  assert.deepEqual(sent[1],[UI,`/claudex-witness ${OP} ${CLAIM}`,undefined,undefined,undefined,undefined,undefined,CLAIM]);
+  assert.equal(f.calls.filter(c=>['start','prewarm','move'].includes(c[0])).length,0);
+  assert.deepEqual(f.calls.find(c=>c[0]==='claudex_local_start_claim')[1].proof,
+    {sessionId:UI,cliSessionId:CLI,cwd:'/fixture/scratch',lastActivityAt:1,command:'claudex-witness',unique:true});
+  assert.equal(f.calls.filter(c=>c[0]==='catalogue').length,2);
+});
+test('witness refuses missing/duplicate catalogue, draft, shell and lifecycle changes without model fallback',async()=>{
+  for(const commands of [[],[{name:'claudex-witness'},{name:'claudex-witness'}],null]) {
+    const f=fixture({stage:'witness',commands});
+    // Preserve explicit null rather than fixture's ordinary default.
+    f.native.getSupportedCommands=async()=>commands;
+    await run(f);assert.equal(f.calls.filter(c=>c[0]==='witness'||c[0].endsWith('_claim')).length,0);
+  }
+  for(const change of ['draft','shell','busy','title','activity','catalogue','profile']) {
+    const f=fixture({stage:'witness',draft:change==='draft'});
+    if(change==='shell')f.native.getBusyShellPtyKeys=async()=>({probed:true,busy:[],unknown:['unknown']});
+    if(change==='busy')f.state.cliBootPending=true;
+    if(change==='title')f.state.title='changed';
+    const call=f.client.callTool;
+    f.client.callTool=async args=>{const reply=await call(args);if(args.name.endsWith('_claim')) {
+      if(change==='activity')f.state.lastActivityAt++;
+      if(change==='catalogue')f.native.getSupportedCommands=async()=>[];
+      if(change==='profile')f.entry.registryRoot='/fixture/foreign';
+    }return reply;};
+    await run(f);assert.equal(f.calls.filter(c=>c[0]==='witness').length,0,change);
+  }
 });

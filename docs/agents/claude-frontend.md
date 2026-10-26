@@ -387,14 +387,27 @@ are authority for one `getSupportedCommands({sessionId})` query. Require a uniqu
 live `claudex-bootstrap` entry before and after start claim. Start the same
 prewarm in its returned scratch cwd with only the fixed bootstrap command, no
 packet or model input. Do not pass the target cwd to claim a scratch prewarm:
-native claim keeps the existing query's cwd. Require actual bootstrap receipt,
-exact native registry mapping and idle/shell/draft checks before a separately
-claimed normal `changeCwd(localId,target,false)`. Keep native trust/policy and
+native claim keeps the existing query's cwd. Require actual bootstrap receipt
+(or the independent certificate below), exact native registry mapping and
+idle/shell/draft checks before a separately claimed normal `changeCwd(localId,target,false)`. Keep native trust/policy and
 configured provider/account/model authoritative. No packet is exposed until the
 coordinator proves target cwd/identity and complete transcript relocation.
 
+An explicitly enrolled failed-bootstrap recovery adds a separate `witness` stage
+in that same version-3 manifest. It uses the retained scratch Local/CLI mapping,
+compiled registry namespace, title/activity, exact idle/shell/no-draft checks and
+unique live `claudex-witness` catalogue before and after its separate durable
+claim. Recheck activity after the awaited final catalogue and recheck the exact
+manifest/lifecycle before one `sendMessage` with the fixed command envelope and
+saved deterministic input UUID. It never invokes prewarm/start/changeCwd or
+creates a model prompt as an alternative. Consume an unknown claim permanently,
+including across restart; no new claim is minted to retry it. An observed helper
+receipt and complete certified graph are separate coordinator gates before move.
+The manifest's `identity` may name that certificate's context while `bootstrap`
+remains null; standard READY entries retain their original behavior.
+
 Content-free `[Claudex local start]` diagnostics distinguish API availability,
-prewarm/start/move claimed and returned/unknown/rejected/needs_trust outcomes,
+prewarm/start/move/witness claimed and returned/unknown/rejected/needs_trust outcomes,
 bootstrap catalogue ready/missing/duplicate/unavailable, registry mismatch and
 native idle/shell waits. Private local-start journals contain the exact native
 receipts and original/migrated target evidence. Its content-free `status` reaches

@@ -79,3 +79,23 @@ test('native bootstrap failures and malformed inputs are always consumed locally
   for(const args of ['',OP,`${OP} ${CLAIM} extra`])assert.match((await f.command(args)).text,/^CLAUDEX_LOCAL_BLOCKED:/);
   assert.equal(f.calls.length,0);
 });
+
+test('independent own-context witness uses only its dedicated helper, never bootstrap or append', async () => {
+  const f=fixture({ name:'claudex-witness' });
+  assert.deepEqual(await f.command(`${OP} ${CLAIM}`),{text:`CLAUDEX_LOCAL_WITNESSED ${OP}`});
+  assert.equal(f.appends.length,0);
+  assert.deepEqual(f.calls,[{argv:['/fixture/plugin/runtime/bin/claudex','local-sync','witness','--root','/fixture/state'],
+    request:{opId:OP,claimId:CLAIM,sessionId:SESSION,cwd:'/fixture/project',pluginName:'claudex'}}]);
+});
+test('identity command failures expose only a fixed phase, always consuming the command', async () => {
+  for(const name of ['claudex-bootstrap','claudex-witness']) {
+    const marker=name==='claudex-bootstrap'?'CLAUDEX_LOCAL_BLOCKED':'CLAUDEX_WITNESS_BLOCKED';
+    for(const [option,phase] of [[{worker:true},'worker'],[{},'envelope'],[{fail:name==='claudex-bootstrap'?'bootstrap':'witness'},'helper'],[{fail:'lifecycle'},'recheck']]) {
+      const f=fixture({...option,name});
+      const result=await f.command(phase==='envelope'?'invalid':`${OP} ${CLAIM}`);
+      assert.equal(result.text,`${marker}: ${phase}. Preserve the receipt; do not resend this command.`);
+      assert.equal(f.appends.length,0);
+      assert.ok(!result.text.includes(OP)&&!result.text.includes('/fixture'));
+    }
+  }
+});

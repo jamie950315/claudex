@@ -565,6 +565,25 @@ pub(crate) fn verified_command(
         !j["applied"].is_null(),
         "Awaiting native Local command acknowledgement; never replay."
     );
+    let output = format!(
+        "<local-command-stdout>{}: {marker} {}</local-command-stdout>",
+        j["pluginName"].as_str().unwrap(),
+        j["opId"].as_str().unwrap()
+    );
+    verified_command_output(j, rows, name, &output)
+}
+/// Same complete graph proof for a separately certified no-query observation.
+/// The caller owns the durable identity certificate, never a dispatch lease.
+pub(crate) fn verified_command_output(
+    j: &Value,
+    rows: &[Value],
+    name: &str,
+    output: &str,
+) -> Result<Vec<String>> {
+    ensure!(
+        !j["applied"].is_null(),
+        "Awaiting native Local command acknowledgement; never replay."
+    );
     let command = one(rows, &j["entry"]["inputUuid"])?;
     let args = format!(
         "{} {}",
@@ -621,12 +640,7 @@ pub(crate) fn verified_command(
     ensure!(
         out["commandRun"] == json!({"command":name,"args":displayed_args,"plugin":j["pluginName"]})
             && out["sessionId"] == j["cliSessionId"]
-            && out["content"]
-                == format!(
-                    "<local-command-stdout>{}: {marker} {}</local-command-stdout>",
-                    j["pluginName"].as_str().unwrap(),
-                    j["opId"].as_str().unwrap()
-                ),
+            && out["content"] == output,
         "Native Local command completion differs from receipt."
     );
     let mut remove = vec![

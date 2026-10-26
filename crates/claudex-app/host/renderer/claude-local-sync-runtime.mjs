@@ -211,15 +211,17 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
       throw new Error('Native Local manifest invalid');
     for (const e of value.entries) {
       if (!syncPath(registryRoot) || e.registryRoot !== registryRoot
-        || !['prewarm', 'start', 'move'].includes(e.stage) || !syncUuid(e.opId) || !syncPath(e.cwd)
-        || !syncText(e.title) || e.command !== 'claudex-bootstrap' || !Number.isSafeInteger(e.expiresAt))
+        || !['prewarm', 'start', 'move', 'witness'].includes(e.stage) || !syncUuid(e.opId) || !syncPath(e.cwd)
+        || !syncText(e.title) || e.command !== (e.stage === 'witness' ? 'claudex-witness' : 'claudex-bootstrap') || !Number.isSafeInteger(e.expiresAt))
         throw new Error('Native Local identity invalid');
       if (e.stage !== 'prewarm' && (!syncPath(e.prewarm?.cwd) || !e.prewarm.sessionId?.startsWith('local_')
         || !syncUuid(e.prewarm.sessionId.slice(6)))) throw new Error('Native prewarm receipt invalid');
-      if (e.stage === 'move' && (!syncUuid(e.bootstrap?.sessionId) || e.bootstrap.cwd !== e.prewarm.cwd
+      const context = e.stage === 'witness' ? e.witnessContext : (e.identity ?? e.bootstrap);
+      if (e.stage === 'witness' && !syncUuid(e.inputUuid)) throw new Error('Native witness input identity invalid');
+      if (['move', 'witness'].includes(e.stage) && (!syncUuid(context?.sessionId) || context.cwd !== e.prewarm.cwd
         || !syncPath(e.mapping?.registryPath) || !e.mapping.registryPath.startsWith(`${registryRoot}/`)
         || !e.mapping.registryPath.endsWith(`/${e.prewarm.sessionId}.json`)
-        || e.mapping.sessionId !== e.prewarm.sessionId || e.mapping.nativeId !== e.bootstrap.sessionId
+        || e.mapping.sessionId !== e.prewarm.sessionId || e.mapping.nativeId !== context.sessionId
         || e.mapping.cwd !== e.prewarm.cwd || !Number.isSafeInteger(e.mapping.lastActivityAt)))
         throw new Error('Native bootstrap mapping invalid');
     }
@@ -256,14 +258,15 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
     return count === 1;
   }
   async function moveProof(e) {
+    const context = e.stage === 'witness' ? e.witnessContext : (e.identity ?? e.bootstrap);
     const p = e.mapping.registryPath, cut = p.lastIndexOf('/');
     const m = decode(await native.readFileAtCwd(p.slice(0, cut), p.slice(cut + 1)), 8 * 1024 * 1024);
-    if (m.sessionId !== e.prewarm.sessionId || m.cliSessionId !== e.bootstrap.sessionId
-      || m.cwd !== e.prewarm.cwd || m.isArchived !== false || m.lastActivityAt !== e.mapping.lastActivityAt) {
+    if (m.sessionId !== e.prewarm.sessionId || m.cliSessionId !== context.sessionId
+      || m.cwd !== e.prewarm.cwd || m.isArchived !== false || m.title !== e.title || m.lastActivityAt !== e.mapping.lastActivityAt) {
       report('cwd-registry-identity-changed'); return null;
     }
     const s = await native.getSession(e.prewarm.sessionId);
-    if (!s || s.sessionId !== m.sessionId || s.cwd !== m.cwd || s.isArchived !== false
+    if (!s || s.sessionId !== m.sessionId || s.cwd !== m.cwd || s.title !== e.title || s.isArchived !== false
       || s.isRunning !== false || s.turnRunning !== false || s.lastActivityAt !== m.lastActivityAt
       || ['cliBootPending', 'starting', 'heldInput', 'hasBackgroundActivity', 'hasBackgroundWork', 'remoteTarget',
         'pendingCwd', 'pendingCwdTrustPrompt', 'remoteControlConnecting', 'scheduledTaskId', 'agentDispatched',
@@ -293,7 +296,13 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
         if (e.stage === 'start') {
           if (!await catalogue(e)) continue;
           proof = { sessionId: e.prewarm.sessionId, cwd: e.prewarm.cwd, command: e.command, unique: true };
-        } else if (e.stage === 'move') { proof = await moveProof(e); if (!proof) continue; }
+        } else if (['move', 'witness'].includes(e.stage)) {
+          proof = await moveProof(e); if (!proof) continue;
+          if (e.stage === 'witness') {
+            if (typeof native.sendMessage !== 'function' || !await catalogue(e)) continue;
+            proof = { ...proof, command: e.command, unique: true };
+          }
+        }
         if (!await current(e, ticket)) continue;
         client(); attempted.add(key);
         const claim = await call('claudex_local_start_claim', { opId: e.opId, stage: e.stage, proof });
@@ -306,7 +315,16 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
         try {
           permitted = await current(e, ticket);
           if (permitted && e.stage === 'start') permitted = await catalogue(e);
-          if (permitted && e.stage === 'move') permitted = JSON.stringify(await moveProof(e)) === JSON.stringify(proof);
+          if (permitted && ['move', 'witness'].includes(e.stage)) {
+            let currentProof = await moveProof(e);
+            if (e.stage === 'witness') {
+              permitted = !!currentProof && await catalogue(e);
+              // Catalogue awaits can race activity, drafts and profile changes.
+              if (permitted) currentProof = await moveProof(e);
+              currentProof = currentProof && { ...currentProof, command: e.command, unique: true };
+            }
+            permitted = permitted && JSON.stringify(currentProof) === JSON.stringify(proof);
+          }
           if (permitted) permitted = await current(e, ticket);
         } catch { permitted = false; report('native-start-authority-changed'); }
         if (permitted) {
@@ -321,6 +339,10 @@ export function createClaudeLocalStartRuntime({ readManifest, native, getClient,
               const value = await native.start({ sessionId: e.prewarm.sessionId, cwd: e.prewarm.cwd, useWorktree: false,
                 title: e.title, message: `/${e.command} ${e.opId} ${claim.claimId}` });
               if (value?.sessionId === e.prewarm.sessionId) { outcome = 'returned'; result = { sessionId: value.sessionId }; }
+            } else if (e.stage === 'witness') {
+              await native.sendMessage(e.prewarm.sessionId, `/${e.command} ${e.opId} ${claim.claimId}`,
+                undefined, undefined, undefined, undefined, undefined, e.inputUuid);
+              outcome = 'returned'; result = { sessionId: e.prewarm.sessionId };
             } else {
               const value = await native.changeCwd(e.prewarm.sessionId, e.cwd, false);
               if (value?.status === 'ok' && value.cwd === e.cwd) { outcome = 'returned'; result = { status: 'ok', cwd: value.cwd }; }

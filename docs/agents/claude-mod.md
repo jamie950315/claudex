@@ -155,3 +155,15 @@ the coordinator still requires its exact native command graph and registry,
 project relocation and later packet ACK. A helper response or command return is
 not synchronization completion. Do not create a same-name prompt skill or
 advertise this command through the sessionless catalogue.
+
+The separate non-immediate `claudex-witness` command is an independent
+own-context observation for an explicitly enrolled, already-created Local. It
+uses only `local-sync witness`, with a fresh one-use witness claim and actual
+session/cwd/plugin; it never calls bootstrap/start, `next`, `session.append` or
+inference. Always consume failures locally. Both identity handlers expose only
+fixed `worker`, `envelope`, `context`, `lifecycle`, `helper`, `receipt` or `recheck`
+phases on failure, without native errors, inputs, paths or IDs. A witness helper
+receipt is not a certificate: the coordinator requires its exact persisted
+completion graph before moving. Do not advertise witness in a cold catalogue or
+provide a same-name prompt skill. Preserve the failed bootstrap and never retry
+an uncertain witness under a new claim.

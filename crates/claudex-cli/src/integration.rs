@@ -774,6 +774,30 @@ mod tests {
             "local_start_claim"
         );
         assert!(transport::validate_tool("claudex_local_start_claim", &p, false).is_err());
+        let witness = json!({"opId":fresh_op,"stage":"witness","proof":{}});
+        assert_eq!(
+            transport::validate_tool("claudex_local_start_claim", &witness, true)?,
+            "local_start_claim"
+        );
+        assert!(transport::validate_tool("claudex_local_start_claim", &witness, false).is_err());
+        // The existing Unix RPC reaches the independent enrollment guards; a
+        // fresh, unenrolled owner cannot claim this stage or gain native input.
+        assert!(
+            transport::call(
+                &b.root,
+                Provider::Claude,
+                b.controller_token(),
+                "local_start_claim",
+                witness
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(
+            before,
+            claudex_core::storage::read_json(root.join("local-start-manifest.json"))?
+        );
+
         assert!(
             transport::call(
                 &b.root,
@@ -814,6 +838,13 @@ mod tests {
             transport::validate_tool("claudex_local_start_receipt", &receipt, true)?,
             "local_start_receipt"
         );
+        let mut witness_receipt = receipt.clone();
+        witness_receipt["stage"] = json!("witness");
+        assert_eq!(
+            transport::validate_tool("claudex_local_start_receipt", &witness_receipt, true)?,
+            "local_start_receipt"
+        );
+
         assert_eq!(
             transport::call(
                 &b.root,

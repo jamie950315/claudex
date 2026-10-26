@@ -597,7 +597,7 @@ async fn local_sync_stdio(raw: &[String]) -> Result<()> {
     let a = Args::parse(raw, &["root", "desktop-app"], &[])?;
     anyhow::ensure!(
         a.positionals.len() == 1,
-        "Expected local-sync receive|applied|bootstrap|recover-prewarm."
+        "Expected local-sync receive|applied|bootstrap|witness|recover-bootstrap|recover-prewarm."
     );
     let root = a.root()?;
     if a.positionals[0] == "recover-prewarm" {
@@ -648,7 +648,19 @@ async fn local_sync_stdio(raw: &[String]) -> Result<()> {
         }
         "applied" => claudex_sync::local_sync::applied(&root, &params)?,
         "bootstrap" => claudex_sync::local_start::bootstrap(&root, &params)?,
-        _ => bail!("Expected local-sync receive|applied|bootstrap."),
+        "witness" | "recover-bootstrap" => {
+            let homes = crate::native_clients::Homes::read(&root, &home()?)?;
+            if a.positionals[0] == "witness" {
+                claudex_sync::local_start::witness(&root, &homes.desktop_registry, &params)?
+            } else {
+                claudex_sync::local_start::recover_bootstrap(
+                    &root,
+                    &homes.desktop_registry,
+                    &params,
+                )?
+            }
+        }
+        _ => bail!("Expected local-sync receive|applied|bootstrap|witness|recover-bootstrap."),
     };
     let output = serde_json::to_string(&json!({"ok":true,"result":result}))?;
     anyhow::ensure!(

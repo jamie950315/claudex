@@ -275,8 +275,9 @@ A prepared first Claude handoff may resolve its provisional/legacy SDK target
 only through the exact `local-start` migration journal. Retain the complete old
 pending and owner, and verify any old seed's nanosecond identity. Never clear the
 pending, replay an uncertain SDK/native action or mutate native data. The normal
-locked coordinator resolves only after the replacement native Local's bootstrap,
-registry, canonical project, relocated transcript and full packet ACK are proven.
+locked coordinator resolves only after the replacement native Local's bootstrap
+or independent identity certificate, registry, canonical project, relocated
+transcript and full packet ACK are proven.
 Write the migration before replacing app-owned owner metadata, then save the
 resolved pending through ordinary verification/promotion. This is not a general
 pending reroute or permission to move an already verified/reusable owner.
@@ -289,3 +290,13 @@ process. It retains the original unknown journal and creates a separately bound
 v2 journal; it never clears pending, resets a consumed claim or calls native APIs.
 Normal startup consumes only the corrected v2 manifest and retains every existing
 bootstrap, relocation and packet-ACK gate.
+
+A completed blocked bootstrap with a returned start and no handler receipt has
+one separate explicit recovery: stopped-service `local-sync recover-bootstrap`
+enrolls the same pending/Local for a metadata-only own-context witness. Follow
+the complete guards in desktop-owner.md. Keep old bootstrap/claims unchanged,
+retain original native bytes, and require the new one-use witness receipt plus
+exact persisted completion certificate before ordinary relocation and packet ACK.
+The enrollment command performs no native operation. Unknown witness dispatch
+never retries, including after restart or repeated enrollment; diagnostic pane
+observations alone never authorize migration.

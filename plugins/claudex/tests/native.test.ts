@@ -662,3 +662,38 @@ test('native bootstrap refuses malformed envelopes and helper failures locally',
   expect(failed.text.startsWith('CLAUDEX_LOCAL_BLOCKED:')).toBe(true)
   expect(helperCalls).toBe(1)
 })
+
+
+test('native own-context witness is separately registered and never replays bootstrap or appends', async ($, on) => {
+  const op = '22222222-2222-4222-8222-222222222222', claim = '33333333-3333-4333-8333-333333333333'
+  const registered: string[] = [], seen: any[] = []
+  stubs(on, false, (request, event) => {
+    if (event.argv[1] !== 'local-sync') return {}
+    seen.push({ action: event.argv[2], request })
+    return { recorded: true }
+  }, 'en', undefined, {}, name => registered.push(name))
+  on('session.append', () => { throw new Error('Witness cannot append') })
+  await $.session.start({ cwd: '/fixture', surface: 'desktop', isInteractive: true })
+  expect(registered.filter(name => name === 'claudex-witness').length).toBe(1)
+  const result = await $.command.run({ command: 'claudex-witness', args: `${op} ${claim}` })
+  expect(result.text).toBe(`CLAUDEX_LOCAL_WITNESSED ${op}`)
+  expect(seen.length).toBe(1)
+  expect(seen[0].action).toBe('witness')
+  expect(seen[0].request).toEqual({ opId: op, claimId: claim, sessionId: ID, cwd: '/fixture', pluginName: 'claudex' })
+})
+
+test('native witness failures return only content-free phase diagnostics and never fall through', async ($, on) => {
+  const op = '22222222-2222-4222-8222-222222222222', claim = '33333333-3333-4333-8333-333333333333'
+  let calls = 0
+  stubs(on, false, (_request, event) => {
+    if (event.argv[1] === 'local-sync') { calls++; throw new Error('Private native failure') }
+    return {}
+  })
+  on('session.append', () => { throw new Error('Witness cannot append') })
+  const malformed = await $.command.run({ command: 'claudex-witness', args: 'invalid' })
+  expect(malformed.text).toBe('CLAUDEX_WITNESS_BLOCKED: envelope. Preserve the receipt; do not resend this command.')
+  expect(calls).toBe(0)
+  const failed = await $.command.run({ command: 'claudex-witness', args: `${op} ${claim}` })
+  expect(failed.text).toBe('CLAUDEX_WITNESS_BLOCKED: helper. Preserve the receipt; do not resend this command.')
+  expect(calls).toBe(1)
+})
