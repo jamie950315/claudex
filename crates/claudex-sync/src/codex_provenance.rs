@@ -26,7 +26,7 @@ use uuid::Uuid;
 const MAX_BYTES: usize = 512 * 1024 * 1024;
 const ROW_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
-const MAX_ITEMS: usize = 25_000;
+const MAX_ITEMS: usize = crate::native_history::MAX_HISTORY_ITEMS;
 fn text(v: &Value) -> Result<&str> {
     v.as_str()
         .context("Native provenance identity must be text.")

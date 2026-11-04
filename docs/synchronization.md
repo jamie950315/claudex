@@ -227,7 +227,7 @@ page. The private state root's `config.json` can explicitly set
 with smaller native response pages. The watcher holds a history in memory while
 it reads it, so a larger budget raises its peak memory use for large conversations. Apply changes only when the watcher can
 restart safely. Both original and managed Codex histories use these settings;
-the 256-page and 25,000-item limits remain unchanged. A response page may be as
+the 256-page and 100,000-item limits remain fixed. A response page may be as
 large as the configured budget (at least 64 MiB); a delivery packet is still
 limited to 64 MiB.
 Raw and converted histories must both fit the byte budget. Exceeding a limit

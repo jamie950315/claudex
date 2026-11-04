@@ -40,7 +40,9 @@ DesktopRuntime reads optional `nativeHistoryMaxBytes` and `nativeHistoryPageSize
 from the private root's config.json. Defaults remain 16 MiB and 100 turns/page;
 explicit bounds are 1024..268435456 bytes (raised from 64 MiB by user decision) and 1..100 turns/page. Both original and
 owned native exports enforce the configured raw/converted byte budget. Keep the
-256-page and 25,000-item limits unchanged. The history client's frame limit is
+256-page limit unchanged. The item limit is 100,000 (raised from 25,000 by user
+decision on 2026-11-05, when a long autonomous Codex conversation exceeded it);
+retained image provenance shares it, and the byte budget stays the memory bound. The history client's frame limit is
 64 MiB or the configured byte budget, whichever is larger, and an oversized
 response is reported as such. The Desktop-to-backend launcher only forwards
 Codex Desktop's own traffic and uses a 1 GiB sanity bound: stopping there would

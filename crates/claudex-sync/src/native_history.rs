@@ -22,6 +22,10 @@ impl Rpc for claudex_core::rpc::CodexClient {
         self.request(method, params).await
     }
 }
+/// Most native items one history read accepts. Long autonomous Codex turns
+/// produce tens of thousands of reasoning and tool items; the byte budget
+/// remains the memory bound.
+pub const MAX_HISTORY_ITEMS: usize = 100_000;
 #[derive(Clone, Debug)]
 pub struct Limits {
     pub max_bytes: usize,
@@ -33,7 +37,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_bytes: 16 * 1024 * 1024,
-            max_items: 25_000,
+            max_items: MAX_HISTORY_ITEMS,
             max_pages: 256,
             page_size: 100,
         }
@@ -45,7 +49,7 @@ impl Limits {
             (1024..=268_435_456).contains(&self.max_bytes)
                 && (1..=100).contains(&self.page_size)
                 && self.max_items > 0
-                && self.max_items <= 25_000
+                && self.max_items <= MAX_HISTORY_ITEMS
                 && self.max_pages > 0
                 && self.max_pages <= 256,
             "Invalid native history limits."
