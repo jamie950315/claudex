@@ -198,7 +198,8 @@ name, the result's tool call ID, the event label and its string `id`).
 By user decision, reads that decide whether synchronization continues compare
 the dialogue, so a native release that re-projects a tool or event payload is
 not a divergence: the history-diverged and stopped-tracking checks, handoff and
-promotion source/destination change checks, and late-item ordering. An edited,
+promotion source/destination change checks, late-item ordering, and the
+retained native image checkpoint check. An edited,
 removed or reordered message, changed text or image, or a changed tool or event
 identity still blocks. Exact bytes remain the proof for the tail a handoff
 wrote (`contains_written`: messages after the previous checkpoint must equal

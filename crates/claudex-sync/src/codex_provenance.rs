@@ -1420,8 +1420,10 @@ impl ImageEvidence {
                     "Retained native image evidence requires a verified canonical checkpoint.",
                 )?;
                 cp.validate()?;
+                // A read: the saved dialogue (exact text and images) decides,
+                // so a re-projected tool or event payload is not a contradiction.
                 ensure!(
-                    cp.contains(common)?,
+                    cp.contains_dialogue(common)?,
                     "Retained native images contradict their complete canonical checkpoint."
                 );
                 for origin in &saved {
@@ -2539,6 +2541,28 @@ mod tests {
         assert!(
             proof
                 .promote(&canonical, &positions(1), 0, Some(&cp), saved)
+                .is_err()
+        );
+        // A re-projected tool result keeps the saved dialogue; changed text does not.
+        let with_result = |output: &str, text: &str| {
+            let mut c = canonical.clone();
+            c.messages[1] = serde_json::from_value(json!({"role":"assistant","content":[
+                {"type":"text","text":text},
+                {"type":"tool_result","tool_use_id":"call-1","content":output}]}))
+            .unwrap();
+            c
+        };
+        let cp = Checkpoint::of(&with_result("old projection", "Message 1")).unwrap();
+        let reprojected = with_result("new projection", "Message 1");
+        assert!(
+            proof
+                .promote(&reprojected, &positions(0), 0, Some(&cp), saved)
+                .is_ok()
+        );
+        let edited = with_result("new projection", "Edited");
+        assert!(
+            proof
+                .promote(&edited, &positions(0), 0, Some(&cp), saved)
                 .is_err()
         );
         let mut conflicting = f.rows.clone();
