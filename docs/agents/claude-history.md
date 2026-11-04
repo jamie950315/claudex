@@ -82,7 +82,11 @@ problem: something precedes the boundary in the same session and directory,
 and a row the boundary names that is in the file is the last one before it
 (otherwise earlier history is missing), the summary is readable and belongs
 to the same session and directory, and no identity repeats with different
-content. Claude Code 2.1.295 /compact after a completed turn was observed
+content. A native session continued from another session's compaction
+starts its file at the boundary (nothing precedes it, and the row the boundary
+names may be copied after it): its history begins at the readable summary and
+is not missing. Owned histories always keep their prefix. Claude Code 2.1.295
+/compact after a completed turn was observed
 naming a row it never wrote to the file; every row it kept still precedes the
 boundary, so that is not missing history. How native flags the summary,
 links it, or describes the

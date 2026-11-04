@@ -578,14 +578,15 @@ pub fn decode_claude_with(
             "Claude compaction identity missing."
         );
         if preserve_compaction {
+            // A native session continued from another session's compaction
+            // starts at its boundary: nothing precedes it in the file, and its
+            // readable summary is where that conversation begins. Owned
+            // histories always keep their prefix.
+            let previous = rows[..*index].iter().rev().find(|r| r["uuid"].is_string());
             ensure!(
-                *index > 0
-                    && rows[..*index]
-                        .iter()
-                        .rev()
-                        .find(|r| r["uuid"].is_string())
-                        .is_some_and(|previous| boundary["sessionId"] == previous["sessionId"]
-                            && boundary["cwd"] == previous["cwd"])
+                previous.map_or(!owned, |previous| boundary["sessionId"]
+                    == previous["sessionId"]
+                    && boundary["cwd"] == previous["cwd"])
                     && rows[summary]["uuid"]
                         .as_str()
                         .is_some_and(|s| !s.is_empty())
@@ -597,13 +598,11 @@ pub fn decode_claude_with(
                 .as_str()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| anyhow::anyhow!("Claude compaction exact link missing."))?;
-            if first.contains_key(logical) {
+            // A named row in the file is the last one before the boundary;
+            // in a continued session it was copied after it, not lost.
+            if first.contains_key(logical) && previous.is_some() {
                 ensure!(
-                    rows[..*index]
-                        .iter()
-                        .rev()
-                        .find(|r| r["uuid"].is_string())
-                        .is_some_and(|previous| previous["uuid"] == logical),
+                    previous.is_some_and(|previous| previous["uuid"] == logical),
                     "Claude compaction has missing earlier history."
                 );
             }
@@ -1263,6 +1262,36 @@ mod tests {
             decode_claude_authenticated(&serialize_rows(&rows)?, true, true, Some(&|_| Ok(true)))
                 .is_err()
         );
+        Ok(())
+    }
+    #[test]
+    fn native_session_continued_from_a_compaction_begins_at_its_summary() -> Result<()> {
+        // The continued file starts at the boundary and repeats the row it
+        // names after it; nothing earlier is missing.
+        let rows = vec![
+            json!({"type":"custom-title","sessionId":"session","customTitle":"Continued"}),
+            json!({"type":"system","subtype":"compact_boundary","uuid":"boundary","parentUuid":null,"logicalParentUuid":"named","sessionId":"session","cwd":"/project","compactMetadata":{"trigger":"manual"}}),
+            json!({"type":"user","uuid":"summary","parentUuid":"boundary","sessionId":"session","cwd":"/project","isCompactSummary":true,"isVisibleInTranscriptOnly":true,"message":{"role":"user","content":"Readable summary"}}),
+            json!({"type":"system","subtype":"stop_hook_summary","uuid":"named","parentUuid":"summary","sessionId":"session","cwd":"/project"}),
+            json!({"type":"user","uuid":"prompt","parentUuid":"named","sessionId":"session","cwd":"/project","message":{"role":"user","content":"Next request"}}),
+            json!({"type":"assistant","uuid":"reply","parentUuid":"prompt","sessionId":"session","cwd":"/project","message":{"id":"m","role":"assistant","content":[{"type":"text","text":"Done"}]}}),
+        ];
+        let decoded = decode_claude(&serialize_rows(&rows)?, true, false)?;
+        assert!(
+            decoded.messages[0].content[0]["text"]
+                .as_str()
+                .is_some_and(|t| t.contains("Readable summary"))
+        );
+        assert_eq!(decoded.messages.last().unwrap().role, "assistant");
+        // An owned history never begins at a compaction.
+        assert!(decode_claude(&serialize_rows(&rows)?, true, true).is_err());
+        // With earlier rows, the named row must still be the last one before it.
+        let mut earlier = rows.clone();
+        earlier.insert(
+            1,
+            json!({"type":"user","uuid":"older","parentUuid":null,"sessionId":"session","cwd":"/project","message":{"role":"user","content":"Older"}}),
+        );
+        assert!(decode_claude(&serialize_rows(&earlier)?, true, false).is_err());
         Ok(())
     }
     #[test]
