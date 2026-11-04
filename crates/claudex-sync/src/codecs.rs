@@ -26,11 +26,8 @@ pub fn parse_rows(text: &str) -> Result<Vec<Value>> {
         .collect()
 }
 pub fn project_directory(home: &Path, cwd: &str) -> PathBuf {
-    home.join("projects").join(
-        cwd.chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-            .collect::<String>(),
-    )
+    home.join("projects")
+        .join(claudex_core::claude_layout::project_key(cwd))
 }
 pub fn claude_path(home: &Path, cwd: &str, id: &str) -> Result<PathBuf> {
     Uuid::parse_str(id)?;
@@ -39,6 +36,26 @@ pub fn claude_path(home: &Path, cwd: &str, id: &str) -> Result<PathBuf> {
         "Claude project must be absolute."
     );
     Ok(project_directory(home, cwd).join(format!("{id}.jsonl")))
+}
+/// Claudex 2.0.44 and earlier saved Claude paths of working directories whose
+/// project name exceeds 200 characters under the unshortened name, a directory
+/// Claude Code never writes. Returns the shortened native path for such a saved
+/// path when nothing exists at the old location; every other path is unchanged.
+pub fn shortened_claude_path(path: &Path, cwd: &str, id: &str) -> Option<PathBuf> {
+    let legacy = cwd
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>();
+    let key = claudex_core::claude_layout::project_key(cwd);
+    let parent = path.parent()?;
+    (key != legacy
+        && Path::new(cwd).is_absolute()
+        && path.file_name()? == format!("{id}.jsonl").as_str()
+        && parent.file_name()? == legacy.as_str()
+        // A name longer than the file system allows cannot exist either.
+        && matches!(std::fs::symlink_metadata(path), Err(e) if e.kind() == std::io::ErrorKind::NotFound
+            || e.raw_os_error() == Some(libc::ENAMETOOLONG)))
+        .then(|| parent.parent().unwrap().join(key).join(format!("{id}.jsonl")))
 }
 fn timestamp(row: &Value, default: &Value) -> Value {
     row.get("timestamp").unwrap_or(default).clone()
@@ -1159,6 +1176,43 @@ pub fn decode_codex(text: &str) -> Result<Common> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saved_unshortened_long_claude_paths_read_at_the_native_location() -> Result<()> {
+        let home = tempfile::tempdir()?;
+        let id = Uuid::new_v4().to_string();
+        let cwd = format!("/private/tmp/{}/codex", "scratch-".repeat(30));
+        let legacy_key = cwd
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>();
+        let legacy = home
+            .path()
+            .join("projects")
+            .join(&legacy_key)
+            .join(format!("{id}.jsonl"));
+        let native = claude_path(home.path(), &cwd, &id)?;
+        assert_ne!(native, legacy);
+        assert_eq!(shortened_claude_path(&legacy, &cwd, &id), Some(native.clone()));
+        // Current paths, short paths and other sessions are left alone.
+        assert_eq!(shortened_claude_path(&native, &cwd, &id), None);
+        let short = claude_path(home.path(), "/Users/me/app", &id)?;
+        assert_eq!(shortened_claude_path(&short, "/Users/me/app", &id), None);
+        let other = Uuid::new_v4().to_string();
+        assert_eq!(shortened_claude_path(&legacy, &cwd, &other), None);
+        // Something at an old location that fits the file system is never redirected.
+        let cwd = format!("/private/tmp/{}/codex", "scratch-".repeat(28));
+        let legacy = home
+            .path()
+            .join("projects")
+            .join(cwd.replace(|c: char| !c.is_ascii_alphanumeric(), "-"))
+            .join(format!("{id}.jsonl"));
+        assert!(shortened_claude_path(&legacy, &cwd, &id).is_some());
+        std::fs::create_dir_all(legacy.parent().unwrap())?;
+        std::fs::write(&legacy, b"")?;
+        assert_eq!(shortened_claude_path(&legacy, &cwd, &id), None);
+        Ok(())
+    }
     /// Session metadata rows exactly as Claude Code 2.1.250-2.1.302 writes
     /// them: none sits on the parent chain.
     fn claude_session_metadata(session: &str) -> Vec<Value> {

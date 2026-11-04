@@ -1,10 +1,16 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.101
+## Current companion: 0.8.104
 
-Claudex.app 2.0.43 installs, updates and checks its bundled Mod automatically;
+Claudex.app 2.0.46 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
+Version 0.8.104 packages the Claudex 2.0.46 runtime. A quarantine receipt saved
+before a Mac restart is still recognized when macOS renumbers the volume's device;
+its inode, size, timestamps, owner, mode and link count must still match.
+Claude transcripts of very long working directories are found in the shortened
+project folder Claude Code uses, including paths saved by earlier versions, so
+their handoffs no longer stay pending.
 Version 0.8.101 packages the Claudex 2.0.43 runtime. Codex item timing fields and
 per-item content metadata no longer block owned bootstraps, image provenance or
 compaction-only turns. Checkpoints saved before or after Codex added item timing
@@ -16,7 +22,8 @@ another session's compaction begins at its readable summary instead of pausing
 as missing earlier history. Desktop integration reads frontend cache entries
 that Claude Desktop now stores brotli-encoded and proves the 2026-11-03 session
 metadata reader. Versions 0.8.94 to 0.8.100 (Claudex 2.0.36 to 2.0.42) were
-local builds only.
+local builds only. Versions 0.8.102 and 0.8.103 (Claudex 2.0.44 and
+2.0.45) were local builds only.
 Version 0.8.93 packages the Claudex 2.0.35 runtime. Paused synchronization keeps
 folder and owner-wake diagnostics in technical details instead of presenting them
 as repair actions for independent collaboration and cache commands.
@@ -562,7 +569,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.101-review"
+STAGE="$PARENT/claudex-0.8.104-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -583,7 +590,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.101-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.104-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

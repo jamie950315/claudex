@@ -59,6 +59,20 @@ impl FileIdentity {
     pub fn same_inode(&self, other: &Self) -> bool {
         self.dev == other.dev && self.ino == other.ino
     }
+    /// Compares a live identity with one saved by an earlier process. The device
+    /// number is assigned when the volume is mounted and can change after a
+    /// restart, so it is excluded; every field the volume itself keeps
+    /// (inode, size, nanosecond mtime/ctime, owner, mode and link count) must
+    /// still match. Live comparisons within one process keep using equality.
+    pub fn matches_saved(&self, saved: &Self) -> bool {
+        self.ino == saved.ino
+            && self.size == saved.size
+            && self.mtime_ns == saved.mtime_ns
+            && self.ctime_ns == saved.ctime_ns
+            && self.uid == saved.uid
+            && self.mode == saved.mode
+            && self.nlink == saved.nlink
+    }
 }
 
 #[derive(Debug)]

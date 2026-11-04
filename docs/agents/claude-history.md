@@ -2,6 +2,12 @@
 
 Contributor rules moved out of AGENTS.md; they are binding. Scope: Ancillary tails, compaction, forks and parallel-tool graphs, and Claude image originals and sidecars.
 
+A transcript lives under `projects/<key>/<sessionId>.jsonl`. Derive `<key>` only
+through `claudex_core::claude_layout::project_key`: Claude Code replaces each
+non-alphanumeric UTF-16 code unit with `-` and shortens names over 200
+characters to their first 200 plus `-` and a base-36 djb2 hash of the cwd.
+Long scratch and worktree paths otherwise point at a directory that never exists.
+
 Canonical messages contain authored turns and the native local-command envelopes
 that the codec projects into turns. Known native context and bookkeeping rows
 (`mode`, `permission-mode`, `attachment`, `cost-state`, `atis-latch`, `agent-name`,

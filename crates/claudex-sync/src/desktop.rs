@@ -512,7 +512,7 @@ pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
             }
         }
     }
-    let state: State = match &stored {
+    let mut state: State = match &stored {
         Some(stored) => serde_json::from_slice(&stored.bytes).map_err(|_| {
             anyhow::anyhow!("Malformed JSON state; inspect the local file before continuing.")
         })?,
@@ -529,6 +529,7 @@ pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
             "Invalid tracking enrollment metadata."
         );
     }
+    shorten_legacy_claude_paths(&mut state);
     crate::quarantine::validate(root, &state)?;
     if let Some(stored) = stored {
         *cache.lock().unwrap() = Some((stored.identity, stored.bytes, state.clone()));
@@ -536,6 +537,24 @@ pub(crate) fn read_state(root: &Path, cache: &StateCache) -> Result<State> {
         *cache.lock().unwrap() = None;
     }
     Ok(state)
+}
+/// Reads Claude records saved with the unshortened project name of a long
+/// working directory at the native shortened location; the next save keeps it.
+fn shorten_legacy_claude_paths(state: &mut State) {
+    let pending = match state.pending.as_mut() {
+        Some(PendingOperation::Handoff(p)) => Some(&mut p.record),
+        Some(PendingOperation::OriginalArchive(p)) => Some(&mut p.record),
+        None => None,
+    };
+    for record in state.records.iter_mut().chain(pending) {
+        if record.side == Side::Claude {
+            if let Some(path) =
+                crate::codecs::shortened_claude_path(&record.path, &record.cwd, &record.native_id)
+            {
+                record.path = path;
+            }
+        }
+    }
 }
 /// A native read could not resolve its saved working directory. Other history,
 /// permission and persistence failures must not be treated as folder removal.

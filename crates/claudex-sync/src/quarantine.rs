@@ -96,10 +96,13 @@ pub(crate) fn validate(root: &Path, state: &State) -> Result<()> {
             .read(true)
             .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
             .open(&path)?;
+        // The saved identity outlives restarts, which can renumber the volume's
+        // device; the three live observations must still agree exactly.
+        let named = storage::FileIdentity::from_metadata(&named);
         ensure!(
-            storage::FileIdentity::from_metadata(&named) == expected
-                && storage::FileIdentity::from_metadata(&file.metadata()?) == expected
-                && storage::FileIdentity::from_metadata(&fs::symlink_metadata(&path)?) == expected,
+            named.matches_saved(&expected)
+                && storage::FileIdentity::from_metadata(&file.metadata()?) == named
+                && storage::FileIdentity::from_metadata(&fs::symlink_metadata(&path)?) == named,
             "Quarantine receipt changed or disappeared; unresolved evidence remains protected."
         );
         ensure!(
@@ -953,6 +956,26 @@ mod tests {
             assert!(outcome.is_err(), "{kind}");
             assert!(bridge.status()?.pending.is_some());
         }
+        Ok(())
+    }
+    #[test]
+    fn quarantine_receipt_survives_a_restart_that_renumbers_the_volume_device() -> Result<()> {
+        let (_tmp, bridge, id, op, _) = fixture()?;
+        confirm(&bridge, &id, &op)?;
+        let ledger = bridge.root.join("desktop-state.json");
+        let mut state = storage::read_json(&ledger)?;
+        let saved = state["conversations"][&id]["quarantine"]["receiptIdentity"].clone();
+        let renumbered = (saved["dev"].as_str().unwrap().parse::<u64>()? + 3).to_string();
+        state["conversations"][&id]["quarantine"]["receiptIdentity"]["dev"] = json!(renumbered);
+        storage::atomic_write(&ledger, serde_json::to_vec_pretty(&state)?)?;
+        let restarted = DesktopBridge::new(&bridge.root, BTreeMap::new());
+        assert!(restarted.status()?.conversations[&id].quarantined());
+        // A renumbered device never excuses a different inode.
+        state["conversations"][&id]["quarantine"]["receiptIdentity"]["ino"] =
+            json!((saved["ino"].as_str().unwrap().parse::<u64>()? + 1).to_string());
+        storage::atomic_write(&ledger, serde_json::to_vec_pretty(&state)?)?;
+        let restarted = DesktopBridge::new(&bridge.root, BTreeMap::new());
+        assert!(restarted.status().is_err());
         Ok(())
     }
     #[test]

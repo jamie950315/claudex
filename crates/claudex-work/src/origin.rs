@@ -220,18 +220,9 @@ fn directory(path: &Path) -> Result<(u64, u64, u32, u32)> {
 fn claude_proof(home: &Path, input: &Value) -> Result<()> {
     insist(normalized(home), "ORIGIN_PROOF_UNAVAILABLE")?;
     let cwd = input["cwd"].as_str().unwrap();
-    let project = cwd
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_string()
-            } else {
-                "-".repeat(c.len_utf16())
-            }
-        })
-        .collect::<Vec<_>>()
-        .concat();
-    let parent = home.join("projects").join(project);
+    let parent = home
+        .join("projects")
+        .join(claudex_core::claude_layout::project_key(cwd));
     let path = parent.join(format!("{}.jsonl", input["sessionId"].as_str().unwrap()));
     let dirs = [home.to_path_buf(), home.join("projects"), parent];
     let before = dirs

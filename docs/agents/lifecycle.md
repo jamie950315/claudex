@@ -178,7 +178,9 @@ keep their original canonical checkpoints and assets. Exclude the entire
 conversation from discovery enrollment, native inspection/ownership, sync queues,
 folder/archival presentation and retirement. Preserve snapshot count/byte quota
 accounting. Ledger reads verify the receipt's exact post-publication private
-single-link nanosecond identity through a no-follow descriptor; explicit repeat
+single-link nanosecond identity through a no-follow descriptor (the saved
+identity excludes only the device number, which macOS can renumber across a
+restart; the live named and opened identities must still agree exactly); explicit repeat
 confirmation authenticates its complete content against the saved intent digest.
 Do not hash/read the large preserved ledger on every heartbeat. `resume-tracking`
 refuses until a separately authorized exact transaction resolution exists. Never
