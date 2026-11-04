@@ -1,12 +1,13 @@
 # Claude native Mod companion
 
-## Current companion: 0.8.94
+## Current companion: 0.8.95
 
-Claudex.app 2.0.36 installs, updates and checks its bundled Mod automatically;
+Claudex.app 2.0.37 installs, updates and checks its bundled Mod automatically;
 see the [app lifecycle guide](app.md#claude-mod-lifecycle). The standalone commands
 below remain available for CLI-only installations and developer validation.
-Version 0.8.94 packages the Claudex 2.0.36 runtime. Codex item timing fields and
-per-item content metadata no longer block owned bootstraps or image provenance.
+Version 0.8.95 packages the Claudex 2.0.37 runtime. Codex item timing fields and
+per-item content metadata no longer block owned bootstraps, image provenance or
+compaction-only turns. Version 0.8.94 (Claudex 2.0.36) was a local build only.
 Version 0.8.93 packages the Claudex 2.0.35 runtime. Paused synchronization keeps
 folder and owner-wake diagnostics in technical details instead of presenting them
 as repair actions for independent collaboration and cache commands.
@@ -552,7 +553,7 @@ inspection instead of recursively changing permissions or moving native data.
 ROOT="$(realpath "$HOME/.local/share/claudex")"
 PARENT="$HOME/.local/share/claudex-mod-marketplaces"
 mkdir -p -m 700 "$PARENT"
-STAGE="$PARENT/claudex-0.8.94-review"
+STAGE="$PARENT/claudex-0.8.95-review"
 target/debug/claudex mod stage --root "$ROOT" --output "$STAGE"
 ```
 
@@ -573,7 +574,7 @@ CLAUDE_VALIDATE=/absolute/path/to/reviewed/claude
 "$CLAUDE_VALIDATE" plugin validate "$STAGE/plugins/claudex" --strict --json
 # Use a separate, never-installed native test candidate. Both receiver options
 # default to true; explicit --no-native-wake/--no-self-wake stage an opt-out.
-TEST_STAGE="$PARENT/claudex-0.8.94-native-tests"
+TEST_STAGE="$PARENT/claudex-0.8.95-native-tests"
 target/debug/claudex mod stage --root "$ROOT" --output "$TEST_STAGE" --native-wake --self-wake
 "$CLAUDE_VALIDATE" plugin validate "$TEST_STAGE/plugins/claudex" --strict --json
 "$CLAUDE_VALIDATE" plugin test "$TEST_STAGE/plugins/claudex"

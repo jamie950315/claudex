@@ -115,8 +115,8 @@ fn timestamp(value: &Value) -> Result<Option<i64>> {
 fn compaction_control(turn: &Value) -> bool {
     turn["status"] == "completed"
         && turn["items"].as_array().is_some_and(|a| {
+            // Native timing and other display fields are inert.
             a.len() == 1
-                && packet::exact_keys(&a[0], &["id", "type"])
                 && a[0]["type"] == "contextCompaction"
                 && a[0]["id"].as_str().is_some_and(|s| !s.is_empty())
         })
@@ -833,6 +833,14 @@ pub fn needs_late_item_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compaction_control_ignores_native_item_timing() {
+        let turn = |item: Value| json!({"id":"t","status":"completed","items":[item]});
+        assert!(compaction_control(&turn(json!({"id":"c","type":"contextCompaction",
+            "startedAtMs":1793695284000u64,"completedAtMs":1793695284001u64}))));
+        assert!(!compaction_control(&turn(json!({"id":"","type":"contextCompaction"}))));
+        assert!(!compaction_control(&turn(json!({"id":"c","type":"agentMessage","text":""}))));
+    }
     struct QuietTurnRpc(Value);
     #[async_trait]
     impl Rpc for QuietTurnRpc {
