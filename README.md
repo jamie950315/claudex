@@ -5,8 +5,8 @@ to the other, hand a task over, message an existing chat, and continue a
 conversation in the other app.
 
 Current build: **Claudex.app 2.0.43**, bundling **Claude Mod 0.8.101**.
-Latest published release: **2.0.17** · [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.17)
-· [Release notes](docs/releases/2.0.17.md)
+Latest published release: **2.0.43** · [Download](https://github.com/jamie950315/claudex/releases/tag/v2.0.43)
+· [Release notes](docs/releases/2.0.43.md)
 
 ## Requirements
 
@@ -21,8 +21,8 @@ Claude Code third-party routing and model catalogs remain independent.
 
 ## Install
 
-1. Download `Claudex-v2.0.17-macOS-arm64.zip` from the
-   [release page](https://github.com/jamie950315/claudex/releases/tag/v2.0.17),
+1. Download `Claudex-v2.0.43-macOS-arm64.zip` from the
+   [release page](https://github.com/jamie950315/claudex/releases/tag/v2.0.43),
    unzip it, and drag **Claudex.app** into **Applications**. Do not move it later.
 2. Open Claudex. The build is development-signed, not notarized, so macOS may
    block the first launch. Go to **System Settings › Privacy & Security** and
