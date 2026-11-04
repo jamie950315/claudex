@@ -607,19 +607,6 @@ fn user_content(item: &Value) -> Result<Vec<Value>> {
     }
     Ok(content)
 }
-/// Per-item native timing is presentation data: each message already carries
-/// its turn's timestamp. Keeping it out of the projection leaves checkpoints
-/// saved before Codex added these fields byte-identical.
-const ITEM_TIMING: [&str; 2] = ["startedAtMs", "completedAtMs"];
-fn without_item_timing(item: &Value) -> Value {
-    let mut item = item.clone();
-    if let Some(fields) = item.as_object_mut() {
-        for key in ITEM_TIMING {
-            fields.remove(key);
-        }
-    }
-    item
-}
 pub fn convert(
     snapshot: &Snapshot,
     id: &str,
@@ -668,8 +655,7 @@ pub fn convert(
             .and_then(|n| chrono::DateTime::from_timestamp(n, 0))
             .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
             .or_else(|| timestamp.map(str::to_owned));
-        if let Some(item) = entry.item.as_ref().map(without_item_timing) {
-            let item = &item;
+        if let Some(item) = entry.item.as_ref() {
             let (role, content) = match item["type"].as_str() {
                 Some("userMessage") => ("user", user_content(item)?),
                 Some("agentMessage") => {
@@ -782,6 +768,37 @@ pub(crate) fn without_vendor_added_nulls(snapshot: &Snapshot) -> Option<Snapshot
 /// canonical prefix authenticates its exact bytes. It never selects a new
 /// checkpoint. Without one, the ordinary conversion is returned and the caller
 /// accepts it when the saved dialogue matches.
+/// Per-item timing Codex added to every thread item. Checkpoints saved before
+/// it appeared hold the items without it; later ones hold it.
+const VENDOR_ADDED_ITEM_TIMING: [&str; 2] = ["startedAtMs", "completedAtMs"];
+
+/// The snapshot without the vendor-added per-item timing, if any item has it.
+fn without_vendor_added_item_timing(snapshot: &Snapshot) -> Option<Snapshot> {
+    let mut selected = snapshot.clone();
+    let mut changed = false;
+    for item in selected
+        .turns
+        .iter_mut()
+        .filter_map(|turn| turn["items"].as_array_mut())
+        .flatten()
+        .filter_map(Value::as_object_mut)
+    {
+        for field in VENDOR_ADDED_ITEM_TIMING {
+            changed |= item.remove(field).is_some();
+        }
+    }
+    changed.then_some(selected)
+}
+
+/// Serialization alternatives an existing checkpoint may have been saved
+/// under, in preference order. The current representation is not included.
+pub fn checkpoint_alternatives(snapshot: &Snapshot) -> Vec<Snapshot> {
+    let nulls = without_vendor_added_nulls(snapshot);
+    let timing = without_vendor_added_item_timing(snapshot);
+    let both = nulls.as_ref().and_then(without_vendor_added_item_timing);
+    [nulls, timing, both].into_iter().flatten().collect()
+}
+
 pub fn convert_checkpoint(
     snapshot: &Snapshot,
     id: &str,
@@ -795,7 +812,7 @@ pub fn convert_checkpoint(
     if let Some(candidate) = goal_alternative(snapshot, id, cwd, checkpoint)? {
         return Ok(candidate);
     }
-    if let Some(selected) = without_vendor_added_nulls(snapshot) {
+    for selected in checkpoint_alternatives(snapshot) {
         let candidate = convert(&selected, id, cwd, None, true)?;
         if checkpoint.contains(&candidate)? {
             return Ok(candidate);
@@ -848,7 +865,7 @@ pub fn needs_late_item_proof(
 mod tests {
     use super::*;
     #[test]
-    fn item_timing_does_not_change_the_projection() -> Result<()> {
+    fn checkpoints_saved_with_or_without_item_timing_keep_their_reading() -> Result<()> {
         let turns = |timed: bool| {
             let mut items = vec![
                 json!({"id":"u","type":"userMessage","clientId":null,"content":[{"type":"text","text":"Ask"}]}),
@@ -867,9 +884,19 @@ mod tests {
             Ok(serde_json::from_value(json!({"turns":turns,"digest":"d","itemCount":3,"bytes":1,"pages":1,
                 "completedPrefix":true,"incompleteTail":false,"incompleteTailCount":0,"closedTail":false}))?)
         };
-        let plain = convert(&snapshot(turns(false))?, "id", "/tmp", None, false)?;
-        let timed = convert(&snapshot(turns(true))?, "id", "/tmp", None, false)?;
-        assert_eq!(plain.messages, timed.messages);
+        let checkpoint = |common: &Common| -> Result<crate::desktop::Checkpoint> {
+            Ok(crate::desktop::Checkpoint {
+                count: common.messages.len(),
+                digest: Some(crate::history::fingerprint(&common.messages, common.messages.len())?),
+                dialogue: Some(crate::history::dialogue_fingerprint(&common.messages, common.messages.len())?),
+            })
+        };
+        let current = snapshot(turns(true))?;
+        let before = checkpoint(&convert(&snapshot(turns(false))?, "id", "/tmp", None, true)?)?;
+        let after = checkpoint(&convert(&current, "id", "/tmp", None, true)?)?;
+        assert_ne!(before, after);
+        assert!(before.contains(&convert_checkpoint(&current, "id", "/tmp", &before)?)?);
+        assert!(after.contains(&convert_checkpoint(&current, "id", "/tmp", &after)?)?);
         Ok(())
     }
     #[test]

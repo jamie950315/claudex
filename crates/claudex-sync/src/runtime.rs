@@ -923,15 +923,29 @@ impl Runtime {
             )?;
             let convert = |snapshot: &native_history::Snapshot| -> Result<Common> {
                 if r.managed {
-                    Ok(owned_history::decode_codex_native(
-                        &self.options.root,
-                        snapshot,
-                        &r.conversation_id,
-                        &id,
-                        &cwd.to_string_lossy(),
-                        &self.key,
-                    )?
-                    .common)
+                    let decode = |snapshot: &native_history::Snapshot| -> Result<Common> {
+                        Ok(owned_history::decode_codex_native(
+                            &self.options.root,
+                            snapshot,
+                            &r.conversation_id,
+                            &id,
+                            &cwd.to_string_lossy(),
+                            &self.key,
+                        )?
+                        .common)
+                    };
+                    let original = decode(snapshot)?;
+                    if r.checkpoint.count == 0 || r.checkpoint.contains(&original)? {
+                        return Ok(original);
+                    }
+                    // Same serialization alternatives as ordinary sources.
+                    for selected in native_history::checkpoint_alternatives(snapshot) {
+                        let candidate = decode(&selected)?;
+                        if r.checkpoint.contains(&candidate)? {
+                            return Ok(candidate);
+                        }
+                    }
+                    Ok(original)
                 } else {
                     native_history::convert_checkpoint(
                         snapshot,

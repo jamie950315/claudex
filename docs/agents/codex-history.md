@@ -136,9 +136,12 @@ bytes come from the full API item and must match the translated persisted user
 completion; validate the normalized model-input image without substituting its
 possibly resized bytes for the inline original.
 This preserves native persisted model-input bytes, not proven unresized uploads.
-Per-item `startedAtMs`/`completedAtMs` are presentation timing: the projection
-drops them (each message keeps its turn timestamp) so checkpoints saved before
-Codex added them keep their exact and dialogue digests. Item proofs compare only
+Per-item `startedAtMs`/`completedAtMs` are a vendor-added serialization like
+`VENDOR_ADDED_NULL_FIELDS`: the projection keeps the current native items, and
+`checkpoint_alternatives` (null fields, item timing, both) lets a checkpoint
+saved before Codex added them select its exact representation, for ordinary and
+owned Codex sources alike. Never strip them from the default projection:
+checkpoints exist in both forms. Item proofs compare only
 the fields they use (type, id, clientId, content, turn_id); other item and
 persisted-metadata fields such as `content_item_metadata` are inert.
 Owned bootstraps must still be inline authenticated checkpoints before hydration;
