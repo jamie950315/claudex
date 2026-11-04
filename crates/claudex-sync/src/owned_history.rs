@@ -130,15 +130,9 @@ pub fn decode_codex(
         incomplete_tail: false,
     })
 }
-fn permitted_keys(value: &Value, keys: &[&str]) -> bool {
-    value
-        .as_object()
-        .is_some_and(|m| m.keys().all(|k| keys.contains(&k.as_str())))
-}
 fn bootstrap_content(item: &Value) -> Result<Vec<Value>> {
     ensure!(
-        permitted_keys(item, &["type", "id", "clientId", "content"])
-            && item["type"] == "userMessage"
+        item["type"] == "userMessage"
             && item["id"].as_str().is_some_and(|s| !s.is_empty())
             && item
                 .get("clientId")
@@ -146,8 +140,8 @@ fn bootstrap_content(item: &Value) -> Result<Vec<Value>> {
         "Owned checkpoint user metadata changed."
     );
     item["content"].as_array().filter(|a|!a.is_empty()).ok_or_else(||anyhow::anyhow!("Empty bootstrap user content."))?.iter().map(|block|{
-        if block["type"]=="text" {ensure!(permitted_keys(block,&["type","text","text_elements"])&&block["text"].is_string()&&block["text_elements"].as_array().is_some_and(Vec::is_empty),"Owned bootstrap text metadata changed.");Ok(json!({"type":"text","text":block["text"]}))}
-        else if block["type"]=="image" {ensure!(permitted_keys(block,&["type","url","detail"])&&block["detail"].is_null(),"Owned bootstrap image metadata changed.");let (media,data)=block["url"].as_str().and_then(|s|s.strip_prefix("data:")).and_then(|s|s.split_once(";base64,")).ok_or_else(||anyhow::anyhow!("Owned bootstrap image bytes missing."))?;let image=json!({"type":"image","source":{"type":"base64","media_type":media,"data":data}});packet::validate_image(&image)?;Ok(image)}
+        if block["type"]=="text" {ensure!(block["text"].is_string()&&block.get("text_elements").is_none_or(|v|v.as_array().is_some_and(Vec::is_empty)),"Owned bootstrap text metadata changed.");Ok(json!({"type":"text","text":block["text"]}))}
+        else if block["type"]=="image" {ensure!(block["detail"].is_null(),"Owned bootstrap image metadata changed.");let (media,data)=block["url"].as_str().and_then(|s|s.strip_prefix("data:")).and_then(|s|s.split_once(";base64,")).ok_or_else(||anyhow::anyhow!("Owned bootstrap image bytes missing."))?;let image=json!({"type":"image","source":{"type":"base64","media_type":media,"data":data}});packet::validate_image(&image)?;Ok(image)}
         else {bail!("Unsupported owned bootstrap input; no content discarded.")}
     }).collect()
 }
@@ -216,18 +210,7 @@ pub fn decode_codex_native(
     validate_bootstrap(&metadata)?;
     let ack = &items[1];
     ensure!(
-        permitted_keys(
-            ack,
-            &[
-                "type",
-                "id",
-                "text",
-                "phase",
-                "memoryCitation",
-                "delivery",
-                "questions"
-            ]
-        ) && ack["type"] == "agentMessage"
+        ack["type"] == "agentMessage"
             && ack["phase"] == "final_answer"
             && ack["text"] == receipt(metadata["digest"].as_str().unwrap())
             && ["memoryCitation", "delivery", "questions"]
@@ -1247,6 +1230,22 @@ pub(crate) mod tests {
         rows[1]["message"]["model"] = json!("<synthetic>");
         rows[1]["message"]["content"][0]["text"] = json!("An authored answer");
         assert!(read(&rows).is_err());
+        Ok(())
+    }
+    #[test]
+    fn owned_native_bootstrap_ignores_item_timing_but_keeps_its_proof() -> Result<()> {
+        let mut item = json!({"type":"userMessage","id":"u","clientId":"u",
+            "content":[{"type":"text","text":"packet","text_elements":[]}],
+            "startedAtMs":1793726078361u64,"completedAtMs":1793726078361u64});
+        assert_eq!(
+            bootstrap_content(&item)?,
+            vec![json!({"type":"text","text":"packet"})]
+        );
+        item["content"][0]["text_elements"] = json!([{"start":0}]);
+        assert!(bootstrap_content(&item).is_err());
+        item["content"][0]["text_elements"] = json!([]);
+        item["id"] = json!("");
+        assert!(bootstrap_content(&item).is_err());
         Ok(())
     }
     #[test]

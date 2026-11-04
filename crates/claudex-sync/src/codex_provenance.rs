@@ -1537,6 +1537,12 @@ fn translate(item: &Value) -> Result<Value> {
     }
     Ok(out)
 }
+/// Compare only the fields that prove a user item: identity and content.
+/// Native timing or other display fields on either side are not part of it.
+fn same_user_item(native: &Value, api: &Value) -> bool {
+    ["type", "id", "content"].iter().all(|k| native[*k] == api[*k])
+        && native["clientId"] == api.get("clientId").cloned().unwrap_or(Value::Null)
+}
 fn candidate(
     payload: &Value,
     request: &Request,
@@ -1555,29 +1561,10 @@ fn candidate(
     }
     let meta = &payload["internal_chat_message_metadata_passthrough"];
     ensure!(
-        (packet::exact_keys(
-            payload,
-            &[
-                "type",
-                "id",
-                "role",
-                "content",
-                "internal_chat_message_metadata_passthrough"
-            ]
-        ) || packet::exact_keys(
-            payload,
-            &[
-                "type",
-                "role",
-                "content",
-                "internal_chat_message_metadata_passthrough"
-            ]
-        )) && payload["type"] == "message"
+        payload["type"] == "message"
             && payload["role"] == "user"
             && (payload.get("id").is_none() || nonempty(&payload["id"]))
-            && (packet::exact_keys(meta, &["turn_id"])
-                || packet::exact_keys(meta, &["turn_id", "create_time"])
-                || packet::exact_keys(meta, &["turn_id", "create_time", "content_item_kinds"]))
+            && meta.is_object()
             && meta["turn_id"] == request.turn
             && active.as_deref() == Some(&request.turn)
             && context.as_deref() == Some(&request.turn)
@@ -1816,7 +1803,7 @@ impl Provenance {
                                 && p["turn_id"] == r.turn
                                 && active.as_deref() == Some(&r.turn)
                                 && context.as_deref() == Some(&r.turn)
-                                && translate(&p["item"])? == r.item,
+                                && same_user_item(&translate(&p["item"])?, &r.item),
                             "Native completed user item differs from complete API identity and content."
                         );
                         let (ordinal, images) = s
@@ -2337,6 +2324,31 @@ mod tests {
                 "mutation {mutate}"
             );
         }
+    }
+    #[test]
+    fn native_item_timing_and_content_item_metadata_are_inert() {
+        let f = fixture();
+        let mut rows = f.rows.clone();
+        rows[4]["payload"]["internal_chat_message_metadata_passthrough"]["content_item_metadata"] =
+            json!([{"provenance":{"type":"user"}}]);
+        rows[4]["payload"]["future_field"] = json!("kept");
+        write(&f.source.path, &rows);
+        let mut timed = f.turns.clone();
+        for item in timed[0]["items"].as_array_mut().unwrap() {
+            item["startedAtMs"] = json!(100_000);
+            item["completedAtMs"] = json!(100_001);
+        }
+        let mut turns = timed.clone();
+        f.source.hydrate(&mut turns, &[], None, 1_048_576).unwrap();
+        assert_eq!(turns[0]["items"][0]["startedAtMs"], 100_000);
+        audit_image_preservation(&timed, &turns).unwrap();
+        rows[5]["payload"]["item"]["content"][0]["text"] = json!("changed");
+        write(&f.source.path, &rows);
+        assert!(
+            f.source
+                .hydrate(&mut timed.clone(), &[], None, 1_048_576)
+                .is_err()
+        );
     }
     #[test]
     fn interrupted_optional_native_metadata_and_compressed_representation_preserve_images() {
