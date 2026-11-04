@@ -136,6 +136,11 @@ bytes come from the full API item and must match the translated persisted user
 completion; validate the normalized model-input image without substituting its
 possibly resized bytes for the inline original.
 This preserves native persisted model-input bytes, not proven unresized uploads.
+Per-item `startedAtMs`/`completedAtMs` are presentation timing: the projection
+drops them (each message keeps its turn timestamp) so checkpoints saved before
+Codex added them keep their exact and dialogue digests. Item proofs compare only
+the fields they use (type, id, clientId, content, turn_id); other item and
+persisted-metadata fields such as `content_item_metadata` are inert.
 Owned bootstraps must still be inline authenticated checkpoints before hydration;
 only subsequent native inputs can use this recovery path. Packet authentication,
 exact transport receipts and all continuation provenance checks remain mandatory.

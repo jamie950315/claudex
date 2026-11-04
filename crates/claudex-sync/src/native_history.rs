@@ -607,6 +607,19 @@ fn user_content(item: &Value) -> Result<Vec<Value>> {
     }
     Ok(content)
 }
+/// Per-item native timing is presentation data: each message already carries
+/// its turn's timestamp. Keeping it out of the projection leaves checkpoints
+/// saved before Codex added these fields byte-identical.
+const ITEM_TIMING: [&str; 2] = ["startedAtMs", "completedAtMs"];
+fn without_item_timing(item: &Value) -> Value {
+    let mut item = item.clone();
+    if let Some(fields) = item.as_object_mut() {
+        for key in ITEM_TIMING {
+            fields.remove(key);
+        }
+    }
+    item
+}
 pub fn convert(
     snapshot: &Snapshot,
     id: &str,
@@ -655,7 +668,8 @@ pub fn convert(
             .and_then(|n| chrono::DateTime::from_timestamp(n, 0))
             .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
             .or_else(|| timestamp.map(str::to_owned));
-        if let Some(item) = entry.item.as_ref() {
+        if let Some(item) = entry.item.as_ref().map(without_item_timing) {
+            let item = &item;
             let (role, content) = match item["type"].as_str() {
                 Some("userMessage") => ("user", user_content(item)?),
                 Some("agentMessage") => {
@@ -833,6 +847,31 @@ pub fn needs_late_item_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn item_timing_does_not_change_the_projection() -> Result<()> {
+        let turns = |timed: bool| {
+            let mut items = vec![
+                json!({"id":"u","type":"userMessage","clientId":null,"content":[{"type":"text","text":"Ask"}]}),
+                json!({"id":"c","type":"commandExecution","status":"completed","aggregatedOutput":"ok"}),
+                json!({"id":"a","type":"agentMessage","text":"Done","phase":"final_answer"}),
+            ];
+            if timed {
+                for item in &mut items {
+                    item["startedAtMs"] = json!(100_000);
+                    item["completedAtMs"] = json!(100_500);
+                }
+            }
+            json!([{"id":"t","status":"completed","itemsView":"full","startedAt":100,"completedAt":101,"items":items}])
+        };
+        let snapshot = |turns: Value| -> Result<Snapshot> {
+            Ok(serde_json::from_value(json!({"turns":turns,"digest":"d","itemCount":3,"bytes":1,"pages":1,
+                "completedPrefix":true,"incompleteTail":false,"incompleteTailCount":0,"closedTail":false}))?)
+        };
+        let plain = convert(&snapshot(turns(false))?, "id", "/tmp", None, false)?;
+        let timed = convert(&snapshot(turns(true))?, "id", "/tmp", None, false)?;
+        assert_eq!(plain.messages, timed.messages);
+        Ok(())
+    }
     #[test]
     fn compaction_control_ignores_native_item_timing() {
         let turn = |item: Value| json!({"id":"t","status":"completed","items":[item]});
