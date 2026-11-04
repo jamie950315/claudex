@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "2.0.42"
+version = "2.0.43"
 edition = "2024"
 rust-version = "1.88"
 publish = false
@@ -14,6 +14,7 @@ async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = { version = "0.3", features = ["sink"] }
+brotli-decompressor = "5"
 flate2 = "1"
 hex = "0.4"
 libc = "0.2"

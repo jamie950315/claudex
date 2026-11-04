@@ -86,7 +86,11 @@ the coordinator lock, and never report a boundary while a transaction is pending
 
 `crates/claudex-app/src/frontend_graph.rs` discovers the latest fetched index entry from the
 private HTTP cache using verified Chromium HttpResponseInfo response timestamps,
-never filesystem mtime (patches change mtime). Require a unique newest entry and
+never filesystem mtime (patches change mtime). Desktop stores each body as the
+server sent it: zstd for most assets, brotli (`content-encoding: br`) for some
+modules and resources since the 2026-11-03 graph. Reads decode either; a patch
+re-encodes zstd and keeps the response headers, so it refuses a brotli entry.
+Require a unique newest entry and
 its root bootstrap. Follow literal static/re-export/dynamic imports within the
 exact Anthropic assets origin; only reachable cached modules qualify. Missing
 lazy chunks are counted, never fetched or replaced with an older graph. Cache
@@ -159,6 +163,12 @@ prefetch proof covers both forms, and the reader, normalizer, classifier and
 lookup remain function declarations. Graphs fetched up to 2026-10-15 have no
 browser-only guard before the reader's request; the request, failure and
 return proofs are unchanged, and any other extra statement still refuses.
+From the 2026-11-03 graph the reader builds its query in a `URLSearchParams`
+(literal `set` calls only, including `include_hearth_binding`) and retries once
+without `omit_bound_device` after a 400. The proof requires that retry to stay
+behind the caller's explicit `omitBoundDevice===true`, which Claudex never
+passes, so the reader still issues one default no-store GET; the failure branch
+is a block ending in a throw.
 Graphs fetched up to 2026-10-14 also prefetch the session's events with the
 same headers: every authenticated prefetch request must use one raw fetch
 binding, and requests through different callees refuse.

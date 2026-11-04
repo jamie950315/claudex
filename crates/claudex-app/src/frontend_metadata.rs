@@ -28,6 +28,16 @@ fn functions(ast: &Value) -> Vec<&Value> {
 fn literal(node: &Value, value: &str) -> bool {
     kind(node) == "Literal" && node["value"] == value
 }
+fn declarators(node: &Value) -> &[Value] {
+    if kind(node) == "VariableDeclaration" {
+        array(&node["declarations"])
+    } else {
+        &[]
+    }
+}
+fn literal_bool(node: &Value, value: bool) -> bool {
+    kind(node) == "Literal" && node["value"] == value
+}
 fn contains_literal(node: &Value, value: &str) -> bool {
     !nodes(node, |n| literal(n, value)).is_empty()
 }
@@ -146,23 +156,105 @@ fn prove(
     )?;
     let params = array(&read["params"]);
     let throws = |n: &Value| kind(n) == "IfStatement" && kind(&n["consequent"]) == "ThrowStatement";
-    // Graphs fetched up to 2026-10-15 have no leading browser-only guard.
-    let body = match array(&read["body"]["body"]) {
-        [guard, rest @ ..] if rest.len() == 3 && throws(guard) => rest,
-        body => body,
-    };
     ensure!(
-        params.len() == 4
-            && params.iter().all(|p| id(p).is_some())
-            && read["async"] == true
-            && body.len() == 3
-            && kind(&body[0]) == "VariableDeclaration"
-            && array(&body[0]["declarations"]).len() == 1
-            && throws(&body[1])
-            && kind(&body[2]) == "ReturnStatement",
+        params.len() == 4 && params.iter().all(|p| id(p).is_some()) && read["async"] == true,
         "Native exact-ID reader lifecycle changed."
     );
-    let response = &body[0]["declarations"][0];
+    let (response, query) = match array(&read["body"]["body"]) {
+        // Graphs from 2026-11-03 build the query in a URLSearchParams and
+        // retry once without `omit_bound_device`, only when the caller asked
+        // for it (`omitBoundDevice===true`); Claudex never does.
+        [
+            guard,
+            builder,
+            hearth,
+            omit,
+            omit_set,
+            request,
+            retry,
+            failed,
+            done,
+        ] if throws(guard) => {
+            let builder = &declarators(builder).first().cloned().unwrap_or_default();
+            let omit = &declarators(omit).first().cloned().unwrap_or_default();
+            let leftmost = |n: &Value| {
+                let mut n = n;
+                while kind(n) == "LogicalExpression" && n["operator"] == "&&" {
+                    n = &n["left"];
+                }
+                n.clone()
+            };
+            let set = |statement: &Value, test: &dyn Fn(&Value) -> bool| {
+                let e = &statement["expression"];
+                let call = &e["right"];
+                kind(statement) == "ExpressionStatement"
+                    && kind(e) == "LogicalExpression"
+                    && e["operator"] == "&&"
+                    && test(&e["left"])
+                    && kind(call) == "CallExpression"
+                    && member(&call["callee"], "set")
+                    && scopes.same(&call["callee"]["object"], &builder["id"])
+                    && array(&call["arguments"]).len() == 2
+                    && array(&call["arguments"])
+                        .iter()
+                        .all(|a| kind(a) == "Literal")
+            };
+            let opt_in = leftmost(&omit["init"]);
+            let flag = &opt_in["right"];
+            let pair = declarators(request);
+            ensure!(
+                array(&builder["init"]["arguments"]).is_empty()
+                    && kind(&builder["init"]) == "NewExpression"
+                    && id(&builder["init"]["callee"]) == Some("URLSearchParams")
+                    && set(hearth, &|n| {
+                        member(n, "includeHearthBinding")
+                            && scopes.same(&unwrap(n)["object"], &params[3])
+                    })
+                    && kind(&opt_in) == "BinaryExpression"
+                    && opt_in["operator"] == "==="
+                    && member(&opt_in["left"], "omitBoundDevice")
+                    && scopes.same(&unwrap(&opt_in["left"])["object"], &params[3])
+                    && (literal_bool(flag, true)
+                        || kind(flag) == "UnaryExpression"
+                            && flag["operator"] == "!"
+                            && kind(&flag["argument"]) == "Literal"
+                            && flag["argument"]["value"] == 0)
+                    && set(omit_set, &|n| scopes.same(n, &omit["id"]))
+                    && pair.len() == 2
+                    && kind(&pair[0]["init"]) == "CallExpression"
+                    && member(&pair[0]["init"]["callee"], "toString")
+                    && scopes.same(&pair[0]["init"]["callee"]["object"], &builder["id"])
+                    && array(&pair[0]["init"]["arguments"]).is_empty()
+                    && kind(retry) == "IfStatement"
+                    && scopes.same(&leftmost(&retry["test"]), &omit["id"])
+                    && kind(failed) == "IfStatement"
+                    && kind(&failed["consequent"]) == "BlockStatement"
+                    && array(&failed["consequent"]["body"])
+                        .last()
+                        .is_some_and(|n| kind(n) == "ThrowStatement")
+                    && kind(done) == "ReturnStatement",
+                "Native exact-ID reader lifecycle changed."
+            );
+            (pair[1].clone(), pair[0]["id"].clone())
+        }
+        body => {
+            // Graphs fetched up to 2026-10-15 have no leading browser-only guard.
+            let body = match body {
+                [guard, rest @ ..] if rest.len() == 3 && throws(guard) => rest,
+                body => body,
+            };
+            ensure!(
+                body.len() == 3
+                    && kind(&body[0]) == "VariableDeclaration"
+                    && declarators(&body[0]).len() == 1
+                    && throws(&body[1])
+                    && kind(&body[2]) == "ReturnStatement",
+                "Native exact-ID reader lifecycle changed."
+            );
+            (body[0]["declarations"][0].clone(), Value::Null)
+        }
+    };
+    let response = &response;
     let request = &response["init"]["argument"];
     ensure!(
         kind(&response["init"]) == "AwaitExpression"
@@ -188,8 +280,12 @@ fn prove(
             && scopes.same(&parts[1]["arguments"][0], &params[2])
             && kind(&parts[2]) == "ConditionalExpression"
             && literal(&parts[2]["alternate"], "")
-            && member(unwrap(&parts[2]["test"]), "includeHearthBinding")
-            && scopes.same(&unwrap(&parts[2]["test"])["object"], &params[3])
+            && if query.is_null() {
+                member(unwrap(&parts[2]["test"]), "includeHearthBinding")
+                    && scopes.same(&unwrap(&parts[2]["test"])["object"], &params[3])
+            } else {
+                scopes.same(&parts[2]["test"], &query)
+            }
             && kind(options) == "ObjectExpression"
             && array(&options["properties"]).len() == 2
             && literal(field(options, "cache")?, "no-store"),
@@ -640,6 +736,54 @@ export{read,normalize,bridge};
         );
         let error = prove(&syntax(&both).unwrap(), "./metadata.js", &no_imports).unwrap_err();
         assert!(error.to_string().contains("prefetch context"), "{error}");
+    }
+    /// The 2026-11-03 reader builds its query and retries once without
+    /// `omit_bound_device`, only when the caller opted in.
+    const BUILT_QUERY: &str = "async function read(fetch,org,id,options){\
+ if(local(id))throw Error('local only');\
+ let query=new URLSearchParams;\
+ options?.includeHearthBinding&&query.set('include_hearth_binding','true');\
+ let omit=options?.omitBoundDevice===!0&&keyed()&&!refused.has(id);\
+ omit&&query.set('omit_bound_device','true');\
+ let text=query.toString(),response=await fetch(`${base}/${encode(id)}${text?`?${text}`:''}`,{headers:{...headers(org),...cache},cache:'no-store'});\
+ if(omit&&response.status===400){refused.add(id);let again=await read(fetch,org,id,{...options,omitBoundDevice:!1});return again}\
+ if(!response.ok){let type=response.status;throw Error('fetchCcrV2Session')}\
+ return decode(await response.json()).session??null;\
+}";
+    fn built_query(read: &str) -> String {
+        let start = SOURCE.find("async function read").unwrap();
+        let end = SOURCE.find("function normalize").unwrap();
+        format!("{}{read}\n{}", &SOURCE[..start], &SOURCE[end..])
+    }
+    #[test]
+    fn reader_that_builds_its_query_and_retries_only_on_request_is_proven() {
+        let p = prove(
+            &syntax(&built_query(BUILT_QUERY)).unwrap(),
+            "./metadata.js",
+            &no_imports,
+        )
+        .unwrap();
+        assert_eq!(p.read, "read");
+        for (from, to) in [
+            // The retry must stay behind the caller's explicit opt-in.
+            ("options?.omitBoundDevice===!0&&", ""),
+            ("options?.omitBoundDevice===!0", "options?.omitBoundDevice!==!0"),
+            ("options?.omitBoundDevice===!0", "other?.omitBoundDevice===!0"),
+            ("if(omit&&response.status", "if(response.status"),
+            // The query only adds literal parameters to one default GET.
+            ("query.set('omit_bound_device','true')", "query.set(id,'true')"),
+            ("${text?`?${text}`:''}", "${other?`?${text}`:''}"),
+            ("cache:'no-store'", "cache:'no-store',method:'POST'"),
+            ("throw Error('fetchCcrV2Session')}", "}"),
+        ] {
+            let changed = BUILT_QUERY.replacen(from, to, 1);
+            assert_ne!(changed, BUILT_QUERY, "{from}");
+            assert!(
+                prove(&syntax(&built_query(&changed)).unwrap(), "./metadata.js", &no_imports)
+                    .is_err(),
+                "{from}"
+            );
+        }
     }
     #[test]
     fn changed_request_or_account_provenance_is_refused() {

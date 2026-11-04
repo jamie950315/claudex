@@ -89,10 +89,18 @@ pub fn inspect(bytes: &[u8], target: Option<&str>) -> Result<Entry> {
             && Sha256::digest(key).as_slice() == &bytes[eof0 - 32..eof0],
         "Cache checksum mismatch."
     );
+    // Desktop stores the body as the server sent it. Most assets arrive as
+    // zstd; some modules and resources now arrive as brotli.
     let mut decoded = Vec::new();
-    zstd::stream::read::Decoder::new(body)?
-        .take(MAX_SOURCE_BYTES as u64 + 1)
-        .read_to_end(&mut decoded)?;
+    match content_encoding(metadata)?.as_str() {
+        "zstd" => zstd::stream::read::Decoder::new(body)?
+            .take(MAX_SOURCE_BYTES as u64 + 1)
+            .read_to_end(&mut decoded)?,
+        "br" => brotli_decompressor::Decompressor::new(body, 4096)
+            .take(MAX_SOURCE_BYTES as u64 + 1)
+            .read_to_end(&mut decoded)?,
+        _ => anyhow::bail!("Unsupported cache content encoding."),
+    };
     ensure!(
         decoded.len() <= MAX_SOURCE_BYTES,
         "Decoded source exceeds its bound."
@@ -108,6 +116,30 @@ pub fn inspect(bytes: &[u8], target: Option<&str>) -> Result<Entry> {
         source,
         source_hash,
     })
+}
+/// The response's content encoding. Without the header the stored body was
+/// written as zstd, as every cached asset was before brotli appeared.
+fn content_encoding(metadata: &[u8]) -> Result<String> {
+    let lower = metadata.to_ascii_lowercase();
+    let name = b"\0content-encoding:";
+    let found = lower
+        .windows(name.len())
+        .enumerate()
+        .filter(|(_, w)| w == name)
+        .map(|(i, _)| i + name.len())
+        .collect::<Vec<_>>();
+    ensure!(found.len() <= 1, "Ambiguous cache content encoding.");
+    let Some(&start) = found.first() else {
+        return Ok("zstd".into());
+    };
+    let end = lower[start..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|n| start + n)
+        .context("Invalid cache content encoding.")?;
+    Ok(String::from_utf8(lower[start..end].to_vec())?
+        .trim()
+        .to_owned())
 }
 fn replace_header(bytes: &[u8], old: usize, new: usize) -> Result<Vec<u8>> {
     let mut result = bytes.to_vec();
@@ -167,6 +199,11 @@ pub fn replace_source(original: &[u8], source: &str, target: Option<&str>) -> Re
         source.len() <= MAX_SOURCE_BYTES,
         "Patched source exceeds its bound."
     );
+    // A replacement keeps the response headers, so it can only re-encode zstd.
+    ensure!(
+        content_encoding(&e.metadata)? == "zstd",
+        "Patched cache entry is not zstd-encoded."
+    );
     let compressed = zstd::stream::encode_all(source.as_bytes(), 19)?;
     let metadata = lengths(&e.metadata, e.body.len(), compressed.len())?;
     let eof0 = original.len() - 24;
@@ -192,10 +229,12 @@ pub fn replace_source(original: &[u8], source: &str, target: Option<&str>) -> Re
 pub(crate) mod tests {
     use super::*;
     pub(crate) fn fixture(source: &str) -> Vec<u8> {
+        encoded_fixture(zstd::stream::encode_all(source.as_bytes(), 19).unwrap(), "")
+    }
+    fn encoded_fixture(compressed: Vec<u8>, headers: &str) -> Vec<u8> {
         let key = b"1/0/https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/index-test.js";
-        let compressed = zstd::stream::encode_all(source.as_bytes(), 19).unwrap();
         let raw = format!(
-            "HTTP/1.1 200\0content-length:{}\0x-goog-stored-content-length:{}\0\0",
+            "HTTP/1.1 200\0content-length:{}\0x-goog-stored-content-length:{}\0{headers}\0",
             compressed.len(),
             compressed.len()
         )
@@ -230,6 +269,20 @@ pub(crate) mod tests {
             b.extend(f)
         }
         b
+    }
+    #[test]
+    fn brotli_entries_are_read_and_never_rewritten() {
+        // brotli("export const x=1;\n")
+        let body = hex::decode("8b08806578706f727420636f6e737420783d313b0a03").unwrap();
+        let entry = encoded_fixture(body, "content-encoding:br\0");
+        assert_eq!(inspect(&entry, None).unwrap().source, "export const x=1;\n");
+        let error = replace_source(&entry, "export const x=2;", None).unwrap_err();
+        assert!(error.to_string().contains("not zstd"), "{error}");
+        let zstd = zstd::stream::encode_all(&b"export const y=1;"[..], 19).unwrap();
+        let named = encoded_fixture(zstd.clone(), "Content-Encoding: zstd\0");
+        assert_eq!(inspect(&named, None).unwrap().source, "export const y=1;");
+        assert!(replace_source(&named, "export const y=2;", None).is_ok());
+        assert!(inspect(&encoded_fixture(zstd, "content-encoding:gzip\0"), None).is_err());
     }
     #[test]
     fn codec_roundtrip_retains_http_tail_and_checksums() {
