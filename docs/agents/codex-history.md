@@ -37,18 +37,26 @@ withhold trailing control turns and unfinished tails. Initial, mixed, malformed
 or error-bearing control turns retain normal rejection; never fabricate a reply.
 
 DesktopRuntime reads optional `nativeHistoryMaxBytes` and `nativeHistoryPageSize`
-from the private root's config.json. Defaults remain 16 MiB and 100 turns/page;
-explicit bounds are 1024..268435456 bytes (raised from 64 MiB by user decision) and 1..100 turns/page. Both original and
-owned native exports enforce the configured raw/converted byte budget. Keep the
-256-page limit unchanged. The item limit is 100,000 (raised from 25,000 by user
-decision on 2026-11-05, when a long autonomous Codex conversation exceeded it);
-retained image provenance shares it, and the byte budget stays the memory bound. The history client's frame limit is
+from the private root's config.json. Defaults are 320 MiB and 100 turns/page;
+explicit bounds are 1024..5 GiB bytes and 1..100 turns/page. Both original and
+owned native exports enforce the configured raw/converted byte budget. A read
+accepts at most 5,120 pages and 2,000,000 items. By user decision on 2026-11-05
+(large engineering conversations kept hitting them) every history size bound
+was raised twentyfold: byte default 16->320 MiB, byte ceiling 256 MiB->5 GiB,
+pages 256->5,120, items 100,000->2,000,000, whole-file source reads 480/512 MiB
+->10 GiB (native_history::MAX_SOURCE_BYTES), provenance files 256->5,120,
+archive turns 25,000->500,000 and the backup quota 512 MiB->10 GiB. Do not lower
+them again without a user decision. Per-message, per-image, per-row and
+delivery-packet caps are not history size bounds and were left unchanged.
+Retained image provenance shares the item limit; the byte budget stays the
+memory bound. The history client's frame limit is
 64 MiB or the configured byte budget, whichever is larger, and an oversized
 response is reported as such. The Desktop-to-backend launcher only forwards
-Codex Desktop's own traffic and uses a 1 GiB sanity bound: stopping there would
+Codex Desktop's own traffic and uses a 20 GiB sanity bound (formerly 1 GiB; the
+history client accepts the same maximum, so the 5 GiB byte budget always fits): stopping there would
 end the user's backend. Context packets keep their 64 MiB cap, so the packet
 limit is the smaller of the budget and that cap. Rollout sources read for
-empty-turn, goal and late-item proofs may be up to 480 MiB. Limit errors
+empty-turn, goal and late-item proofs may be up to 10 GiB. Limit errors
 identify the source thread; never add automatic retries, truncation or fallback.
 Codex Desktop attaches a display-only data-URL screenshot at mcpToolCall
 result._meta["codex/toolSurface"].screenshot.url (Browser Use/CUA); it is not
@@ -88,7 +96,7 @@ new image messages require current-rollout evidence. Preserve origins across
 later path updates, without adding image-free rollovers. Conflicting duplicate
 proofs, partial provenance, missing files, aliases or moved message identities
 fail explicitly. Use O_NOFOLLOW and stable identity/stat checks across at most
-256 explicit files, with a 512 MiB aggregate scan cap and 64 MiB row cap.
+5,120 explicit files, with a 10 GiB aggregate scan cap and 64 MiB row cap.
 Native archival may relocate the current file. A missing former path is not
 required when the exact requested images are already completely proven by the
 authoritative/retained sources and the saved canonical checkpoint still matches;

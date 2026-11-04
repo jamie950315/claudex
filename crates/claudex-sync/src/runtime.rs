@@ -636,7 +636,7 @@ impl Runtime {
             fs::canonicalize(parent)? == parent && parent.starts_with(&self.options.claude_home),
             "Unapplied native target has an unsafe parent."
         );
-        let raw = storage::read_stable_with_limit(&path, 16 * 1024 * 1024)?;
+        let raw = storage::read_stable_with_limit(&path, crate::native_history::MAX_SOURCE_BYTES)?;
         let (owner, retired) = self.saved_owner(r)?;
         ensure!(
             !retired
@@ -677,7 +677,7 @@ impl Runtime {
             !processes.trim().is_empty(),
             "Native process inventory is unavailable."
         );
-        let after = storage::read_stable_with_limit(&path, 16 * 1024 * 1024)?;
+        let after = storage::read_stable_with_limit(&path, crate::native_history::MAX_SOURCE_BYTES)?;
         ensure!(
             raw.identity == after.identity
                 && raw.bytes == after.bytes
@@ -720,7 +720,7 @@ impl Runtime {
         let raw = || -> Result<_> {
             let physical = native::physical_rollout(&path)?;
             native::safe_native_path(&physical, &self.options.codex_home)?;
-            let snapshot = storage::snapshot_with_limit(&physical, 480 * 1024 * 1024)?;
+            let snapshot = storage::snapshot_with_limit(&physical, crate::native_history::MAX_SOURCE_BYTES)?;
             let identity = &snapshot.file_identity;
             ensure!(
                 identity.uid == storage::uid().to_string()
@@ -868,14 +868,14 @@ impl Runtime {
                 cwd: cwd.clone(),
                 origin_cwd: origin_cwd.clone(),
                 codex_home: self.options.codex_home.clone(),
-                max_bytes: 480 * 1024 * 1024,
+                max_bytes: crate::native_history::MAX_SOURCE_BYTES,
             };
             let mut proofs = RuntimeProofs {
                 rollout: crate::native_proofs::RolloutProofs::new(
                     path.clone(),
                     id.clone(),
                     cwd.clone(),
-                    480 * 1024 * 1024,
+                    crate::native_history::MAX_SOURCE_BYTES,
                 )
                 .with_origin_cwd(origin_cwd),
                 provenance: provenance.clone(),
@@ -1146,7 +1146,7 @@ impl Runtime {
         if let Some(parent) = fork_parent {
             let path = r.path.parent().unwrap().join(format!("{parent}.jsonl"));
             native::safe_native_path(&path, &self.options.claude_home)?;
-            let parent = storage::snapshot_with_limit(path, 512 * 1024 * 1024)?;
+            let parent = storage::snapshot_with_limit(path, crate::native_history::MAX_SOURCE_BYTES)?;
             let mut cutoff = 0;
             let mut offset = 0;
             for line in data.text.split_inclusive('\n') {
@@ -1361,7 +1361,7 @@ impl Runtime {
     }
     fn closed_tail_raw(&self, r: &Record) -> Result<(PathBuf, storage::FileIdentity, String)> {
         use std::{borrow::Cow, io::Read};
-        const MAX_BYTES: usize = 480 * 1024 * 1024;
+        const MAX_BYTES: usize = crate::native_history::MAX_SOURCE_BYTES;
         ensure!(
             r.path.is_absolute()
                 && r.path.parent().is_some_and(|parent| {
@@ -1550,7 +1550,7 @@ impl Runtime {
         );
         let physical = native::physical_rollout(&path)?;
         native::safe_native_path(&physical, &self.options.codex_home)?;
-        let before = storage::snapshot_with_limit(&physical, 512 * 1024 * 1024)?;
+        let before = storage::snapshot_with_limit(&physical, crate::native_history::MAX_SOURCE_BYTES)?;
         ensure!(
             before.rows.first().is_some_and(
                 |row| row["type"] == "session_meta" && row["payload"]["id"] == r.native_id
@@ -1577,7 +1577,7 @@ impl Runtime {
                 ),
             "Codex original metadata changed during archive preflight."
         );
-        let after = storage::snapshot_with_limit(&physical, 512 * 1024 * 1024)?;
+        let after = storage::snapshot_with_limit(&physical, crate::native_history::MAX_SOURCE_BYTES)?;
         ensure!(
             before.hash == after.hash && before.file_identity == after.file_identity,
             "Codex original bytes changed during archive preflight."

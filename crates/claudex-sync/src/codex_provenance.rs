@@ -23,9 +23,9 @@ use std::{
 };
 use uuid::Uuid;
 
-const MAX_BYTES: usize = 512 * 1024 * 1024;
+const MAX_BYTES: usize = crate::native_history::MAX_SOURCE_BYTES;
 const ROW_BYTES: usize = 64 * 1024 * 1024;
-const MAX_FILES: usize = 256;
+const MAX_FILES: usize = 5_120;
 const MAX_ITEMS: usize = crate::native_history::MAX_HISTORY_ITEMS;
 fn text(v: &Value) -> Result<&str> {
     v.as_str()
@@ -755,7 +755,7 @@ impl Provenance {
     fn read_history(&self) -> Result<NativeHistory> {
         self.validate()?;
         ensure!(
-            self.max_bytes <= 480 * 1024 * 1024,
+            self.max_bytes <= crate::native_history::MAX_SOURCE_BYTES,
             "Native late-item raw proof exceeds its 480 MiB bound."
         );
         let current = self.read(&self.path, None, self.max_bytes, true)?;

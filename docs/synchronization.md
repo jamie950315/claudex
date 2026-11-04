@@ -220,14 +220,14 @@ guards still apply. Transport and digest checks must be supplemented with actual
 model-input acceptance after deployment; they do not by themselves prove the
 receiving model can see the images.
 
-Desktop native history reads default to a 16 MiB byte budget and 100 turns per
+Desktop native history reads default to a 320 MiB byte budget and 100 turns per
 page. The private state root's `config.json` can explicitly set
-`nativeHistoryMaxBytes` (1024 through 268435456 bytes) and `nativeHistoryPageSize`
-(1 through 100); for example, `268435456` and `5` support a larger bounded export
+`nativeHistoryMaxBytes` (1024 bytes through 5 GiB) and `nativeHistoryPageSize`
+(1 through 100); for example, `5368709120` and `5` support a larger bounded export
 with smaller native response pages. The watcher holds a history in memory while
 it reads it, so a larger budget raises its peak memory use for large conversations. Apply changes only when the watcher can
 restart safely. Both original and managed Codex histories use these settings;
-the 256-page and 100,000-item limits remain fixed. A response page may be as
+the 5,120-page and 2,000,000-item limits are fixed. A response page may be as
 large as the configured budget (at least 64 MiB); a delivery packet is still
 limited to 64 MiB.
 Raw and converted histories must both fit the byte budget. Exceeding a limit
@@ -270,8 +270,8 @@ checkpoint. Their exact turn/item/message positions and full checkpoint digest
 must still match; new image messages require current-rollout evidence. The ledger
 retains only actual image origins across verified promotions, not every rollover,
 and never commits later source origins beyond the copied checkpoint. Reads use
-no-follow opens and stable file identity/stat checks across at most 256 exact
-origins, a 512 MiB aggregate scan limit and 64 MiB row limit. Conflicting duplicate
+no-follow opens and stable file identity/stat checks across at most 5,120 exact
+origins, a 10 GiB aggregate scan limit and 64 MiB row limit. Conflicting duplicate
 proofs or partial provenance remain blocked. It never opens the historical image path, fetches a URL or searches
 for rollout files. A forked or rolled-over Codex conversation can inherit images
 from earlier rollouts: those are read only through the exact `history_base`
@@ -827,7 +827,7 @@ identity and original Local mapping still agree. An anchor never authorizes an
 archive, and expired commands are never made actionable by retained grouping.
 There remains **one fixed Local original archive per logical conversation**, not
 another copy each round. It is not disposable quota data. Generated previous
-disposable copies keep the existing one-per-side, seven-day and aggregate 512 MiB bounds;
+disposable copies keep the existing one-per-side, seven-day and aggregate 10 GiB bounds;
 the audit remains capped at 50 entries.
 
 This path is native-structure-validated and lifecycle-guarded, not an external writer lease. A manifest
@@ -1071,7 +1071,7 @@ Per logical conversation, the steady-state managed set is:
 - One current Codex projection and one current Claude projection.
 - At most one previous projection per side.
 - Previous projections expire seven days after retirement, subject to a global
-  512 MiB backup budget. Current conversations are never deleted for a quota.
+  10 GiB backup budget. Current conversations are never deleted for a quota.
 
 Independent snapshots therefore have at most four managed complete copies in steady state. A transaction
 can temporarily add one candidate; an error stops further allocation. The
@@ -1086,7 +1086,7 @@ bytes and dependency inventory, Desktop mode preserves it as a
 The promoted replacement and source prefixes are rechecked before the same
 transaction completes; recovery never resends that handoff. Such anchors remain
 visible native histories and are never automatically demoted or expired, even
-if their children later disappear. They still count toward the same 512 MiB
+if their children later disappear. They still count toward the same 10 GiB
 backup budget, with a hard maximum of 64 anchors globally. New allocation is
 refused when these bounds cannot be met. The ordinary one-previous-per-side and
 seven-day limits continue to apply to disposable snapshots. Missing or changed

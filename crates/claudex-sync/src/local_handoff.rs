@@ -21,7 +21,7 @@ use std::{
 use uuid::Uuid;
 
 const MAX_METADATA: usize = 2 * 1024 * 1024;
-const MAX_TRANSCRIPT: usize = 512 * 1024 * 1024;
+const MAX_TRANSCRIPT: usize = crate::native_history::MAX_SOURCE_BYTES;
 #[async_trait]
 pub trait Inspector: Sync {
     async fn inspect_handoff(&self, record: &Record) -> Result<Reading>;

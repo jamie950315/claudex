@@ -61,7 +61,7 @@ impl RolloutProofs {
                 && Uuid::parse_str(id).is_ok()
                 && self.path.is_absolute()
                 && self.cwd.is_absolute()
-                && (1..=480 * 1024 * 1024).contains(&self.max_bytes),
+                && (1..=crate::native_history::MAX_SOURCE_BYTES).contains(&self.max_bytes),
             "Native proof source identity or byte limit is invalid."
         );
         let parent = self

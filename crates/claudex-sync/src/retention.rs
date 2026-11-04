@@ -17,7 +17,7 @@ impl Default for Policy {
         Self {
             previous_per_side: 1,
             max_age_ms: 7 * 86_400_000,
-            max_backup_bytes: 512 * 1024 * 1024,
+            max_backup_bytes: 10 * 1024 * 1024 * 1024,
             max_audit_entries: 50,
         }
     }

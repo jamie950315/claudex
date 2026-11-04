@@ -12,7 +12,7 @@ use std::{
 };
 use uuid::Uuid;
 
-const LIMIT: usize = 512 * 1024 * 1024;
+const LIMIT: usize = crate::native_history::MAX_SOURCE_BYTES;
 fn exact_uuid(value: &str) -> Result<()> {
     ensure!(
         Uuid::parse_str(value)?.to_string() == value,

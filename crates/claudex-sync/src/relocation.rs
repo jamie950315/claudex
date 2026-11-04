@@ -126,7 +126,7 @@ pub fn claude(home: &Path, registry: &Path, record: &Record) -> Result<Option<Re
     ] {
         directory(&p)?;
     }
-    let raw = storage::snapshot_with_limit(&path, 512 * 1024 * 1024)?;
+    let raw = storage::snapshot_with_limit(&path, crate::native_history::MAX_SOURCE_BYTES)?;
     ensure!(
         raw.file_identity.uid == storage::uid().to_string()
             && raw.file_identity.nlink == "1"

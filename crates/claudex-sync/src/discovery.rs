@@ -15,7 +15,7 @@ use std::{
 use uuid::Uuid;
 
 const HEADER_BYTES: usize = 4 * 1024 * 1024;
-const TRANSCRIPT_BYTES: usize = 480 * 1024 * 1024;
+const TRANSCRIPT_BYTES: usize = crate::native_history::MAX_SOURCE_BYTES;
 
 /// Discovery classifies candidates; it neither loads nor authenticates history.
 /// Keep only one row in memory and recheck the same exact no-follow descriptor.

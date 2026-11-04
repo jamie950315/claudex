@@ -25,7 +25,14 @@ impl Rpc for claudex_core::rpc::CodexClient {
 /// Most native items one history read accepts. Long autonomous Codex turns
 /// produce tens of thousands of reasoning and tool items; the byte budget
 /// remains the memory bound.
-pub const MAX_HISTORY_ITEMS: usize = 100_000;
+pub const MAX_HISTORY_ITEMS: usize = 2_000_000;
+/// Most response pages and the largest configurable byte budget (5 GiB).
+pub const MAX_HISTORY_PAGES: usize = 5_120;
+pub const MAX_HISTORY_BYTES: usize = 5 * 1024 * 1024 * 1024;
+/// Largest native transcript or rollout file read whole as evidence.
+pub const MAX_SOURCE_BYTES: usize = 10 * 1024 * 1024 * 1024;
+// A page may be as large as the byte budget, so the shared socket must accept it.
+const _: () = assert!(MAX_HISTORY_BYTES <= claudex_core::rpc::MAX_CONFIGURED_FRAME_BYTES);
 #[derive(Clone, Debug)]
 pub struct Limits {
     pub max_bytes: usize,
@@ -36,9 +43,9 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
-            max_bytes: 16 * 1024 * 1024,
+            max_bytes: 320 * 1024 * 1024,
             max_items: MAX_HISTORY_ITEMS,
-            max_pages: 256,
+            max_pages: MAX_HISTORY_PAGES,
             page_size: 100,
         }
     }
@@ -46,12 +53,12 @@ impl Default for Limits {
 impl Limits {
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            (1024..=268_435_456).contains(&self.max_bytes)
+            (1024..=MAX_HISTORY_BYTES).contains(&self.max_bytes)
                 && (1..=100).contains(&self.page_size)
                 && self.max_items > 0
                 && self.max_items <= MAX_HISTORY_ITEMS
                 && self.max_pages > 0
-                && self.max_pages <= 256,
+                && self.max_pages <= MAX_HISTORY_PAGES,
             "Invalid native history limits."
         );
         Ok(())

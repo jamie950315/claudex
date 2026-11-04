@@ -230,7 +230,7 @@ fn claude_proof(home: &Path, input: &Value) -> Result<()> {
         .map(|d| directory(d))
         .collect::<Result<Vec<_>>>()?;
     insist(path.canonicalize()? == path, "ORIGIN_PROOF_UNAVAILABLE")?;
-    let source = archive::private_read_text(&path, 16 * 1024 * 1024)?;
+    let source = archive::private_read_text(&path, 320 * 1024 * 1024)?;
     for (d, b) in dirs.iter().zip(before) {
         insist(directory(d)? == b, "ORIGIN_PROOF_UNAVAILABLE")?;
     }

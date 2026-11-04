@@ -29,6 +29,9 @@ use tokio_tungstenite::{
 };
 
 pub const MAX_FRAME_BYTES: usize = 64 * 1024 * 1024;
+/// Largest configurable shared-socket response, twenty times the former 1 GiB
+/// bound so the largest history byte budget always fits.
+pub const MAX_CONFIGURED_FRAME_BYTES: usize = 20 * 1024 * 1024 * 1024;
 const UNKNOWN: &str = "completion is unknown, do not retry writes automatically";
 
 /// A missing endpoint before admission, not a missing history or uncertain RPC.
@@ -250,7 +253,7 @@ impl CodexClient {
         Self::connect_with_limit(path, MAX_FRAME_BYTES).await
     }
     pub async fn connect_with_limit(path: &Path, max_payload: usize) -> Result<Self> {
-        if !(MAX_FRAME_BYTES..=1024 * 1024 * 1024).contains(&max_payload) {
+        if !(MAX_FRAME_BYTES..=MAX_CONFIGURED_FRAME_BYTES).contains(&max_payload) {
             bail!("Invalid shared Codex frame limit.");
         }
         let ws = connect_codex_socket(path, max_payload).await?;

@@ -9,7 +9,7 @@ use claudex_core::{
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, fs, io::Read, path::Path};
 use uuid::Uuid;
-const MAX_BYTES: usize = 512 * 1024 * 1024;
+const MAX_BYTES: usize = crate::native_history::MAX_SOURCE_BYTES;
 const KINDS: &[&str] = &[
     "cli",
     "vscode",
@@ -62,7 +62,7 @@ fn file_proof(path: &Path, id: &str, budget: &mut Budget) -> Result<Value> {
     );
     let end = bytes.iter().position(|b| *b == b'\n').unwrap();
     ensure!(
-        end <= 64 * 1024 * 1024,
+        end <= 20 * 64 * 1024 * 1024,
         "Preserved archive header exceeds its byte limit."
     );
     let header: Value = serde_json::from_str(&String::from_utf8_lossy(&bytes[..end]))?;
@@ -99,7 +99,7 @@ async fn history_proof(
         let page = client.request("thread/turns/list", params).await?;
         budget.api_bytes += stringify(&page)?.len();
         ensure!(
-            budget.api_bytes <= 64 * 1024 * 1024,
+            budget.api_bytes <= 20 * 64 * 1024 * 1024,
             "Preserved archive native history exceeds its byte limit."
         );
         let rows = page["data"]
@@ -146,7 +146,7 @@ async fn history_proof(
             }
             digests.push(json!(hash(turn)?));
             ensure!(
-                ids.len() <= 25_000,
+                ids.len() <= 500_000,
                 "Preserved archive native history exceeds its turn limit."
             );
         }

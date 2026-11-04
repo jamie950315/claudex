@@ -94,7 +94,7 @@ be revived by an anchor. Archived folder anchors use the observed native session
 normalizer and actual git metadata, not invented keys or labels. Keep one fixed
 Local original archive per logical conversation, never a new original per turn.
 Disposable generated predecessors retain the existing one-previous-per-side, seven-day,
-512 MiB aggregate rollback and 50-audit-entry bounds; originals are not deletable
+10 GiB aggregate rollback and 50-audit-entry bounds; originals are not deletable
 quota entries. Native automatic archival UI acceptance is a separate requirement
 from unit tests, manifest publication or service readiness.
 Native UI checks now verify existing Local predecessors and a fresh image-origin

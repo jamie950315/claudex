@@ -2155,7 +2155,7 @@ impl DesktopBridge {
             .root
             .join("edited-source-resolutions")
             .join(format!("{operation_id}.json"));
-        let receipt = match storage::read_stable_with_limit(&receipt_path, 512 * 1024 * 1024) {
+        let receipt = match storage::read_stable_with_limit(&receipt_path, crate::native_history::MAX_SOURCE_BYTES) {
             Ok(file) => {
                 storage::require_private_directory(receipt_path.parent().unwrap())?;
                 ensure!(

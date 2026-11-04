@@ -21,7 +21,7 @@ use std::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader, ReadBuf};
 
-pub const MAX_DESKTOP_FRAME_BYTES: usize = 1024 * 1024 * 1024;
+pub const MAX_DESKTOP_FRAME_BYTES: usize = claudex_core::rpc::MAX_CONFIGURED_FRAME_BYTES;
 pub const SIGNED_HOST_SCRIPT: &str = include_str!("../host/codex-host.mjs");
 
 /// Replace transport options only; preserve all original native argument bytes.

@@ -5,7 +5,7 @@
 Use the installed `claudex` executable, or `bin/claudex` from a built source
 checkout. This guide covers execution, not history synchronization; the two
 capabilities use separate services and state.
-Current behavior is described for Claudex 2.0.47 and its bundled Mod 0.8.105;
+Current behavior is described for Claudex 2.0.49 and its bundled Mod 0.8.107;
 the verification section identifies historical runtime evidence separately.
 
 ## Work protocol
@@ -423,7 +423,7 @@ native Desktop originator, direct-input capability and explicit null fork,
 parent, agent-role and agent-nickname markers. Missing markers, other nullable
 schemas and native versions remain unbound; the complete exact call/result proof
 is still mandatory. Claude uses the exact native UUID
-and cwd to locate one stable no-follow private transcript of at most 16 MiB in
+and cwd to locate one stable no-follow private transcript of at most 320 MiB in
 the broker's Claude home (`~/.claude` in the standard installation). Desktop Local
 registry membership is not required: persisted same-host CLI, SDK and Remote
 Control sessions use the same proof, including newly authored native calls in

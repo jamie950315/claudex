@@ -117,7 +117,7 @@ auto-demote them, remove children, or skip preallocation capacity checks.
 The Rust `bin/claudex` entry point provides explicit initialization with
 all-project or selected-project scope, discovery, watching, synchronization, recovery, collection, and optional macOS LaunchAgent
 installation. Disposable-copy defaults retain one current and one previous copy per side,
-seven-day rollback age, 512 MiB aggregate rollback quota, and 50 audit entries.
+seven-day rollback age, 10 GiB aggregate rollback quota, and 50 audit entries.
 One extra candidate is allowed during a transaction; unresolved failures prevent
 new allocation. Original source sessions are not disposable backups.
 All-project discovery skips unsupported unenrolled histories and reports a
