@@ -1049,7 +1049,7 @@ impl Runtime {
                 .to_string_lossy()
                 .ends_with(".jsonl.zst")
             {
-                storage::compressed_rollout_bytes(&physical, 480 * 1024 * 1024)?
+                storage::compressed_rollout_bytes(&physical)?
             } else {
                 fs::symlink_metadata(&physical)?.len()
             };

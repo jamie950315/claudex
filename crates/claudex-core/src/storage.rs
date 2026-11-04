@@ -275,14 +275,59 @@ fn decompress_rollout(stored: &[u8], max_bytes: usize) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 /// The logical byte count snapshot_with_limit reports for a compressed rollout,
-/// without parsing its rows.
-pub fn compressed_rollout_bytes(path: impl AsRef<Path>, max_bytes: usize) -> Result<u64> {
-    let bytes = decompress_rollout(&read_stable(path.as_ref())?.bytes, max_bytes)?;
-    let text = String::from_utf8_lossy(&bytes);
-    if !text.is_empty() && !text.ends_with('\n') {
+/// without parsing its rows. It is a count, like the size of an uncompressed
+/// rollout, so it streams the decompressed bytes instead of holding them and
+/// applies no read limit. Invalid UTF-8 counts as its lossy replacement, as
+/// in the decoded text.
+pub fn compressed_rollout_bytes(path: impl AsRef<Path>) -> Result<u64> {
+    let stored = read_stable(path.as_ref())?.bytes;
+    let mut decoder = zstd::stream::read::Decoder::new(stored.as_slice())
+        .context("Compressed Codex rollout is not a complete zstd stream.")?;
+    let mut buffer = vec![0u8; 1 << 20];
+    let mut carry = Vec::new();
+    let mut total = 0u64;
+    let mut last = None;
+    loop {
+        let read = decoder
+            .read(&mut buffer)
+            .context("Compressed Codex rollout is not a complete zstd stream.")?;
+        if read == 0 {
+            break;
+        }
+        last = Some(buffer[read - 1]);
+        carry.extend_from_slice(&buffer[..read]);
+        let mut rest = carry.as_slice();
+        loop {
+            match std::str::from_utf8(rest) {
+                Ok(_) => {
+                    total += rest.len() as u64;
+                    rest = &[];
+                    break;
+                }
+                Err(e) => {
+                    total += e.valid_up_to() as u64;
+                    match e.error_len() {
+                        Some(len) => {
+                            total += '\u{FFFD}'.len_utf8() as u64;
+                            rest = &rest[e.valid_up_to() + len..];
+                        }
+                        None => {
+                            rest = &rest[e.valid_up_to()..];
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        carry = rest.to_vec();
+    }
+    if !carry.is_empty() {
+        total += '\u{FFFD}'.len_utf8() as u64;
+    }
+    if total > 0 && (last != Some(b'\n') || !carry.is_empty()) {
         bail!("Transcript has an incomplete final line.");
     }
-    Ok(text.len() as u64)
+    Ok(total)
 }
 pub fn snapshot_with_limit(path: impl AsRef<Path>, max_bytes: usize) -> Result<Snapshot> {
     let path = path.as_ref();
@@ -571,6 +616,33 @@ pub fn epoch_ms(time: SystemTime) -> Result<i64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compressed_rollout_bytes_streams_past_the_read_limit_and_counts_like_the_text() {
+        let dir = std::env::temp_dir().join(format!("claudex-zst-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("rollout.jsonl.zst");
+        let write = |raw: &[u8]| {
+            std::fs::write(&path, zstd::encode_all(raw, 3).unwrap()).unwrap();
+        };
+        // Invalid UTF-8 straddles the 1 MiB read boundary and ends a line.
+        let mut raw = vec![b'"'];
+        raw.extend(vec![b'a'; (1 << 20) - 2]);
+        raw.extend_from_slice(&[0xE2, 0x82, b'"', b'\n', b'"', 0xFF, b'x']);
+        raw.extend_from_slice(&[0xF0, 0x9F, 0x98, 0x80, b'"', b'\n']);
+        write(&raw);
+        let expected = String::from_utf8_lossy(&raw).len() as u64;
+        assert_eq!(compressed_rollout_bytes(&path).unwrap(), expected);
+        let text = snapshot_with_limit(&path, usize::MAX).unwrap();
+        assert_eq!(text.bytes, expected);
+        // No read limit: a count larger than any snapshot limit is still a count.
+        assert!(snapshot_with_limit(&path, 1024).is_err());
+        write(b"{}\n{}");
+        assert!(compressed_rollout_bytes(&path).is_err());
+        write(b"");
+        assert_eq!(compressed_rollout_bytes(&path).unwrap(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn sha256_backend_keeps_standard_digest_bytes() {
