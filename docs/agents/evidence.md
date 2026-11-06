@@ -433,6 +433,8 @@ prepared handoff backed up its original rollout and native index, corrected only
 that generated copy's provider label in its header and index row, and performed
 one native resume without submitting a turn. Normal coordinator recovery then
 cleared the pending transaction and authenticated equal 151-message checkpoints
-on both current sides. This was a one-off user-authorized repair, not automatic
-provider migration or permission to edit other native data. No model inference,
+on both current sides. A subsequent normal handoff used the configured provider
+without local repair and advanced both verified checkpoints to 302 messages.
+This was a one-off user-authorized repair, not automatic provider migration or
+permission to edit other native data. No model inference,
 provider switching or native-app restart was used.
