@@ -438,3 +438,25 @@ without local repair and advanced both verified checkpoints to 302 messages.
 This was a one-off user-authorized repair, not automatic provider migration or
 permission to edit other native data. No model inference,
 provider switching or native-app restart was used.
+
+## Startup sweep fairness under native event traffic (2026-11-06)
+
+App 2.0.51 / Mod 0.8.109 fixes startup starvation when native activity keeps the
+durable inbox nonempty. A deterministic regression inserts a new receipt after
+the foreground snapshot: restoring the old empty-inbox admission condition makes
+the regression fail. The fixed scheduler admits one cold operation per boundary,
+bounds foreground history/owner-wake work and preserves unserved revisions.
+A second regression verifies bounded foreground service and durable backlog
+consumption across boundaries. Workspace contracts passed 466 tests with six
+intentional ignores; release build and signed app packaging passed.
+
+Normal stop/drain and signed local installation preserved both native desktop
+apps. Bundled, installed and freshly observed Mod versions were 0.8.109; strict
+deep signature verification passed. The installed watcher completed all 769 of
+769 startup checks with no blocked tracked conversation or pending error, and a
+subsequent state read found no pending transaction. Actual app pixels and
+accessibility showed synchronization ready and both native apps connected.
+Unenrolled sources awaiting a complete native turn remain ordinary admission
+waits. No model turn, native transcript/index edit, provider switch or native-app
+restart was used. This is installed startup/scheduler acceptance, not a new
+model-reply acceptance or public release.
