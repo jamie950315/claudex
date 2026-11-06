@@ -1239,6 +1239,51 @@ impl Runtime {
         );
         Ok(result["thread"].clone())
     }
+    async fn codex_provider(&self, cwd: &str) -> Result<String> {
+        let result = self
+            .client()
+            .await?
+            .request("config/read", json!({"cwd":cwd,"includeLayers":false}))
+            .await?;
+        result["config"]["model_provider"]
+            .as_str()
+            .filter(|provider| !provider.trim().is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| anyhow::anyhow!("Native Codex configuration has no model provider."))
+    }
+    async fn verify_registration(&self, r: &Record) -> Result<()> {
+        // A published rollout already has thread/read metadata even when resume
+        // was refused. Only the authenticated full API bootstrap proves that
+        // Codex actually indexed the handoff; a matching path proves nothing.
+        let metadata = self.metadata(&r.native_id).await?;
+        ensure!(
+            metadata["path"] == json!(r.path),
+            "Registered Codex path changed."
+        );
+        if let Err(error) = self.inspect(r).await {
+            if error
+                .downcast_ref::<native_history::NoCompletedHistory>()
+                .is_some()
+            {
+                let provider = self.codex_provider(&r.cwd).await?;
+                let saved = metadata["modelProvider"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Native Codex thread provider is missing."))?;
+                ensure!(
+                    saved == provider,
+                    "Codex handoff {} is not verified: its provider is {}, but the current provider is {}. Registration was not retried; pending history is preserved.",
+                    r.native_id,
+                    saved,
+                    provider
+                );
+            }
+            return Err(error.context(format!(
+                "Codex handoff {} registration is not verified; pending preserved",
+                r.native_id
+            )));
+        }
+        Ok(())
+    }
     async fn mutation(&self, r: &Record, action: &str, method: &str, params: Value) -> Result<()> {
         let path = self
             .options
@@ -1254,11 +1299,17 @@ impl Runtime {
                 "Native mutation journal identity mismatch."
             );
             if journal["phase"] == "complete" {
+                if action == "register" {
+                    self.verify_registration(r).await?;
+                }
                 return Ok(());
             }
             let metadata = self.metadata(&r.native_id).await?;
             let recovered = match action {
-                "register" => metadata["path"] == json!(r.path),
+                "register" => {
+                    self.verify_registration(r).await?;
+                    true
+                }
                 "name" => metadata["name"] == params["name"],
                 "archive" | "original-archive" => metadata["path"].as_str().is_some_and(|p| {
                     Path::new(p)
@@ -1275,6 +1326,9 @@ impl Runtime {
         journal = json!({"version":1,"nativeId":r.native_id,"recordId":r.id,"method":method,"params":params,"phase":"requested"});
         storage::write_json(&path, &journal)?;
         self.client().await?.request(method, params).await?;
+        if action == "register" {
+            self.verify_registration(r).await?;
+        }
         journal["phase"] = json!("complete");
         storage::write_json(path, &journal)
     }
@@ -2132,6 +2186,10 @@ impl Adapter for NativeAdapter {
                 );
             }
         } else {
+            let provider = self.runtime.codex_provider(input.common.cwd()?).await?;
+            record
+                .extra
+                .insert("codexModelProvider".into(), json!(provider));
             record.path = codecs::codex_projection_path(
                 &self.runtime.options.codex_home,
                 &input.common,
@@ -2242,7 +2300,23 @@ impl Adapter for NativeAdapter {
         }
         let content = self.runtime.content(r, p)?;
         let common = owned_history::build_codex(&p.common, content, &r.native_id)?;
-        let text = codecs::encode_codex(&common, &r.native_id, true)?;
+        // Old prepared plans retain the provider their encoder always used.
+        // Never rewrite an already-published native rollout to migrate it.
+        let provider = r
+            .extra
+            .get("codexModelProvider")
+            .map(|v| {
+                v.as_str()
+                    .filter(|s| !s.trim().is_empty())
+                    .ok_or_else(|| anyhow::anyhow!("Invalid planned Codex model provider."))
+            })
+            .transpose()?
+            .unwrap_or("openai");
+        ensure!(
+            self.runtime.codex_provider(&r.cwd).await? == provider,
+            "Codex model provider changed after handoff planning; nothing published."
+        );
+        let text = codecs::encode_codex_with_provider(&common, &r.native_id, true, provider)?;
         let expected = owned_history::decode_codex(
             &self.runtime.options.root,
             &text,
@@ -2605,6 +2679,9 @@ mod tests {
                     let result = match request["method"].as_str() {
                         Some("initialize") => json!({}),
                         Some("thread/read") => json!({"thread":state["metadata"]}),
+                        Some("config/read") => {
+                            json!({"config":{"model_provider":state.get("provider").cloned().unwrap_or(json!("openai"))}})
+                        }
                         Some("thread/loaded/list") => {
                             json!({"data":state.get("loaded").cloned().unwrap_or(json!([])),"nextCursor":null})
                         }
@@ -2678,6 +2755,39 @@ mod tests {
                 side: Side::Codex,
             }
         }
+        async fn owned(&mut self) -> Result<Pending> {
+            let common = self.runtime.inspect(&self.record).await?.common.portable();
+            self.record.managed = true;
+            self.record.verified = false;
+            self.record.kind = "snapshot".into();
+            self.record.checkpoint = crate::desktop::Checkpoint::empty();
+            let pending = Pending {
+                phase: crate::desktop::Phase::Prepared,
+                operation_id: Uuid::new_v4().to_string(),
+                record: self.record.clone(),
+                source_id: "source".into(),
+                target_id: None,
+                archive_original_id: None,
+                reuse: false,
+                checkpoint: crate::desktop::Checkpoint::of(&common)?,
+                previous: crate::desktop::Checkpoint::empty(),
+                common: common.clone(),
+                extra: Map::new(),
+            };
+            let content = self.runtime.content(&self.record, &pending)?;
+            let native = owned_history::build_codex(&common, content, &self.record.native_id)?;
+            let text = codecs::encode_codex(&native, &self.record.native_id, true)?;
+            storage::atomic_write(&self.record.path, &text)?;
+            let rows = codecs::parse_rows(&text)?;
+            let raw = &rows[3]["payload"]["item"];
+            let user = json!({"type":"userMessage","id":raw["id"],"clientId":raw["client_id"],"content":raw["content"]});
+            let raw = &rows[5]["payload"]["item"];
+            let agent = json!({"type":"agentMessage","id":raw["id"],"phase":raw["phase"],"text":raw["content"][0]["text"]});
+            let mut state = self.backend.lock().await;
+            state["metadata"]["modelProvider"] = json!("openai");
+            state["turns"] = json!([{"id":rows[1]["payload"]["turn_id"],"status":"completed","error":null,"itemsView":"full","items":[user,agent]}]);
+            Ok(pending)
+        }
         async fn preserved(&self) -> Result<Record> {
             let mut record = self.record.clone();
             record.extra.insert(
@@ -2691,6 +2801,113 @@ mod tests {
             self.server.await??;
             Ok(())
         }
+    }
+    #[tokio::test]
+    async fn codex_handoff_plans_bind_the_effective_project_provider() -> Result<()> {
+        let f = ClosedTailFixture::new().await?;
+        f.backend.lock().await["provider"] = json!("project-provider");
+        let common = f.runtime.inspect(&f.record).await?.common;
+        let planned = f
+            .adapter()
+            .plan(&PlanInput {
+                conversation_id: f.record.conversation_id.clone(),
+                native_id: Uuid::new_v4().to_string(),
+                operation_id: Uuid::new_v4().to_string(),
+                common,
+                title: "Example".into(),
+                target: None,
+                relocation: false,
+                context_reset: false,
+                context_refresh: false,
+            })
+            .await?;
+        assert_eq!(planned.extra["codexModelProvider"], "project-provider");
+        f.close().await
+    }
+    #[tokio::test]
+    async fn registration_recovery_never_equates_a_published_path_with_native_acceptance()
+    -> Result<()> {
+        for phase in ["requested", "complete"] {
+            let mut f = ClosedTailFixture::new().await?;
+            f.owned().await?;
+            {
+                let mut state = f.backend.lock().await;
+                state["turns"] = json!([]);
+                state["provider"] = json!("current-provider");
+            }
+            let params = json!({"threadId":f.record.native_id,"path":f.record.path,"cwd":f.record.cwd,"excludeTurns":true});
+            let journal = f
+                .runtime
+                .options
+                .root
+                .join("native-operations")
+                .join(format!("{}-register.json", f.record.id));
+            let value = json!({"version":1,"nativeId":f.record.native_id,"recordId":f.record.id,"method":"thread/resume","params":params,"phase":phase});
+            storage::write_json(&journal, &value)?;
+            let before = fs::read(&journal)?;
+            let error = f
+                .runtime
+                .mutation(&f.record, "register", "thread/resume", params)
+                .await
+                .unwrap_err();
+            assert!(
+                error.to_string().contains(
+                    "its provider is openai, but the current provider is current-provider"
+                ),
+                "{error:#}"
+            );
+            assert_eq!(fs::read(&journal)?, before);
+            // The fixture rejects every native mutation: no resume was replayed.
+            f.close().await?;
+        }
+        Ok(())
+    }
+    #[tokio::test]
+    async fn registration_recovery_requires_the_authenticated_full_api_bootstrap() -> Result<()> {
+        let mut f = ClosedTailFixture::new().await?;
+        f.owned().await?;
+        let params = json!({"threadId":f.record.native_id,"path":f.record.path,"cwd":f.record.cwd,"excludeTurns":true});
+        let journal = f
+            .runtime
+            .options
+            .root
+            .join("native-operations")
+            .join(format!("{}-register.json", f.record.id));
+        storage::write_json(
+            &journal,
+            &json!({"version":1,"nativeId":f.record.native_id,"recordId":f.record.id,"method":"thread/resume","params":params,"phase":"requested"}),
+        )?;
+        f.runtime
+            .mutation(&f.record, "register", "thread/resume", params.clone())
+            .await?;
+        assert_eq!(storage::read_json(&journal)?["phase"], "complete");
+        f.backend.lock().await["turns"][0]["items"][1]["text"] = json!("Changed receipt");
+        assert!(
+            f.runtime
+                .mutation(&f.record, "register", "thread/resume", params)
+                .await
+                .is_err()
+        );
+        f.close().await
+    }
+    #[tokio::test]
+    async fn changed_codex_provider_prevents_publication_of_a_prepared_snapshot() -> Result<()> {
+        let mut f = ClosedTailFixture::new().await?;
+        let mut pending = f.owned().await?;
+        let mut record = f.record.clone();
+        record.path = f.runtime.options.codex_home.join("unpublished.jsonl");
+        record
+            .extra
+            .insert("codexModelProvider".into(), json!("planned-provider"));
+        pending.record = record.clone();
+        f.backend.lock().await["provider"] = json!("changed-provider");
+        let error = f.adapter().apply(&record, &pending).await.unwrap_err();
+        assert!(
+            error.to_string().contains("changed after handoff planning"),
+            "{error:#}"
+        );
+        assert!(!record.path.exists());
+        f.close().await
     }
     #[tokio::test]
     async fn unpublished_snapshot_not_loaded_requires_independent_absence() -> Result<()> {

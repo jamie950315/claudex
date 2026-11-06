@@ -942,7 +942,19 @@ fn projection_item_id(id: &str, index: usize) -> String {
     )
 }
 pub fn encode_codex(common: &Common, id: &str, paginated: bool) -> Result<String> {
+    encode_codex_with_provider(common, id, paginated, "openai")
+}
+pub fn encode_codex_with_provider(
+    common: &Common,
+    id: &str,
+    paginated: bool,
+    provider: &str,
+) -> Result<String> {
     Uuid::parse_str(id)?;
+    ensure!(
+        !provider.trim().is_empty(),
+        "Codex model provider is missing."
+    );
     assert_complete(common)?;
     ensure!(
         common.messages.first().is_some_and(|m| m.role == "user"),
@@ -955,7 +967,7 @@ pub fn encode_codex(common: &Common, id: &str, paginated: bool) -> Result<String
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("Projection timestamp missing."))?;
     let mut rows = vec![
-        json!({"timestamp":stamp,"type":"session_meta","payload":{"base_instructions":null,"cli_version":"0.155.0-alpha.16.3","cwd":cwd,"id":id,"model_provider":"openai","originator":"claudex","source":"cli","timestamp":stamp,"history_mode":if paginated{"paginated"}else{"legacy"}}}),
+        json!({"timestamp":stamp,"type":"session_meta","payload":{"base_instructions":null,"cli_version":"0.155.0-alpha.16.3","cwd":cwd,"id":id,"model_provider":provider,"originator":"claudex","source":"cli","timestamp":stamp,"history_mode":if paginated{"paginated"}else{"legacy"}}}),
     ];
     let mut turn = None;
     let mut number = 0;
@@ -1432,6 +1444,17 @@ mod tests {
                 decode_codex(&codex).unwrap().fingerprint().unwrap(),
                 common.fingerprint().unwrap()
             );
+            let custom =
+                encode_codex_with_provider(&common, &id, paginated, "native-provider").unwrap();
+            assert_eq!(
+                parse_rows(&custom).unwrap()[0]["payload"]["model_provider"],
+                "native-provider"
+            );
+            assert_eq!(
+                decode_codex(&custom).unwrap().fingerprint().unwrap(),
+                common.fingerprint().unwrap()
+            );
+            assert!(encode_codex_with_provider(&common, &id, paginated, " ").is_err());
         }
     }
 }

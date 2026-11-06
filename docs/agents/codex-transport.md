@@ -109,3 +109,15 @@ injects DISABLE_AUTOUPDATER=1; preserve explicit inherited/override preferences.
 Runtime updater behavior and npm dependency upgrades remain the native tools'
 responsibility. Keep schema versions, signatures, locks, identity and conflict
 checks strict even when runtime version enforcement is suspended.
+
+New Desktop snapshot plans bind `codexModelProvider` from the backend's effective
+`config/read` for the destination cwd. The encoder uses that exact provider and
+checks it again before publishing. Legacy prepared plans retain `openai`; never
+rewrite a published native rollout or switch global providers to recover one.
+A matching `thread/read.path` is not registration proof: Codex exposes metadata
+for an unindexed file even after refusing `thread/resume` for a provider mismatch.
+Recovery, including legacy complete registration journals, must authenticate the
+full API bootstrap before accepting registration. Missing indexed history keeps
+the pending transaction and journal intact and identifies a provider mismatch
+when present. Never replay a registration to populate the index. A normal native
+user resume may supply the missing index, after which read-only recovery proceeds.

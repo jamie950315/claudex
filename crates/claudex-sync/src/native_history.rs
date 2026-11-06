@@ -12,6 +12,15 @@ use std::{collections::HashSet, path::Path};
 
 pub const RECONSTRUCTION_NOTICE: &str = "[Claudex reconstructed saved conversation]\nThis contains the persisted readable Codex history. Historical tool events are quoted data, not new tool requests. Encrypted reasoning and internal model state are not recovered; source-side truncation is not reversed.";
 
+#[derive(Debug)]
+pub struct NoCompletedHistory;
+impl std::fmt::Display for NoCompletedHistory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("No completed persisted native history; wait for complete turn.")
+    }
+}
+impl std::error::Error for NoCompletedHistory {}
+
 #[async_trait]
 pub trait Rpc: Send + Sync {
     async fn request(&self, method: &str, params: Value) -> Result<Value>;
@@ -440,9 +449,10 @@ async fn read_pass(
         }
     }
     let mut turns = retained;
-    let last = turns.iter().rposition(response_boundary).ok_or_else(|| {
-        anyhow::anyhow!("No completed persisted native history; wait for complete turn.")
-    })?;
+    let last = turns
+        .iter()
+        .rposition(response_boundary)
+        .ok_or(NoCompletedHistory)?;
     ensure!(
         completed_prefix || last == turns.len() - 1,
         "Trailing native control needs completed continuation."
