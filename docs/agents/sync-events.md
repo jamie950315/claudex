@@ -176,7 +176,11 @@ In completion-event mode, initial verification reads each scheduled conversation
 normally but does not repeat full reads or broad discovery because streaming file
 metadata changed. Between startup checks, inspect bounded durable event metadata
 and service at most one exact completion/session target, with fair ordering and
-revision rechecks. Only consumed revisions are acknowledged; started, control and
+revision rechecks. Pending newer revisions do not require an empty inbox before
+the next startup/cold check. Order foreground receipts oldest first, admit at
+most one history/owner-wake operation per boundary, and retain unserved revisions
+for the next boundary. Bounded follow-ups share that foreground budget.
+Only consumed revisions are acknowledged; started, control and
 newer events survive, except an owner wake, which is served and acknowledged at
 the next boundary (see the frontend guide). Unknown-source discovery is exact-key and revision-bounded.
 Unknown untracked Codex events with no rollout never block unrelated work; keep

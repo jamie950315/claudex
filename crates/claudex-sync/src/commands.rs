@@ -797,9 +797,14 @@ async fn watch_desktop_control(
                     checking_conversation_count=0;
                     published_first_operation=false;
                 }
+                let mut foreground_serviced = false;
                 if !work.is_empty() {
                     folder_dirty = true;
                     let mut consumed = vec![];
+                    // Bound foreground history work at each cold-check boundary.
+                    // Oldest receipts go first so a repeatedly active source
+                    // cannot monopolize the remaining durable events.
+                    work.sort_by_key(|receipt| (receipt.at, receipt.event.key()));
                     for receipt in &work {
                         if *shutdown.borrow() || hooks::synchronization_held(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
                         let state = bridge.status()?;
@@ -811,12 +816,6 @@ async fn watch_desktop_control(
                             consumed.push(receipt.clone());
                             continue;
                         }
-                        if receipt.event.kind == Kind::OwnerWake {
-                            // A stale activation hint never takes down synchronization.
-                            let _ = runtime.wake_owner(&receipt.event.native_id, receipt.event.remote_id.as_deref().unwrap_or("")).await;
-                            consumed.push(receipt.clone());
-                            continue;
-                        }
                         if matches!(receipt.event.kind, Kind::Configuration | Kind::Reconnect) {
                             consumed.push(receipt.clone());
                             continue;
@@ -824,6 +823,14 @@ async fn watch_desktop_control(
                         let managed = state.records.iter().any(|r| r.managed && r.side == receipt.event.side && r.native_id.eq_ignore_ascii_case(&receipt.event.native_id));
                         if receipt.event.kind == Kind::Session && managed {
                             consumed.push(receipt.clone()); continue;
+                        }
+                        if foreground_serviced { continue; }
+                        foreground_serviced = true;
+                        if receipt.event.kind == Kind::OwnerWake {
+                            // A stale activation hint never takes down synchronization.
+                            let _ = runtime.wake_owner(&receipt.event.native_id, receipt.event.remote_id.as_deref().unwrap_or("")).await;
+                            consumed.push(receipt.clone());
+                            continue;
                         }
                         if ids.is_empty() {
                             let only = HashSet::from([receipt.event.key()]);
@@ -879,7 +886,7 @@ async fn watch_desktop_control(
                 if transport_wait.is_none() && bridge.status()?.pending.is_none() && !hooks::synchronization_held(&bridge.root)? {
                     let due = followups.iter().filter(|(_, (_, when))| *when <= tokio::time::Instant::now())
                         .map(|(id, (step, _))| (id.clone(), *step)).collect::<Vec<_>>();
-                    for (id, step) in due {
+                    for (id, step) in due.into_iter().take(usize::from(!foreground_serviced)) {
                         handoff_scope.insert(id.clone());
                         folder_dirty = true;
                         if *shutdown.borrow() || hooks::synchronization_held(&bridge.root)? || bridge.status()?.pending.is_some() { break; }
@@ -909,7 +916,10 @@ async fn watch_desktop_control(
                     }
                     // Only one cold history per pass; native completions get
                     // first service before the next potentially expensive read.
-                    if transport_wait.is_none() && !*shutdown.borrow() && !hooks::synchronization_held(&bridge.root)? && inbox.list()?.is_empty() && bridge.status()?.pending.is_none() {
+                    // New revisions remain in the inbox for the next boundary;
+                    // requiring an empty inbox starves startup under continuous
+                    // native activity, leaving progress at 0/0 indefinitely.
+                    if transport_wait.is_none() && !*shutdown.borrow() && !hooks::synchronization_held(&bridge.root)? && bridge.status()?.pending.is_none() {
                         if startup {
                             if handoff_enabled && !actions_revoked_since_publish {
                                 runtime.revoke_handoff_actions()?;
@@ -1461,6 +1471,12 @@ mod lifecycle_tests {
         })?
     }
     async fn synthetic_backend(root: &Path) -> Result<tokio::task::JoinHandle<Result<()>>> {
+        synthetic_backend_with_late_event(root, None).await
+    }
+    async fn synthetic_backend_with_late_event(
+        root: &Path,
+        mut late_event: Option<crate::events::Event>,
+    ) -> Result<tokio::task::JoinHandle<Result<()>>> {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::{accept_async, tungstenite::Message};
         let directory = storage::private_directory(root.join("codex-shared"))?;
@@ -1495,7 +1511,12 @@ mod lifecycle_tests {
                 }
                 let result = match request["method"].as_str() {
                     Some("initialize") => json!({}),
-                    Some("hooks/list") => json!({"data":[{"cwd":root,"hooks":[],"errors":[]}]}),
+                    Some("hooks/list") => {
+                        if let Some(event) = late_event.take() {
+                            Inbox::new(&root)?.publish(event).await?;
+                        }
+                        json!({"data":[{"cwd":root,"hooks":[],"errors":[]}]})
+                    }
                     method => bail!("Unexpected synthetic backend method: {method:?}"),
                 };
                 ws.send(Message::Text(
@@ -1507,6 +1528,141 @@ mod lifecycle_tests {
             }
             Ok(())
         }))
+    }
+    struct ProgressHistory {
+        root: PathBuf,
+        statuses: std::sync::Mutex<Vec<Value>>,
+    }
+    #[async_trait]
+    impl WatchLifecycle for ProgressHistory {
+        async fn start(&self, _: &crate::event_source::Source, _: &Path, _: &Value) -> Result<()> {
+            Ok(())
+        }
+        async fn stop(&self) -> Result<()> {
+            Ok(())
+        }
+        fn status(&self) -> Value {
+            if let Ok(value) = storage::read_json(self.root.join("watcher-status.json")) {
+                self.statuses.lock().unwrap().push(value);
+            }
+            json!({"testPendingEventCount":Inbox::new(&self.root).and_then(|inbox|inbox.list()).map(|events|events.len()).ok()})
+        }
+    }
+    #[tokio::test]
+    async fn foreground_backlog_is_bounded_and_preserved_across_cold_boundaries() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude});
+        let inbox = Inbox::new(&root)?;
+        for id in [
+            "00000000-0000-4000-8000-000000000003",
+            "00000000-0000-4000-8000-000000000004",
+        ] {
+            inbox
+                .publish(crate::events::Event {
+                    side: Side::Codex,
+                    native_id: id.into(),
+                    kind: Kind::Session,
+                    turn_id: None,
+                    remote_id: None,
+                })
+                .await?;
+        }
+        let backend = synthetic_backend(&root).await?;
+        let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
+        let history = Arc::new(ProgressHistory {
+            root: root.clone(),
+            statuses: Default::default(),
+        });
+        let observed = history.clone();
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let running = tokio::spawn(async move {
+            watch_desktop_control(
+                runtime.clone(),
+                runtime.bridge(),
+                &config,
+                Some(observed),
+                Some(receiver),
+            )
+            .await
+        });
+        until_status(&root, |v| v["initialSweepCompletedAt"].is_number()).await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while history.statuses.lock().unwrap().is_empty() || !inbox.list()?.is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        shutdown.send(true)?;
+        tokio::time::timeout(Duration::from_secs(5), running).await???;
+        tokio::time::timeout(Duration::from_secs(5), backend).await???;
+        let statuses = history.statuses.lock().unwrap();
+        let first = statuses.first().expect("No pass was observed");
+        assert_eq!(first["rendererAdapters"]["testPendingEventCount"], 1);
+        assert!(first["initialSweepCompletedAt"].is_number());
+        assert!(inbox.list()?.is_empty());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn a_new_durable_event_at_the_cold_boundary_does_not_starve_startup() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700))?;
+        let root = storage::private_directory(temp.path())?;
+        let codex = storage::private_directory(root.join("codex"))?;
+        let claude = storage::private_directory(root.join("claude"))?;
+        let config = json!({"codexHome":codex,"claudeHome":claude});
+        let event = crate::events::Event {
+            side: Side::Codex,
+            native_id: "00000000-0000-4000-8000-000000000003".into(),
+            kind: Kind::Started,
+            turn_id: None,
+            remote_id: None,
+        };
+        // The backend publishes after the watcher took its event snapshot,
+        // deterministically keeping the inbox nonempty at the cold boundary.
+        let backend = synthetic_backend_with_late_event(&root, Some(event)).await?;
+        let runtime = Runtime::new(RuntimeOptions::from_config(&root, &config)?)?;
+        let history = Arc::new(ProgressHistory {
+            root: root.clone(),
+            statuses: Default::default(),
+        });
+        let observed = history.clone();
+        let (shutdown, receiver) = tokio::sync::watch::channel(false);
+        let running = tokio::spawn(async move {
+            watch_desktop_control(
+                runtime.clone(),
+                runtime.bridge(),
+                &config,
+                Some(observed),
+                Some(receiver),
+            )
+            .await
+        });
+        until_status(&root, |v| v["initialSweepCompletedAt"].is_number()).await?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while history.statuses.lock().unwrap().is_empty()
+                || !Inbox::new(&root)?.list()?.is_empty()
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        })
+        .await??;
+        shutdown.send(true)?;
+        tokio::time::timeout(Duration::from_secs(5), running).await???;
+        tokio::time::timeout(Duration::from_secs(5), backend).await???;
+        let statuses = history.statuses.lock().unwrap();
+        let first = statuses.first().expect("No pass was observed");
+        assert!(
+            first["initialSweepCompletedAt"].is_number(),
+            "Startup was deferred by a newer event: {first}"
+        );
+        assert_eq!(first["initialSweepRemaining"], 0);
+        Ok(())
     }
     #[tokio::test]
     async fn enrollment_preserves_endpoint_failure_type_and_missing_history_stays_blocked()
