@@ -416,3 +416,23 @@ Installed and freshly observed Mod versions were 0.8.68; actual app pixels
 showed synchronization ready. Recovery and acceptance issued no model requests.
 Workspace contracts passed 404 tests with six intentional ignores; native
 image/fork regressions retained exact segment, ordinal and byte-prefix checks.
+
+## Codex provider binding and registration recovery (2026-11-06)
+
+App 2.0.50 / Mod 0.8.108 workspace contracts passed 464 tests with six intentional
+ignores. Isolated Codex 0.166.0-alpha.6 profiles reproduced a wrong-provider
+resume refusal with a published rollout but no indexed bootstrap. A correctly
+bound provider loaded the full bootstrap, which remained readable after a
+backend restart. Regression tests cover effective-project provider planning,
+provider changes before publication, unchanged requested/complete journals on
+refusal, authenticated registration recovery and receipt changes.
+
+The signed local app was installed normally; bundled, installed and freshly
+observed Mod versions were 0.8.108. Separately authorized recovery of one legacy
+prepared handoff backed up its original rollout and native index, corrected only
+that generated copy's provider label in its header and index row, and performed
+one native resume without submitting a turn. Normal coordinator recovery then
+cleared the pending transaction and authenticated equal 151-message checkpoints
+on both current sides. This was a one-off user-authorized repair, not automatic
+provider migration or permission to edit other native data. No model inference,
+provider switching or native-app restart was used.
