@@ -25,6 +25,14 @@ No credential extraction/copy is allowed. The opt-in Desktop watcher uses this
 path. Store the owner handle before start() so startup failures
 during user work retain the live owner instead of interrupting it.
 
+The native `remote_control` control response reports the bridge identity at
+`ready`, before the transport connects. An owner is connected only after the
+native `bridge_state: connected` event; `failed` or `policy_disabled` is an
+explicit startup failure, never a saved connected owner. A failed bridge keeps
+the saved Remote Control identity for reattach and marks the process for
+replacement at its next use. Do not infer connectivity from the control
+response or from a bridge-session transcript row alone.
+
 Managed Desktop owners start through `start_official`: remove inherited provider,
 auth and model overrides and overlay empty native settings values plus an empty
 apiKeyHelper only in that child, then select the native `default` model. Keep

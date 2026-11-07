@@ -718,7 +718,7 @@ impl CliSession {
         let (events, _) = broadcast::channel(4096);
         let controls: PendingControls = Arc::new(Mutex::new(HashMap::new()));
         let status = Arc::new(Mutex::new(
-            json!({"nativeState":"unknown","backgroundTasks":[],"identityUncertain":false,"sessionId":id,"activityRevision":0,"everConnected":false}),
+            json!({"nativeState":"unknown","backgroundTasks":[],"identityUncertain":false,"sessionId":id,"activityRevision":0,"everConnected":false,"bridgeState":null,"bridgeDetail":null,"bridgeFailureKind":null}),
         ));
         let session = Arc::new(Self {
             stdin: Mutex::new(Some(stdin)),
@@ -791,7 +791,12 @@ impl CliSession {
                     let mut state = status.lock().await;
                     consume_identity(&mut state, &event, &expected);
                     if event["type"] == "system" && event["subtype"] == "bridge_state" {
-                        state["everConnected"] = json!(true);
+                        state["bridgeState"] = event["state"].clone();
+                        state["bridgeDetail"] = event["detail"].clone();
+                        state["bridgeFailureKind"] = event["failure_kind"].clone();
+                        if event["state"] == "connected" {
+                            state["everConnected"] = json!(true);
+                        }
                     }
                     let suppressed = activity_suppressed.load(Ordering::Acquire);
                     if event["type"] == "system" && event["subtype"] == "session_state_changed" {
@@ -832,6 +837,46 @@ impl CliSession {
         Ok(session)
     }
 }
+
+/// The SDK control response reports the bridge identity at `ready`, before the
+/// transport has connected. Wait for the native `connected` state so a failed
+/// or dropped bridge is never mistaken for a live Remote Control session.
+async fn wait_for_bridge_connected(
+    mut events: broadcast::Receiver<Value>,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            bail!("Remote Control did not report a connected bridge.");
+        }
+        match tokio::time::timeout(remaining, events.recv()).await {
+            Ok(Ok(event)) => {
+                if event["type"] != "system" || event["subtype"] != "bridge_state" {
+                    continue;
+                }
+                match event["state"].as_str() {
+                    Some("connected") => return Ok(()),
+                    Some("failed" | "policy_disabled") => {
+                        let detail = event["detail"]
+                            .as_str()
+                            .filter(|detail| !detail.is_empty())
+                            .unwrap_or("Remote Control bridge failed.");
+                        bail!("{detail}");
+                    }
+                    _ => (),
+                }
+            }
+            Ok(Err(broadcast::error::RecvError::Lagged(_))) => continue,
+            Ok(Err(broadcast::error::RecvError::Closed)) => {
+                bail!("Native owner event stream ended before Remote Control connected.")
+            }
+            Err(_) => bail!("Remote Control did not report a connected bridge."),
+        }
+    }
+}
+
 #[async_trait]
 impl Session for CliSession {
     async fn prepare_clear(&self, old_id: &str, uuid: &str) -> Result<()> {
@@ -1335,9 +1380,6 @@ impl Owner {
         Ok(())
     }
     pub async fn connect(&mut self) -> Result<()> {
-        if self.connected {
-            return Ok(());
-        }
         ensure!(
             self.state["reset"].is_null(),
             "Context reset must be restored before Remote Control connection."
@@ -1347,6 +1389,16 @@ impl Owner {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Owner not started."))?
             .clone();
+        if self.connected {
+            if session.status().await["bridgeState"] == "connected" {
+                return Ok(());
+            }
+            self.connected = false;
+        }
+        // Subscribe before the control request: the native CLI can report a
+        // terminal bridge failure before the request's success response reaches
+        // this process, and the broadcast buffer must retain it.
+        let events = session.subscribe();
         let previous = self.state["remoteId"].clone();
         let mut request =
             json!({"subtype":"remote_control","enabled":true,"keep_session_on_exit":true});
@@ -1379,6 +1431,20 @@ impl Owner {
         self.state["remoteId"] = json!(id);
         self.state["registration"] = json!("registered");
         self.save()?;
+        if let Err(error) = wait_for_bridge_connected(events, Duration::from_secs(30)).await {
+            self.connected = false;
+            self.restart_required = true;
+            return Err(error);
+        }
+        let status = session.status().await;
+        if status["bridgeState"] != "connected" {
+            self.connected = false;
+            self.restart_required = true;
+            bail!(
+                "Remote Control bridge is not connected ({}).",
+                status["bridgeState"]
+            );
+        }
         self.connected = true;
         Ok(())
     }
@@ -1397,6 +1463,12 @@ impl Owner {
             "Claude owner is busy; refusing to interrupt user work."
         );
         Ok(())
+    }
+    pub async fn bridge_state(&self) -> Value {
+        match &self.session {
+            Some(session) => session.status().await["bridgeState"].clone(),
+            None => Value::Null,
+        }
     }
     pub async fn append(&mut self, operation_id: &str, content: &[Value]) -> Result<Value> {
         self.append_inner(operation_id, content, None).await
@@ -1732,6 +1804,79 @@ done
         }
         assert_eq!(storage::read_stable(&settings)?.bytes, original.bytes);
         assert!(owner.state["pending"].is_null());
+        Ok(())
+    }
+
+    fn remote_control_fixture(root: &Path, final_state: &str, detail: &str) -> Result<PathBuf> {
+        let binary = root.join("remote-control-fixture");
+        let script = r#"#!/bin/sh
+if [ "$1" = '--version' ]; then printf '2.1.281 (Claude Code)\n'; exit 0; fi
+while IFS= read -r frame; do
+    request_id=${frame#*\"request_id\":\"}
+    request_id=${request_id%%\"*}
+    subtype=${frame#*\"subtype\":\"}
+    subtype=${subtype%%\"*}
+    case "$subtype" in
+        initialize)
+            printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"session_state":"idle","commands":[]}}}\n' "$request_id"
+            ;;
+        remote_control)
+            printf '{"type":"system","subtype":"bridge_state","state":"ready","detail":null,"bridge_epoch":1}\n'
+            printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{"bridge_session_id":"cse_fixturebridge","session_url":"https://example.invalid/session","bridge_epoch":1}}}\n' "$request_id"
+            printf '{"type":"system","subtype":"bridge_state","state":"__STATE__","detail":"__DETAIL__","bridge_epoch":1}\n'
+            ;;
+        *)
+            printf '{"type":"control_response","response":{"subtype":"success","request_id":"%s","response":{}}}\n' "$request_id"
+            ;;
+    esac
+done
+"#
+        .replace("__STATE__", final_state)
+        .replace("__DETAIL__", detail);
+        fs::write(&binary, script)?;
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o700))?;
+        Ok(binary)
+    }
+
+    #[tokio::test]
+    async fn remote_control_waits_for_native_connected_state() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = storage::private_directory(temporary.path())?;
+        let cwd = storage::private_directory(root.join("project"))?;
+        let home = storage::private_directory(root.join("claude"))?;
+        let binary = remote_control_fixture(&root, "failed", "fixture bridge failed")?;
+        let mut owner = Owner::open(&root, &cwd, &home, "bridge-failure", "Title")?;
+        owner.state["remoteId"] = json!("cse_fixturebridge");
+        owner.state["registration"] = json!("registered");
+        owner.save()?;
+        let error = owner
+            .start_official(&binary, Some("default"))
+            .await
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("fixture bridge failed"));
+        assert!(!owner.connected);
+        assert!(owner.restart_required);
+        assert_eq!(owner.state["remoteId"], "cse_fixturebridge");
+        assert_eq!(owner.state["registration"], "registered");
+        owner.close().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remote_control_accepts_native_connected_state() -> Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = storage::private_directory(temporary.path())?;
+        let cwd = storage::private_directory(root.join("project"))?;
+        let home = storage::private_directory(root.join("claude"))?;
+        let binary = remote_control_fixture(&root, "connected", "")?;
+        let mut owner = Owner::open(&root, &cwd, &home, "bridge-connected", "Title")?;
+        owner.state["remoteId"] = json!("cse_fixturebridge");
+        owner.state["registration"] = json!("registered");
+        owner.save()?;
+        owner.start_official(&binary, Some("default")).await?;
+        assert!(owner.connected);
+        assert!(!owner.restart_required);
+        owner.close().await?;
         Ok(())
     }
 

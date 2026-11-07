@@ -444,6 +444,14 @@ impl Runtime {
                 let handle = entry.clone();
                 let mut entry = entry.lock().await;
                 entry.used = Instant::now();
+                if entry.owner.session.is_some()
+                    && matches!(
+                        entry.owner.bridge_state().await.as_str(),
+                        Some("failed" | "policy_disabled")
+                    )
+                {
+                    entry.owner.restart_required = true;
+                }
                 if entry.owner.maintenance != maintenance {
                     ensure!(
                         !maintenance,
