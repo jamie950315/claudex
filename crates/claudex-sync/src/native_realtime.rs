@@ -335,14 +335,28 @@ pub(crate) fn prove(data: &Snapshot, id: &str, turns: &[Value]) -> Result<Option
         // A repeated identical voice exchange is distinguished by the native
         // handoff's position, not by selecting a matching transcript arbitrarily.
         let (response, completed, boundary) = validate_flush(rows, id, turn, &items[0])?;
+        let next_handoff = rows
+            .iter()
+            .enumerate()
+            .skip(response + 1)
+            .find_map(|(i, row)| {
+                (row["type"] == "event_msg"
+                    && row["payload"]["type"] == "task_started"
+                    && turns.iter().any(|t| {
+                        t["id"] == row["payload"]["turn_id"] && has_handoff(std::slice::from_ref(t))
+                    }))
+                .then_some(i)
+            })
+            .unwrap_or(rows.len());
         let matches = matches
             .into_iter()
-            .filter(|(_, s)| {
-                s.rows[0] < response
+            .filter(|(session_id, s)| {
+                !selected_sessions.contains(*session_id)
+                    && s.rows[0] < response
                     && s.rows
                         .iter()
                         .filter(|i| rows[**i]["payload"]["type"] == "transcript_segment")
-                        .all(|i| *i < response)
+                        .all(|i| *i < next_handoff)
                     && !rows[s.rows[0] + 1..response].iter().any(|r| {
                         r["type"] == "realtime_item"
                             && r["payload"]["type"] == "realtime_session_started"
@@ -709,6 +723,109 @@ mod tests {
         );
         Ok(())
     }
+    #[tokio::test]
+    async fn realtime_segment_persisted_after_flush_is_reconstructed_once() -> Result<()> {
+        let mut f = Fixture::new()?;
+        let segment = f.rows.remove(3);
+        let close = f
+            .rows
+            .iter()
+            .position(|r| r["payload"]["type"] == "realtime_session_closed")
+            .unwrap();
+        f.rows.insert(close, segment);
+        f.write()?;
+        let snapshot = f.read().await?;
+        let common = f.common(&snapshot)?;
+        let speakers = common
+            .messages
+            .iter()
+            .filter_map(|m| {
+                let text = m.content.first()?.get("text")?.as_str()?;
+                matches!(text, "Hello" | "Hi").then_some((m.role.as_str(), text))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(speakers, vec![("user", "Hello"), ("assistant", "Hi")]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn realtime_late_segment_cannot_cross_a_later_handoff() -> Result<()> {
+        let mut f = Fixture::new()?;
+        let segment = f.rows.remove(3);
+        let close = f.rows.pop().unwrap();
+        let mut next = f.turns[0].clone();
+        next["id"] = json!(NEXT);
+        f.turns.push(next);
+        f.rows
+            .push(json!({"type":"event_msg","payload":{"type":"task_started","turn_id":NEXT}}));
+        f.rows.push(segment);
+        f.rows.push(close);
+        f.write()?;
+        let error = f.read().await.unwrap_err().to_string();
+        assert!(
+            error.contains("Realtime handoff lacks one complete matching transcript session"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn realtime_identical_closed_sessions_cannot_be_reused_for_two_handoffs() -> Result<()> {
+        let mut f = Fixture::new()?;
+        let mut first = f.rows[1..4].to_vec();
+        for row in &mut first {
+            row["payload"]["id"] =
+                json!(format!("first-{}", row["payload"]["id"].as_str().unwrap()));
+            row["payload"]["realtime_session_id"] = json!("session-0");
+        }
+        first.push(json!({"type":"realtime_item","payload":{"id":"first-close","type":"realtime_session_closed","realtime_session_id":"session-0"}}));
+        f.rows.splice(1..1, first);
+        let close = f.rows.pop().unwrap();
+        let start = f
+            .rows
+            .iter()
+            .position(|r| r["payload"]["type"] == "task_started")
+            .unwrap();
+        f.rows.insert(start, close);
+        let mut next = f.turns[0].clone();
+        next["id"] = json!(NEXT);
+        next["items"][0]["id"] = json!("user-2");
+        f.turns.push(next);
+        let mut second = f
+            .rows
+            .iter()
+            .filter(|r| {
+                r["payload"]["turn_id"] == TURN
+                    || r["payload"]["internal_chat_message_metadata_passthrough"]["turn_id"] == TURN
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for row in &mut second {
+            let p = &mut row["payload"];
+            for key in ["turn_id", "root_turn_id"] {
+                if p.get(key).is_some() {
+                    p[key] = json!(NEXT);
+                }
+            }
+            if p.get("internal_chat_message_metadata_passthrough")
+                .is_some()
+            {
+                p["internal_chat_message_metadata_passthrough"]["turn_id"] = json!(NEXT);
+            }
+            if p.get("item").is_some() {
+                p["item"]["id"] = json!("user-2");
+            }
+        }
+        f.rows.extend(second);
+        f.write()?;
+        let error = f.read().await.unwrap_err().to_string();
+        assert!(
+            error.contains("Realtime handoff lacks one complete matching transcript session"),
+            "{error}"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn ordinary_continuation_keeps_the_complete_realtime_checkpoint() -> Result<()> {
         let mut f = Fixture::new()?;
