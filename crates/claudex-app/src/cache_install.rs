@@ -459,6 +459,63 @@ mod tests {
         assert!(operate(Action::Install, &o, &Append).unwrap().changed);
     }
     #[test]
+    fn brotli_publication_recovers_prepared_and_keeps_exact_ownership_proofs() {
+        let (_t, mut options, _) = setup();
+        let bytes = cache::tests::brotli_fixture("export const a=1;");
+        fs::write(&options.cache_path, &bytes).unwrap();
+        fs::set_permissions(&options.cache_path, fs::Permissions::from_mode(0o600)).unwrap();
+        options.source_hash = cache::inspect(&bytes, None).unwrap().source_hash;
+        struct Interrupted;
+        impl Transform for Interrupted {
+            fn build(&self, source: &str) -> Result<String> {
+                Append.build(source)
+            }
+            fn publication_fence(&self) -> Result<()> {
+                anyhow::bail!("Synthetic stop before native cache publication")
+            }
+        }
+        let error = operate(Action::Install, &options, &Interrupted).unwrap_err();
+        assert!(error.to_string().contains("Synthetic stop"), "{error}");
+        assert_eq!(fs::read(&options.cache_path).unwrap(), bytes);
+        let private = options.root.join("ui-folder-compat");
+        let original = snapshot(&private.join("original.cache"), cache::MAX_CACHE_BYTES).unwrap();
+        assert_eq!(original.bytes, bytes);
+        let manifest: Manifest =
+            serde_json::from_slice(&fs::read(private.join("manifest.json")).unwrap()).unwrap();
+        assert_eq!(manifest.phase, Phase::Prepared);
+        let staging = options
+            .cache_path
+            .parent()
+            .unwrap()
+            .join(manifest.staging_name.unwrap());
+        assert!(staging.exists());
+        // A new operation uses only the durable prepared journal and original.
+        let recovered = operate(Action::Install, &options, &Append).unwrap();
+        assert!(recovered.changed && recovered.recovered);
+        assert!(!staging.exists());
+        assert!(!operate(Action::Install, &options, &Append).unwrap().changed);
+        assert!(operate(Action::Restore, &options, &Append).unwrap().changed);
+        assert_eq!(fs::read(&options.cache_path).unwrap(), bytes);
+        assert_eq!(
+            snapshot(&private.join("original.cache"), cache::MAX_CACHE_BYTES)
+                .unwrap()
+                .identity,
+            original.identity
+        );
+
+        operate(Action::Install, &options, &Append).unwrap();
+        let foreign = cache::tests::brotli_fixture("export const foreign=1;");
+        fs::write(&options.cache_path, &foreign).unwrap();
+        for action in [Action::Install, Action::Restore] {
+            let error = operate(action, &options, &Append).unwrap_err();
+            assert!(
+                error.to_string().contains("outside this installer"),
+                "{error}"
+            );
+            assert_eq!(fs::read(&options.cache_path).unwrap(), foreign);
+        }
+    }
+    #[test]
     fn foreign_writes_and_hardlink_aliases_refuse_without_replacement() {
         let (_t, o, _) = setup();
         operate(Action::Install, &o, &Append).unwrap();

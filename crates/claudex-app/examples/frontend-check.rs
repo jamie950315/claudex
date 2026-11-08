@@ -255,7 +255,12 @@ fn inventory(root: &Path, home: &Path, output: &Path) -> Result<Value> {
         if let Some(old) = originals.insert(entry.url.clone(), original.bytes.clone()) {
             ensure!(old == original.bytes, "Conflicting journal originals");
         }
-        journals.push(json!({"adapter":adapter.name(),"asset":entry.url.rsplit('/').next(),"url":entry.url,"cacheFilename":m.cache_path.file_name(),"status":"validated","manifest":m}));
+        let filename = m
+            .cache_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .context("Invalid journal cache filename")?;
+        journals.push(json!({"adapter":adapter.name(),"asset":entry.url.rsplit('/').next(),"url":entry.url,"cacheFilename":filename,"status":"validated","manifest":m}));
         observed.insert(path.join("manifest.json"), receipt);
         observed.insert(path.join("original.cache"), original);
         Ok(())

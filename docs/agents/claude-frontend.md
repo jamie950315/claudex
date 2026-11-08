@@ -89,7 +89,11 @@ private HTTP cache using verified Chromium HttpResponseInfo response timestamps,
 never filesystem mtime (patches change mtime). Desktop stores each body as the
 server sent it: zstd for most assets, brotli (`content-encoding: br`) for some
 modules and resources since the 2026-11-03 graph. Reads decode either; a patch
-re-encodes zstd and keeps the response headers, so it refuses a brotli entry.
+re-encodes with that resource's original encoding (zstd or brotli), updates the
+proved length fields and checksums, and preserves the other headers and opaque
+metadata. The split folder consumer can itself be brotli-encoded. Preflight
+both containers before publishing either; encoding support changes no structural,
+ownership, immutable-original, journal or exact-write proofs.
 Require a unique newest entry and
 its root bootstrap. Follow literal static/re-export/dynamic imports within the
 exact Anthropic assets origin; only reachable cached modules qualify. Missing

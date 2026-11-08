@@ -96,7 +96,7 @@ pub fn inspect(bytes: &[u8], target: Option<&str>) -> Result<Entry> {
         "zstd" => zstd::stream::read::Decoder::new(body)?
             .take(MAX_SOURCE_BYTES as u64 + 1)
             .read_to_end(&mut decoded)?,
-        "br" => brotli_decompressor::Decompressor::new(body, 4096)
+        "br" => brotli::Decompressor::new(body, 4096)
             .take(MAX_SOURCE_BYTES as u64 + 1)
             .read_to_end(&mut decoded)?,
         _ => anyhow::bail!("Unsupported cache content encoding."),
@@ -199,12 +199,17 @@ pub fn replace_source(original: &[u8], source: &str, target: Option<&str>) -> Re
         source.len() <= MAX_SOURCE_BYTES,
         "Patched source exceeds its bound."
     );
-    // A replacement keeps the response headers, so it can only re-encode zstd.
-    ensure!(
-        content_encoding(&e.metadata)? == "zstd",
-        "Patched cache entry is not zstd-encoded."
-    );
-    let compressed = zstd::stream::encode_all(source.as_bytes(), 19)?;
+    // Keep the native response encoding and all other header/opaque metadata.
+    let compressed = match content_encoding(&e.metadata)?.as_str() {
+        "zstd" => zstd::stream::encode_all(source.as_bytes(), 19)?,
+        "br" => {
+            let mut compressed = Vec::new();
+            brotli::CompressorReader::new(source.as_bytes(), 4096, 11, 22)
+                .read_to_end(&mut compressed)?;
+            compressed
+        }
+        _ => anyhow::bail!("Unsupported cache content encoding."),
+    };
     let metadata = lengths(&e.metadata, e.body.len(), compressed.len())?;
     let eof0 = original.len() - 24;
     let mut footer1 = original[e.body_end..e.body_end + 24].to_vec();
@@ -230,6 +235,13 @@ pub(crate) mod tests {
     use super::*;
     pub(crate) fn fixture(source: &str) -> Vec<u8> {
         encoded_fixture(zstd::stream::encode_all(source.as_bytes(), 19).unwrap(), "")
+    }
+    pub(crate) fn brotli_fixture(source: &str) -> Vec<u8> {
+        let mut compressed = Vec::new();
+        brotli::CompressorReader::new(source.as_bytes(), 4096, 11, 22)
+            .read_to_end(&mut compressed)
+            .unwrap();
+        encoded_fixture(compressed, "content-encoding:br\0")
     }
     fn encoded_fixture(compressed: Vec<u8>, headers: &str) -> Vec<u8> {
         let key = b"1/0/https://assets-proxy.anthropic.com/claude-ai/v2/assets/v1/index-test.js";
@@ -271,13 +283,43 @@ pub(crate) mod tests {
         b
     }
     #[test]
-    fn brotli_entries_are_read_and_never_rewritten() {
+    fn brotli_replacement_preserves_encoding_and_http_tail() {
         // brotli("export const x=1;\n")
         let body = hex::decode("8b08806578706f727420636f6e737420783d313b0a03").unwrap();
         let entry = encoded_fixture(body, "content-encoding:br\0");
         assert_eq!(inspect(&entry, None).unwrap().source, "export const x=1;\n");
-        let error = replace_source(&entry, "export const x=2;", None).unwrap_err();
-        assert!(error.to_string().contains("not zstd"), "{error}");
+        let replacement = replace_source(&entry, "export const x=2;", None).unwrap();
+        let patched = inspect(&replacement, None).unwrap();
+        assert_eq!(patched.source, "export const x=2;");
+        assert_eq!(content_encoding(&patched.metadata).unwrap(), "br");
+        assert!(patched.metadata.ends_with(&[0xaa, 0xbb, 0xcc, 0xdd]));
+        assert!(
+            patched
+                .metadata
+                .windows(b"\0content-encoding:br\0".len())
+                .any(|w| w == b"\0content-encoding:br\0")
+        );
+        let large = format!("export const x={:?};", (0..1000).collect::<Vec<_>>());
+        let resized = replace_source(&entry, &large, None).unwrap();
+        let resized_entry = inspect(&resized, None).unwrap();
+        assert_eq!(resized_entry.source, large);
+        assert_ne!(
+            patched.body.len().to_string().len(),
+            resized_entry.body.len().to_string().len()
+        );
+        for name in ["content-length", "x-goog-stored-content-length"] {
+            let header = format!("\0{name}:{}\0", resized_entry.body.len());
+            assert!(
+                resized_entry
+                    .metadata
+                    .windows(header.len())
+                    .any(|w| w == header.as_bytes())
+            );
+        }
+        assert_eq!(content_encoding(&resized_entry.metadata).unwrap(), "br");
+        assert!(resized_entry.metadata.ends_with(&[0xaa, 0xbb, 0xcc, 0xdd]));
+        let shrunk = replace_source(&resized, "export const x=2;", None).unwrap();
+        assert_eq!(inspect(&shrunk, None).unwrap().source, "export const x=2;");
         let zstd = zstd::stream::encode_all(&b"export const y=1;"[..], 19).unwrap();
         let named = encoded_fixture(zstd.clone(), "Content-Encoding: zstd\0");
         assert_eq!(inspect(&named, None).unwrap().source, "export const y=1;");
