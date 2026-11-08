@@ -182,7 +182,7 @@ dependencies = [
 
 [[package]]
 name = "claudex-app"
-version = "2.0.52"
+version = "2.0.53"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "claudex-cli"
-version = "2.0.52"
+version = "2.0.53"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "claudex-core"
-version = "2.0.52"
+version = "2.0.53"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -259,7 +259,7 @@ dependencies = [
 
 [[package]]
 name = "claudex-sync"
-version = "2.0.52"
+version = "2.0.53"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "claudex-work"
-version = "2.0.52"
+version = "2.0.53"
 dependencies = [
  "anyhow",
  "async-trait",
